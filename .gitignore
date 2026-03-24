@@ -416,3 +416,14 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Self
+bin/
+bin-int/
+
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+.vs/
