@@ -164,3 +164,110 @@ gl::Application* gl::CreateApplication() {
 - 这就是 C++ 的多态性（Polymorphism）。引擎拿到这个指针后，以为自己在操作一个普通的 Application，但实际上它在操作你写的 Sandbox 游戏！这就允许引擎在未来去调用 Sandbox 重写的那些虚函数（比如 virtual void OnUpdate()）。
 
 **引擎被打包成了库 -> 游戏链接了这个库 -> 游戏在** **main** **函数里把控制权上交给了引擎 -> 引擎开始死循环接管世界！**
+
+## 入口点
+
+目前的 main 函数写在 SandboxApp.cpp 里，这意味着用户（游戏开发者）必须知道怎么初始化引擎、怎么调用 Run()，但是这都是可以再次简化的，所以创建EntryPoint.h，这个文件将包含真正的 int main()。
+
+```
+#pragma once
+
+#ifdef GL_PLATFORM_WINDOWS
+
+extern gl::Application* gl::CreateApplication();
+
+int main(int argc, char** argv)
+{
+    auto app = gl::CreateApplication();
+
+    app->Run();
+
+    delete app;
+}
+
+#endif
+```
+
+以及最重要的注入宏定义，不然等于没写，可以在visual studio每个项目加入预处理器定义，这里我采用在premake.lua脚本添加
+
+```
+workspace "GlimmerEngine"
+    -- ... (前面的配置不变) ...
+
+-- 1. 引擎项目
+project "Glimmer"
+    -- ... (前面的配置不变) ...
+
+    -- 【新增】：告诉编译器，如果我们是在 Windows 上编译，就定义 GL_PLATFORM_WINDOWS
+    filter "system:windows"
+        systemversion "latest"
+        defines {
+            "GL_PLATFORM_WINDOWS",
+            "GL_BUILD_DLL" -- 预留，虽然我们现在是静态库
+        }
+
+-- 2. 沙盒项目
+project "Sandbox"
+    -- ... (前面的配置不变) ...
+
+    -- 【新增】：沙盒也需要知道自己是在 Windows 上
+    filter "system:windows"
+        systemversion "latest"
+        defines {
+            "GL_PLATFORM_WINDOWS"
+        }
+```
+
+## KB
+
+### 为什么不用动态库？
+
+如果用动态链接库，将会出现每次生成解决方案都要手动复制一遍dll文件的情况
+
+#### 1. 什么是 StaticLib (静态库 .lib)？
+
+**通俗比喻**：相当于你把 Glimmer 引擎所有的代码（碰撞、渲染、数学库）**打印成了一本厚厚的实体书**。
+
+- **工作原理**：当编译 Sandbox 游戏时，链接器（Linker）会把这本 Glimmer.lib 里的**所有内容**，直接“抄”一份，**死死地缝合（打包）进最终的 Sandbox.exe 文件里**。
+- **结果**：你最终只得到一个胖胖的 Sandbox.exe。你只需要把这个 .exe 发给玩家，玩家双击就能直接玩！
+- **优点**：**极度省事**：不需要管环境变量，不需要把一堆 .dll 文件和 .exe 放在同一个目录下，玩家绝不会遇到恶心的“找不到 xxxx.dll”报错。**运行极快**：因为所有的代码都在一个 .exe 的内存空间里，函数调用的速度是最快的（编译器甚至能做极致的跨文件内联优化）。
+- **为什么目前用它？**：在引擎开发的初期，代码量很少，编译速度极快。用静态库可以让你少踩无数个“DLL 导出宏（__declspec(dllexport)）”的坑。
+
+#### 2. 什么是 SharedLib (动态链接库 .dll)？
+
+**通俗比喻**：相当于你把 Glimmer 引擎做成了一个**在线的云文档**。
+
+- **工作原理**：当编译 Sandbox 游戏时，它只会生成一个极小的 Sandbox.exe 和一个小小的引导文件（通常也叫 .lib，但只是个空壳目录）。真正的核心代码全都在独立生成的 **Glimmer.dll** 里。
+
+- **结果**：你必须把 Sandbox.exe 和 Glimmer.dll 放在同一个文件夹里发给玩家。当玩家双击 .exe 时，程序会在运行时（Run-time）动态地去旁边寻找并加载这个 .dll。
+
+- **优点**：**内存共享**：如果玩家电脑上同时运行了三个用 Glimmer 引擎做的游戏，它们可以共享内存中的同一个 Glimmer.dll，极大地节省了系统内存。**热更新（极度高级）**：你可以只替换掉玩家目录下的 Glimmer.dll 来修复引擎的 Bug，而不需要重新让玩家下载整个几 GB 的 Sandbox.exe 游戏本体！
+
+- **为什么现在不用它？**：
+  要写出一个能完美跨平台（Windows 用 .dll，Mac 用 .dylib，Linux 用 .so）的动态库引擎，你需要在所有的类和函数前面加上恶心至极的导出宏：
+
+  ```
+  // 如果用 DLL，你的代码得写成这样： 
+  #ifdef GLIMMER_BUILD_DLL    
+  	#define GLIMMER_API __declspec(dllexport) 
+  #else    
+  	#define GLIMMER_API __declspec(dllimport) 
+  #endif class GLIMMER_API Application { ... };
+  ```
+
+  这对于刚起步的引擎来说，纯粹是自找麻烦。
+
+### 什么是“静态链接（Static Link）”下的入口点冲突？
+
+**如果你在引擎的头文件里定义了 int main()，而用户在两个不同的 .cpp 文件里都包含了这个头文件，会发生什么？**
+
+- **标准答案**：会触发**重定义错误（Multiple Definition Error）**。
+- **如何规避？**：**约定俗成**：明确告知开发者，EntryPoint.h 只能在一个项目中有且仅有一个 .cpp 文件包含（通常是主程序入口）。**强制唯一性**：通过条件编译或特定的架构设计，确保 main 函数所在的翻译单元是唯一的。
+
+### **为什么我们要自己定义 GL_PLATFORM_WINDOWS，而不是直接用微软自带的 _WIN32？**
+
+- **标准答案（显摆你的架构思维）**：
+
+  **命名空间保护**：\_WIN32 是编译器厂商提供的宏。如果以后我们要支持 Android、iOS，每个平台都有自己乱七八糟的内置宏。使用 GL_ 前缀的宏（如 GL_PLATFORM_WINDOWS、GL_PLATFORM_LINUX），可以统一我们引擎自己的逻辑，**代码更干净，且不依赖于特定编译器。**
+
+  **灵活控制**：有时候我们可能在 Windows 上模拟 Linux 的运行逻辑。如果使用自己的宏，我们可以通过 Premake 脚本随时开启或关闭，而内置宏是没法手动关掉的。

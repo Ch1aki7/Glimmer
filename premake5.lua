@@ -25,6 +25,13 @@ project "Glimmer"
         "%{prj.name}/src"
     }
 
+    filter "system:windows"
+    systemversion "latest"
+    defines {
+        "GL_PLATFORM_WINDOWS",
+        "GL_BUILD_DLL" -- 预留，虽然我们现在是静态库
+    }
+
 project "Sandbox"
     location "Sandbox"
     kind "ConsoleApp"
@@ -46,4 +53,10 @@ project "Sandbox"
 
     links {
         "Glimmer" -- 沙盒链接引擎的静态库
+    }
+
+    filter "system:windows"
+    systemversion "latest"
+    defines {
+        "GL_PLATFORM_WINDOWS"
     }
