@@ -218,6 +218,136 @@ project "Sandbox"
         }
 ```
 
+## 日志系统
+
+首先引入子模块
+
+```
+git submodule add https://github.com/gabime/spdlog.git Glimmer/vendor/spdlog
+```
+
+然后告诉premake引擎现在需要包含这个新文件夹
+
+```
+project "Glimmer"
+    -- ... 其他配置不变 ...
+    includedirs {
+        "%{prj.name}/src",
+        "%{prj.name}/vendor/spdlog/include" -- 新增这一行
+    }
+    
+        includedirs {
+        "Glimmer/src", -- 沙盒需要引用引擎的代码
+        "Glimmer/vendor/spdlog/include"
+    }
+```
+
+新建 Log.h 和 Log.cpp
+
+```
+#pragma once
+#include "spdlog/spdlog.h"
+#include <memory>
+
+namespace gl {
+	class Log
+	{
+    public:
+        static void Init();
+        inline static std::shared_ptr<spdlog::logger>& GetCoreLogger() { return s_CoreLogger; }
+        inline static std::shared_ptr<spdlog::logger>& GetClientLogger() { return s_ClientLogger; }
+    private:
+        static std::shared_ptr<spdlog::logger> s_CoreLogger;
+        static std::shared_ptr<spdlog::logger> s_ClientLogger;
+	};
+};
+
+```
+
+https://github.com/gabime/spdlog/wiki/Custom-formatting在wiki中可以查看格式设置
+
+```
+#include "Log.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
+
+namespace gl {
+    std::shared_ptr<spdlog::logger> Log::s_CoreLogger;
+    std::shared_ptr<spdlog::logger> Log::s_ClientLogger;
+
+    void Log::Init() {
+        spdlog::set_pattern("%^[%T] %n: %v%$"); // 设置日志格式：时间-名称-内容
+        s_CoreLogger = spdlog::stdout_color_mt("GLIMMER");
+        s_CoreLogger->set_level(spdlog::level::trace);
+
+        s_ClientLogger = spdlog::stdout_color_mt("APP");
+        s_ClientLogger->set_level(spdlog::level::trace);
+    }
+}
+```
+
+出现'Unicode support requires compiling with /utf-8'报错
+
+这是因为中文版 Windows 的 Visual Studio (MSVC) 使用的是 GBK（或者叫 System Codepage）编码。当 spdlog 发现你没有开启 UTF-8 支持时，它就会通过 static_assert 故意让编译失败，以防你的日志输出变成乱码。
+
+修改 **premake5.lua**
+
+```
+workspace "GlimmerEngine"
+    -- ... (之前的配置) ...
+
+    -- 【新增】：为 MSVC 编译器开启 UTF-8 支持
+    filter "system:windows"
+        buildoptions { "/utf-8" } -- 这一行是解决报错的关键
+        systemversion "latest"
+        defines {
+            "GL_PLATFORM_WINDOWS"
+        }
+```
+
+测试
+
+![image-20260325162630699](README.assets/image-20260325162630699.png)
+
+在Log.h中定义新的宏
+
+```
+// 引擎层日志宏 (Core)
+#define GL_CORE_ERROR(...)  ::gl::Log::GetCoreLogger()->error(__VA_ARGS__)
+#define GL_CORE_WARN(...)   ::gl::Log::GetCoreLogger()->warn(__VA_ARGS__)
+#define GL_CORE_INFO(...)   ::gl::Log::GetCoreLogger()->info(__VA_ARGS__)
+
+// 游戏层日志宏 (Client)
+#define GL_ERROR(...)       ::gl::Log::GetClientLogger()->error(__VA_ARGS__)
+#define GL_INFO(...)        ::gl::Log::GetClientLogger()->info(__VA_ARGS__)
+```
+
+在Log.cpp加入
+
+```
+        GL_CORE_INFO(R"(
+ ****** ****** ****** ****** ****** ****** ****** ****** ****** ****** 
+////// ////// ////// ////// ////// ////// ////// ////// ////// //////                                                                        
+                                                                       
+   ********  **       ** ****     **** ****     **** ******** *******  
+  **//////**/**      /**/**/**   **/**/**/**   **/**/**///// /**////** 
+ **      // /**      /**/**//** ** /**/**//** ** /**/**      /**   /** 
+/**         /**      /**/** //***  /**/** //***  /**/******* /*******  
+/**    *****/**      /**/**  //*   /**/**  //*   /**/**////  /**///**  
+//**  ////**/**      /**/**   /    /**/**   /    /**/**      /**  //** 
+ //******** /********/**/**        /**/**        /**/********/**   //**
+  ////////  //////// // //         // //         // //////// //     //                                                                       
+                                                                       
+ ****** ****** ****** ****** ****** ****** ****** ****** ****** ****** 
+////// ////// ////// ////// ////// ////// ////// ////// ////// ////// 
+)");
+```
+
+这样就可以实现立体艺术字
+
+<img src="README.assets/image-20260325164801944.png" alt="image-20260325164801944" style="zoom:67%;" />
+
+ 
+
 ## KB
 
 ### 为什么不用动态库？
@@ -271,3 +401,14 @@ project "Sandbox"
   **命名空间保护**：\_WIN32 是编译器厂商提供的宏。如果以后我们要支持 Android、iOS，每个平台都有自己乱七八糟的内置宏。使用 GL_ 前缀的宏（如 GL_PLATFORM_WINDOWS、GL_PLATFORM_LINUX），可以统一我们引擎自己的逻辑，**代码更干净，且不依赖于特定编译器。**
 
   **灵活控制**：有时候我们可能在 Windows 上模拟 Linux 的运行逻辑。如果使用自己的宏，我们可以通过 Premake 脚本随时开启或关闭，而内置宏是没法手动关掉的。
+
+### **为什么在开发跨平台引擎时，我们倾向于强制开启** **/utf-8** **标志？**
+
+- **标准答案**：**一致性**：不同国家的开发者、不同操作系统的默认编码（Windows 的 GBK, Linux 的 UTF-8）各不相同。如果不统一，你的代码里写了一句中文注释，发给国外的合作伙伴，他的电脑打开可能全是乱码，甚至导致编译失败。
+- **现代标准**：C++11 之后，像 spdlog、fmt、yaml-cpp 等现代库都遵循 UTF-8 标准。
+- **运行环境**：设置 /utf-8 会同时设置**源代码字符集**和**执行字符集**。这意味着你在代码里写的 "你好"，在运行时输出到控制台时，编译器会确保它以 UTF-8 的形式正确呈现，而不是变成 ?? 或 锟斤拷。
+
+### **在 C++ 中，如果你要输出一段包含大量换行、反斜杠（\）或引号的字符串，你该怎么做？**
+
+- **标准答案**：使用 **C++11 引入的原始字符串字面量 (Raw String Literals)**，语法为 R"(字符串内容)"。
+- **为什么要用它？**：**无需转义**：在普通字符串里，你需要写 \\ 来代表一个 \，这在画 ASCII 艺术字时简直是噩梦。在 R"(...)" 中，你看到什么，输出就是什么。**支持多行**：它允许直接在代码里换行，非常适合写 Shader 源码、JSON 模板或艺术字 Logo。

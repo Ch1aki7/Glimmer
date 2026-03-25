@@ -22,10 +22,12 @@ project "Glimmer"
     }
     
     includedirs {
-        "%{prj.name}/src"
+        "%{prj.name}/src",
+        "%{prj.name}/vendor/spdlog/include"
     }
 
     filter "system:windows"
+    buildoptions { "/utf-8" }
     systemversion "latest"
     defines {
         "GL_PLATFORM_WINDOWS",
@@ -48,7 +50,8 @@ project "Sandbox"
     }
 
     includedirs {
-        "Glimmer/src" -- 沙盒需要引用引擎的代码
+        "Glimmer/src", -- 沙盒需要引用引擎的代码
+        "Glimmer/vendor/spdlog/include"
     }
 
     links {
@@ -56,6 +59,7 @@ project "Sandbox"
     }
 
     filter "system:windows"
+    buildoptions { "/utf-8" }
     systemversion "latest"
     defines {
         "GL_PLATFORM_WINDOWS"

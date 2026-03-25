@@ -1,0 +1,3 @@
+[submodule "Glimmer/vendor/spdlog"]
+	path = Glimmer/vendor/spdlog
+	url = https://github.com/gabime/spdlog.git
