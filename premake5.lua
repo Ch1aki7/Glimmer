@@ -16,6 +16,9 @@ project "Glimmer"
     targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
 
+    pchheader "glpch.h" -- 告诉编译器 PCH 的名字
+    pchsource "Glimmer/src/glpch.cpp" -- 只有 Glimmer 项目需要这个源文件
+
     files {
         "%{prj.name}/src/**.h",
         "%{prj.name}/src/**.cpp",

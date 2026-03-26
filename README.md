@@ -346,7 +346,291 @@ workspace "GlimmerEngine"
 
 <img src="README.assets/image-20260325164801944.png" alt="image-20260325164801944" style="zoom:67%;" />
 
- 
+##  事件系统
+
+在游戏引擎架构中，**事件系统（Event System）** 被称为引擎的“神经系统”。
+
+它的核心作用是**解耦（Decoupling）**：让底层的窗口（如 GLFW 窗口）在发生动作（点击、缩放）时，不需要知道谁在处理这些动作，只需要把“信号”发出去，让上层的游戏逻辑（Sandbox）去监听并执行。
+
+###  核心组成部分
+
+- **EventType (枚举)**：定义具体的事件类型（如 KeyPressed, MouseButtonPressed, WindowClose）。
+- **EventCategory (位掩码枚举)**：将事件分类（如 Keyboard, Mouse, Input）。一个事件可以属于多个分类（例如“按下鼠标”既属于 Mouse 也属于 Input）。
+- **Event (基类)**：所有事件的祖先，定义了获取类型、分类、是否被处理（Handled）的接口。
+- **EventDispatcher (分发器)**：核心逻辑。它像一个过滤器，根据事件的类型，把它交给正确的函数去处理
+
+```
+#pragma once
+#include "Core.h"  // 我们需要在这里定义位操作宏
+
+namespace gl {
+
+    // 事件类型枚举
+    enum class EventType {
+        None = 0,
+        WindowClose, WindowResize, WindowFocus, WindowLostFocus, WindowMoved,
+        AppTick, AppUpdate, AppRender,
+        KeyPressed, KeyReleased, KeyTyped,
+        MouseButtonPressed, MouseButtonReleased, MouseMoved, MouseScrolled
+    };
+
+    // 事件分类（使用位移操作，方便一个事件属于多个分类）
+    enum EventCategory {
+        None = 0,
+        EventCategoryApplication = BIT(0),
+        EventCategoryInput = BIT(1),
+        EventCategoryKeyboard = BIT(2),
+        EventCategoryMouse = BIT(3),
+        EventCategoryMouseDevice = BIT(4)
+    };
+
+    // 为了方便子类实现，定义的辅助宏
+#define EVENT_CLASS_TYPE(type) static EventType GetStaticType() { return EventType::##type; }\
+                               virtual EventType GetEventType() const override { return GetStaticType(); }\
+                               virtual const char* GetName() const override { return #type; }
+
+#define EVENT_CLASS_CATEGORY(category) virtual int GetCategoryFlags() const override { return category; }
+
+    // 事件基类
+    class Event {
+    public:
+        bool Handled = false; // 如果被处理了，就不再传给下一层
+
+        virtual EventType GetEventType() const = 0;
+        virtual const char* GetName() const = 0;
+        virtual int GetCategoryFlags() const = 0;
+        virtual std::string ToString() const { return GetName(); }
+
+        // 检查该事件是否属于某个分类
+        inline bool IsInCategory(EventCategory category) {
+            return GetCategoryFlags() & category;
+        }
+    };
+
+    // 事件分发器：根据类型执行对应的函数
+    class EventDispatcher {
+        template<typename T>
+        using EventFn = std::function<bool(T&)>;
+    public:
+        EventDispatcher(Event& event) : m_Event(event) {}
+
+        template<typename T>
+        bool Dispatch(EventFn<T> func) {
+            if (m_Event.GetEventType() == T::GetStaticType()) {
+                m_Event.Handled = func(*(T*)&m_Event);
+                return true;
+            }
+            return false;
+        }
+    private:
+        Event& m_Event;
+    };
+
+    // 方便 spdlog 直接打印事件对象
+    inline std::ostream& operator<<(std::ostream& os, const Event& e) {
+        return os << e.ToString();
+    }
+}
+```
+
+ Core.h，用来放引擎最基础的宏定义
+
+```
+#pragma once
+
+// BIT(x) 宏： 1 << 0 = 1, 1 << 1 = 2, 1 << 2 = 4...
+// 用于 EventCategory 的位掩码判定
+#define BIT(x) (1 << x)
+```
+
+同理编写各种事件，目前包含KeyEvent、MoudeEvent、ApplicationEvent，这里需要注意头文件的作用情况
+
+```
+#pragma once
+#include "Glimmer/Events/Event.h"
+
+namespace gl {
+
+    class KeyEvent : public Event {
+    public:
+        inline int GetKeyCode() const { return m_KeyCode; }
+        EVENT_CLASS_CATEGORY(EventCategoryKeyboard | EventCategoryInput)
+    protected:
+        KeyEvent(int keycode) : m_KeyCode(keycode) {}
+        int m_KeyCode;
+    };
+
+    class KeyPressedEvent : public KeyEvent {
+    public:
+        KeyPressedEvent(int keycode, int repeatCount)
+            : KeyEvent(keycode), m_RepeatCount(repeatCount) {}
+
+        inline int GetRepeatCount() const { return m_RepeatCount; }
+
+        std::string ToString() const override {
+            std::stringstream ss;
+            ss << "KeyPressedEvent: " << m_KeyCode << " (" << m_RepeatCount << " repeats)";
+            return ss.str();
+        }
+
+        EVENT_CLASS_TYPE(KeyPressed)
+    private:
+        int m_RepeatCount;
+    };
+}#pragma once
+#include "Glimmer/Events/Event.h"
+
+namespace gl {
+
+    class KeyEvent : public Event {
+    public:
+        inline int GetKeyCode() const { return m_KeyCode; }
+        EVENT_CLASS_CATEGORY(EventCategoryKeyboard | EventCategoryInput)
+    protected:
+        KeyEvent(int keycode) : m_KeyCode(keycode) {}
+        int m_KeyCode;
+    };
+
+    class KeyPressedEvent : public KeyEvent {
+    public:
+        KeyPressedEvent(int keycode, int repeatCount)
+            : KeyEvent(keycode), m_RepeatCount(repeatCount) {}
+
+        inline int GetRepeatCount() const { return m_RepeatCount; }
+
+        std::string ToString() const override {
+            std::stringstream ss;
+            ss << "KeyPressedEvent: " << m_KeyCode << " (" << m_RepeatCount << " repeats)";
+            return ss.str();
+        }
+
+        EVENT_CLASS_TYPE(KeyPressed)
+    private:
+        int m_RepeatCount;
+    };
+}
+```
+
+最后尝试在Application调试
+
+```
+    void Application::Run() {
+
+        WindowResizeEvent e(1920, 1080);
+        GL_TRACE("{0}", e);
+
+        while (true) {
+            // 这里将是未来游戏的心脏：Game Loop
+        }
+    }
+```
+
+但是出现报错
+
+```
+1>E:\Zaproject\Engine\Glimmer\Glimmer\vendor\spdlog\include\spdlog\fmt\bundled\base.h(2310,45): error C2079: “_”使用未定义的 struct“fmt::v12::detail::type_is_unformattable_for<T,char>”
+1>        with
+1>        [
+1>            T=gl::WindowResizeEvent
+1>        ]
+```
+
+回头检查了很多次，很奇怪，宏就是无法识别e作为传输对象，只有加上ToString才可以通过
+
+![image-20260326113548656](README.assets/image-20260326113548656.png)
+
+查了一些资料，找到了原因：fmt 12+（新版）不认识你的 Event 类，不知道怎么格式化它
+
+需要**在 Event.h 末尾**加一段 fmt 格式化支持代码
+
+```
+#include <spdlog/fmt/fmt.h>
+
+template<typename T>
+struct fmt::formatter<T, std::enable_if_t<std::is_base_of_v<gl::Event, T>, char>>
+    : fmt::formatter<std::string>
+{
+    auto format(const T& e, format_context& ctx) const
+    {
+        return formatter<std::string>::format(e.ToString(), ctx);
+    }
+};
+```
+
+之后就不会进行报错
+
+![image-20260326114511827](README.assets/image-20260326114511827.png)
+
+## 预编译头文件 (PCH)
+
+在上一节的事件系统可以看到，如果你使用了某个标准库的功能（比如 std::function）却没有包含对应的头文件（<functional>），编译器会变得非常混乱。它不认识 std::function，导致后面的**模板解析全部失败**，进而引发了一连串莫名其妙的错误（甚至连 spdlog 和系统的 <ratio> 库都会跟着报废）。这在之后模块越来越多的情况下是难以进行管理的，因此为了彻底解决“漏掉头文件”的问题并大幅提升编译速度，正式引入“预编译头文件 (PCH)”
+
+在 Glimmer/src 下创建 glpch.h。把所有常用的标准库全放进去。
+
+```
+#pragma once
+
+#include <iostream>
+#include <memory>
+#include <utility>
+#include <algorithm>
+#include <functional>
+
+#include <string>
+#include <sstream>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+
+#ifdef GL_PLATFORM_WINDOWS
+#include <Windows.h>
+#endif
+```
+
+在 Glimmer/src 下创建 glpch.cpp。
+*(注意：这是给 Visual Studio 用的，它需要一个空的源文件来触发编译 PCH)*。
+
+```
+#include "glpch.h"
+```
+
+修改 premake5.lua 启用 PCH，需要告诉 Premake 哪个是 PCH 文件。
+
+```
+project "Glimmer"
+    -- ... 之前的配置 ...
+
+    pchheader "glpch.h" -- 告诉编译器 PCH 的名字
+    pchsource "Glimmer/src/glpch.cpp" -- 只有 Glimmer 项目需要这个源文件
+
+    files {
+        "%{prj.name}/src/**.h",
+        "%{prj.name}/src/**.cpp",
+    }
+    -- ...
+```
+
+**所有属于 Glimmer 项目内部的 .cpp 源文件**（即 Glimmer/src 下的所有文件），都**必须**在第一行写上 #include "glpch.h"。
+
+- **原因**：你在 Premake 里为 Glimmer 项目开启了 PCH。如果编译器在 Glimmer 项目的 .cpp 文件里第一行没看到这个头文件，它就会报错（报错代码通常是 C1010）。
+
+**绝对不要包含 glpch.h 的文件**
+
+1. 引擎内部的 .h 头文件 (重要！)
+
+   **永远不要在 .h 文件里 #include "glpch.h"。**
+
+   **原因**：头文件是被别人引用的。如果你在 Event.h 里写了 glpch.h，而外部的 Sandbox 项目引用了 Event.h，但 Sandbox 没有配置这个 PCH，它就会报错找不到 glpch.h。
+
+   **做法**：在 .h 里，如果你需要 std::string，就直接包含 #include <string>。
+
+2. Sandbox 项目的所有文件
+
+   **绝对不要在 Sandbox 里的任何文件包含 glpch.h。**
+
+   **原因**：glpch.h 是属于 Glimmer 引擎项目的内部私有财产。Sandbox 是另一个独立的工程，它有自己的编译环境。它甚至不需要 PCH，或者它可能有自己的一套 sandpch.h。
+
+启用过后编译速度真起飞了
 
 ## KB
 
@@ -412,3 +696,28 @@ workspace "GlimmerEngine"
 
 - **标准答案**：使用 **C++11 引入的原始字符串字面量 (Raw String Literals)**，语法为 R"(字符串内容)"。
 - **为什么要用它？**：**无需转义**：在普通字符串里，你需要写 \\ 来代表一个 \，这在画 ASCII 艺术字时简直是噩梦。在 R"(...)" 中，你看到什么，输出就是什么。**支持多行**：它允许直接在代码里换行，非常适合写 Shader 源码、JSON 模板或艺术字 Logo。
+
+### **为什么在事件系统中，EventCategory **要使用 **BIT(x)** **位移操作，而不是简单的 1, 2, 3 数字？**
+
+- **标准答案**：**多重归属（Multiple Categories）**：使用位掩码（Bitmask）可以允许一个事件同时属于多个分类。例如，MouseButtonPressedEvent 的分类标志可以是 EventCategoryMouse | EventCategoryInput（结果是二进制的 1010）。
+- **高效查询**：检查一个事件是否属于某个分类只需要一次位运算（&），速度极快，这在每秒产生成千上万个事件的引擎中至关重要。
+
+### **Glimmer 现在的事件系统是“阻塞式（Blocking）”的，这有什么优缺点？**
+
+- **标准答案**：
+
+  **优点**：实现简单，逻辑直观。事件一发生立即处理，不需要额外的内存缓冲区。
+
+  **缺点**：如果处理某个事件（如复杂计算）太耗时，会直接卡住主循环，导致掉帧。
+
+  **未来优化**：后续可以引入“事件队列（Event Queue）”，将不紧急的事件存起来，在下一帧统筹处理。
+
+### **为什么大型 C++ 项目一定要用 PCH？它的原理是什么？**
+
+- **标准答案**：
+
+  **原理**：C++ 的 #include 是简单的文本拷贝。如果你有 1000 个文件都包含了 <Windows.h>（约 10 万行代码），编译器就要处理 1 亿行代码。PCH 的做法是**将这些头文件预先编译成二进制格式**。
+
+  **作用**：后续编译其他源文件时，编译器直接加载二进制缓存，不再重复解析。
+
+  **结果**：可以把数分钟的编译时间缩短到几秒钟，显著提升开发效率。
