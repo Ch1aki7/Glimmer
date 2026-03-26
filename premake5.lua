@@ -6,6 +6,8 @@ workspace "GlimmerEngine"
 
     outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
+include "Glimmer/vendor/GLFW"
+
 project "Glimmer"
     location "Glimmer"
     kind "StaticLib"
@@ -26,7 +28,13 @@ project "Glimmer"
     
     includedirs {
         "%{prj.name}/src",
-        "%{prj.name}/vendor/spdlog/include"
+        "%{prj.name}/vendor/spdlog/include",
+        "%{prj.name}/vendor/GLFW/include"
+    }
+
+    links {
+        "GLFW", -- 直接写项目名，Premake 会自动处理静态库链接
+        "opengl32.lib"
     }
 
     filter "system:windows"

@@ -632,6 +632,209 @@ project "Glimmer"
 
 启用过后编译速度真起飞了
 
+## 窗口和GLFW
+
+引入 **GLFW** 是 Glimmer 引擎从“控制台黑框框”向“真正的图形化软件”跨越的关键一步。
+
+我们将遵循工业级引擎的开发模式：**不要直接在 Application 里写 GLFW 代码**，而是先建立一个**窗口抽象层（Window Abstraction）**。这样未来你想把底层换成 DirectX 或支持手机端时，只需要增加一个实现类，而不需要改动引擎核心逻辑。
+
+添加子模块
+
+```
+git submodule add https://github.com/glfw/glfw.git .\Glimmer\vendor\GLFW
+```
+
+在 **Glimmer/vendor/GLFW/** 目录下新建文件 **premake5.lua**：
+
+
+
+**修改 premake5.lua**：
+我们需要告诉 Glimmer 项目去哪里找 GLFW。
+
+```
+-- Glimmer 项目配置中增加：
+project "Glimmer"
+    -- ...
+    includedirs {
+        "%{prj.name}/src",
+        "%{prj.name}/vendor/spdlog/include",
+        "%{prj.name}/vendor/GLFW/include" -- 新增
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        defines { "GL_PLATFORM_WINDOWS" }
+        
+        -- 新增链接项
+        links { 
+            "GLFW", 
+            "opengl32.lib" -- Windows 自带的 OpenGL 驱动库
+        }
+
+        libdirs {
+            "Glimmer/vendor/GLFW/lib" -- 告诉 Premake 去哪里找 glfw3.lib
+        }
+```
+
+定义窗口接口 (Window.h)
+
+在 Glimmer/src/Glimmer 下创建 Window.h。这是一个纯虚基类，定义了所有平台窗口都必须有的功能。
+
+**Glimmer/src/Glimmer/Window.h**:
+
+
+
+Windows 平台的具体实现 (WindowsWindow.h/cpp)
+
+我们在 Glimmer/src/Platform/Windows 目录下专门存放 Windows 特有的代码。
+
+**Glimmer/src/Platform/Windows/WindowsWindow.h**:
+
+
+
+实现窗口初始化 (WindowsWindow.cpp)
+
+在这里，我们将调用 GLFW 的 API 来真正弹出一个窗口，并设置 **VSync（垂直同步）**。
+
+**Glimmer/src/Platform/Windows/WindowsWindow.cpp**:
+
+
+
+在 Application 中接入窗口
+
+**Glimmer/src/Glimmer/Application.h**:
+
+```
+    private:
+        std::unique_ptr<Window> m_Window; // 引擎持有的窗口指针
+        bool m_Running = true;
+```
+
+**Glimmer/src/Glimmer/Application.cpp**:
+
+```
+// Application.cpp
+#include "glpch.h"
+#include "Application.h"
+
+namespace gl {
+    Application::Application() {
+        m_Window = std::unique_ptr<Window>(Window::Create());
+    }
+    Application::~Application() {}
+
+    void Application::Run() {
+
+        while (m_Running) {
+            m_Window->OnUpdate();
+        }
+    }
+}
+```
+
+现在运行可以生成一个全黑的窗口了！
+
+![image-20260326132003846](README.assets/image-20260326132003846.png)
+
+## 窗口事件
+
+目前窗口虽然能弹出来，但它就像一个植物人，对外界的点击、缩放、关闭毫无反应。我们要利用 GLFW 的**回调（Callbacks）**机制，将系统的原生消息转化为我们之前写好的 Event 类，并传回给 Application。
+
+在 WindowsWindow.cpp 中绑定 GLFW 回调
+
+这是最关键的一步。GLFW 是 C 语言写的，它使用全局函数作为回调，而我们的引擎是 C++ 面向对象的。我们利用 glfwSetWindowUserPointer 将我们的 WindowData 结构体塞进 GLFW 窗口里。
+
+修改 **WindowsWindow.cpp** 的 Init 函数：
+
+引入三类事件文件
+
+```
+// 设置窗口缩放回调
+glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* window, int width, int height) {
+    // 从“口袋”里掏出我们的 Data
+    WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
+    data.Width = width;
+    data.Height = height;
+
+    WindowResizeEvent event(width, height);
+    data.EventCallback(event); // 触发回调！
+    });
+```
+
+（我们在之后通过 glfwSetWindowUserPointer 和 glfwGetWindowUserPointer 获取了 m_Data,并将其复制到一个名为data的引用上：WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window); ） 
+
+调用出来的 OnEvent( ) 就相当于 data.EventCallback( )，然而 OnEvent 在定义上是需要参数的，所以 data.EventCallback(event) == OnEvent(event) ,这个 event ，就是我们用占位符延缓的参数（ 这个参数被标明会在后续使用） 
+
+在使用 Event 对象作为 OnEvent 的参数填入之后，event这个参数参与到 OnEvent 函数体内的操作中去，完成我们定义的操作。
+
+![image-20260326151138428](README.assets/image-20260326151138428.png)
+
+其余同理
+
+在 Application 中接收事件
+
+现在 WindowsWindow 会疯狂地向外发送事件，我们需要在 Application 里接住它们并决定如何处理。
+
+**Application.h**:
+
+```
+class Application {
+    public:
+        // ...
+        void OnEvent(Event& e); // 处理事件的中心枢纽
+    private:
+        bool OnWindowClose(WindowCloseEvent& e); // 专门处理关闭的逻辑
+        // ...
+    };
+```
+
+**Application.cpp**:
+
+```
+// 在构造函数里绑定回调
+Application::Application() {
+    m_Window = std::unique_ptr<Window>(Window::Create());
+    
+    // 使用 Lambda 表达式把事件传给 OnEvent
+    m_Window->SetEventCallback([this](Event& e) {
+        this->OnEvent(e);
+    });
+}
+
+void Application::OnEvent(Event& e) {
+    // 1. 打印所有事件（调试用）
+    GL_CORE_TRACE("{0}", e.ToString());
+
+    // 2. 使用分发器处理特定事件
+    EventDispatcher dispatcher(e);
+    // 如果是关闭窗口事件，就执行 OnWindowClose 函数
+    dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent& event) {
+        return this->OnWindowClose(event);
+    });
+}
+
+bool Application::OnWindowClose(WindowCloseEvent& e) {
+    m_Running = false; // 停止 while 循环，优雅退出
+    return true;
+}
+```
+
+```
+m_Window->SetEventCallback([this](Event& e) {
+    this->OnEvent(e);
+});
+```
+
+- **原理**：编译器会为你自动生成一个匿名的“闭包”类。[this] 表示通过值捕获当前对象的指针，使得 Lambda 内部可以访问成员函数。
+
+  **性能更好**：编译器更容易对 Lambda 进行内联（Inline）优化。它不涉及复杂的包装转换，几乎没有额外开销。
+
+  **更直观**：代码一眼就能看出逻辑——“当事件 e 发生时，执行 this->OnEvent(e)”。
+
+  **调试友好**：在断点调试时，堆栈信息比 std::bind 简单得多。
+
+![image-20260326183438714](README.assets/image-20260326183438714.png)
+
 ## KB
 
 ### 为什么不用动态库？
@@ -721,3 +924,22 @@ project "Glimmer"
   **作用**：后续编译其他源文件时，编译器直接加载二进制缓存，不再重复解析。
 
   **结果**：可以把数分钟的编译时间缩短到几秒钟，显著提升开发效率。
+
+### **为什么在 Window::Create 中使用静态工厂方法，而不是直接 new WindowsWindow？**
+
+- **标准答案**：
+  为了实现**跨平台隐藏**。在 Application.cpp 中，我们只需要包含通用的 Window.h，而不需要知道 WindowsWindow.h 的存在。这样在编译 Linux 版时，Window::Create 会返回 LinuxWindow，而 Application 的逻辑代码一行都不用改。这符合设计模式中的**工厂模式**和**依赖倒置原则**。
+
+### **什么是 VSync（垂直同步）？它的底层原理是什么？**
+
+- **标准答案**：
+  VSync 用于将显示器的刷新率（如 60Hz）与 GPU 的渲染帧率同步。
+  **原理**：GPU 有两个缓冲区（Front Buffer 和 Back Buffer）。当开启 VSync 时，GPU 会等待显示器的 **垂直空白间隙 (Vertical Blanking Interval)** 信号，才执行 **双缓冲交换 (Buffer Swapping)**。这能有效防止画面撕裂（Screen Tearing），但可能会增加微小的输入延迟。
+
+### **在处理 GLFW 回调时，为什么不能直接在回调里写 Application::OnEvent(...)？**
+
+- **标准答案**：**语法限制**：GLFW 的回调是 C 风格的函数指针，它无法直接调用 C++ 对象的成员函数（因为没有 this 指针）。
+
+  **解耦原则**：底层的窗口模块不应该知道上层的 Application 是谁。
+
+  **解决方案**：使用 glfwSetWindowUserPointer。这是一个极其经典的 C/C++ 混编技巧。它允许我们将一个自定义对象的地址存在 C 库持有的句柄里，在回调触发时再强转回来。这本质上是在为 C 语言的回调函数提供“上下文”。

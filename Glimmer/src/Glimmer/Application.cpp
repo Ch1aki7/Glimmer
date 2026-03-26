@@ -2,20 +2,35 @@
 #include "glpch.h"
 #include "Application.h"
 
-#include "Glimmer/Events/ApplicationEvent.h"
-#include "Glimmer/Log.h"
-
 namespace gl {
-    Application::Application() {}
+    Application::Application() {
+        m_Window = std::unique_ptr<Window>(Window::Create());
+        // 使用 Lambda 表达式把事件传给 OnEvent
+        m_Window->SetEventCallback([this](Event& e) {
+            this->OnEvent(e);
+            });
+    }
     Application::~Application() {}
 
+    void Application::OnEvent(Event& e) {
+        GL_CORE_TRACE("{0}", e);
+
+        EventDispatcher dispatcher(e);
+        dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent& event) {
+            return this->OnWindowClose(event);
+            });
+    }
     void Application::Run() {
 
-        WindowResizeEvent e(1920, 1080);
-        GL_TRACE(e);
-
-        while (true) {
-            // 这里将是未来游戏的心脏：Game Loop
+        while (m_Running) {
+            m_Window->OnUpdate();
         }
     }
+
+    bool Application::OnWindowClose(WindowCloseEvent& e) {
+        m_Running = false;
+        return true;
+    }
+
+
 }

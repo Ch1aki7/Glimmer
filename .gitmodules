@@ -1,3 +1,6 @@
 [submodule "Glimmer/vendor/spdlog"]
 	path = Glimmer/vendor/spdlog
 	url = https://github.com/gabime/spdlog.git
+[submodule "Glimmer/vendor/GLFW"]
+	path = Glimmer/vendor/GLFW
+	url = https://github.com/glfw/glfw.git
