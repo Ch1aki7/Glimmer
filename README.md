@@ -835,6 +835,220 @@ m_Window->SetEventCallback([this](Event& e) {
 
 ![image-20260326183438714](README.assets/image-20260326183438714.png)
 
+## 图层(Layer)
+
+在游戏引擎开发中，**图层（Layer）** 是组织游戏逻辑的核心架构。
+
+想象一下：你的游戏有背景地图、玩家角色、敌人、以及顶层的 UI 菜单和调试信息。如果不分层，所有的代码都会堆在 Application::Run 的死循环里，变得无法维护。
+
+**图层系统的目的：** 把引擎的一帧拆解成多个有序的步骤，并让事件（如鼠标点击）能从上往下传递（UI 层先接住，如果 UI 没拦截，再传给游戏层）。
+
+定义图层基类 (Layer.h)
+
+在 Glimmer/src/Glimmer 下创建 Layer.h。
+
+**Layer.h**:
+
+```
+#pragma once
+
+#include "Glimmer/Core.h"
+#include "Glimmer/Events/Event.h"
+
+namespace gl {
+
+    class Layer {
+    public:
+        Layer(const std::string& name = "Layer");
+        virtual ~Layer();
+
+        virtual void OnAttach() {}    // 当图层被推入引擎时调用（类似 Start）
+        virtual void OnDetach() {}    // 当图层被移除时调用
+        virtual void OnUpdate() {}    // 每帧调用（类似 Update）
+        virtual void OnEvent(Event& event) {} // 当事件发生时调用
+
+        inline const std::string& GetName() const { return m_DebugName; }
+    protected:
+        std::string m_DebugName; // 用于调试的名字
+    };
+
+}
+```
+
+**Layer.cpp**:
+
+```
+#include "glpch.h"
+#include "Layer.h"
+
+namespace gl {
+    Layer::Layer(const std::string& name) : m_DebugName(name) {}
+    Layer::~Layer() {}
+}
+```
+
+实现图层栈 (LayerStack.h/cpp)
+
+图层栈负责管理图层的顺序。在 Glimmer 中，我们把图层分为两类：
+
+1. **普通图层 (Layers)**：放在栈的前半部分（如关卡、背景）。
+2. **覆盖层 (Overlays)**：永远放在栈的最后面（如 UI、控制台），保证它们始终在最上层。
+
+**LayerStack.h**:
+
+```
+#pragma once
+
+#include "glpch.h"
+#include "Layer.h"
+
+namespace gl {
+
+    class LayerStack {
+    public:
+        LayerStack();
+        ~LayerStack();
+
+        void PushLayer(Layer* layer);
+        void PushOverlay(Layer* overlay);
+        void PopLayer(Layer* layer);
+        void PopOverlay(Layer* overlay);
+
+        // 为了方便循环遍历
+        std::vector<Layer*>::iterator begin() { return m_Layers.begin(); }
+        std::vector<Layer*>::iterator end() { return m_Layers.end(); }
+    private:
+        std::vector<Layer*> m_Layers;
+        unsigned int m_LayerInsertIndex = 0; // 用于追踪普通图层应该插在哪里
+    };
+
+}
+```
+
+**LayerStack.cpp**:
+
+```
+#include "glpch.h"
+#include "LayerStack.h"
+
+namespace gl {
+
+    LayerStack::LayerStack() {}
+
+    LayerStack::~LayerStack() {
+        for (Layer* layer : m_Layers)
+            delete layer;
+    }
+
+    void LayerStack::PushLayer(Layer* layer) {
+        // 普通图层插入到 Index 位置，Index 后移
+        m_Layers.emplace(m_Layers.begin() + m_LayerInsertIndex, layer);
+        m_LayerInsertIndex++;
+    }
+
+    void LayerStack::PushOverlay(Layer* overlay) {
+        // 覆盖层直接插在末尾
+        m_Layers.emplace_back(overlay);
+    }
+
+    void LayerStack::PopLayer(Layer* layer) {
+        auto it = std::find(m_Layers.begin(), m_Layers.end(), layer);
+        if (it != m_Layers.end()) {
+            m_Layers.erase(it);
+            m_LayerInsertIndex--;
+        }
+    }
+
+    void LayerStack::PopOverlay(Layer* overlay) {
+        auto it = std::find(m_Layers.begin(), m_Layers.end(), overlay);
+        if (it != m_Layers.end())
+            m_Layers.erase(it);
+    }
+}
+```
+
+在 Application 中集成
+
+现在我们要让 Application 拥有这个栈，并在每帧去更新它，在每个事件去分发它。
+
+**Application.h**:
+
+```
+// ... 增加引用 ...
+#include "Glimmer/LayerStack.h"
+
+    class Application {
+    public:
+        void PushLayer(Layer* layer);
+        void PushOverlay(Layer* overlay);
+        // ...
+    private:
+        LayerStack m_LayerStack;
+        // ...
+    };
+```
+
+随后在**Application.cpp**:实现函数
+
+注意顺序
+
+```
+// 核心逻辑：事件倒序分发
+// 为什么要倒序？因为最上层（UI）在 vector 的末尾，它们应该先处理事件
+for (auto it = m_LayerStack.end(); it != m_LayerStack.begin(); ) {
+    (*--it)->OnEvent(e);
+    if (e.Handled) // 如果事件被某一层拦截了，直接停止传递
+        break;
+}
+```
+
+```
+void Application::Run() {
+
+    while (m_Running) {
+        // 核心逻辑：正序更新
+        // 先渲染背景，再渲染玩家，最后渲染 UI
+        for (Layer* layer : m_LayerStack)
+            layer->OnUpdate();
+
+        m_Window->OnUpdate();
+    }
+}
+```
+
+在 Sandbox 中测试
+
+在 SandboxApp.cpp 里创建一个测试图层：
+
+```
+class ExampleLayer : public gl::Layer {
+public:
+    ExampleLayer() : Layer("Example") {}
+
+    void OnUpdate() override {
+         GL_INFO("ExampleLayer::Update");
+    }
+
+    void OnEvent(gl::Event& event) override {
+        GL_TRACE("{0}", event.ToString());
+    }
+};
+
+class Sandbox : public gl::Application {
+public:
+    Sandbox() {
+        std::cout << "Glimmer Engine Initialized! Hello World!" << std::endl;
+        //在这里激活
+        PushLayer(new ExampleLayer());
+    }
+    ~Sandbox() {}
+};
+```
+
+运行可以看到，Example层一直在更新，但同时也会监听其他操作
+
+<img src="README.assets/image-20260326200942243.png" alt="image-20260326200942243" style="zoom:67%;" />
+
 ## KB
 
 ### 为什么不用动态库？

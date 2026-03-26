@@ -2,11 +2,25 @@
 #include <Glimmer.h>
 #include <iostream>
 
+class ExampleLayer : public gl::Layer {
+public:
+    ExampleLayer() : Layer("Example") {}
+
+    void OnUpdate() override {
+         GL_INFO("ExampleLayer::Update");
+    }
+
+    void OnEvent(gl::Event& event) override {
+        GL_TRACE("{0}", event.ToString());
+    }
+};
+
 // 继承 Glimmer 的引擎基类
 class Sandbox : public gl::Application {
 public:
     Sandbox() {
         std::cout << "Glimmer Engine Initialized! Hello World!" << std::endl;
+        PushLayer(new ExampleLayer());
     }
     ~Sandbox() {}
 };
