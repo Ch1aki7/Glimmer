@@ -1049,6 +1049,94 @@ public:
 
 <img src="README.assets/image-20260326200942243.png" alt="image-20260326200942243" style="zoom:67%;" />
 
+## Glad
+
+**GLAD** 是 Glimmer 引擎与显卡驱动之间的“翻译官”。OpenGL 的函数实现是在显卡驱动里的，C++ 默认找不到它们。GLAD 的作用就是**加载所有 OpenGL 函数的指针**，让你能写出 glClear、glDrawArrays 这些指令。
+
+我们要遵循**高度解耦**的架构：创建一个 GraphicsContext（图形上下文）接口。这样以后如果你想把 OpenGL 换成 Vulkan，只需要换一个 Context 实现，而不必拆掉整个窗口系统。
+
+**获取 GLAD 源代码**
+
+1. 访问 [GLAD 在线生成器](https://glad.dav1d.de/)。
+2. **Language**: C/C++
+3. **API**: gl Version **4.6** (或者 4.5，确保选 **Core** 模式)。
+4. 点击 **Generate**，下载生成的 ZIP 包。
+5. **物理存放**：将 include/glad 和 include/KHR 文件夹放入 Glimmer/vendor/Glad/include。将 src/glad.c 放入 Glimmer/vendor/Glad/src。
+
+**为 Glad 编写 Premake 脚本**
+
+因为 Glad 包含一个 .c 文件，我们需要把它编译进引擎。
+
+在 **Glimmer/vendor/Glad/** 目录下新建 **premake5.lua**：
+
+```
+project "Glad"
+    kind "StaticLib"
+    language "C"
+    staticruntime "on"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "include/glad/glad.h",
+        "include/KHR/khrplatform.h",
+        "src/glad.c"
+    }
+
+    includedirs {
+        "include"
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+```
+
+修改根目录的 **premake5.lua**：
+
+1. 在 include "Glimmer/vendor/GLFW" 下面增加 include "Glimmer/vendor/Glad"。
+2. 在 Glimmer 项目的 includedirs 中增加 "%{prj.name}/vendor/Glad/include"。
+3. 在 Glimmer 项目的 links 中增加 "Glad"。
+
+**运行 GenerateProject.bat。**
+
+修改WindowsWindow.cpp进行测试
+
+在WindowsWindow更新了
+
+```
+m_Window = glfwCreateWindow((int)props.Width, (int)props.Height, m_Data.Title.c_str(), nullptr, nullptr);
+glfwMakeContextCurrent(m_Window);
+int status = gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+
+glfwSetWindowUserPointer(m_Window, &m_Data);
+SetVSync(true);
+```
+
+报错1>E:\Zaproject\Engine\Glimmer\Glimmer\vendor\Glad\include\glad\glad.h(27,1): fatal  error C1189: #error:  OpenGL header already included, remove this include, glad already provides it
+
+**报错原因**：
+GLAD 和 GLFW 都在争夺对 OpenGL 头文件的控制权。
+
+1. GLAD 必须在**最前面**被包含，因为它定义了所有的 OpenGL 函数。
+2. GLFW 默认也会自动包含一个标准的 GL.h。
+3. 如果你先包含了 GLFW/glfw3.h 再包含 glad/glad.h，或者在同一个文件里它们顺序反了，就会触发 GLAD 源码里的那个 #error 保护机制。
+
+可以
+
+```
+// WindowsWindow.h 或 WindowsWindow.cpp 的顶部
+#include <glad/glad.h>   // 1. GLAD 永远在第一位
+#define GLFW_INCLUDE_NONE // 2. 告诉 GLFW 别带上默认的 OpenGL 头文件
+#include <GLFW/glfw3.h>  // 3. 然后再包含 GLFW
+```
+
+不加宏定义也行，只是要保证顺序
+
+断点调试结果保证正常运行
+
+![image-20260327125047422](README.assets/image-20260327125047422.png)
+
 ## KB
 
 ### 为什么不用动态库？
@@ -1157,3 +1245,28 @@ public:
   **解耦原则**：底层的窗口模块不应该知道上层的 Application 是谁。
 
   **解决方案**：使用 glfwSetWindowUserPointer。这是一个极其经典的 C/C++ 混编技巧。它允许我们将一个自定义对象的地址存在 C 库持有的句柄里，在回调触发时再强转回来。这本质上是在为 C 语言的回调函数提供“上下文”。
+
+### **如果我想在引擎里加一个“性能监控面板（FPS计数器）”，我该怎么做？**
+
+- **标准答案**：我会创建一个专门的 **Overlay（覆盖层）**。把它放在 LayerStack 的最顶端（最后面）。在 OnUpdate 中计算 FPS 并使用渲染指令画在屏幕顶端。因为它处于最顶层，所以无论游戏层怎么渲染，性能面板永远不会被遮挡，且它通常不拦截鼠标事件（Handled = false），保证不影响玩家玩游戏。
+
+### **为什么 OpenGL 需要 Glad 或 Glew 这样的加载库？直接调用不行吗？**
+
+- **标准答案**：
+
+  **动态寻址**：OpenGL 函数实现在 GPU 驱动里。驱动版本不同，函数的内存地址也不同。
+
+  **跨平台限制**：Windows 只默认支持 OpenGL 1.1。所有更高版本的函数（如 Shader 相关函数）必须在运行时动态获取地址。
+
+  **Glad 的工作**：它通过调用 OS 提供的接口（如 Windows 上的 wglGetProcAddress）把这些深藏在驱动里的函数地址一个一个抠出来，赋值给 C++ 指针，我们才能正常调用。
+
+### **什么是“双缓冲（Double Buffering）”？为什么要 SwapBuffers？**
+
+- **标准答案**：
+  为了防止画面闪烁。
+
+  **后缓冲区（Back Buffer）**：GPU 在后台静静地画图。
+
+  **前缓冲区（Front Buffer）**：显示器当前显示的图。
+
+  **SwapBuffers**：当后缓冲区画好了，瞬间把它和前缓冲区交换。玩家看到的就是完整的画面，而不是 GPU 正在涂色的过程。

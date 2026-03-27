@@ -2,6 +2,7 @@
 #include "glpch.h"
 #include "Application.h"
 
+#include <glad/glad.h>
 namespace gl {
     Application::Application() {
         m_Window = std::unique_ptr<Window>(Window::Create());
@@ -9,6 +10,8 @@ namespace gl {
         m_Window->SetEventCallback([this](Event& e) {
             this->OnEvent(e);
             });
+        unsigned int id;
+        glGenVertexArrays(1, &id);
     }
     Application::~Application() {}
 

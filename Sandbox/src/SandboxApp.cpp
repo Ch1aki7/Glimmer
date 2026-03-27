@@ -7,7 +7,7 @@ public:
     ExampleLayer() : Layer("Example") {}
 
     void OnUpdate() override {
-         GL_INFO("ExampleLayer::Update");
+         //GL_INFO("ExampleLayer::Update");
     }
 
     void OnEvent(gl::Event& event) override {
