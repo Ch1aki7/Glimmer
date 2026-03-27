@@ -4,3 +4,7 @@
 [submodule "Glimmer/vendor/GLFW"]
 	path = Glimmer/vendor/GLFW
 	url = https://github.com/glfw/glfw.git
+[submodule "Glimmer/vendor/imgui"]
+	path = Glimmer/vendor/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = docking

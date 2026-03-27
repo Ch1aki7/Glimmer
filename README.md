@@ -1137,6 +1137,145 @@ GLAD 和 GLFW 都在争夺对 OpenGL 头文件的控制权。
 
 ![image-20260327125047422](README.assets/image-20260327125047422.png)
 
+## ImGui
+
+集成 **Dear ImGui** 是 Glimmer 引擎开发中里程碑式的一步。它不仅能让你画出各种调试滑块、性能图表，更是未来**可视化编辑器**的基石。
+
+按照 Glimmer 的架构，我们将 ImGui 作为一个特殊的 **Overlay（覆盖层）** 插入图层栈。这样它就能永远显示在游戏画面最顶端，并且优先拦截鼠标/键盘事件。
+
+```
+git submodule add -b docking https://github.com/ocornut/imgui.git Glimmer/vendor/imgui
+```
+
+> *-b docking* *分支。这个分支支持“窗口停靠”和“多视图”功能，是做引擎编辑器的标准选择。*
+
+为 ImGui 编写 Premake 脚本
+
+ImGui 本身只是源码，我们需要告诉 Premake 如何编译它的核心代码以及对应的 **GLFW** 和 **OpenGL3** 后端。
+
+在 **Glimmer/vendor/imgui/** 目录下新建 **premake5.lua**：
+
+并**修改根目录的 premake5.lua：**
+
+1. 在 include "Glimmer/vendor/Glad" 下增加 include "Glimmer/vendor/imgui"。
+2. 在 Glimmer 项目的 includedirs 中增加 "%{prj.name}/vendor/imgui" 和 "%{prj.name}/vendor/imgui/backends"。
+3. 在 Glimmer 项目的 links 中增加 "ImGui"。
+
+**运行 GenerateProject.bat。**
+
+
+
+**在 Application 中渲染 ImGui**
+
+现代引擎通常不在 Layer::OnUpdate 里直接画 UI，而是在主循环里专门留出一个位置。
+
+**Application.cpp 改动**：
+
+
+
+为了让 ImGuiLayer 能顺利初始化，我们需要让它能访问到全局的 Application 实例，以及底层的 GLFWwindow 指针。
+
+1. 修改 Window.h (暴露原生窗口指针)
+
+   ```
+   // Glimmer/src/Glimmer/Window.h
+   namespace gl {
+       // ...
+       class Window {
+       public:
+           // ... 其他虚函数
+           virtual void* GetNativeWindow() const = 0; // 【新增】：返回底层窗口句柄
+       };
+   }
+   ```
+
+2. 修改 WindowsWindow.h (实现接口)
+
+   ```
+   // Glimmer/src/Platform/Windows/WindowsWindow.h
+   namespace gl {
+       class WindowsWindow : public Window {
+       public:
+           // ...
+           inline virtual void* GetNativeWindow() const override { return m_Window; } // 【新增】
+       };
+   }
+   ```
+
+3. 修改 Application.h (实现单例模式)
+
+4. 修改 Application.cpp (初始化单例)
+
+   ```
+   namespace gl {
+       Application* Application::s_Instance = nullptr; // 【新增】：定义静态变量
+   
+       Application::Application() {
+           GL_CORE_ASSERT(!s_Instance, "Application already exists!"); // 防止实例化多次
+           s_Instance = this; // 【新增】：把自己存入单例
+   ```
+
+**编写 ImGuiLayer (完整的 UI 渲染层)**
+
+在 Glimmer/src/Glimmer/ImGui 目录下创建这两个文件。
+
+1. ImGuiLayer.h，为了给cpp调用，需要重载Layer里的函数
+
+   ```
+   #pragma once
+   #include "Glimmer/Layer.h"
+   
+   namespace gl {
+       class ImGuiLayer : public Layer {
+       public:
+           ImGuiLayer();
+           ~ImGuiLayer();
+   
+           virtual void OnAttach() override;
+           virtual void OnDetach() override;
+           virtual void OnUpdate() override;
+           virtual void OnEvent(Event& event) override;
+   
+           virtual void OnImGuiRender() override;
+   
+           void Begin(); // 每帧开始前呼叫
+           void End();   // 每帧结束后呼叫
+       private:
+           float m_Time = 0.0f;
+       };
+   }
+   ```
+
+2. cpp代码过长，简要说明：代码实现了一个 ImGui 的引擎层封装（ImGuiLayer），把 Dear ImGui 完整接入到你的引擎生命周期中。核心逻辑是：在 `OnAttach` 中创建 ImGui 上下文并开启键盘控制、Docking 和多窗口 Viewport 等高级功能，同时通过 GLFW 获取原生窗口并初始化 ImGui 的 GLFW + OpenGL 后端；在每一帧通过 `Begin` 和 `End` 控制 ImGui 的更新与渲染流程，其中 `End` 负责将 UI 绘制数据提交给 OpenGL，并在开启多窗口时处理额外的平台窗口渲染和上下文切换；在 `OnDetach` 中则完整释放 ImGui 相关资源。整体上，这段代码把 UI 系统封装成引擎的一个独立 Layer，使 UI 渲染流程与游戏逻辑解耦，并为后续实现类似 Unity 的编辑器（可拖拽面板、多窗口界面）提供基础。
+
+最后打开 SandboxApp.cpp，在 ExampleLayer 中重写 OnImGuiRender：
+
+
+
+
+
+回头来看全过程：
+
+我们将 ImGui 的集成分为 **资源导入、项目构建、层级集成、渲染循环** 四个阶段：
+
+1. **资源获取（Submodule）**：
+   使用 Git 子模块拉取 ImGui 的 docking 分支。这个分支不仅支持窗口停靠，还支持 **Viewports**（允许 UI 拖出主窗口），是做现代引擎编辑器的必备选择。
+2. **项目构建（Premake）**：
+   由于 ImGui 是以源代码形式分发的，我们编写了一个专门的 premake5.lua。关键点在于包含 backends 文件夹下的 imgui_impl_glfw.cpp 和 imgui_impl_opengl3.cpp，并将它们编译成一个静态库（StaticLib），链接到我们的 Glimmer 引擎中。
+3. **图层抽象（ImGuiLayer）**：
+   我们创建了一个 ImGuiLayer 类，继承自引擎的 Layer 基类。**OnAttach**：执行 ImGui 的初始化（创建上下文、开启 Docking/Viewports 标志位、初始化 GLFW 和 OpenGL 后端）。**OnDetach**：执行清理工作。
+4. **渲染管线集成（The Loop）**：
+   在 Application::Run 的主循环中，我们将 UI 渲染独立出来。每帧执行：m_ImGuiLayer->Begin()：开启 ImGui 新帧，处理输入轮询。调用所有 Layer 的 OnImGuiRender()：让每个游戏模块能在此处编写自己的调试 UI。m_ImGuiLayer->End()：执行渲染并将数据交给 GPU，同时处理 **Multi-Viewport** 的上下文切换（Context Switching），保证弹出窗口的正确渲染。
+
+相关机制
+
+- **架构层面的解耦设计**
+  “在集成过程中，我采用了 **Backend-Agnostic（后端无关）** 的设计思路。ImGui 的核心代码与具体的图形 API 是分离的。虽然我目前使用的是 GLFW 和 OpenGL3 组合，但我将其封装在 ImGuiLayer 中，并通过 Application::Get().GetWindow().GetNativeWindow() 获取原生句柄。这种设计保证了如果未来将 Glimmer 升级到 Vulkan 或 DX12，我只需要更换 ImGuiLayer 内部的实现细节，而不需要触动任何上层 UI 代码。”
+- **针对多视口（Viewports）的特殊处理**
+  “为了实现类似 Unity 那种可以将窗口拖出主程序的体验，我开启了 ImGuiConfigFlags_ViewportsEnable。这引入了一个难点：**OpenGL 上下文管理**。在 End() 函数中，ImGui 需要在多个 OS 窗口间切换渲染上下文。我实现的逻辑是：在处理完额外视口后，必须通过 glfwMakeContextCurrent 强制将 Context 还原回引擎主窗口，否则主循环后续的 SwapBuffers 会作用在错误窗口导致崩溃。这体现了对图形 API 状态机机制的理解。”
+- **事件系统与 UI 的冲突处理（劫持机制）**
+  “目前我正在完善 UI 对事件的**拦截机制**。即当鼠标悬浮在 ImGui 窗口上时，通过检查 io.WantCaptureMouse 标志位，由 ImGuiLayer 设置 Event.Handled = true。这样可以确保玩家在点击 UI 按钮时，不会误触发背后游戏世界的攻击动作。这证明了我对引擎内‘从顶层向底层分发事件’这一流向的准确控制。”
+
 ## KB
 
 ### 为什么不用动态库？
@@ -1270,3 +1409,14 @@ GLAD 和 GLFW 都在争夺对 OpenGL 头文件的控制权。
   **前缓冲区（Front Buffer）**：显示器当前显示的图。
 
   **SwapBuffers**：当后缓冲区画好了，瞬间把它和前缓冲区交换。玩家看到的就是完整的画面，而不是 GPU 正在涂色的过程。
+
+### **ImGui 层应该由客户端（Sandbox）手动挂载，还是由引擎自动集成？**
+
+“这取决于引擎的定位。
+
+**手动挂载（Hazel 早期）\**遵循了\**组合优于继承**的原则，具有极高的灵活性。如果应用是一个不需要交互的后台程序或纯性能演示，可以完全剥离 UI 模块，减少内存和渲染开销。
+
+**自动集成（我目前的做法）\**则是将 ImGui 视为\**引擎的基础设施（Infrastructure）**。
+首先，它统一了**渲染序列**。由于 ImGui 需要每帧执行 Begin/End 上下文设置，由引擎持有 m_ImGuiLayer 指针可以确保 UI 渲染逻辑始终包裹在所有图层的 OnImGuiRender 之外。
+其次，它提升了**开发效率**。开发者在创建新的 Sandbox 游戏或新的 Layer 时，无需关心 UI 环境的初始化，可以直接通过重写 OnImGuiRender 来实现调试工具的快速开发。
+这实际上是向**‘编辑器驱动’**的架构演进，因为未来的引擎编辑器本身就是建立在这个自动集成的 ImGui 层之上的。”

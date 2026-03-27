@@ -13,6 +13,7 @@
 #include <unordered_set>
 
 #include <Glimmer/Log.h>
+#include <Glimmer/Core.h>
 
 #ifdef GL_PLATFORM_WINDOWS
 #include <Windows.h>

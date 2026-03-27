@@ -36,5 +36,7 @@ namespace gl {
 
         // 静态工厂方法：在不同平台下创建对应的窗口实例
         static Window* Create(const WindowProps& props = WindowProps());
+
+        virtual void* GetNativeWindow() const = 0; // 返回底层窗口句柄
     };
 }

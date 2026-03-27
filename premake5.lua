@@ -4,10 +4,26 @@ workspace "GlimmerEngine"
 
     configurations { "Debug", "Release", "Dist" }
 
+        -- 针对 Debug 配置，定义 GL_DEBUG 宏
+    filter "configurations:Debug"
+        defines "GL_DEBUG"
+        symbols "On" 
+
+    -- 针对 Release 配置
+    filter "configurations:Release"
+        defines "GL_RELEASE"
+        optimize "On" 
+
+    -- 针对 Dist (最终发布) 配置
+    filter "configurations:Dist"
+        defines "GL_DIST"
+        optimize "On"
+
     outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
 include "Glimmer/vendor/GLFW"
 include "Glimmer/vendor/Glad"
+include "Glimmer/vendor/imgui"
 
 project "Glimmer"
     location "Glimmer"
@@ -31,13 +47,16 @@ project "Glimmer"
         "%{prj.name}/src",
         "%{prj.name}/vendor/spdlog/include",
         "%{prj.name}/vendor/GLFW/include",
-        "%{prj.name}/vendor/Glad/include"
+        "%{prj.name}/vendor/Glad/include",
+        "%{prj.name}/vendor/imgui",
+        "%{prj.name}/vendor/imgui/backends"
     }
 
     links {
         "GLFW", -- 直接写项目名，Premake 会自动处理静态库链接
         "opengl32.lib",
-        "Glad"
+        "Glad",
+        "ImGui"
     }
 
     filter "system:windows"
@@ -65,7 +84,8 @@ project "Sandbox"
 
     includedirs {
         "Glimmer/src", -- 沙盒需要引用引擎的代码
-        "Glimmer/vendor/spdlog/include"
+        "Glimmer/vendor/spdlog/include",
+        "Glimmer/vendor/imgui"
     }
 
     links {

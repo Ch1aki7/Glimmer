@@ -4,4 +4,6 @@
 #include "Glimmer/Log.h"
 #include "Glimmer/Layer.h"
 
+#include "imgui.h"
+
 #include "Glimmer/EntryPoint.h"

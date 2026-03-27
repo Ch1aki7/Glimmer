@@ -4,15 +4,21 @@
 
 #include <glad/glad.h>
 namespace gl {
+    Application* Application::s_Instance = nullptr;
+
     Application::Application() {
+        GL_CORE_ASSERT(!s_Instance, "Application already exists!"); // 防止实例化多次
+        s_Instance = this; // 【新增】：把自己存入单例
         m_Window = std::unique_ptr<Window>(Window::Create());
         // 使用 Lambda 表达式把事件传给 OnEvent
         m_Window->SetEventCallback([this](Event& e) {
             this->OnEvent(e);
             });
-        unsigned int id;
-        glGenVertexArrays(1, &id);
+
+        m_ImGuiLayer = new ImGuiLayer();
+        PushOverlay(m_ImGuiLayer); // 【新增】：把 ImGuiLayer 作为覆盖层推入栈顶
     }
+
     Application::~Application() {}
 
     void Application::PushLayer(Layer* layer) {
@@ -42,11 +48,17 @@ namespace gl {
     void Application::Run() {
 
         while (m_Running) {
-            // 核心逻辑：正序更新
-            // 先渲染背景，再渲染玩家，最后渲染 UI
+            // 1. 游戏逻辑更新 (清除屏幕、移动角色等)
             for (Layer* layer : m_LayerStack)
                 layer->OnUpdate();
 
+            // 2. UI 渲染 (极其重要：必须在 Begin 和 End 之间)
+            m_ImGuiLayer->Begin();
+            for (Layer* layer : m_LayerStack)
+                layer->OnImGuiRender(); // 调用每个图层的 UI 绘制函数
+            m_ImGuiLayer->End();
+
+            // 3. 交换缓冲区
             m_Window->OnUpdate();
         }
     }
