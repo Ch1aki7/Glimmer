@@ -1402,7 +1402,101 @@ glfwSetCharCallback(m_Window, [](GLFWwindow* window, unsigned int keycode)
 });
 ```
 
+## 输入轮询
 
+在 Glimmer 引擎中实现**输入轮询（Input Polling）**，标志着你终于可以像在 Unity 里写 Input.GetKey(KeyCode.W) 那样，随时随地获取按键状态了。
+
+目前你的事件系统是“被动”的（只有按键时才发通知），而输入轮询是“主动”的（随时询问状态）。这在处理角色移动等需要连续输入的场景中是必不可少的。
+
+**创建输入抽象接口 (Input.h)**
+
+在 Glimmer/src/Glimmer 下创建 Input.h。我们使用**单例模式（Singleton）**，但通过静态方法暴露接口，保证调用最整洁。
+
+**Input.h**:
+
+```
+#pragma once
+
+#include "Glimmer/Core.h"
+
+namespace gl {
+
+    class Input {
+    public:
+        // 静态接口：外部直接调用 Input::IsKeyPressed(key)
+        inline static bool IsKeyPressed(int keycode) { return s_Instance->IsKeyPressedImpl(keycode); }
+
+        inline static bool IsMouseButtonPressed(int button) { return s_Instance->IsMouseButtonPressedImpl(button); }
+        inline static std::pair<float, float> GetMousePosition() { return s_Instance->GetMousePositionImpl(); }
+        inline static float GetMouseX() { return s_Instance->GetMouseXImpl(); }
+        inline static float GetMouseY() { return s_Instance->GetMouseYImpl(); }
+
+    protected:
+        // 由不同平台实现的受保护虚函数 (Impl = Implementation)
+        virtual bool IsKeyPressedImpl(int keycode) = 0;
+        virtual bool IsMouseButtonPressedImpl(int button) = 0;
+        virtual std::pair<float, float> GetMousePositionImpl() = 0;
+        virtual float GetMouseXImpl() = 0;
+        virtual float GetMouseYImpl() = 0;
+
+    private:
+        // 静态单例指针
+        static Input* s_Instance;
+    };
+}
+```
+
+**Windows 平台的具体实现 (WindowsInput.cpp)**
+
+在 Glimmer/src/Platform/Windows 目录下创建 WindowsInput.h/cpp。它将直接调用 **GLFW** 的 API 来查询状态。
+
+对外提供一个统一的 `Input` 静态接口（比如 `Input::IsKeyPressed`），但内部并不直接实现，而是通过一个静态单例指针 `s_Instance` 转发到具体平台（这里是 `WindowsInput`）去执行。也就是说，上层代码只依赖 `Input` 这个抽象接口，而真正调用的是底层用 GLFW 实现的 `WindowsInput`，例如在 `IsKeyPressedImpl` 里通过 `glfwGetKey` 轮询当前键盘状态。这样一来，你的引擎逻辑层完全不需要关心是 Windows、Mac 还是 Linux，只需要调用统一接口即可，实现了**平台解耦**。
+
+同时，这套设计本质上是一个“**静态接口 + 单例 + 虚函数分发**”的组合：
+
+- 静态函数保证调用方便（不用到处传对象）
+- 单例保证全局唯一输入系统
+- 虚函数保证不同平台可以替换实现
+
+最终效果就是：
+
+> 上层写 `Input::IsKeyPressed(W)`，底层自动走到 GLFW（Windows）实现，实现了干净的分层。
+
+**在 Application 中测试**
+
+现在，可以在任何 Layer 的 OnUpdate 中，极其方便地检测输入了。
+
+```
+    void Application::Run() {
+
+        while (m_Running) {
+            // 1. 游戏逻辑更新 (清除屏幕、移动角色等)
+            for (Layer* layer : m_LayerStack)
+                layer->OnUpdate();
+
+            // 2. UI 渲染 (极其重要：必须在 Begin 和 End 之间)
+            m_ImGuiLayer->Begin();
+            for (Layer* layer : m_LayerStack)
+                layer->OnImGuiRender(); // 调用每个图层的 UI 绘制函数
+            m_ImGuiLayer->End();
+
+            // 检测按键
+            if (gl::Input::IsKeyPressed(GLFW_KEY_TAB))
+                GL_TRACE("TAB 键正被按住！");
+
+            // 检测鼠标
+            if (gl::Input::IsMouseButtonPressed(0)) {
+                auto [x, y] = gl::Input::GetMousePosition();
+                GL_TRACE("鼠标左键点击坐标: {0}, {1}", x, y);
+            }
+
+            // 3. 交换缓冲区
+            m_Window->OnUpdate();
+        }
+    }
+```
+
+<img src="README.assets/image-20260329132404500.png" alt="image-20260329132404500" style="zoom:67%;" />
 
 ## KB
 
