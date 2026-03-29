@@ -49,7 +49,8 @@ project "Glimmer"
         "%{prj.name}/vendor/GLFW/include",
         "%{prj.name}/vendor/Glad/include",
         "%{prj.name}/vendor/imgui",
-        "%{prj.name}/vendor/imgui/backends"
+        "%{prj.name}/vendor/imgui/backends",
+        "%{prj.name}/vendor/glm"
     }
 
     links {
@@ -85,7 +86,8 @@ project "Sandbox"
     includedirs {
         "Glimmer/src", -- 沙盒需要引用引擎的代码
         "Glimmer/vendor/spdlog/include",
-        "Glimmer/vendor/imgui"
+        "Glimmer/vendor/imgui",
+        "%{prj.name}/vendor/glm"
     }
 
     links {

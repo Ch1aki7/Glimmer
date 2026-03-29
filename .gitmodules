@@ -8,3 +8,6 @@
 	path = Glimmer/vendor/imgui
 	url = https://github.com/ocornut/imgui.git
 	branch = docking
+[submodule "Glimmer/vendor/glm"]
+	path = Glimmer/vendor/glm
+	url = https://github.com/g-truc/glm.git

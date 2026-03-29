@@ -1577,6 +1577,57 @@ SandBox
 
 <img src="README.assets/image-20260329141655268.png" alt="image-20260329141655268" style="zoom:67%;" />
 
+## GLM
+
+在底层 C++ 开发中，这些数学类型都需要我们自己找库。**GLM** 是工业界的绝对标准，它的设计几乎完全模仿 **GLSL**（OpenGL 着色语言），让你在 C++ 里写数学逻辑和在 Shader 里写起来一模一样。
+
+```
+git submodule add https://github.com/g-truc/glm.git Glimmer/vendor/glm
+```
+
+**修改 Premake 配置**
+
+由于 GLM 只是头文件，我们不需要为它写 premake5.lua 脚本，只需要把它的路径加入到 **Engine** 和 **Sandbox** 的包含目录中。
+
+修改根目录的 **premake5.lua**：includedirs 两个项目
+
+在Application中进行测试
+
+```
+#include <glm/vec3.hpp> // glm::vec3
+#include <glm/vec4.hpp> // glm::vec4
+#include <glm/mat4x4.hpp> // glm::mat4
+#include <glm/gtc/matrix_transform.hpp> // glm::translate, glm::rotate, glm::scale, glm::perspective
+namespace gl {
+    Application* Application::s_Instance = nullptr;
+
+    Application::Application() {
+        GL_CORE_ASSERT(!s_Instance, "Application already exists!"); // 防止实例化多次
+        s_Instance = this; // 【新增】：把自己存入单例
+        m_Window = std::unique_ptr<Window>(Window::Create());
+        // 使用 Lambda 表达式把事件传给 OnEvent
+        m_Window->SetEventCallback([this](Event& e) {
+            this->OnEvent(e);
+            });
+
+        m_ImGuiLayer = new ImGuiLayer();
+        PushOverlay(m_ImGuiLayer); // 【新增】：把 ImGuiLayer 作为覆盖层推入栈顶
+
+        // --- GLM 数学测试 ---
+        glm::vec4 vector(1.0f, 1.0f, 1.0f, 1.0f);
+
+        // 创建一个平移矩阵，让坐标向右移动 2 个单位
+        glm::mat4 trans = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
+
+        // 矩阵乘法
+        auto result = trans * vector;
+
+        GL_CORE_INFO("GLM Math Test: Result X = {0}", result.x); // 应该输出 3.0
+    }
+```
+
+![image-20260329145655166](README.assets/image-20260329145655166.png)
+
 ## KB
 
 ### 为什么不用动态库？
@@ -1743,10 +1794,22 @@ SandBox
 1. **控制权**：作为引擎开发者，我们希望**所有的**系统事件（从 GLFW 来的）都必须先经过我们的 Application::OnEvent 统一调度。如果让 ImGui 直接去钩住 GLFW，我们的事件系统就会被架空。
 2. **平台无关性**：如果我们未来支持手机端，手机端没有 GLFW。通过手动映射，我们可以把触摸事件转化为 ImGui 的鼠标点击，而底层的 ImGui 逻辑完全不需要修改。
 
-## **为什么要把 GLFW 的键码重定义一遍？直接在游戏里用 GLFW 的宏不是更快吗？**
+### **为什么要把 GLFW 的键码重定义一遍？直接在游戏里用 GLFW 的宏不是更快吗？**
 
 - **标准答案**：
 
   **屏蔽实现细节**：如果明年我想把底层库从 GLFW 换成 SDL，或者要在手机上跑（手机没键盘，只有触摸），如果我用了 GLFW_KEY_A，我得改掉成百上千个游戏逻辑文件。
 
   **二进制兼容性**：作为引擎开发者，我希望暴露给用户的 API 是**绝对稳定**的。通过重定义，我可以保证 GL_KEY_A 永远代表 A，而不受底层第三方库版本更新（比如宏改名）的影响。
+
+### **GLM 使用的是“行优先 (Row-major)”还是“列优先 (Column-major)”存储？这有什么影响？**
+
+- **标准答案**：
+
+  **GLM 是列优先 (Column-major)**。这与 OpenGL 的标准保持一致。
+
+  **影响**：
+
+  - **内存排列**：一个 4x4 矩阵，在内存里是先存第一列，再存第二列。
+  - **乘法顺序**：在代码里我们要写 Matrix * Vector。如果你用的是行优先的库（如 DirectX 数学库），乘法顺序通常是 Vector * Matrix。
+  - **传参**：当你使用 glUniformMatrix4fv 把矩阵传给显卡时，不需要进行转置处理，因为内存结构和 OpenGL 驱动预期的完全一致。
