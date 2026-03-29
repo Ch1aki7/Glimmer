@@ -1628,6 +1628,150 @@ namespace gl {
 
 ![image-20260329145655166](README.assets/image-20260329145655166.png)
 
+##  渲染上下文
+
+WindowsWindow 承担了太多的责任：它既要负责打开窗口，又要负责初始化 OpenGL（调用 Glad）。
+
+按照工业级引擎的**“解耦”**原则，我们需要引入 **渲染上下文 (Rendering Context)** 抽象层。
+
+为什么需要这一步？
+
+- **职责分离**：窗口只负责和操作系统（Windows/Linux）打交道；上下文只负责和图形显卡（OpenGL/Vulkan）打交道。
+- **跨平台/多 API 支持**：未来如果你想支持 DirectX 或 Vulkan，你只需要增加一个新的 Context 实现类，而不需要修改 WindowsWindow.cpp。
+
+**定义抽象基类 (GraphicsContext.h)**
+
+在 Glimmer/src/Glimmer/Renderer 下创建 GraphicsContext.h。
+
+**GraphicsContext.h**:
+
+```
+#pragma once
+
+namespace gl {
+
+    // 这是一个纯虚接口，定义了所有图形 API 上下文必须具备的功能
+    class GraphicsContext {
+    public:
+        virtual ~GraphicsContext() = default;
+
+        virtual void Init() = 0;        // 初始化（加载驱动函数指针）
+        virtual void SwapBuffers() = 0; // 交换缓冲区（将画面呈现到屏幕）
+    };
+
+}
+```
+
+**实现 OpenGL 具体上下文 (OpenGLContext.cpp)**
+
+在 Glimmer/src/Platform/OpenGL 下创建 OpenGLContext.h 和 OpenGLContext.cpp。
+
+**OpenGLContext.h**:
+
+```
+#pragma once
+#include "Glimmer/Renderer/GraphicsContext.h"
+
+struct GLFWwindow; // 前向声明，减少头文件包含
+
+namespace gl {
+
+    class OpenGLContext : public GraphicsContext {
+    public:
+        OpenGLContext(GLFWwindow* windowHandle);
+
+        virtual void Init() override;
+        virtual void SwapBuffers() override;
+    private:
+        GLFWwindow* m_WindowHandle;
+    };
+
+}
+```
+
+**OpenGLContext.cpp**:
+
+```
+#include "glpch.h"
+#include "OpenGLContext.h"
+
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+
+namespace gl {
+
+    OpenGLContext::OpenGLContext(GLFWwindow* windowHandle)
+        : m_WindowHandle(windowHandle)
+    {
+        GL_CORE_ASSERT(windowHandle, "Window handle is null!")
+    }
+
+    void OpenGLContext::Init()
+    {
+        // 1. 将该窗口设为当前的 OpenGL 上下文
+        glfwMakeContextCurrent(m_WindowHandle);
+
+        // 2. 使用 Glad 加载 OpenGL 函数指针
+        int status = gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+        GL_CORE_ASSERT(status, "Failed to initialize Glad!");
+
+        // 打印 GPU 信息（面试加分项）
+        GL_CORE_INFO("OpenGL Info:");
+        GL_CORE_INFO("  Vendor: {0}", (const char*)glGetString(GL_VENDOR));
+        GL_CORE_INFO("  Renderer: {0}", (const char*)glGetString(GL_RENDERER));
+        GL_CORE_INFO("  Version: {0}", (const char*)glGetString(GL_VERSION));
+    }
+
+    void OpenGLContext::SwapBuffers()
+    {
+        // 交换前后缓冲区
+        glfwSwapBuffers(m_WindowHandle);
+    }
+}
+```
+
+在 `Init()` 中先通过 `glfwMakeContextCurrent` 将当前窗口绑定为 OpenGL 的上下文，然后使用 Glad 加载所有 OpenGL 函数指针（因为 OpenGL 本身是动态函数，需要运行时获取），接着打印显卡厂商、渲染器和版本信息用于调试；而 `SwapBuffers()` 则负责在每一帧结束时调用 `glfwSwapBuffers` 进行前后缓冲区交换，把渲染结果真正显示到屏幕上。整体上，这个类把“平台窗口（GLFW）”和“图形 API（OpenGL）”连接起来，是渲染系统启动的第一步。
+
+**重构 WindowsWindow 接入上下文**
+
+现在我们要把 WindowsWindow 里的“脏活累活”交给 OpenGLContext。
+
+**WindowsWindow.h**:
+
+```
+#include "Glimmer/Renderer/GraphicsContext.h" // 包含接口
+
+// ...
+private:
+    GLFWwindow* m_Window;
+    GraphicsContext* m_Context; // ✨ 增加成员变量
+// ...
+```
+
+WindowsWindow.cpp
+
+```
+void WindowsWindow::Init(const WindowProps& props)
+{
+    // ... glfwCreateWindow 的代码 ...
+
+    // 核心重构：创建并初始化上下文
+    m_Context = new OpenGLContext(m_Window);
+    m_Context->Init(); 
+
+    // ... 设置回调的代码 ...
+}
+
+void WindowsWindow::OnUpdate()
+{
+    glfwPollEvents();
+    // 核心重构：不再调用 glfwSwapBuffers，而是调用上下文的交换
+    m_Context->SwapBuffers(); 
+}
+```
+
+<img src="README.assets/image-20260329164819786.png" alt="image-20260329164819786" style="zoom:67%;" />
+
 ## KB
 
 ### 为什么不用动态库？

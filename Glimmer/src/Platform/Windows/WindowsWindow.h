@@ -1,5 +1,6 @@
 #pragma once
 #include "Glimmer/Window.h"
+#include "Glimmer/Renderer/GraphicsContext.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
@@ -24,7 +25,7 @@ namespace gl {
         virtual void Shutdown();
     private:
         GLFWwindow* m_Window; // GLFW ‘≠ º÷∏’Î
-
+        GraphicsContext* m_Context;
         struct WindowData {
             std::string Title;
             unsigned int Width, Height;
