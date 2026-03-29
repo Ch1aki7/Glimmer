@@ -1,13 +1,15 @@
 // SandboxApp.cpp
 #include <Glimmer.h>
-#include <iostream>
 
 class ExampleLayer : public gl::Layer {
 public:
     ExampleLayer() : Layer("Example") {}
 
     void OnUpdate() override {
-         //GL_INFO("ExampleLayer::Update");
+        // 使用我们自己的键码判断移动
+        if (gl::Input::IsKeyPressed(GL_KEY_W))
+            GL_TRACE("向北前进!");
+
     }
 
     void OnEvent(gl::Event& event) override {

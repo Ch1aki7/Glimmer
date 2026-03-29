@@ -1498,6 +1498,85 @@ namespace gl {
 
 <img src="README.assets/image-20260329132404500.png" alt="image-20260329132404500" style="zoom:67%;" />
 
+## 按键与鼠标码解耦
+
+现在的 Sandbox 如果想判断按键，必须 #include <GLFW/glfw3.h> 并使用 GLFW_KEY_A。这违反了**依赖倒置原则**——上层游戏逻辑不应该依赖底层的实现库。
+
+在 Glimmer/src/Glimmer 下创建 KeyCodes.h 和 MouseCodes.h。
+
+**KeyCodes.h (部分示例)：**
+
+```
+#pragma once
+
+// 这里的数值完全参照 GLFW，但名字变成了我们引擎自己的前缀
+#define GL_KEY_SPACE           32
+#define GL_KEY_APOSTROPHE      39  /* ' */
+#define GL_KEY_A               65
+#define GL_KEY_W               87
+#define GL_KEY_S               83
+#define GL_KEY_D               68
+// ... (你可以从 GLFW 源码拷贝剩下的并替换前缀)
+```
+
+**MouseButtonCodes**
+
+```
+#pragma once
+
+// From glfw3.h
+#define GL_MOUSE_BUTTON_1         0
+#define GL_MOUSE_BUTTON_2         1
+#define GL_MOUSE_BUTTON_3         2
+#define GL_MOUSE_BUTTON_4         3
+#define GL_MOUSE_BUTTON_5         4
+#define GL_MOUSE_BUTTON_6         5
+#define GL_MOUSE_BUTTON_7         6
+#define GL_MOUSE_BUTTON_8         7
+#define GL_MOUSE_BUTTON_LAST      GL_MOUSE_BUTTON_8
+#define GL_MOUSE_BUTTON_LEFT      GL_MOUSE_BUTTON_1
+#define GL_MOUSE_BUTTON_RIGHT     GL_MOUSE_BUTTON_2
+#define GL_MOUSE_BUTTON_MIDDLE    GL_MOUSE_BUTTON_3
+```
+
+**更新引擎“全家桶”头文件 (Glimmer.h)**
+
+**作用：** 在 Unity 里，你只需要 using UnityEngine;。我们也要给 Glimmer 做一个“出口”，让用户只需要 #include <Glimmer.h> 就能用到引擎的所有核心功能。
+
+在 Glimmer/src 下创建 **Glimmer.h**：
+
+```
+#pragma once
+
+// 供客户端（Sandbox）使用的总头文件
+#include "Glimmer/Application.h"
+#include "Glimmer/Layer.h"
+#include "Glimmer/Log.h"
+
+#include "Glimmer/Input.h"
+#include "Glimmer/KeyCodes.h"
+#include "Glimmer/MouseButtonCodes.h"
+
+#include "imgui.h"
+
+// --- 入口点 (EntryPoint) ---
+#include "Glimmer/EntryPoint.h"
+// ----------------------------
+```
+
+SandBox
+
+```
+    void OnUpdate() override {
+        // 使用我们自己的键码判断移动
+        if (gl::Input::IsKeyPressed(GL_KEY_W))
+            GL_TRACE("向北前进!");
+
+    }
+```
+
+<img src="README.assets/image-20260329141655268.png" alt="image-20260329141655268" style="zoom:67%;" />
+
 ## KB
 
 ### 为什么不用动态库？
@@ -1663,3 +1742,11 @@ namespace gl {
 
 1. **控制权**：作为引擎开发者，我们希望**所有的**系统事件（从 GLFW 来的）都必须先经过我们的 Application::OnEvent 统一调度。如果让 ImGui 直接去钩住 GLFW，我们的事件系统就会被架空。
 2. **平台无关性**：如果我们未来支持手机端，手机端没有 GLFW。通过手动映射，我们可以把触摸事件转化为 ImGui 的鼠标点击，而底层的 ImGui 逻辑完全不需要修改。
+
+## **为什么要把 GLFW 的键码重定义一遍？直接在游戏里用 GLFW 的宏不是更快吗？**
+
+- **标准答案**：
+
+  **屏蔽实现细节**：如果明年我想把底层库从 GLFW 换成 SDL，或者要在手机上跑（手机没键盘，只有触摸），如果我用了 GLFW_KEY_A，我得改掉成百上千个游戏逻辑文件。
+
+  **二进制兼容性**：作为引擎开发者，我希望暴露给用户的 API 是**绝对稳定**的。通过重定义，我可以保证 GL_KEY_A 永远代表 A，而不受底层第三方库版本更新（比如宏改名）的影响。
