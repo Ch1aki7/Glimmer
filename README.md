@@ -2101,6 +2101,43 @@ void main()
 
 <img src="README.assets/image-20260330140556451.png" alt="image-20260330140556451" style="zoom:50%;" />
 
+测试shader留档
+
+```
+        // Shader 代码
+        std::string vertexSrc = R"(
+		#version 330 core
+		layout(location = 0) in vec3 a_Position;
+        uniform mat4 u_ViewProjection;
+		out vec3 v_Position;
+        uniform float u_Time;
+		void main()
+		{
+            vec3 pos = a_Position;
+            pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
+            v_Position = pos;
+            gl_Position = u_ViewProjection * vec4(pos, 1.0); 
+		}
+	)";
+        std::string fragmentSrc = R"(
+		#version 330 core
+		layout(location = 0) out vec4 color;
+		in vec3 v_Position;
+        uniform float u_Time;
+		void main()
+		{
+            vec3 col;
+            // 使用三角函数让 R, G, B 三个通道随位置和时间发生不同的相位偏移
+            col.r = sin(v_Position.x * 3.0 + u_Time) * 0.5 + 0.5;
+            col.g = sin(v_Position.y * 3.0 + u_Time + 2.0) * 0.5 + 0.5;
+            col.b = sin((v_Position.x + v_Position.y) * 3.0 + u_Time + 4.0) * 0.5 + 0.5;
+            color = vec4(col, 1.0);
+		}
+	)";
+```
+
+
+
 ## Buffer 抽象
 
 接入 **Buffer（缓冲区）抽象** 是 Glimmer 引擎迈向**多图形 API 支持**（如未来支持 DX12/Vulkan）最关键的一步。
@@ -2829,6 +2866,225 @@ void Application::Run()
 重新修改顶点，以至于匹配正交摄像机后的画面
 
 <img src="README.assets/image-20260330194657176.png" alt="image-20260330194657176" style="zoom:50%;" /> 
+
+## Timestep
+
+引入时间步这一机制，首先要明白，什么是时间步？
+
+我们之前也写过关于shader的时间u_Time
+
+**运行总时间 (u_Time) 的职责**
+
+你现在在 Shader 里写：sin(u_Time + v_Position.x)。
+
+- **它的强项**：处理**周期性、持续性**的视觉效果。波浪起伏（水面、草地摆动）。颜色循环（彩虹特效）。纹理滚动（流光效果）。
+- **为什么用它？** 因为显卡非常擅长计算数学函数。通过给它一个单增的时间值，它可以瞬间算出这一帧每一个像素应该在什么相位。
+
+**时间步 (Timestep / DeltaTime) 的职责**
+
+你在 Application::Run 算出的 timestep = time - lastFrameTime。
+
+- **它的强项**：处理**位移、速度和变化率**。摄像机移动：pos += velocity * timestep。角色跳跃、物理模拟。
+- **为什么用它？（帧率无关性）**如果你不用 timestep，直接 pos += 0.01f。在 60 帧的电脑上，每秒移动 0.6 单位。在 144 帧的电竞屏上，每秒移动 1.44 单位。**用了 timestep，无论电脑多快，大家每秒移动的距离都完全一样。**
+
+**为什么不建议在 Shader 里用 Timestep 来累加时间？**
+
+有些新手会想：我能不能每帧传一个 u_DeltaTime 给 Shader，让 Shader 内部自己加出一个总时间？
+**答案：绝对不要这样做。**
+
+- **精度灾难（Floating Point Drift）**：
+  Shader 内部使用的是 float（单精度浮点数）。如果你每帧加一个很小的数（比如 0.016s），运行几十分钟后，浮点数的舍入误差会越来越大，导致你的彩虹特效开始闪烁、跳变甚至停滞。
+- **CPU 的优势**：
+  CPU 可以使用 double（双精度）甚至高精度的计时器来追踪总时间，然后在传给 Uniform 时转成 float。这样每一帧 Shader 拿到的都是一个经过校准的、绝对准确的时间点。
+
+**创建 Timestep 包装类**
+
+在 Glimmer/src/Glimmer/Core 下创建 Timestep.h。我们不直接用 float，而是封装一个类，这样可以方便地在秒和毫秒之间切换。
+
+**文件路径：Glimmer/src/Glimmer/Core/Timestep.h**
+
+```
+#pragma once
+
+namespace gl {
+
+	class Timestep
+	{
+	public:
+		Timestep(float time = 0.0f)
+			: m_Time(time)
+		{
+		}
+
+		// 允许像 float 一样直接使用： float s = ts;
+		operator float() const { return m_Time; }
+
+		float GetSeconds() const { return m_Time; }
+		float GetMilliseconds() const { return m_Time * 1000.0f; }
+	private:
+		float m_Time;
+	};
+
+}
+```
+
+**修改 Layer.h 接口**
+
+所有的图层更新都必须感知到时间的流逝。
+
+**文件路径：Glimmer/src/Glimmer/Layer.h**
+
+```
+#include "Glimmer/Core/Timestep.h" // ✨ 包含头文件
+
+namespace gl {
+	class Layer {
+	public:
+		// ... 
+		virtual void OnUpdate(Timestep ts) {} // ✨ 修改：增加参数
+		// ...
+	};
+}
+```
+
+**在 Application 中计算 Delta Time**
+
+我们需要在主循环中对比“这一帧的时间”和“上一帧的时间”。
+
+**文件路径：Glimmer/src/Glimmer/Application.h**
+
+```
+private:
+    // ... 其他成员 ...
+    float m_LastFrameTime = 0.0f; // ✨ 记录上一帧的时间点
+```
+
+文件路径：**Glimmer/src/Glimmer/Application.cpp**
+
+```
+void Application::Run()
+{
+    while (m_Running)
+    {
+        // 1. ✨ 计算增量时间 (Delta Time)
+        // glfwGetTime 返回的是从启动到现在的总秒数
+        float time = (float)glfwGetTime(); 
+        Timestep timestep = time - m_LastFrameTime;
+        m_LastFrameTime = time;
+
+        // 2. 渲染清屏
+        RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
+        RenderCommand::Clear();
+
+        // 3. 更新图层逻辑 (传入 timestep)
+        for (Layer* layer : m_LayerStack)
+            layer->OnUpdate(timestep);
+
+        // 4. ImGui 渲染 (UI 通常不需要按 timestep 移动)
+        m_ImGuiLayer->Begin();
+        for (Layer* layer : m_LayerStack)
+            layer->OnImGuiRender();
+        m_ImGuiLayer->End();
+
+        m_Window->OnUpdate();
+    }
+}
+```
+
+**在 Sandbox 中应用（真正解决移动问题）**
+
+现在我们可以把摄像机的移动速度定义为 **“每秒移动多少单位”**，而不是“每帧移动多少”。
+
+**修改 SandboxApp.cpp 里的 OnUpdate：**
+
+```
+void OnUpdate(gl::Timestep ts) override 
+{
+    // 定义移动速度：每秒 2.0 个世界单位
+    float moveSpeed = 2.0f; 
+
+    // ✨ 核心公式：位移 = 速度 * 时间
+    // 无论帧率高低，相乘后的结果都能保证每一秒钟移动的距离是恒定的
+    if (gl::Input::IsKeyPressed(GL_KEY_A))
+        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(-moveSpeed * ts, 0, 0));
+    else if (gl::Input::IsKeyPressed(GL_KEY_D))
+        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(moveSpeed * ts, 0, 0));
+
+    if (gl::Input::IsKeyPressed(GL_KEY_W))
+        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(0, moveSpeed * ts, 0));
+    else if (gl::Input::IsKeyPressed(GL_KEY_S))
+        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(0, -moveSpeed * ts, 0));
+}
+```
+
+同时，将Application中的渲染逻辑全部迁移
+
+```
+class ExampleLayer : public gl::Layer {
+public:
+    ExampleLayer() :Layer("Example"), m_Camera(-1.6f, 1.6f, -0.9f, 0.9f)
+    {
+        // 1. 创建顶点数组
+        m_VertexArray.reset(gl::VertexArray::Create());
+
+        // 2. 准备数据
+        float vertices[3 * 3] = {
+            -1.0f, -0.5f, 0.0f,
+             1.0f, -0.5f, 0.0f,
+             0.0f,  0.5f, 0.0f
+        };
+
+        std::shared_ptr<gl::VertexBuffer> vertexBuffer;
+        vertexBuffer.reset(gl::VertexBuffer::Create(vertices, sizeof(vertices)));
+// ... 同之前Application ...
+```
+
+并且修改u_Time
+
+我们要在 Application 里提供一个统一的时间入口，让 Sandbox 能拿到时间，但不需要知道 GLFW 的存在。
+
+**第一步：在 Application 中暴露时间接口**
+
+修改 **Glimmer/src/Glimmer/Application.h** 和 **Application.cpp**：
+
+```
+// Application.h
+public:
+    // 供外部获取从引擎启动至今的总时间（秒）
+    inline float GetTime() { return (float)glfwGetTime(); }
+
+// ... 保持单例模式 ...
+```
+
+**第二步：在 Sandbox 中优雅地使用**
+
+现在，**SandboxApp.cpp** 不再需要 #include <GLFW/glfw3.h>，也不需要改 Premake，直接找引擎要时间：
+
+```
+void ExampleLayer::OnUpdate(gl::Timestep ts) override {
+    // ... 摄像机控制逻辑 ...
+
+    // --- 渲染部分 ---
+    gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
+    gl::RenderCommand::Clear();
+
+    gl::Renderer::BeginScene(m_Camera);
+
+    m_Shader->Bind();
+    
+    // ✨ 重点：通过 Application 单例获取时间，彻底告别 GLFW
+    float time = gl::Application::Get().GetTime();
+    m_Shader->UploadUniformFloat("u_Time", time); 
+
+    gl::Renderer::Submit(m_Shader, m_VertexArray);
+
+    gl::Renderer::EndScene();
+}
+```
+
+最终修复大大小小的简单报错，可以WASD移动，变色，动态顶点且在SandBox实现的三角形，诞生
+
+<img src="README.assets/image-20260330223810703.png" alt="image-20260330223810703" style="zoom: 50%;" />
 
 ## KB
 

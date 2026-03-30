@@ -80,7 +80,7 @@ namespace gl {
         // ImGui::ShowDemoWindow(&show);
     }
 
-    void ImGuiLayer::OnUpdate()
+    void ImGuiLayer::OnUpdate(Timestep ts)
     {
     }
 

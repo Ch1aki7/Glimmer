@@ -2,6 +2,7 @@
 
 #include "Glimmer/Core.h"
 #include "Glimmer/Events/Event.h"
+#include "Glimmer/Core/Timestep.h"
 
 namespace gl {
 
@@ -12,7 +13,7 @@ namespace gl {
 
         virtual void OnAttach() {}    // 当图层被推入引擎时调用（类似 Start）
         virtual void OnDetach() {}    // 当图层被移除时调用
-        virtual void OnUpdate() {}    // 每帧调用（类似 Update）
+        virtual void OnUpdate(Timestep ts) {}
         virtual void OnEvent(Event& event) {} // 当事件发生时调用
         virtual void OnImGuiRender() {} // 【新增】：专门用于画 UI 的函数
         inline const std::string& GetName() const { return m_DebugName; }
