@@ -2052,13 +2052,14 @@ std::string vertexSrc = R"(
 #version 330 core
 
 layout(location = 0) in vec3 a_Position;
-
+out vec3 v_Position;
 uniform float u_Time;
 
 void main()
 {
     vec3 pos = a_Position;
     pos.y += sin(pos.x * 5.0 + u_Time) * 0.1; // 新增
+    v_Position = pos;
     gl_Position = vec4(pos, 1.0);
 }
 )";
@@ -2095,6 +2096,10 @@ void main()
 ```
 
 <img src="README.assets/image-20260330120529730.png" alt="image-20260330120529730" style="zoom:50%;" />
+
+同时应用顶点变换和颜色变换小bug：没有更新顶点的out v_Position赋值，导致颜色变换的计算是基于原坐标而不是变换坐标
+
+<img src="README.assets/image-20260330140556451.png" alt="image-20260330140556451" style="zoom:50%;" />
 
 ## KB
 

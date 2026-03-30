@@ -56,6 +56,7 @@ namespace gl {
 			{
                 vec3 pos = a_Position;
                 pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
+                v_Position = pos;
                 gl_Position = vec4(pos, 1.0);
 			}
 		)";
@@ -69,7 +70,12 @@ namespace gl {
             uniform float u_Time;
 			void main()
 			{
-                vec3 col = 0.5 + 0.5 * cos(u_Time + v_Position.xyx + vec3(3,1,4));
+                vec3 col;
+                // 使用三角函数让 R, G, B 三个通道随位置和时间发生不同的相位偏移
+                col.r = sin(v_Position.x * 3.0 + u_Time) * 0.5 + 0.5;
+                col.g = sin(v_Position.y * 3.0 + u_Time + 2.0) * 0.5 + 0.5;
+                col.b = sin((v_Position.x + v_Position.y) * 3.0 + u_Time + 4.0) * 0.5 + 0.5;
+    
                 color = vec4(col, 1.0);
 			}
 		)";
