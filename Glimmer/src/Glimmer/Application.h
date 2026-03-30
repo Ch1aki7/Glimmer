@@ -5,6 +5,7 @@
 #include "Glimmer/LayerStack.h"
 #include "Glimmer/ImGui/ImGuiLayer.h"
 #include "Glimmer/Renderer/Shader.h"
+#include "Glimmer/Renderer/Buffer.h"
 namespace gl { // 属于 Glimmer 引擎的命名空间
     class Application {
     public:
@@ -21,10 +22,10 @@ namespace gl { // 属于 Glimmer 引擎的命名空间
         inline Window& GetWindow() { return *m_Window; }        
 
         unsigned int m_VertexArray;
-        unsigned int m_VertexBuffer;
-        unsigned int m_IndexBuffer;
         unsigned int m_ShaderProgram;
         std::unique_ptr<Shader> m_Shader;
+        std::unique_ptr<VertexBuffer> m_VertexBuffer;
+        std::unique_ptr<IndexBuffer> m_IndexBuffer;
     private:
         bool OnWindowClose(WindowCloseEvent& e); // 专门处理关闭的逻辑
         std::unique_ptr<Window> m_Window; // 引擎持有的窗口指针

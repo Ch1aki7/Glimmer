@@ -2101,6 +2101,463 @@ void main()
 
 <img src="README.assets/image-20260330140556451.png" alt="image-20260330140556451" style="zoom:50%;" />
 
+## Buffer 抽象
+
+接入 **Buffer（缓冲区）抽象** 是 Glimmer 引擎迈向**多图形 API 支持**（如未来支持 DX12/Vulkan）最关键的一步。
+
+目前我们在 Application.cpp 里直接调用 glGenBuffers 和 glBindBuffer，这让代码充满了“OpenGL 味儿”。我们要把它封装成通用的 C++ 接口。
+
+我们将实现三个核心类：
+
+1. **VertexBuffer** (顶点缓冲区)：存坐标、颜色。
+2. **IndexBuffer** (索引缓冲区)：存画图顺序。
+3. **BufferLayout** (布局)：**这是重中之重！** 它将彻底消灭难看的 glVertexAttribPointer。
+
+**定义抽象接口 (Buffer.h)**
+
+在 Glimmer/src/Glimmer/Renderer 下创建。
+
+**Buffer.h**:
+
+```
+#pragma once
+
+namespace gl {
+
+    class VertexBuffer {
+    public:
+        virtual ~VertexBuffer() {}
+
+        virtual void Bind() const = 0;
+        virtual void Unbind() const = 0;
+
+        static VertexBuffer* Create(float* vertices, uint32_t size);
+    };
+
+    class IndexBuffer {
+    public:
+        virtual ~IndexBuffer() {}
+
+        virtual void Bind() const = 0;
+        virtual void Unbind() const = 0;
+
+        virtual uint32_t GetCount() const = 0; // 拿到有多少个索引点
+
+        static IndexBuffer* Create(uint32_t* indices, uint32_t count);
+    };
+
+}
+```
+
+**实现 OpenGL 版本的 Buffer (OpenGLBuffer.cpp)**
+
+在 Glimmer/src/Platform/OpenGL 下创建。
+
+**OpenGLBuffer.h**:
+
+定义了 OpenGL 渲染后端的两个核心缓冲区类：`OpenGLVertexBuffer` 和 `OpenGLIndexBuffer`，它们分别实现了引擎抽象的顶点缓冲和索引缓冲接口。`OpenGLVertexBuffer` 接收顶点数据，在构造时生成 GPU 上的 VBO 并通过 `m_RendererID` 管理，`Bind` 和 `Unbind` 用于在渲染时切换当前缓冲区，而析构函数负责释放 GPU 内存。`OpenGLIndexBuffer` 同样管理索引数据，保存索引数量 `m_Count`，通过绑定和解绑操作配合 `glDrawElements` 使用，实现顶点复用以减少渲染开销。这种设计的核心价值在于接口与实现分离，上层渲染逻辑无需关心 OpenGL 细节，只通过统一接口操作缓冲区，从而保证了渲染器后端的可替换性。
+
+```
+#pragma once
+#include "Glimmer/Renderer/Buffer.h"
+
+namespace gl {
+
+    class OpenGLVertexBuffer : public VertexBuffer {
+    public:
+        OpenGLVertexBuffer(float* vertices, uint32_t size);
+        virtual ~OpenGLVertexBuffer();
+
+        virtual void Bind() const override;
+        virtual void Unbind() const override;
+    private:
+        uint32_t m_RendererID;
+    };
+
+    class OpenGLIndexBuffer : public IndexBuffer {
+    public:
+        OpenGLIndexBuffer(uint32_t* indices, uint32_t count);
+        virtual ~OpenGLIndexBuffer();
+
+        virtual void Bind() const override;
+        virtual void Unbind() const override;
+
+        virtual uint32_t GetCount() const override { return m_Count; }
+    private:
+        uint32_t m_RendererID;
+        uint32_t m_Count;
+    };
+}
+```
+
+**OpenGLBuffer.cpp**: (核心逻辑，把 gl 函数包起来)
+
+`OpenGLBuffer.cpp` 代码实现了前面头文件中声明的 `OpenGLVertexBuffer` 和 `OpenGLIndexBuffer`，核心作用是把顶点和索引数据上传到 GPU 并管理它们的生命周期，从而支持高效渲染。具体来说，`OpenGLVertexBuffer` 构造时通过 `glGenBuffers` 创建一个 VBO，并用 `glBufferData` 将顶点数组传入 GPU 内存，绑定和解绑方法用于在渲染时切换当前缓冲区，析构函数负责释放 GPU 资源，保证内存安全；`OpenGLIndexBuffer` 类似地创建 EBO 管理索引数据，`m_Count` 记录索引数量方便后续渲染调用 `glDrawElements`，绑定解绑控制当前索引缓冲对象。整体逻辑体现了 **RAII 风格的资源管理**、**接口抽象与实现分离**，上层渲染系统只需通过统一接口操作缓冲区而无需关心 OpenGL 的底层细节，实现了渲染器后端解耦。
+
+**实现工厂方法 (Buffer.cpp)**
+
+这一步是为了让 Application 只需要调用 Create 就能自动根据平台返回正确的 Buffer。
+
+**Glimmer/src/Glimmer/Renderer/Buffer.cpp**:
+
+```
+#include "glpch.h"
+#include "Buffer.h"
+#include "Platform/OpenGL/OpenGLBuffer.h"
+
+namespace gl {
+
+    VertexBuffer* VertexBuffer::Create(float* vertices, uint32_t size) {
+        // 未来可以在这里写 switch(Renderer::GetAPI()) 来切换平台
+        return new OpenGLVertexBuffer(vertices, size);
+    }
+
+    IndexBuffer* IndexBuffer::Create(uint32_t* indices, uint32_t count) {
+        return new OpenGLIndexBuffer(indices, count);
+    }
+
+}
+```
+
+**在 Application 中使用封装后的 Buffer**
+
+重构你的 Application.cpp。你会发现原生 gl 调用正在消失：
+
+## 缓冲区布局与顶点数组封装
+
+**实现 BufferLayout (缓冲区布局)**
+
+我们要让引擎自动计算“步长（Stride）”和“偏移量（Offset）”。
+
+定义数据类型与布局类
+
+在 Buffer.h 中添加以下代码（放在命名空间内）：
+
+**Glimmer/src/Glimmer/Renderer/Buffer.h** (新增部分):
+
+代码过长：首先定义了 `ShaderDataType` 枚举，表示顶点属性可能的数据类型（浮点、整型、矩阵、布尔），并通过 `ShaderDataTypeSize` 函数计算每种类型在内存中的字节大小，这对于后续缓冲区偏移计算非常关键。
+
+`BufferElement` 结构体描述单个顶点属性，包括名称、类型、大小、偏移量以及是否归一化，同时提供 `GetComponentCount` 方法返回该属性的分量数量（例如 `Float3` 是 3 个分量），便于在 OpenGL 中调用 `glVertexAttribPointer` 时指定每个顶点属性的维度。
+
+`BufferLayout` 类则管理一组 `BufferElement`，在构造时接受初始化列表并调用 `CalculateOffsetsAndStride` 计算每个属性在顶点结构体中的 **内存偏移** 和 **顶点总字节数（Stride）**，保证 GPU 能按正确顺序读取数据。通过提供 `begin()` 和 `end()`，支持范围循环遍历每个属性，方便绑定到渲染管线。
+
+同时，给 VertexBuffer 类增加设置布局的虚接口：
+
+```
+class VertexBuffer {
+public:
+    // ... 原有函数 ...
+    virtual void SetLayout(const BufferLayout& layout) = 0;
+    virtual const BufferLayout& GetLayout() const = 0;
+};
+```
+
+**更新 OpenGLBuffer.h/cpp**
+
+你需要实现刚才在接口里增加的 GetLayout 和 SetLayout。
+
+```
+		virtual const BufferLayout& GetLayout() const override { return m_Layout; }
+		virtual void SetLayout(const BufferLayout& layout) override { m_Layout = layout; }
+	private:
+		uint32_t m_RendererID;
+		BufferLayout m_Layout;
+```
+
+**实现 VertexArray (顶点数组对象)**
+
+定义抽象接口 (VertexArray.h)
+
+```
+#pragma once
+#include "Glimmer/Renderer/Buffer.h"
+#include <memory>
+
+namespace gl {
+    class VertexArray {
+    public:
+        virtual ~VertexArray() {}
+        virtual void Bind() const = 0;
+        virtual void Unbind() const = 0;
+
+        virtual void AddVertexBuffer(const std::shared_ptr<VertexBuffer>& vertexBuffer) = 0;
+        virtual void SetIndexBuffer(const std::shared_ptr<IndexBuffer>& indexBuffer) = 0;
+
+        virtual const std::vector<std::shared_ptr<VertexBuffer>>& GetVertexBuffers() const = 0;
+        virtual const std::shared_ptr<IndexBuffer>& GetIndexBuffer() const = 0;
+
+        static VertexArray* Create();
+    };
+}
+```
+
+**实现 OpenGL 版本的 VertexArray**
+
+这里是最精彩的：它会自动读取 VertexBuffer 里的 Layout，并自动调用 glVertexAttribPointer。
+
+**文件路径：Glimmer/src/Platform/OpenGL/OpenGLVertexArray.h**
+
+```
+#pragma once
+#include "Glimmer/Renderer/VertexArray.h"
+
+namespace gl {
+
+	class OpenGLVertexArray : public VertexArray
+	{
+	public:
+		OpenGLVertexArray();
+		virtual ~OpenGLVertexArray();
+
+		virtual void Bind() const override;
+		virtual void Unbind() const override;
+
+		virtual void AddVertexBuffer(const std::shared_ptr<VertexBuffer>& vertexBuffer) override;
+		virtual void SetIndexBuffer(const std::shared_ptr<IndexBuffer>& indexBuffer) override;
+
+		virtual const std::vector<std::shared_ptr<VertexBuffer>>& GetVertexBuffers() const override { return m_VertexBuffers; }
+		virtual const std::shared_ptr<IndexBuffer>& GetIndexBuffer() const override { return m_IndexBuffer; }
+	private:
+		uint32_t m_RendererID;
+		std::vector<std::shared_ptr<VertexBuffer>> m_VertexBuffers;
+		std::shared_ptr<IndexBuffer> m_IndexBuffer;
+	};
+
+}
+```
+
+文件路径：**Glimmer/src/Platform/OpenGL/OpenGLVertexArray.cpp**
+
+它的核心作用是：**把“顶点数据 + 顶点布局描述”绑定在一起，让 GPU 知道如何解析一段连续内存中的顶点结构**，从而完成真正的渲染输入配置。
+
+从整体流程来看，这个类在构造时通过 `glGenVertexArrays` 创建一个 VAO，在 `Bind/Unbind` 中切换当前 VAO；真正的关键逻辑在 `AddVertexBuffer`：它先检查传入的 `VertexBuffer` 是否有布局（这是非常重要的安全校验），然后绑定 VAO 和 VBO，接着遍历 `BufferLayout` 中的每个 `BufferElement`，调用 `glEnableVertexAttribArray` 和 `glVertexAttribPointer`，把“顶点数据如何解释”（比如位置是3个float、颜色是4个float）逐个告诉 GPU，其中 `ShaderDataTypeToOpenGLBaseType` 负责把引擎抽象的数据类型映射为 OpenGL 类型（如 GL_FLOAT）。同时通过 `stride` 和 `offset` 指定每个属性在内存中的步长和偏移，这一步本质上就是在描述“一个顶点在内存中的结构”。最后把这个 VBO 存入列表，保证生命周期和后续使用。
+
+`SetIndexBuffer` 则负责绑定索引缓冲（EBO），并保存引用，这样 VAO 就同时记录了“顶点数据 + 索引数据”的完整状态，之后渲染时只需要 Bind VAO，就能恢复全部输入配置。
+
+**VertexArray 的工厂方法**
+
+**文件路径：Glimmer/src/Glimmer/Renderer/VertexArray.cpp**
+
+```
+#include "glpch.h"
+#include "VertexArray.h"
+#include "Platform/OpenGL/OpenGLVertexArray.h"
+
+namespace gl {
+
+	VertexArray* VertexArray.Create()
+	{
+		// 暂时直接返回 OpenGL 版本
+		return new OpenGLVertexArray();
+	}
+
+}
+```
+
+## Render类
+
+接入 **Renderer（渲染器）** 类是 Glimmer 引擎从“OpenGL 包装盒”进化为“真正的渲染引擎”的决定性一步。
+
+目前的 Application.cpp 依然在亲手处理 glClear 和 glDrawElements。**Renderer 类存在的意义，就是彻底剥离这些底层细节。**
+
+我们将建立一个三层架构：
+
+1. **RendererAPI**：抽象基类，定义“画画”和“清屏”的动作。
+2. **RenderCommand**：静态中转站，负责呼叫当前的 API。
+3. **Renderer**：最高级层，负责场景管理（比如：开始场景、提交模型、结束场景）。
+
+**API 抽象层 (RendererAPI & RenderCommand)**
+
+定义 API 接口 (RendererAPI.h)，这是所有图形 API（OpenGL, Vulkan, DX12）必须实现的“动作清单”。
+
+在 Glimmer/src/Glimmer/Renderer 下创建。
+
+**Glimmer/src/Glimmer/Renderer/RendererAPI.h**
+
+```
+#pragma once
+#include <glm/glm.hpp>
+#include "VertexArray.h"
+
+namespace gl {
+    class RendererAPI {
+    public:
+        enum class API { None = 0, OpenGL = 1 };
+    public:
+        virtual void SetClearColor(const glm::vec4& color) = 0;
+        virtual void Clear() = 0;
+        virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) = 0;
+
+        inline static API GetAPI() { return s_API; }
+    private:
+        static API s_API;
+    };
+}
+```
+
+**Glimmer/src/Glimmer/Renderer/RendererAPI.cpp**
+
+```
+#include "glpch.h"
+#include "RendererAPI.h"
+
+namespace gl {
+
+	RendererAPI::API RendererAPI::s_API = RendererAPI::API::OpenGL;
+
+}
+```
+
+**实现 OpenGL 的具体指令 (OpenGLRendererAPI.h/cpp)**
+
+在这里，我们将抽象接口翻译成真实的 OpenGL 代码。
+
+```
+#pragma once
+#include "Glimmer/Renderer/RendererAPI.h"
+
+namespace gl {
+
+	class OpenGLRendererAPI : public RendererAPI
+	{
+	public:
+		virtual void SetClearColor(const glm::vec4& color) override;
+		virtual void Clear() override;
+
+		virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) override;
+	};
+
+}
+```
+
+```
+#include "glpch.h"
+#include "OpenGLRendererAPI.h"
+#include <glad/glad.h>
+
+namespace gl {
+
+	void OpenGLRendererAPI::SetClearColor(const glm::vec4& color)
+	{
+		glClearColor(color.r, color.g, color.b, color.a);
+	}
+
+	void OpenGLRendererAPI::Clear()
+	{
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	}
+
+	void OpenGLRendererAPI::DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray)
+	{
+		glDrawElements(GL_TRIANGLES, vertexArray->GetIndexBuffer()->GetCount(), GL_UNSIGNED_INT, nullptr);
+	}
+
+}
+```
+
+**建立命令中转站 (RenderCommand.h/cpp)**
+
+它的作用是提供一组全局静态方法，方便我们随时随地“发号施令”。
+
+**文件路径：Glimmer/src/Glimmer/Renderer/RenderCommand.h**
+
+```
+#pragma once
+#include "RendererAPI.h"
+
+namespace gl {
+
+	class RenderCommand
+	{
+	public:
+		inline static void SetClearColor(const glm::vec4& color)
+		{
+			s_RendererAPI->SetClearColor(color);
+		}
+
+		inline static void Clear()
+		{
+			s_RendererAPI->Clear();
+		}
+
+		inline static void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray)
+		{
+			s_RendererAPI->DrawIndexed(vertexArray);
+		}
+	private:
+		static RendererAPI* s_RendererAPI;
+	};
+
+}
+```
+
+文件路径：**Glimmer/src/Glimmer/Renderer/RenderCommand.cpp**
+
+```
+#include "glpch.h"
+#include "RenderCommand.h"
+#include "Platform/OpenGL/OpenGLRendererAPI.h"
+
+namespace gl {
+
+	// 核心：在这里决定到底用哪个 API 实例
+	RendererAPI* RenderCommand::s_RendererAPI = new OpenGLRendererAPI();
+
+}
+```
+
+**实现高层渲染器 (Renderer.h/cpp)**
+
+这是开发者最终打交道的类。它负责“提交（Submit）”各种模型和 Shader。
+
+**文件路径：Glimmer/src/Glimmer/Renderer/Renderer.h**
+
+```
+#pragma once
+#include "RenderCommand.h"
+#include "Shader.h"
+
+namespace gl {
+
+	class Renderer
+	{
+	public:
+		static void BeginScene();
+		static void EndScene();
+
+		static void Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray);
+
+		inline static RendererAPI::API GetAPI() { return RendererAPI::GetAPI(); }
+	};
+
+}
+```
+
+```
+#include "glpch.h"
+#include "Renderer.h"
+
+namespace gl {
+
+	void Renderer::BeginScene()
+	{
+		// 以后这里会接收摄像机，并计算 View-Projection 矩阵
+	}
+
+	void Renderer::EndScene()
+	{
+	}
+
+	void Renderer::Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray)
+	{
+		shader->Bind();
+		vertexArray->Bind();
+		RenderCommand::DrawIndexed(vertexArray);
+	}
+
+}
+```
+
 ## KB
 
 ### 为什么不用动态库？
@@ -2317,3 +2774,8 @@ void main()
   **优化方案（Uniform 缓存）**：在 Shader 类中建立一个 **std::unordered_map<std::string, int>**。当第一次上传某个 Uniform 时，查询 Location 并存入 Map。下次上传时，直接从内存里的 Map 读取，避免调用 OpenGL 底层查询指令。
 
   **高级方案**：在现代 OpenGL（4.3+）中，可以使用 layout(location = x) 直接在 Shader 里给 Uniform 指定位置，彻底省去查询过程。
+
+### **为什么要把 VertexBuffer::Create 定义为静态工厂方法，而不是直接 new OpenGLVertexBuffer？**
+
+- **标准答案**：
+  这是**依赖倒置原则（DIP）**的体现。Application 属于高级逻辑层，它应该依赖于抽象接口 VertexBuffer，而不是具体的 OpenGL 实现。通过这种方式，我们可以实现“编译时隔离”：如果你正在开发手机端的 Vulkan 版本，只需让 Create 返回 VulkanVertexBuffer 即可，**业务层的代码一行都不用改**。
