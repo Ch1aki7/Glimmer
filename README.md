@@ -1944,6 +1944,158 @@ std::string fragmentSrc = R"(
 
 <img src="README.assets/image-20260330104640582.png" alt="image-20260330104640582" style="zoom: 50%;" />
 
+## Uniform 上传
+
+实现 **Uniform 上传** 是让 Shader 从“静态图片”变成“动态特效”的关键，也是 CPU 指挥 GPU 的核心手段。
+
+为了让 Glimmer 引擎能够方便地传递时间、颜色、甚至是变换矩阵，我们需要在 Shader 类中封装一系列 UploadUniform 函数。
+
+**扩展 Shader.h 接口**
+
+我们需要支持多种数据类型。虽然你现在只需要 float 传时间，但以后一定会用到 vec3 传颜色和 mat4 传位置。
+
+**Glimmer/src/Glimmer/Renderer/Shader.h**:
+
+```
+#include <glm/glm.hpp> // 确保包含了 GLM 数学库
+
+namespace gl {
+    class Shader {
+    public:
+        // ... 原有构造、析构、Bind ...
+
+        // ✨ 新增一系列上传 Uniform 的接口
+        void UploadUniformInt(const std::string& name, int value);
+
+        void UploadUniformFloat(const std::string& name, float value);
+        void UploadUniformFloat2(const std::string& name, const glm::vec2& value);
+        void UploadUniformFloat3(const std::string& name, const glm::vec3& value);
+        void UploadUniformFloat4(const std::string& name, const glm::vec4& value);
+
+        void UploadUniformMat4(const std::string& name, const glm::mat4& matrix);
+
+    private:
+        uint32_t m_RendererID;
+    };
+}
+```
+
+**实现 Shader.cpp 中的上传逻辑**
+
+在 OpenGL 中，上传数据的标准流程是：**获取位置 (Location) -> 调用对应的 glUniform 函数**。
+
+**Glimmer/src/Glimmer/Renderer/Shader.cpp**:
+
+```
+    void Shader::UploadUniformInt(const std::string& name, int value) {
+        GLint location = glGetUniformLocation(m_RendererID, name.c_str());
+        glUniform1i(location, value);
+    }
+
+    void Shader::UploadUniformFloat(const std::string& name, float value) {
+        GLint location = glGetUniformLocation(m_RendererID, name.c_str());
+        glUniform1f(location, value);
+    }
+    //其余同理
+```
+
+ **在渲染循环中注入时间**
+
+修改 Application::Run：
+
+```
+void Application::Run() {
+    while (m_Running) {
+        glClearColor(0.1f, 0.1f, 0.1f, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        m_Shader->Bind();
+        
+        // 每帧获取当前时间并上传给显卡
+        float time = (float)glfwGetTime(); 
+        m_Shader->UploadUniformFloat("u_Time", time);
+
+        glBindVertexArray(m_VertexArray);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+
+        m_Window->OnUpdate();
+    }
+}
+```
+
+动态shader
+
+```
+std::string fragmentSrc = R"(
+    #version 330 core
+    layout(location = 0) out vec4 color;
+    in vec3 v_Position;
+    
+    uniform float u_Time; // 接收外部注入的时间
+
+    void main() {
+        // 让颜色随时间和位置发生偏移
+        vec3 col = 0.5 + 0.5 * cos(u_Time + v_Position.xyx + vec3(3,1,4));
+        color = vec4(col, 1.0);
+    }
+)";
+```
+
+<img src="README.assets/image-20260330120556157.png" alt="image-20260330120556157" style="zoom:50%;" />
+
+**顶点动画**
+
+使得三角形有旋转的动感
+
+```
+std::string vertexSrc = R"(
+#version 330 core
+
+layout(location = 0) in vec3 a_Position;
+
+uniform float u_Time;
+
+void main()
+{
+    vec3 pos = a_Position;
+    pos.y += sin(pos.x * 5.0 + u_Time) * 0.1; // 新增
+    gl_Position = vec4(pos, 1.0);
+}
+)";
+```
+
+<img src="README.assets/image-20260330120936484.png" alt="image-20260330120936484" style="zoom:50%;" />
+
+extra：
+
+**迷幻彩虹 (Psychedelic Flow)**
+
+颜色不再是静态的，而是像液体一样在三角形表面流动。
+
+**特色**：在颜色空间中引入正弦波震荡。
+
+```
+// Fragment Shader
+#version 330 core
+
+layout(location = 0) out vec4 color;
+in vec3 v_Position;
+uniform float u_Time;
+
+void main()
+{
+    vec3 col;
+    // 使用三角函数让 R, G, B 三个通道随位置和时间发生不同的相位偏移
+    col.r = sin(v_Position.x * 3.0 + u_Time) * 0.5 + 0.5;
+    col.g = sin(v_Position.y * 3.0 + u_Time + 2.0) * 0.5 + 0.5;
+    col.b = sin((v_Position.x + v_Position.y) * 3.0 + u_Time + 4.0) * 0.5 + 0.5;
+    
+    color = vec4(col, 1.0);
+}
+```
+
+<img src="README.assets/image-20260330120529730.png" alt="image-20260330120529730" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？
@@ -2150,3 +2302,13 @@ std::string fragmentSrc = R"(
 - **标准答案**：
   glDetachShader 是将着色器对象从程序对象中“解绑”。
   **原因**：一旦 glLinkProgram 成功，程序对象就已经包含了所需的二进制指令。此时如果不 Detach 就直接 glDeleteShader，着色器对象并不会被真正删除，而是被标记为“待删除”，直到程序对象被销毁。Detach 之后再 Delete，可以更早地释放显存空间，是良好的资源管理习惯。
+
+### **glGetUniformLocation 这个函数有什么性能问题吗？你会如何优化它？**
+
+- **标准答案**：
+
+  **性能损耗**：glGetUniformLocation 是一个相对“昂贵”的操作，因为它涉及到字符串匹配。如果在每一帧中对大量的 Uniform 调用这个函数，会显著降低 CPU 性能。
+
+  **优化方案（Uniform 缓存）**：在 Shader 类中建立一个 **std::unordered_map<std::string, int>**。当第一次上传某个 Uniform 时，查询 Location 并存入 Map。下次上传时，直接从内存里的 Map 读取，避免调用 OpenGL 底层查询指令。
+
+  **高级方案**：在现代 OpenGL（4.3+）中，可以使用 layout(location = x) 直接在 Shader 里给 Uniform 指定位置，彻底省去查询过程。

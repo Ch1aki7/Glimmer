@@ -3,6 +3,7 @@
 #include "Application.h"
 
 #include <glad/glad.h>
+#include <GLFW/glfw3.h>
 namespace gl {
     Application* Application::s_Instance = nullptr;
 
@@ -49,10 +50,13 @@ namespace gl {
 
 			out vec3 v_Position;
 
+            uniform float u_Time;
+
 			void main()
 			{
-				v_Position = a_Position;
-				gl_Position = vec4(a_Position, 1.0);	
+                vec3 pos = a_Position;
+                pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
+                gl_Position = vec4(pos, 1.0);
 			}
 		)";
 
@@ -62,10 +66,11 @@ namespace gl {
 			layout(location = 0) out vec4 color;
 
 			in vec3 v_Position;
-
+            uniform float u_Time;
 			void main()
 			{
-				color = vec4(v_Position * 0.5 + 0.5, 1.0);
+                vec3 col = 0.5 + 0.5 * cos(u_Time + v_Position.xyx + vec3(3,1,4));
+                color = vec4(col, 1.0);
 			}
 		)";
 
@@ -106,6 +111,11 @@ namespace gl {
 
             glUseProgram(m_ShaderProgram);
             m_Shader->Bind();
+
+            // 每帧获取当前时间并上传给显卡
+            float time = (float)glfwGetTime();
+            m_Shader->UploadUniformFloat("u_Time", time);
+
             glBindVertexArray(m_VertexArray);
             glDrawArrays(GL_TRIANGLES, 0, 3);
 

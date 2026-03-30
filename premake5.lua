@@ -89,7 +89,7 @@ project "Sandbox"
         "Glimmer/src", -- 沙盒需要引用引擎的代码
         "Glimmer/vendor/spdlog/include",
         "Glimmer/vendor/imgui",
-        "%{prj.name}/vendor/glm"
+        "Glimmer/vendor/glm"
     }
 
     links {
