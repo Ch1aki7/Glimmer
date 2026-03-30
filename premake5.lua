@@ -21,9 +21,11 @@ workspace "GlimmerEngine"
 
     outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 
+group "Dependencies"
 include "Glimmer/vendor/GLFW"
 include "Glimmer/vendor/Glad"
 include "Glimmer/vendor/imgui"
+group ""
 
 project "Glimmer"
     location "Glimmer"

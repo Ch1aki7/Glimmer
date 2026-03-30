@@ -1772,6 +1772,178 @@ void WindowsWindow::OnUpdate()
 
 <img src="README.assets/image-20260329164819786.png" alt="image-20260329164819786" style="zoom:67%;" />
 
+## 首个三角形
+
+要在屏幕上画出一个三角形，我们需要打通 **CPU（你的代码）** 与 **GPU（显卡）** 之间的通道。这涉及到三个核心概念：
+
+1. **VBO (顶点缓冲区)**：在显存里开辟一块地，把三角形的坐标存进去。
+2. **VAO (顶点数组对象)**：告诉显卡怎么阅读这块地里的坐标（每隔几个字节是一个点）。
+3. **Shader (着色器)**：写两段运行在显卡上的小程序，一段算位置，一段算颜色。
+
+**在 Application.cpp 中编写三角形逻辑**
+
+我们将直接在 Application 类里加入这些 OpenGL 原生调用。别担心，之后我们会把它们封装成漂亮的类。
+
+修改 **Glimmer/src/Glimmer/Application.cpp**：
+
+```
+    glGenVertexArrays(1, &m_VertexArray);
+    glBindVertexArray(m_VertexArray);
+
+    glGenBuffers(1, &m_VertexBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, m_VertexBuffer);
+
+    float vertices[3 * 3] = {
+        -0.5f, -0.5f, 0.0f,
+         0.5f, -0.5f, 0.0f,
+         0.0f,  0.5f, 0.0f
+    };
+
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+
+    glGenBuffers(1, &m_IndexBuffer);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_IndexBuffer);
+
+    unsigned int indices[3] = { 0, 1, 2 };
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+```
+
+**把一个三角形的顶点数据上传到 GPU，并配置好如何解析这些数据，从而让显卡能够正确绘制它**。流程是先创建并绑定一个 VAO（顶点数组对象）来记录所有顶点相关状态，然后创建 VBO（顶点缓冲）并把三角形的顶点坐标传到显存中；接着通过 `glVertexAttribPointer` 告诉 OpenGL：这些数据是按每 3 个 float 表示一个顶点位置（对应 shader 里的 layout location = 0）；最后创建 EBO（索引缓冲），用索引 `{0,1,2}` 指定绘制顺序。这样一套下来，GPU 就知道“从哪里读数据、怎么读、按什么顺序画”，后面只需要一次 DrawCall 就能把这个三角形画出来。
+
+- **以前 (无索引)**：glDrawArrays(GL_TRIANGLES, 0, 3);
+- **现在 (有索引)**：使用 **glDrawElements**。
+
+在 Application::Run 中修改：
+
+```
+// 绑定 VAO（它会自动关联之前绑定的 VBO 和 IBO）
+glBindVertexArray(m_VertexArray);
+
+// 参数：模式, 索引数量, 索引类型, 偏移量
+glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+```
+
+<img src="README.assets/image-20260329175722236.png" alt="image-20260329175722236" style="zoom:67%;" />
+
+## Shader
+
+Shader 是运行在显卡（GPU）上的小程序，通常使用 **GLSL** (OpenGL Shading Language) 编写
+
+**创建 Shader 接口类 (Shader.h)**
+
+在 Glimmer/src/Glimmer/Renderer 目录下创建。
+
+**Shader.h**:
+
+```
+#pragma once
+#include <string>
+
+namespace gl {
+
+    class Shader {
+    public:
+        Shader(const std::string& vertexSrc, const std::string& fragmentSrc);
+        ~Shader();
+
+        void Bind() const;   // 对应 glUseProgram(id)
+        void Unbind() const; // 对应 glUseProgram(0)
+
+    private:
+        uint32_t m_RendererID; // 显卡返回的程序 ID
+    };
+
+}
+```
+
+**实现 Shader 类逻辑 (Shader.cpp)**
+
+这一步最核心的工作是**错误检查**。如果 Shader 写错了，我们必须让引擎在控制台报错，而不是默默黑屏。
+
+**Shader.cpp**:源代码过长，具体逻辑如下：
+
+**把顶点着色器和片元着色器从源码编译、链接成一个 GPU 可执行的渲染程序（Shader Program），并提供绑定/解绑接口供渲染时使用**。流程上先分别创建**顶点**和**片元**着色器对象，将传入的 GLSL 源码提交给 OpenGL 编译，并在每一步严格**检查编译错误**；接着把两个着色器附加到同一个 Program 上进行**链接**，生成最终的 Shader Program（`m_RendererID`），链接完成后再将中间的 Shader 对象解绑（释放依赖）；最后**通过 `Bind/Unbind` 控制当前使用的 Shader**。整体上，这个类把原本繁琐的 OpenGL Shader 流程封装起来，让上层只需要关心“用哪个 Shader”，而不用关心底层细节。
+
+**在 Application 中使用封装后的类**
+
+重构你的 Application.cpp：在缓冲区下加入shader
+
+这段代码的核心是在**定义一套最基础的 Shader（顶点 + 片元），并创建对应的 GPU 渲染程序**。具体来说，`vertexSrc` 定义了顶点着色器：它接收每个顶点的位置 `a_Position`，一方面直接传给 `gl_Position` 用于最终的屏幕变换，另一方面通过 `v_Position` 传递给后续阶段；而 `fragmentSrc` 定义了片元着色器：它接收从顶点阶段插值过来的 `v_Position`，并通过简单的数学变换（`*0.5 + 0.5`）把原本范围在 [-1,1] 的坐标映射到 [0,1]，最终作为颜色输出。最后通过 `m_Shader.reset(new Shader(...))` 创建 Shader 对象并交给智能指针管理，实现自动生命周期控制。整体效果就是：**根据顶点位置生成一个渐变颜色的三角形**。
+
+```glsl
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_IndexBuffer);
+
+    unsigned int indices[3] = { 0, 1, 2 };
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+
+    std::string vertexSrc = R"(
+        #version 330 core
+
+        layout(location = 0) in vec3 a_Position;
+
+        out vec3 v_Position;
+
+        void main()
+        {
+            v_Position = a_Position;
+            gl_Position = vec4(a_Position, 1.0);	
+        }
+    )";
+
+    std::string fragmentSrc = R"(
+        #version 330 core
+
+        layout(location = 0) out vec4 color;
+
+        in vec3 v_Position;
+
+        void main()
+        {
+            color = vec4(v_Position * 0.5 + 0.5, 1.0);
+        }
+    )";
+
+    m_Shader.reset(new Shader(vertexSrc, fragmentSrc));
+```
+
+<img src="README.assets/image-20260330104705597.png" alt="image-20260330104705597" style="zoom:50%;" />
+
+与之相对，固定RGB写法
+
+这两段 Shader 的本质区别在于：**第一段是“基于顶点位置生成颜色的动态渐变”，第二段是“固定颜色输出”**。具体来说，第一段在顶点着色器中把顶点位置通过 `v_Position` 传递到片元着色器，并利用 GPU 的插值机制在三角形内部自动插值，最终在片元阶段根据位置计算颜色（`v_Position * 0.5 + 0.5`），所以整个三角形会呈现渐变效果；而第二段完全没有数据传递，片元着色器直接输出一个固定的 RGBA 值，因此整个三角形是纯色的，没有任何变化。
+
+```
+// 顶点着色器：负责把 3D 坐标转换到屏幕上
+std::string vertexSrc = R"(
+    #version 330 core
+    
+    layout(location = 0) in vec3 a_Position; // 对应刚才指定的 AttribPointer 0
+
+    void main()
+    {
+        gl_Position = vec4(a_Position, 1.0);
+    }
+)";
+
+// 片元着色器：负责给像素上色
+std::string fragmentSrc = R"(
+    #version 330 core
+    
+    layout(location = 0) out vec4 color;
+
+    void main()
+    {
+        color = vec4(0.8, 0.2, 0.3, 1.0); // 橘红色 (RGBA)
+    }
+)";
+```
+
+<img src="README.assets/image-20260330104640582.png" alt="image-20260330104640582" style="zoom: 50%;" />
+
 ## KB
 
 ### 为什么不用动态库？
@@ -1957,3 +2129,24 @@ void WindowsWindow::OnUpdate()
   - **内存排列**：一个 4x4 矩阵，在内存里是先存第一列，再存第二列。
   - **乘法顺序**：在代码里我们要写 Matrix * Vector。如果你用的是行优先的库（如 DirectX 数学库），乘法顺序通常是 Vector * Matrix。
   - **传参**：当你使用 glUniformMatrix4fv 把矩阵传给显卡时，不需要进行转置处理，因为内存结构和 OpenGL 驱动预期的完全一致。
+
+### **为什么我们要在引擎初始化阶段编译 Shader，而不是在每一帧渲染时编译？**
+
+- **标准答案**：
+
+  **开销极大**：Shader 编译涉及字符串解析、驱动程序的底层代码优化（JIT），这在 CPU 上非常耗时。
+
+  **管线停顿 (Pipeline Stall)**：如果在 Run 循环里编译，每一帧都会产生巨大的卡顿，帧率会掉到个位数。
+
+  **状态对象**：在 OpenGL 中，编译后的程序是一个数字 ID（Handle），它存在显存中。我们只需要在渲染前通过 glUseProgram(ID) 切换状态，这个动作几乎是瞬时完成的。
+
+### **为什么在类里要把程序句柄起名叫 m_RendererID 而不是 m_ShaderID？**
+
+- **标准答案**：
+  这是一种**架构习惯**。在 OpenGL 中，最终起作用的是 **Program（程序对象）**，它是由 Vertex Shader 和 Fragment Shader 链接而成的。对于渲染器来说，它只需要知道这个“渲染程序的 ID”。未来我们在封装 Texture、Buffer 时，也会用 m_RendererID 来代表 GPU 端的资源句柄，保持命名的一致性。
+
+### **glDetachShader 的作用是什么？不写会怎么样？**
+
+- **标准答案**：
+  glDetachShader 是将着色器对象从程序对象中“解绑”。
+  **原因**：一旦 glLinkProgram 成功，程序对象就已经包含了所需的二进制指令。此时如果不 Detach 就直接 glDeleteShader，着色器对象并不会被真正删除，而是被标记为“待删除”，直到程序对象被销毁。Detach 之后再 Delete，可以更早地释放显存空间，是良好的资源管理习惯。
