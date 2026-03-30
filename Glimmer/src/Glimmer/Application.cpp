@@ -1,7 +1,13 @@
 // Application.cpp
 #include "glpch.h"
 #include "Application.h"
+// 渲染器核心
+#include "Glimmer/Renderer/Renderer.h"
+#include "Glimmer/Renderer/RenderCommand.h"
 
+// 输入与键码
+#include "Glimmer/Input.h"
+#include "Glimmer/KeyCodes.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 namespace gl {
@@ -19,30 +25,34 @@ namespace gl {
         m_ImGuiLayer = new ImGuiLayer();
         PushOverlay(m_ImGuiLayer); // 【新增】：把 ImGuiLayer 作为覆盖层推入栈顶
 
-        glGenVertexArrays(1, &m_VertexArray);
-        glBindVertexArray(m_VertexArray);
+        m_Camera.reset(new OrthographicCamera(-1.6f, 1.6f, -0.9f, 0.9f));
+        m_VertexArray.reset(VertexArray::Create());
 
         float vertices[3 * 3] = {
-            -0.5f, -0.5f, 0.0f,
-             0.5f, -0.5f, 0.0f,
+            -1.0f, -0.5f, 0.0f,
+             1.0f, -0.5f, 0.0f,
              0.0f,  0.5f, 0.0f
         };
 
-        m_VertexBuffer.reset(VertexBuffer::Create(vertices, sizeof(vertices)));
-        m_VertexBuffer->Bind();
+        std::shared_ptr<VertexBuffer> vertexBuffer;
+        vertexBuffer.reset(VertexBuffer::Create(vertices, sizeof(vertices)));
 
-        // 这一行暂时保留，下一步我们封装了 VertexArray 后再杀掉它
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+        vertexBuffer->SetLayout({
+            { ShaderDataType::Float3, "a_Position" }
+            });
+        m_VertexArray->AddVertexBuffer(vertexBuffer);
 
         uint32_t indices[3] = { 0, 1, 2 };
-        m_IndexBuffer.reset(IndexBuffer::Create(indices, 3));
-        m_IndexBuffer->Bind();
+        std::shared_ptr<IndexBuffer> indexBuffer;
+        indexBuffer.reset(IndexBuffer::Create(indices, 3));
+        m_VertexArray->SetIndexBuffer(indexBuffer);
 
         std::string vertexSrc = R"(
 			#version 330 core
 			
 			layout(location = 0) in vec3 a_Position;
+
+            uniform mat4 u_ViewProjection;
 
 			out vec3 v_Position;
 
@@ -53,7 +63,7 @@ namespace gl {
                 vec3 pos = a_Position;
                 pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
                 v_Position = pos;
-                gl_Position = vec4(pos, 1.0);
+                gl_Position = u_ViewProjection * vec4(pos, 1.0); 
 			}
 		)";
 
@@ -108,36 +118,56 @@ namespace gl {
     void Application::Run() {
 
         while (m_Running) {
-            glClearColor(0.1f, 0.1f, 0.1f, 1);
-            glClear(GL_COLOR_BUFFER_BIT);
+            // ---------------------------------------------------------
+            // A. 摄像机控制逻辑 (Input Polling)
+            // ---------------------------------------------------------
+            float moveSpeed = 0.01f;
+            if (Input::IsKeyPressed(GL_KEY_A))
+                m_Camera->SetPosition({ m_Camera->GetPosition().x - moveSpeed, m_Camera->GetPosition().y, 0.0f });
+            else if (Input::IsKeyPressed(GL_KEY_D))
+                m_Camera->SetPosition({ m_Camera->GetPosition().x + moveSpeed, m_Camera->GetPosition().y, 0.0f });
 
-            glUseProgram(m_ShaderProgram);
+            if (Input::IsKeyPressed(GL_KEY_W))
+                m_Camera->SetPosition({ m_Camera->GetPosition().x, m_Camera->GetPosition().y + moveSpeed, 0.0f });
+            else if (Input::IsKeyPressed(GL_KEY_S))
+                m_Camera->SetPosition({ m_Camera->GetPosition().x, m_Camera->GetPosition().y - moveSpeed, 0.0f });
+
+            // ---------------------------------------------------------
+            // B. 渲染执行
+            // ---------------------------------------------------------
+            RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
+            RenderCommand::Clear();
+
+            // 1. 开启场景渲染 (传入当前摄像机)
+            Renderer::BeginScene(*m_Camera);
+
+            // 2. 更新 Shader 中的时间 Uniform
             m_Shader->Bind();
+            m_Shader->UploadUniformFloat("u_Time", (float)glfwGetTime());
 
-            // 每帧获取当前时间并上传给显卡
-            float time = (float)glfwGetTime();
-            m_Shader->UploadUniformFloat("u_Time", time);
+            // 3. 提交物体进行渲染
+            Renderer::Submit(m_Shader, m_VertexArray);
 
-            glBindVertexArray(m_VertexArray);
-            glDrawElements(GL_TRIANGLES, m_IndexBuffer->GetCount(), GL_UNSIGNED_INT, nullptr);
+            // 4. 结束渲染
+            Renderer::EndScene();
 
-
-            // 1. 游戏逻辑更新 (清除屏幕、移动角色等)
+            // ---------------------------------------------------------
+            // C. 层级更新与 UI 渲染
+            // ---------------------------------------------------------
             for (Layer* layer : m_LayerStack)
                 layer->OnUpdate();
 
-            // 2. UI 渲染 (极其重要：必须在 Begin 和 End 之间)
             m_ImGuiLayer->Begin();
             for (Layer* layer : m_LayerStack)
-                layer->OnImGuiRender(); // 调用每个图层的 UI 绘制函数
+                layer->OnImGuiRender();
             m_ImGuiLayer->End();
 
-            // 3. 交换缓冲区
             m_Window->OnUpdate();
         }
     }
 
-    bool Application::OnWindowClose(WindowCloseEvent& e) {
+    bool Application::OnWindowClose(WindowCloseEvent& e) 
+    {
         m_Running = false;
         return true;
     }

@@ -2558,6 +2558,278 @@ namespace gl {
 }
 ```
 
+## 正交摄像机
+
+现在所有的渲染底层组件（Buffer, VertexArray, Renderer API）都已经封装完毕。目前的三角形是**死死固定在屏幕中心**的（处于 -1 到 1 的标准化设备坐标系中）。
+
+下一步我们要引入 **正交摄像机 (Orthographic Camera)**。
+
+**这一步的作用：**
+
+1. **建立世界坐标系**：你可以定义一个 16:9 的世界，而不是死板的 -1 到 1。
+2. **场景漫游**：通过移动摄像机，实现 2D 游戏的画面滚动（比如主角走，镜头跟）。
+3. **数学联动**：这是你第一次真正大规模使用 GLM 矩阵运算（View-Projection 矩阵）。
+
+**创建摄像机类 (OrthographicCamera.h/cpp)**
+
+**文件路径：Glimmer/src/Glimmer/Renderer/OrthographicCamera.h**
+
+```
+#pragma once
+#include <glm/glm.hpp>
+
+namespace gl {
+
+	class OrthographicCamera
+	{
+	public:
+		OrthographicCamera(float left, float right, float bottom, float top);
+
+		const glm::vec3& GetPosition() const { return m_Position; }
+		void SetPosition(const glm::vec3& position) { m_Position = position; RecalculateViewMatrix(); }
+
+		float GetRotation() const { return m_Rotation; }
+		void SetRotation(float rotation) { m_Rotation = rotation; RecalculateViewMatrix(); }
+
+		const glm::mat4& GetProjectionMatrix() const { return m_ProjectionMatrix; }
+		const glm::mat4& GetViewMatrix() const { return m_ViewMatrix; }
+		const glm::mat4& GetViewProjectionMatrix() const { return m_ViewProjectionMatrix; }
+	private:
+		void RecalculateViewMatrix();
+	private:
+		glm::mat4 m_ProjectionMatrix;
+		glm::mat4 m_ViewMatrix;
+		glm::mat4 m_ViewProjectionMatrix;
+
+		glm::vec3 m_Position = { 0.0f, 0.0f, 0.0f };
+		float m_Rotation = 0.0f;
+	};
+
+}
+```
+
+**Glimmer/src/Glimmer/Renderer/OrthographicCamera.cpp**
+
+```
+#include "glpch.h"
+#include "OrthographicCamera.h"
+#include <glm/gtc/matrix_transform.hpp>
+
+namespace gl {
+
+	OrthographicCamera::OrthographicCamera(float left, float right, float bottom, float top)
+		: m_ProjectionMatrix(glm::ortho(left, right, bottom, top, -1.0f, 1.0f)), m_ViewMatrix(1.0f)
+	{
+		m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
+	}
+
+	void OrthographicCamera::RecalculateViewMatrix()
+	{
+		// 计算 View 矩阵：先平移再旋转，最后取逆
+		// 在 2D 中，摄像机往左移，物体看起来就往右移
+		glm::mat4 transform = glm::translate(glm::mat4(1.0f), m_Position) *
+			glm::rotate(glm::mat4(1.0f), glm::radians(m_Rotation), glm::vec3(0, 0, 1));
+
+		m_ViewMatrix = glm::inverse(transform);
+		m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
+	}
+
+}
+```
+
+**更新渲染器以支持摄像机 (Renderer.h/cpp)**
+
+渲染器现在需要接收摄像机的矩阵，并把它传给每一帧绘制的 Shader。
+
+**文件路径：Glimmer/src/Glimmer/Renderer/Renderer.h**
+
+```
+#pragma once
+#include "RenderCommand.h"
+#include "OrthographicCamera.h"
+#include "Shader.h"
+
+namespace gl {
+
+	class Renderer
+	{
+	public:
+		// 修改：BeginScene 现在需要传入摄像机
+		static void BeginScene(OrthographicCamera& camera);
+		static void EndScene();
+
+		static void Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray);
+
+		inline static RendererAPI::API GetAPI() { return RendererAPI::GetAPI(); }
+
+	private:
+		struct SceneData
+		{
+			glm::mat4 ViewProjectionMatrix;
+		};
+
+		static SceneData* s_SceneData;
+	};
+
+}
+```
+
+**Glimmer/src/Glimmer/Renderer/Renderer.cpp**
+
+```
+#include "glpch.h"
+#include "Renderer.h"
+
+namespace gl {
+
+	Renderer::SceneData* Renderer::s_SceneData = new Renderer::SceneData;
+
+	void Renderer::BeginScene(OrthographicCamera& camera)
+	{
+		// 记录摄像机的 View-Projection 矩阵
+		s_SceneData->ViewProjectionMatrix = camera.GetViewProjectionMatrix();
+	}
+
+	void Renderer::EndScene()
+	{
+	}
+
+	void Renderer::Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray)
+	{
+		shader->Bind();
+		// 自动向 Shader 上传矩阵变量，名字定为 "u_ViewProjection"
+		shader->UploadUniformMat4("u_ViewProjection", s_SceneData->ViewProjectionMatrix);
+
+		vertexArray->Bind();
+		RenderCommand::DrawIndexed(vertexArray);
+	}
+
+}
+```
+
+**重构 Application.cpp**
+
+现在我们要修改 Shader 源码，并让摄像机动起来。
+
+**修改 Application.cpp 中的部分逻辑：**
+
+```
+		// ---------------------------------------------------------
+		// 1. 摄像机初始化 (16:9 比例)
+		// ---------------------------------------------------------
+		m_Camera.reset(new OrthographicCamera(-1.6f, 1.6f, -0.9f, 0.9f));
+
+		// ---------------------------------------------------------
+		// 2. 顶点数据与 VertexArray 封装
+		// ---------------------------------------------------------
+		m_VertexArray.reset(VertexArray::Create());
+
+		float vertices[3 * 3] = {
+			-0.5f, -0.5f, 0.0f, // 左下
+			 0.5f, -0.5f, 0.0f, // 右下
+			 0.0f,  0.5f, 0.0f  // 顶
+		};
+
+		std::shared_ptr<VertexBuffer> vertexBuffer;
+		vertexBuffer.reset(VertexBuffer::Create(vertices, sizeof(vertices)));
+
+		// 使用声明式布局 (BufferLayout)
+		vertexBuffer->SetLayout({
+			{ ShaderDataType::Float3, "a_Position" }
+		});
+		m_VertexArray->AddVertexBuffer(vertexBuffer);
+
+		uint32_t indices[3] = { 0, 1, 2 };
+		std::shared_ptr<IndexBuffer> indexBuffer;
+		indexBuffer.reset(IndexBuffer::Create(indices, 3));
+		m_VertexArray->SetIndexBuffer(indexBuffer);
+
+		// ---------------------------------------------------------
+		// 3. Shader 源码 (必须乘以 u_ViewProjection 矩阵)
+		// ---------------------------------------------------------
+		std::string vertexSrc = R"(
+			#version 330 core
+			
+			layout(location = 0) in vec3 a_Position;
+
+			uniform mat4 u_ViewProjection; // 接收摄像机矩阵
+
+			out vec3 v_Position;
+
+			void main()
+			{
+				v_Position = a_Position;
+				gl_Position = u_ViewProjection * vec4(a_Position, 1.0);	
+			}
+		)";
+```
+
+```
+void Application::Run()
+{
+    while (m_Running)
+    {
+        // ---------------------------------------------------------
+        // A. 摄像机控制逻辑 (Input Polling)
+        // ---------------------------------------------------------
+        float moveSpeed = 0.01f;
+        if (Input::IsKeyPressed(GL_KEY_A))
+            m_Camera->SetPosition({ m_Camera->GetPosition().x - moveSpeed, m_Camera->GetPosition().y, 0.0f });
+        else if (Input::IsKeyPressed(GL_KEY_D))
+            m_Camera->SetPosition({ m_Camera->GetPosition().x + moveSpeed, m_Camera->GetPosition().y, 0.0f });
+
+        if (Input::IsKeyPressed(GL_KEY_W))
+            m_Camera->SetPosition({ m_Camera->GetPosition().x, m_Camera->GetPosition().y + moveSpeed, 0.0f });
+        else if (Input::IsKeyPressed(GL_KEY_S))
+            m_Camera->SetPosition({ m_Camera->GetPosition().x, m_Camera->GetPosition().y - moveSpeed, 0.0f });
+
+        // ---------------------------------------------------------
+        // B. 渲染执行
+        // ---------------------------------------------------------
+        RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
+        RenderCommand::Clear();
+
+        // 1. 开启场景渲染 (传入当前摄像机)
+        Renderer::BeginScene(*m_Camera);
+
+        // 2. 更新 Shader 中的时间 Uniform
+        m_Shader->Bind();
+        m_Shader->UploadUniformFloat("u_Time", (float)glfwGetTime());
+
+        // 3. 提交物体进行渲染
+        Renderer::Submit(m_Shader, m_VertexArray);
+
+        // 4. 结束渲染
+        Renderer::EndScene();
+
+        // ---------------------------------------------------------
+        // C. 层级更新与 UI 渲染
+        // ---------------------------------------------------------
+        for (Layer* layer : m_LayerStack)
+            layer->OnUpdate();
+
+        m_ImGuiLayer->Begin();
+        for (Layer* layer : m_LayerStack)
+            layer->OnImGuiRender();
+        m_ImGuiLayer->End();
+
+        m_Window->OnUpdate();
+    }
+}
+```
+
+这部分要改的东西很多，之后还需要再次回顾加深理解
+
+现在的三角形可以WASD控制移动
+
+<img src="README.assets/image-20260330194300345.png" alt="image-20260330194300345" style="zoom:50%;" />
+
+感觉比例好像变了？这是因为正交摄像机，**在没有加入摄像机之前，你的三角形是被拉伸的；加入摄像机后，它的比例才是正确的。**
+
+重新修改顶点，以至于匹配正交摄像机后的画面
+
+<img src="README.assets/image-20260330194657176.png" alt="image-20260330194657176" style="zoom:50%;" /> 
+
 ## KB
 
 ### 为什么不用动态库？
@@ -2779,3 +3051,19 @@ namespace gl {
 
 - **标准答案**：
   这是**依赖倒置原则（DIP）**的体现。Application 属于高级逻辑层，它应该依赖于抽象接口 VertexBuffer，而不是具体的 OpenGL 实现。通过这种方式，我们可以实现“编译时隔离”：如果你正在开发手机端的 Vulkan 版本，只需让 Create 返回 VulkanVertexBuffer 即可，**业务层的代码一行都不用改**。
+
+### **为什么我们要把 View 和 Projection 矩阵乘在一起传给 Shader，而不是分开传？**
+
+- **标准答案**：
+
+  **减少计算量**：对于一个模型的所有顶点（可能有几万个），它们使用的 `VV` 和 `PP` 矩阵都是一样的。在 CPU 算好乘积 `VPVP` 只需一次 4x4 矩阵乘法；如果传给 Shader，GPU 就要对每个顶点都算一遍乘法。这极大地节省了 GPU 的计算资源。
+
+  **管线优化**：这是标准做法。`P×V×MP×V×M` 构成了物体的最终屏幕位置。将 `PVPV` 视为“场景状态”，`MM` 视为“物体状态”，符合逻辑上的分层。
+
+### **正交投影 (Orthographic) 和 透视投影 (Perspective) 的区别？**
+
+- **标准答案**：
+
+  **正交投影**：物体无论远近，大小看起来都一样。适合 2D 游戏、UI、CAD 软件。
+
+  **透视投影**：近大远小。适合 3D 游戏，因为它模拟了人眼的成像规律。
