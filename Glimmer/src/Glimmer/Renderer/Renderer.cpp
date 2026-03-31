@@ -5,6 +5,11 @@ namespace gl {
 
 	Renderer::SceneData* Renderer::s_SceneData = new Renderer::SceneData;
 
+	void Renderer::Init()
+	{
+		RenderCommand::Init();
+	}
+
 	void Renderer::BeginScene(OrthographicCamera& camera)
 	{
 		// ¼ÇÂ¼ÉãÏñ»úµÄ View-Projection ¾ØÕó

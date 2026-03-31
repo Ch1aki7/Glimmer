@@ -3412,6 +3412,34 @@ void main() {
 
 <img src="README.assets/image-20260331154634223.png" alt="image-20260331154634223" style="zoom:50%;" />
 
+## Alpha 混合
+
+现在加载的纹理，如果是透明的 .png 图片（比如一个带圆角的按钮或一个角色小人），你会发现透明的地方变成了**纯黑色**。
+这是因为 OpenGL 默认是直接“覆盖”像素的。你需要告诉显卡：请根据图片的 Alpha 通道进行混合。
+
+<img src="README.assets/image-20260331162819221.png" alt="image-20260331162819221" style="zoom:50%;" />
+
+在 OpenGLRendererAPI.cpp 的 Init 函数中加入：
+
+```
+glEnable(GL_BLEND);
+glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+```
+
+并在下列文件声明Init()函数
+
+<img src="README.assets/image-20260331162947946.png" alt="image-20260331162947946" style="zoom:50%;" />
+
+最后在Application启用
+
+```
+Renderer::Init();
+```
+
+如今的png透明已经去除黑边
+
+<img src="README.assets/image-20260331163140298.png" alt="image-20260331163140298" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？

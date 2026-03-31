@@ -23,6 +23,8 @@ namespace gl {
             this->OnEvent(e);
             });
 
+        Renderer::Init();
+
         m_ImGuiLayer = new ImGuiLayer();
         PushOverlay(m_ImGuiLayer); // 【新增】：把 ImGuiLayer 作为覆盖层推入栈顶
     }

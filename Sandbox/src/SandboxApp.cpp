@@ -76,7 +76,8 @@ public:
 
         // m_Shader.reset(gl::Shader::Create(vertexSrc, fragmentSrc));
         m_TextureShader.reset(gl::Shader::Create(vertexSrc, fragmentSrc));
-        m_Texture = gl::Texture2D::Create("assets/textures/Henry.jpg");
+        //m_Texture = gl::Texture2D::Create("assets/textures/Henry.jpg");
+        m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
 
         std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->Bind();
         std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->UploadUniformInt("u_Texture", 0);
