@@ -3229,6 +3229,189 @@ for (int y = 0; y < 20; y++) {
 
 <img src="README.assets/image-20260331110107923.png" alt="image-20260331110107923" style="zoom:50%;" />
 
+## 纹理
+
+加入纹理（Texture）是引擎开发从“简笔画”向“真实画面”跨越的关键一步。
+
+为了实现纹理，我们需要：
+
+1. **图像加载库**：引入 stb_image（工业标准）。
+2. **纹理抽象层**：定义 Texture 和 Texture2D 接口。
+3. **OpenGL 实现**：编写 OpenGLTexture2D 类。
+4. **管线升级**：让顶点数据支持 **UV 坐标**，并在 Shader 里使用采样器。
+
+**集成图像加载库 stb_image**
+
+stb_image 是一个极其轻量级的纯头文件 C 库。
+
+1. **下载**：前往 [stb_image.h](https://github.com/nothings/stb/blob/master/stb_image.h) 下载该文件。
+
+2. **物理存放**：放入 Glimmer/vendor/stb_image 目录下。
+
+3. **实现文件**：在同目录下创建一个 stb_image.cpp（这是 C 库的要求）：
+
+   ```
+   #include "glpch.h"
+   
+   #define STB_IMAGE_IMPLEMENTATION
+   #include "stb_image.h"
+   ```
+
+4. **修改 Premake**：将 vendor/stb_image 加入包含路径，并把这个 .cpp 编译进项目。
+
+**定义纹理接口 (Texture.h)**
+
+**文件路径：Glimmer/src/Glimmer/Renderer/Texture.h**
+
+```
+#pragma once
+#include <string>
+#include "Glimmer/Core.h"
+
+namespace gl {
+
+	class Texture
+	{
+	public:
+		virtual ~Texture() = default;
+
+		virtual uint32_t GetWidth() const = 0;
+		virtual uint32_t GetHeight() const = 0;
+
+		// slot 代表纹理单元（0-31），显卡可以同时绑定多个纹理
+		virtual void Bind(uint32_t slot = 0) const = 0;
+	};
+
+	class Texture2D : public Texture
+	{
+	public:
+		// 静态工厂方法，传入图片路径创建纹理
+		static std::shared_ptr<Texture2D> Create(const std::string& path);
+	};
+
+}
+```
+
+**实现工厂方法 (Texture.cpp)**
+
+**文件作用**：根据当前选用的图形 API（目前只有 OpenGL），返回具体的对象实例。
+**Glimmer/src/Glimmer/Renderer/Texture.cpp**：
+
+```
+#include "glpch.h"
+#include "Texture.h"
+
+#include "Platform/OpenGL/OpenGLTexture2D.h"
+#include "Glimmer/Renderer/Renderer.h"
+
+namespace gl {
+
+	std::shared_ptr<Texture2D> Texture2D::Create(const std::string& path)
+	{
+		// 以后这里可以根据 Renderer::GetAPI() 进行分支切换
+		return std::make_shared<OpenGLTexture2D>(path);
+	}
+
+}
+```
+
+**实现 OpenGL 版本的纹理类**
+
+这里是真正与显卡和驱动打交道的地方。
+
+**文件路径说明**：
+
+- .h 负责定义 OpenGL 专属的私有变量（如 m_RendererID）。
+- .cpp 负责加载图片、配置显卡过滤参数、上传像素数据。
+
+**Glimmer/src/Platform/OpenGL/OpenGLTexture2D.h**：
+
+```
+#pragma once
+#include "Glimmer/Renderer/Texture.h"
+
+namespace gl {
+
+	class OpenGLTexture2D : public Texture2D
+	{
+	public:
+		OpenGLTexture2D(const std::string& path);
+		virtual ~OpenGLTexture2D();
+
+		virtual uint32_t GetWidth() const override { return m_Width; }
+		virtual uint32_t GetHeight() const override { return m_Height; }
+
+		virtual void Bind(uint32_t slot = 0) const override;
+	private:
+		std::string m_Path;
+		uint32_t m_Width, m_Height;
+		uint32_t m_RendererID; // GPU 端的资源 ID
+	};
+
+}
+```
+
+**Glimmer/src/Platform/OpenGL/OpenGLTexture2D.cpp**：
+
+这个类在构造时先通过 `stb_image` 从硬盘读取图片数据，然后根据图片通道数选择合适的 OpenGL 格式（RGB/RGBA），接着在 GPU 中创建纹理对象并分配显存，通过 `glTexImage2D` 把像素数据上传到显卡，最后设置采样方式（过滤），这样这张图片就变成了可以在 Shader 中使用的纹理；`Bind` 函数则负责把这个纹理绑定到指定的纹理槽位，供渲染时采样使用。
+
+**升级 Sandbox 渲染管线 (支持 UV)**
+
+要显示贴图，你的顶点必须知道图片上的哪个点对应模型上的哪个点（UV 坐标）。
+
+**修改 Sandbox 顶点数据**：
+
+```
+float vertices[4 * 5] = {
+    // X, Y, Z          // U, V (0-1范围)
+    -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, // 左下
+     0.5f, -0.5f, 0.0f,  1.0f, 0.0f, // 右下
+     0.5f,  0.5f, 0.0f,  1.0f, 1.0f, // 右上
+    -0.5f,  0.5f, 0.0f,  0.0f, 1.0f  // 左上
+};
+```
+
+**更新布局 (Layout)**：
+
+```
+vertexBuffer->SetLayout({
+    { gl::ShaderDataType::Float3, "a_Position" },
+    { gl::ShaderDataType::Float2, "a_TexCoord" } // 👈 新增 UV 属性
+});
+```
+
+**更新 Shader 代码**：
+
+```
+// 顶点着色器
+layout(location = 1) in vec2 a_TexCoord; 
+out vec2 v_TexCoord;
+void main() {
+    v_TexCoord = a_TexCoord;
+    gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 1.0);
+}
+
+// 片元着色器
+uniform sampler2D u_Texture; // 👈 采样器
+void main() {
+    color = texture(u_Texture, v_TexCoord);
+}
+```
+
+之后更换相关变量，并加入
+
+```
+    m_TextureShader.reset(gl::Shader::Create(vertexSrc, fragmentSrc));
+    m_Texture = gl::Texture2D::Create("assets/textures/Henry.jpg");
+
+    std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->Bind();
+    std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->UploadUniformInt("u_Texture", 0);
+```
+
+若要混合颜色和纹理，将两者相乘
+
+<img src="README.assets/image-20260331154634223.png" alt="image-20260331154634223" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？
@@ -3488,3 +3671,17 @@ for (int y = 0; y < 20; y++) {
   **调用频率**：通常我们每一帧只绑定几次或几十次 Shader（取决于材质数量）。相比于 GPU 每秒处理的数百万个顶点，CPU 端这几十次虚函数调用完全不是瓶颈。
 
   **架构收益**：这种设计换取了极强的**跨平台能力**。在没有引入这个重构前，我们的 Application 被迫了解 OpenGL 的细节。现在，整个 Renderer 子系统完全由接口驱动，我们可以无缝接入 Vulkan 或 Metal，这种架构的健壮性远比节省那几纳秒的性能更重要。”
+
+### **在渲染器抽象中，你如何处理特定 API（如 OpenGL）才有的 Uniform 上传功能？**
+
+“起初我尝试在 Renderer 中使用 dynamic_pointer_cast 将通用的 Shader 指针转为 OpenGLShader。但我意识到这会导致 **‘编译时依赖耦合’**，使得通用的渲染层感知到了具体的图形后端，违背了开闭原则（OCP）。
+
+因此，我采用了 **接口多态化** 的方案。我将常用的 Uniform 上传操作抽象到了 Shader 基类接口中。
+对于 OpenGL 后端，它会实现这些虚函数并调用 glUniform。
+对于未来可能的其他后端（如 Vulkan），它可以通过推送常量（Push Constants）或描述符集（Descriptor Sets）来实现这些接口。
+这样 Renderer 类就实现了完全的 **后端无关性（Backend-Agnostic）**，提升了引擎的可扩展性。”
+
+### **纹理 Slot (或者叫 Texture Unit) 是干什么的？**
+
+- **你的回答**：
+  “它是 GPU 上的‘插槽’。现代显卡通常有 16 到 32 个插槽。通过这个机制，我们可以在单次绘制（Draw Call）中同时使用多张贴图（比如：一张反射贴图，一张法线贴图）。我们在 C++ 中通过 glActiveTexture 选择插槽，并在 Shader 中通过 Uniform 变量告诉采样器它该读取哪个插槽。”

@@ -18,6 +18,7 @@
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/VertexArray.h"
 #include "Glimmer/Renderer/OrthographicCamera.h"
+#include "Glimmer/Renderer/Texture.h"
 
 // --- Èë¿Úµã ---
 #include "Glimmer/EntryPoint.h"
