@@ -14,6 +14,7 @@ namespace gl {
         virtual void UploadUniformMat4(const std::string& name, const glm::mat4& matrix) = 0;
         virtual void UploadUniformFloat(const std::string& name, float value) = 0;
 
+		static Shader* Create(const std::string& filepath);
         static Shader* Create(const std::string& vertexSrc, const std::string& fragmentSrc);
     };
 

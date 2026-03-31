@@ -3440,6 +3440,317 @@ Renderer::Init();
 
 <img src="README.assets/image-20260331163140298.png" alt="image-20260331163140298" style="zoom:50%;" />
 
+## 单文件多着色器模式
+
+将 Shader 从 C++ 字符串搬迁到外部文件（.glsl 或 .hlsl）是引擎开发的必经之路。这不仅能让代码更整洁，还能让你利用 VS Code 等工具的插件实现 **GLSL 语法高亮**。
+
+我们将实现一种**“单文件多着色器”**模式：即一个 .glsl 文件里同时包含顶点（Vertex）和片元（Fragment）代码，通过特殊的标签（如 #type vertex）来区分。
+
+**准备外部 Shader 文件**
+
+在你的项目目录下创建 assets/shaders/Texture.glsl 文件，内容如下：
+
+**assets/shaders/Texture.glsl**:
+
+```
+#type vertex
+#version 330 core
+
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec2 a_TexCoord;
+
+uniform mat4 u_ViewProjection;
+uniform mat4 u_Transform;
+uniform float u_Time;
+
+out vec3 v_Position;
+out vec2 v_TexCoord;
+
+void main()
+{
+    v_TexCoord = a_TexCoord;
+    vec3 pos = a_Position;
+    pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
+    v_Position = pos;
+    gl_Position = u_ViewProjection * u_Transform * vec4(pos, 1.0);
+}
+
+#type fragment
+#version 330 core
+
+layout(location = 0) out vec4 color;
+
+in vec3 v_Position;
+in vec2 v_TexCoord;
+
+uniform sampler2D u_Texture;
+uniform float u_Time;
+
+void main()
+{
+    vec3 col;
+    // 使用三角函数让 R, G, B 三个通道随位置和时间发生不同的相位偏移
+    col.r = sin(v_Position.x * 3.0 + u_Time) * 0.5 + 0.5;
+    col.g = sin(v_Position.y * 3.0 + u_Time + 2.0) * 0.5 + 0.5;
+    col.b = sin((v_Position.x + v_Position.y) * 3.0 + u_Time + 4.0) * 0.5 + 0.5;
+    color = vec4(col, 1.0);
+    color *= texture(u_Texture, v_TexCoord);
+}
+```
+
+**扩展 Shader.h 接口**
+
+我们需要增加一个接收“文件路径”的工厂方法。
+
+**Glimmer/src/Glimmer/Renderer/Shader.h**:
+
+```
+static Shader* Create(const std::string& filepath);
+```
+
+```
+	Shader* Shader::Create(const std::string& filepath)
+	{
+		return new OpenGLShader(filepath);
+	}
+```
+
+**在 OpenGLShader 中实现文件读取与解析**
+
+我们需要增加两个核心私有方法：ReadFile（读文件）和 PreProcess（解析标签）。
+
+**Glimmer/src/Platform/OpenGL/OpenGLShader.h**:
+
+```
+class OpenGLShader : public Shader {
+public:
+    OpenGLShader(const std::string& filepath); // ✨ 新构造函数
+    // ...
+private:
+    std::string ReadFile(const std::string& filepath);
+    std::unordered_map<GLenum, std::string> PreProcess(const std::string& source);
+    void Compile(const std::unordered_map<GLenum, std::string>& shaderSources);
+private:
+    uint32_t m_RendererID;
+    std::string m_Name; // 用于 Shader 库标识
+};
+```
+
+核心分割算法：**把一个“合并写在一起的 shader 文件”，按 `#type` 标签拆分成多个独立的着色器源码（vertex / fragment）**，并用 `unordered_map` 存起来，方便后续编译。
+
+函数一开始创建了一个 `unordered_map<GLenum, std::string>`，用于存储“着色器类型 → 对应源码”的映射关系，比如：
+
+```
+GL_VERTEX_SHADER   -> 顶点着色器源码
+GL_FRAGMENT_SHADER -> 片元着色器源码
+```
+
+接着它在整段字符串 `source` 里查找 `#type` 这个标记（比如 `#type vertex`），一旦找到，就说明接下来是一段新的 shader。它先找到这一行的结尾（`\n`），然后从 `#type` 后面截取出类型字符串（例如 `"vertex"` 或 `"fragment"`），再通过 `ShaderTypeFromString` 转换成 OpenGL 能识别的枚举（如 `GL_VERTEX_SHADER`）。
+
+然后关键来了：它会找到**下一行真正 shader 代码开始的位置**，并继续往后找下一个 `#type`，这样就可以确定“当前 shader 代码的范围”，最后用 `substr` 把这一段源码切出来，存进 map 里。
+
+这个过程会循环执行，直到把整个文件里的所有 shader 都拆完。
+
+```
+	std::unordered_map<GLenum, std::string> OpenGLShader::PreProcess(const std::string& source)
+	{
+		std::unordered_map<GLenum, std::string> shaderSources;
+
+		const char* typeToken = "#type";
+		size_t typeTokenLength = strlen(typeToken);
+		size_t pos = source.find(typeToken, 0);
+		while (pos != std::string::npos)
+		{
+			size_t eol = source.find_first_of("\r\n", pos);
+			GL_CORE_ASSERT(eol != std::string::npos, "Syntax error");
+			size_t begin = pos + typeTokenLength + 1;
+			std::string type = source.substr(begin, eol - begin);
+			GL_CORE_ASSERT(ShaderTypeFromString(type), "Invalid shader type specified");
+
+			size_t nextLinePos = source.find_first_not_of("\r\n", eol);
+			pos = source.find(typeToken, nextLinePos);
+			shaderSources[ShaderTypeFromString(type)] = source.substr(nextLinePos, pos - (nextLinePos == std::string::npos ? source.size() - 1 : nextLinePos));
+		}
+
+		return shaderSources;
+	}
+```
+
+```
+	static GLenum ShaderTypeFromString(const std::string& type)
+	{
+		if (type == "vertex") return GL_VERTEX_SHADER;
+		if (type == "fragment" || type == "pixel") return GL_FRAGMENT_SHADER;
+
+		GL_CORE_ASSERT(false, "Unknown shader type!");
+		return 0;
+	}
+```
+
+**制作新shader：小丑牌背景**
+
+要实现那种“红蓝颜料交替的黏稠漩涡感”，我们需要在 Fragment Shader 中完成以下逻辑：
+
+1. **坐标归一化**：将 UV 映射到中心点。
+2. **极坐标转换**：将直角坐标转为角度和半径，实现基础旋转。
+3. **多层噪声 (FBM)**：制造不规则的颜料团块感。
+4. **领域扭曲**：用噪声去偏移噪声的坐标，产生“液体搅拌”的效果。
+
+```
+#type vertex
+#version 330 core
+
+layout(location = 0) in vec3 a_Position;
+uniform mat4 u_ViewProjection;
+uniform mat4 u_Transform;
+
+out vec2 v_Position;
+
+void main()
+{
+	v_Position = a_Position.xy;
+	gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 1.0);
+}
+
+#type fragment
+#version 330 core
+
+layout(location = 0) out vec4 color;
+in vec2 v_Position;
+
+uniform float u_Time;
+
+// 基础噪声函数：制造随机感
+float hash(vec2 p) {
+	p = fract(p * vec2(123.34, 456.21));
+	p += dot(p, p + 45.32);
+	return fract(p.x * p.y);
+}
+
+// 简单的平滑噪声
+float noise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	float a = hash(i);
+	float b = hash(i + vec2(1.0, 0.0));
+	float c = hash(i + vec2(0.0, 1.0));
+	float d = hash(i + vec2(1.0, 1.0));
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+
+// 分形布朗运动 (FBM)：叠加强度不同的噪声，产生细节
+float fbm(vec2 p) {
+	float v = 0.0;
+	float a = 0.5;
+	mat2 rot = mat2(1.6, 1.2, -1.2, 1.6); // 每一层旋转一下，打乱方向
+	for (int i = 0; i < 5; i++) {
+		v += a * noise(p);
+		p = rot * p * 2.0;
+		a *= 0.5;
+	}
+	return v;
+}
+
+void main()
+{
+	vec2 uv = v_Position; // 假设传入的是 -0.5 到 0.5 的坐标
+
+	// 1. 基础极坐标变换 (产生漩涡核心)
+	float r = length(uv);
+	float angle = atan(uv.y, uv.x);
+
+	// 2. 漩涡扭曲：距离中心越近，旋转越快
+	// u_Time 控制总速度，1.0/r 产生漩涡拉扯
+	float strength = 1.5;
+	float swirl = angle + (strength / (r + 0.15)) * (u_Time * 0.5);
+
+	// 3. 领域扭曲 (Domain Warping)：让颜料看起来“不规则”的关键
+	// 我们用 FBM 产生的数值去偏移坐标
+	vec2 warpUV = vec2(cos(swirl) * r, sin(swirl) * r);
+	float n = fbm(warpUV * 3.0 + u_Time * 0.2);
+
+	float m = fbm(warpUV * 2.0 + n + u_Time * 0.1);
+
+	// 4. 颜色调色板 (经典的红蓝交替)
+	vec3 colorRed = vec3(0.8, 0.1, 0.2);   // 深红
+	vec3 colorBlue = vec3(0.1, 0.2, 0.7);  // 深蓝
+	vec3 colorHighlight = vec3(0.9, 0.8, 1.0); // 亮色边缘
+
+	// 用最终的噪声值 m 来在红蓝之间混合
+	vec3 finalCol = mix(colorRed, colorBlue, m);
+
+	// 叠加一些高光效果，增加颜料的质感
+	finalCol += smoothstep(0.7, 1.0, m) * 0.3;
+
+	// 边缘暗角处理
+	finalCol *= smoothstep(1.5, 0.3, r);
+
+	color = vec4(finalCol, 1.0);
+}
+```
+
+<img src="README.assets/image-20260331193141079.png" alt="image-20260331193141079" style="zoom:50%;" />
+
+通过解包小丑牌的源代码发现，原效果用到了`uniform float u_VortexAmt; // 对应 vortex_amt 强度`这种的思路，所以需要通过时间来获取强度变化
+
+```
+    // ✨ 重点：让扭曲强度随时间正弦波动 (从 -2 到 2 循环拧)
+    float vortexStrength = sin(time) * 2.0f; 
+    m_VortexShader->UploadUniformFloat("u_VortexAmt", vortexStrength);
+```
+
+```
+void main()
+{
+	// 1. 获取基础坐标 (假设 v_Position 是相对于中心的)
+	vec2 uv = v_Position;
+	float r = length(uv);
+	float angle = atan(uv.y, uv.x);
+
+	// 2. 融合：第二段代码的 Smoothstep 扭曲逻辑
+	// 控制旋转半径和角度
+	float effectRadius = 2.0;
+	float twist = u_VortexAmt * smoothstep(effectRadius, 0.0, r);
+
+	// 3. 加入“不规则正弦”效果 (波浪抖动)
+	// 利用 sin 让漩涡边缘产生不规则的起伏
+	float wobble = sin(r * 10.0 - u_Time * 2.0) * 0.05;
+
+	// 最终角度 = 原始角度 + 强度扭曲 + 动态旋转 + 波浪抖动
+	float finalAngle = angle + twist + (u_Time * 0.2) + wobble;
+
+	// 4. 将扭曲后的极坐标转回平面坐标，作为颜料噪声的输入
+	vec2 twistedUV = vec2(cos(finalAngle), sin(finalAngle)) * r;
+
+	// 5. 领域扭曲 (Balatro 核心颜料算法)
+	float n = fbm(twistedUV * 3.0 + u_Time * 0.1);
+	float m = fbm(twistedUV * 2.0 + n + u_Time * 0.05);
+
+	// 6. 颜色混合 (红蓝艺术配色)
+	vec3 colorRed = vec3(0.85, 0.15, 0.2);   // 鲜亮红
+	vec3 colorBlue = vec3(0.1, 0.25, 0.75);  // 宝石蓝
+	vec3 darkColor = vec3(0.1, 0.05, 0.15);
+	vec3 darkRed = vec3(0.2, 0.0, 0.0);   // 偏黑红
+	vec3 darkBlue = vec3(0.0, 0.0, 0.2);  // 偏黑蓝
+	vec3 darkGreen = vec3(0.0, 0.2, 0.0); // 偏黑绿
+	vec3 deepBlue = vec3(0.05, 0.05, 0.3); // 深蓝，略带一点暗
+
+	// 用最终噪声值 m 混合，并加入高光亮边
+	vec3 finalCol = mix(colorRed, colorBlue, m);
+	finalCol += smoothstep(0.75, 1.0, m) * 0.25; // 增加白色颜料反光
+
+	// 7. 边缘压暗 (Vignette)
+	finalCol *= smoothstep(1.8, 0.5, r);
+
+	color = vec4(finalCol, 1.0);
+}
+```
+
+<img src="README.assets/image-20260331195911871.png" alt="image-20260331195911871" style="zoom:50%;" />
+
+<img src="README.assets/image-20260331200053084.png" alt="image-20260331200053084" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？

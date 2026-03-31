@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #ifdef GL_PLATFORM_WINDOWS
 
 // 定义一个能触发断点 (Breakpoint) 的底层系统指令。
