@@ -15,11 +15,15 @@ namespace gl {
 	{
 	}
 
-	void Renderer::Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray)
+	void Renderer::Submit(const std::shared_ptr<Shader>& shader,
+		const std::shared_ptr<VertexArray>& vertexArray,
+		const glm::mat4& transform)
 	{
 		shader->Bind();
-		// 自动向 Shader 上传矩阵变量，名字定为 "u_ViewProjection"
+		// 1. 上传场景矩阵 (PV)
 		shader->UploadUniformMat4("u_ViewProjection", s_SceneData->ViewProjectionMatrix);
+		// 2. 上传物体变换矩阵 (M)
+		shader->UploadUniformMat4("u_Transform", transform);
 
 		vertexArray->Bind();
 		RenderCommand::DrawIndexed(vertexArray);

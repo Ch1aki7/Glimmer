@@ -3086,6 +3086,149 @@ void ExampleLayer::OnUpdate(gl::Timestep ts) override {
 
 <img src="README.assets/image-20260330223810703.png" alt="image-20260330223810703" style="zoom: 50%;" />
 
+## 变换矩阵
+
+这一步的作用是实现 **“物体级变换”**：让你可以通过代码让三角形（或正方形）在世界空间里**移动、旋转、缩放**，而不需要去动那块冰冷的顶点缓冲区
+
+**修改 Shader 支持变换矩阵**
+
+我们需要在顶点着色器中增加一个 u_Transform 变量。
+
+**修改 SandboxApp.cpp 里的 vertexSrc：**
+
+```
+std::string vertexSrc = R"(
+    #version 330 core
+    
+    layout(location = 0) in vec3 a_Position;
+
+    uniform mat4 u_ViewProjection;
+    uniform mat4 u_Transform; // ✨ 新增：模型变换矩阵
+
+    out vec3 v_Position;
+    uniform float u_Time;
+
+    void main()
+    {
+        vec3 pos = a_Position;
+        pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
+        v_Position = pos;
+        // ✨ 计算顺序：投影 * 视图 * 模型 * 原始坐标
+        gl_Position = u_ViewProjection * u_Transform * vec4(pos, 1.0);
+    }
+)";
+```
+
+**升级渲染器接口 (Renderer.h/cpp)**
+
+渲染器现在不仅要管摄像机，还要管每个物体的“位姿”。
+
+**文件路径：Glimmer/src/Glimmer/Renderer/Renderer.h**
+
+```
+// 修改 Submit 函数签名，增加 transform 参数
+static void Submit(const std::shared_ptr<Shader>& shader, 
+                  const std::shared_ptr<VertexArray>& vertexArray, 
+                  const glm::mat4& transform = glm::mat4(1.0f)); // ✨ 默认是单位矩阵
+```
+
+**Glimmer/src/Glimmer/Renderer/Renderer.cpp**
+
+```
+void Renderer::Submit(const std::shared_ptr<Shader>& shader, 
+                     const std::shared_ptr<VertexArray>& vertexArray, 
+                     const glm::mat4& transform)
+{
+    shader->Bind();
+    // 1. 上传场景矩阵 (PV)
+    shader->UploadUniformMat4("u_ViewProjection", s_SceneData->ViewProjectionMatrix);
+    // 2. 上传物体变换矩阵 (M)
+    shader->UploadUniformMat4("u_Transform", transform);
+
+    vertexArray->Bind();
+    RenderCommand::DrawIndexed(vertexArray);
+}
+```
+
+**在 Sandbox 中画一个“正方形网格”**
+
+现在我们要展示变换矩阵的威力。我们不再画三角形，而是画一个**正方形**，并且利用循环画出一堆小方块。
+
+**修改 SandboxApp.cpp 构造函数（定义正方形）：**
+
+```
+// 1. 定义 4 个顶点
+float vertices[4 * 3] = {
+    -0.5f, -0.5f, 0.0f,
+     0.5f, -0.5f, 0.0f,
+     0.5f,  0.5f, 0.0f,
+    -0.5f,  0.5f, 0.0f
+};
+// 2. 定义索引 (两个三角形拼成正方形)
+uint32_t indices[6] = { 0, 1, 2, 2, 3, 0 };
+
+// ... 初始化 vertexBuffer (Layout依然是 Float3) ...
+// ... 初始化 m_VertexArray ...
+```
+
+**修改** **SandboxApp.cpp** **的** **OnUpdate**（动画逻辑）：
+
+```
+void OnUpdate(gl::Timestep ts) override {
+    // ... 摄像机控制代码 ...
+
+    gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
+    gl::RenderCommand::Clear();
+
+    gl::Renderer::BeginScene(m_Camera);
+
+    // ✨ 准备一个基础的比例矩阵（让方块变小一点）
+    glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.1f));
+
+    m_Shader->Bind();
+    m_Shader->UploadUniformFloat("u_Time", gl::Application::Get().GetTime());
+
+    // ✨ 渲染一个 20x20 的方块阵列
+    for (int y = 0; y < 20; y++) {
+        for (int x = 0; x < 20; x++) {
+            // 计算每个方块的位置
+            glm::vec3 pos(x * 0.11f, y * 0.11f, 0.0f);
+            glm::mat4 transform = glm::translate(glm::mat4(1.0f), pos) * scale;
+            
+            // 提交给渲染器，每个方块用不同的 transform
+            gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
+        }
+    }
+
+    gl::Renderer::EndScene();
+}
+```
+
+<img src="README.assets/image-20260331104756545.png" alt="image-20260331104756545" style="zoom:50%;" />
+
+给每个方块加一点旋转:
+
+```
+float time = gl::Application::Get().GetTime();
+
+for (int y = 0; y < 20; y++) {
+    for (int x = 0; x < 20; x++) {
+        glm::vec3 pos(x * 0.11f, y * 0.11f, 0.0f);
+        
+        // ✨ 让每个方块根据位置和时间，产生不同的旋转角度
+        float rotation = time * 20.0f + (x + y) * 10.0f;
+        
+        glm::mat4 transform = glm::translate(glm::mat4(1.0f), pos) * 
+                             glm::rotate(glm::mat4(1.0f), glm::radians(rotation), {0, 0, 1}) * 
+                             scale;
+        
+        gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
+    }
+}
+```
+
+<img src="README.assets/image-20260331110107923.png" alt="image-20260331110107923" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？
@@ -3323,3 +3466,25 @@ void ExampleLayer::OnUpdate(gl::Timestep ts) override {
   **正交投影**：物体无论远近，大小看起来都一样。适合 2D 游戏、UI、CAD 软件。
 
   **透视投影**：近大远小。适合 3D 游戏，因为它模拟了人眼的成像规律。
+
+### **在顶点着色器里，为什么矩阵相乘的顺序是** $P×V×M×pos$
+
+- **标准答案**：
+
+  **数学约定**：OpenGL 和 GLM 默认使用**列优先 (Column-major)** 存储，数学计算上遵循从右向左的变换顺序。
+
+  **物理含义**：
+
+  - `MM` (Model)：将顶点从**局部空间**转到**世界空间**（决定物体在哪）。
+  - `VV` (View)：将顶点从**世界空间**转到**观察空间**（决定相机在哪看）。
+  - `PP` (Projection)：将顶点从**观察空间**转到**裁剪空间**（决定哪些东西在屏幕内）。
+  - **结论**：顶点必须先被物体变换，再被相机变换，最后被投影变换。顺序反了，渲染结果就会彻底错误。
+
+### **你把 Shader 改成了虚基类，每一帧调用 Bind() 都会经过虚函数表（V-Table），这会产生严重的性能损耗吗？**
+
+- **标准答案**：
+  “虚函数确实存在一次间接寻址的开销，但在 **Shader 绑定**这种级别的操作中，这种损耗是**微不足道**的。
+
+  **调用频率**：通常我们每一帧只绑定几次或几十次 Shader（取决于材质数量）。相比于 GPU 每秒处理的数百万个顶点，CPU 端这几十次虚函数调用完全不是瓶颈。
+
+  **架构收益**：这种设计换取了极强的**跨平台能力**。在没有引入这个重构前，我们的 Application 被迫了解 OpenGL 的细节。现在，整个 Renderer 子系统完全由接口驱动，我们可以无缝接入 Vulkan 或 Metal，这种架构的健壮性远比节省那几纳秒的性能更重要。”

@@ -1,6 +1,7 @@
 // SandboxApp.cpp
 #include <Glimmer.h>
-
+#include "Platform/OpenGL/OpenGLShader.h"
+#include <glm/gtc/type_ptr.hpp>
 class ExampleLayer : public gl::Layer {
 public:
     ExampleLayer() :Layer("Example"), m_Camera(-1.6f, 1.6f, -0.9f, 0.9f)
@@ -9,10 +10,16 @@ public:
         m_VertexArray.reset(gl::VertexArray::Create());
 
         // 2. 准备数据
-        float vertices[3 * 3] = {
-            -1.0f, -0.5f, 0.0f,
-             1.0f, -0.5f, 0.0f,
-             0.0f,  0.5f, 0.0f
+        //float vertices[3 * 3] = {
+        //    -1.0f, -0.5f, 0.0f,
+        //     1.0f, -0.5f, 0.0f,
+        //     0.0f,  0.5f, 0.0f
+        //};
+        float vertices[4 * 3] = {
+            -0.5f, -0.5f, 0.0f,
+             0.5f, -0.5f, 0.0f,
+             0.5f,  0.5f, 0.0f,
+            -0.5f,  0.5f, 0.0f
         };
 
         std::shared_ptr<gl::VertexBuffer> vertexBuffer;
@@ -25,9 +32,11 @@ public:
         m_VertexArray->AddVertexBuffer(vertexBuffer);
 
         // 4. 设置索引
-        uint32_t indices[3] = { 0, 1, 2 };
+        //uint32_t indices[3] = { 0, 1, 2 };
+        uint32_t indices[6] = { 0, 1, 2, 2, 3, 0 };
         std::shared_ptr<gl::IndexBuffer> indexBuffer;
-        indexBuffer.reset(gl::IndexBuffer::Create(indices, 3));
+        //indexBuffer.reset(gl::IndexBuffer::Create(indices, 3));
+        indexBuffer.reset(gl::IndexBuffer::Create(indices, 6));
         m_VertexArray->SetIndexBuffer(indexBuffer);
 
         // 5. Shader 代码
@@ -35,6 +44,7 @@ public:
 		#version 330 core
 		layout(location = 0) in vec3 a_Position;
         uniform mat4 u_ViewProjection;
+        uniform mat4 u_Transform;
 		out vec3 v_Position;
         uniform float u_Time;
 		void main()
@@ -42,7 +52,7 @@ public:
             vec3 pos = a_Position;
             pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
             v_Position = pos;
-            gl_Position = u_ViewProjection * vec4(pos, 1.0); 
+            gl_Position = u_ViewProjection * u_Transform * vec4(pos, 1.0);
 		}
 	)";
         std::string fragmentSrc = R"(
@@ -61,7 +71,7 @@ public:
 		}
 	)";
 
-        m_Shader.reset(new gl::Shader(vertexSrc, fragmentSrc));
+        m_Shader.reset(gl::Shader::Create(vertexSrc, fragmentSrc));
     }
 
     void OnUpdate(gl::Timestep ts) override {
@@ -87,12 +97,30 @@ public:
 
         gl::Renderer::BeginScene(m_Camera);
 
+        // 准备一个基础的比例矩阵（让方块变小一点）
+        glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.1f));
+
         m_Shader->Bind();
         // 通过 Application 单例获取时间，彻底告别 GLFW
         float time = gl::Application::Get().GetTime();
         m_Shader->UploadUniformFloat("u_Time", time);
 
-        gl::Renderer::Submit(m_Shader, m_VertexArray);
+        // gl::Renderer::Submit(m_Shader, m_VertexArray);
+        // 渲染一个 20x20 的方块阵列
+        for (int y = 0; y < 20; y++) {
+            for (int x = 0; x < 20; x++) {
+                // 计算每个方块的位置
+                glm::vec3 pos(x * 0.11f, y * 0.11f, 0.0f);
+                float rotation = time * 20.0f + (x + y) * 10.0f;
+
+                glm::mat4 transform = glm::translate(glm::mat4(1.0f), pos) *
+                    glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 0, 1 }) *
+                    scale;
+
+                // 提交给渲染器，每个方块用不同的 transform
+                gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
+            }
+        }
 
         gl::Renderer::EndScene();
     }
