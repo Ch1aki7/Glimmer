@@ -1,0 +1,16 @@
+root = true
+
+[*]
+
+charset = utf-8
+
+# 结尾换行符设为 Windows 风格 (CRLF)
+end_of_line = crlf
+
+# 自动去掉行尾空格
+trim_trailing_whitespace = true
+
+# 文件末尾确保有一个空行
+insert_final_newline = true
+
+indent_style = tab

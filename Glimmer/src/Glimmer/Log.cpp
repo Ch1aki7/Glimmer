@@ -1,4 +1,4 @@
-#include "glpch.h"
+ï»¿#include "glpch.h"
 #include "Log.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
@@ -7,7 +7,7 @@ namespace gl {
     std::shared_ptr<spdlog::logger> Log::s_ClientLogger;
 
     void Log::Init() {
-        spdlog::set_pattern("%^[%T] %n: %v%$"); // ÉèÖÃÈÕÖ¾¸ñÊ½£ºÊ±¼ä-Ãû³Æ-ÄÚÈÝ
+        spdlog::set_pattern("%^[%T] %n: %v%$"); // è®¾ç½®æ—¥å¿—æ ¼å¼ï¼šæ—¶é—´-åç§°-å†…å®¹
         s_CoreLogger = spdlog::stdout_color_mt("GLIMMER");
         s_CoreLogger->set_level(spdlog::level::trace);
 

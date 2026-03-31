@@ -1,4 +1,4 @@
-#include "glpch.h"
+ï»¿#include "glpch.h"
 #include "LayerStack.h"
 
 namespace gl {
@@ -11,13 +11,13 @@ namespace gl {
     }
 
     void LayerStack::PushLayer(Layer* layer) {
-        // ÆÕÍ¨Í¼²ã²åÈëµ½ Index Î»ÖÃ£¬Index ºóÒÆ
+        // æ™®é€šå›¾å±‚æ’å…¥åˆ° Index ä½ç½®ï¼ŒIndex åç§»
         m_Layers.emplace(m_Layers.begin() + m_LayerInsertIndex, layer);
         m_LayerInsertIndex++;
     }
 
     void LayerStack::PushOverlay(Layer* overlay) {
-        // ¸²¸Ç²ãÖ±½Ó²åÔÚÄ©Î²
+        // è¦†ç›–å±‚ç›´æ¥æ’åœ¨æœ«å°¾
         m_Layers.emplace_back(overlay);
     }
 
