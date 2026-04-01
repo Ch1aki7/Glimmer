@@ -11,12 +11,6 @@ public:
 		// 背景漩涡VAO
 		m_bg_vortexVertexArray.reset(gl::VertexArray::Create());
 
-
-        //float vertices[3 * 3] = {
-        //    -1.0f, -0.5f, 0.0f,
-        //     1.0f, -0.5f, 0.0f,
-        //     0.0f,  0.5f, 0.0f
-        //};
         float vertices[4 * 5] = {
             // X, Y, Z          // U, V (0-1范围)
             -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, // 左下
@@ -24,12 +18,6 @@ public:
              0.5f,  0.5f, 0.0f,  1.0f, 1.0f, // 右上
             -0.5f,  0.5f, 0.0f,  0.0f, 1.0f  // 左上
         };
-		//float bg_vortexVertices[4 * 3] = {
-		//	-1.6f, -0.9f, 0.0f,
-		//	 1.6f, -0.9f, 0.0f,
-		//	 1.6f,  0.9f, 0.0f,
-		//	-1.6f,  0.9f, 0.0f
-		//};
 		float bg_vortexVertices[4 * 5] = {
 			// 位置 (X, Y, Z)      // UV (U, V)
 			-1.6f, -0.9f, 0.0f,   0.0f, 0.0f,
@@ -49,7 +37,6 @@ public:
 		// 背景漩涡VBO
 		gl::Ref<gl::VertexBuffer> bg_VBO;
 		bg_VBO.reset(gl::VertexBuffer::Create(bg_vortexVertices, sizeof(bg_vortexVertices)));
-		// bg_VBO->SetLayout({ { gl::ShaderDataType::Float3, "a_Position" } });
 		bg_VBO->SetLayout({
 			{ gl::ShaderDataType::Float3, "a_Position" },
 			{ gl::ShaderDataType::Float2, "a_TexCoord" }
@@ -57,10 +44,8 @@ public:
 		m_bg_vortexVertexArray->AddVertexBuffer(bg_VBO);
 
 		/*IBO设置*/
-        //uint32_t indices[3] = { 0, 1, 2 };
         uint32_t indices[6] = { 0, 1, 2, 2, 3, 0 };
         std::shared_ptr<gl::IndexBuffer> indexBuffer;
-        //indexBuffer.reset(gl::IndexBuffer::Create(indices, 3));
         indexBuffer.reset(gl::IndexBuffer::Create(indices, 6));
         m_VertexArray->SetIndexBuffer(indexBuffer);
 		// 背景漩涡IBO
@@ -70,14 +55,11 @@ public:
 		m_bg_vortexVertexArray->SetIndexBuffer(bg_IBO);
 
 		/*路径设置*/
-		m_TextureShader.reset(gl::Shader::Create("assets/shaders/Texture.glsl"));
-        //m_Texture = gl::Texture2D::Create("assets/textures/Henry.jpg");
-        m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
-		// 背景漩涡路径
-		m_bg_vortexShader.reset(gl::Shader::Create("assets/shaders/BalatroVortex.glsl"));
+		m_ShaderLib.Load("assets/shaders/Texture.glsl");
+		m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
+		m_ShaderLib.Load("assets/shaders/Tunnel.glsl");
 
-        //std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->Bind();
-        //std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->UploadUniformInt("u_Texture", 0);
+		m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
     }
 
     void OnUpdate(gl::Timestep ts) override {
@@ -109,41 +91,22 @@ public:
 
         gl::Renderer::BeginScene(m_Camera);
 
-        glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.1f));
-
-
-        // 通过 Application 单例获取时间，彻底告别 GLFW
         float time = gl::Application::Get().GetTime();
-		m_bg_vortexShader->Bind();
+		auto& window = gl::Application::Get().GetWindow();
+
+		auto bgShader = m_ShaderLib.Get("BalatroVortex");
+		bgShader->Bind();
 		float vortexStrength = 2.0f + sin(time * 0.5f) * 1.5f;
-		m_bg_vortexShader->UploadUniformFloat("u_VortexAmt", vortexStrength);
-		m_bg_vortexShader->UploadUniformFloat("u_Time", time);
-		gl::Renderer::Submit(m_bg_vortexShader, m_bg_vortexVertexArray, glm::mat4(1.0f));
+		bgShader->UploadUniformFloat("u_VortexAmt", vortexStrength);
+		bgShader->UploadUniformFloat("u_Time", time);
+		bgShader->UploadUniformFloat2("u_Resolution", { (float)window.GetWidth(), (float)window.GetHeight() });
+		gl::Renderer::Submit(bgShader, m_bg_vortexVertexArray, glm::mat4(1.0f));
 
+		auto textureShader = m_ShaderLib.Get("Texture");
+		textureShader->Bind();
 		m_Texture->Bind();
-		m_TextureShader->Bind();
-		m_TextureShader->UploadUniformFloat("u_Time", time);
-		gl::Renderer::Submit(m_TextureShader, m_VertexArray, glm::scale(glm::mat4(1.0f), glm::vec3(1.5f)));
-
-        //m_Shader->UploadUniformFloat("u_Time", time);
-        
-        // gl::Renderer::Submit(m_Shader, m_VertexArray);
-    
-        //// 渲染一个 20x20 的方块阵列
-        //for (int y = 0; y < 20; y++) {
-        //    for (int x = 0; x < 20; x++) {
-        //        // 计算每个方块的位置
-        //        glm::vec3 pos(x * 0.11f, y * 0.11f, 0.0f);
-        //        float rotation = time * 20.0f + (x + y) * 10.0f;
-
-        //        glm::mat4 transform = glm::translate(glm::mat4(1.0f), pos) *
-        //            glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 0, 1 }) *
-        //            scale;
-
-        //        gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
-        //    }
-        //}
-
+		textureShader->UploadUniformFloat("u_Time", time);
+		gl::Renderer::Submit(textureShader, m_VertexArray, glm::scale(glm::mat4(1.0f), glm::vec3(1.5f)));
 
         gl::Renderer::EndScene();
     }
@@ -153,22 +116,22 @@ public:
     }
 
     void OnImGuiRender() override {
-        // 画一个经典的测试面板
         ImGui::Begin("Glimmer Test Window");
         ImGui::Text("Hello World! ImGui is Working!");
         ImGui::End();
 
-        // 也可以直接调出 ImGui 自带的超级演示窗口，看看它有多强大：
         bool show_demo_window = true;
         ImGui::ShowDemoWindow(&show_demo_window);
     }
 private:
+	gl::ShaderLibrary m_ShaderLib;
+
     std::shared_ptr<gl::VertexArray> m_VertexArray;
     std::shared_ptr<gl::VertexArray> m_bg_vortexVertexArray;
 
-    // std::shared_ptr<gl::Shader> m_Shader;
     std::shared_ptr<gl::Shader> m_TextureShader;
     std::shared_ptr<gl::Shader> m_bg_vortexShader;
+	gl::Ref<gl::Shader> m_TunnelShader;
 
     std::shared_ptr<gl::Texture2D> m_Texture;
     gl::OrthographicCamera m_Camera;

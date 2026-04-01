@@ -3751,6 +3751,258 @@ void main()
 
 <img src="README.assets/image-20260331200053084.png" alt="image-20260331200053084" style="zoom:50%;" />
 
+对比了下游戏效果感觉差远了，特意从shadertoy上扒了大手子复刻的源码进行Glimmer的适配，并学习实现步骤
+
+```
+#type vertex
+#version 330 core
+
+layout(location = 0) in vec3 a_Position;
+uniform mat4 u_ViewProjection;
+uniform mat4 u_Transform;
+
+void main()
+{
+    gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 1.0);
+}
+
+#type fragment
+#version 330 core
+
+layout(location = 0) out vec4 color;
+
+uniform float u_Time;
+uniform vec2 u_Resolution;
+
+// --- 原版配置参数 ---
+#define SPIN_ROTATION -2.0
+#define SPIN_SPEED 7.0
+#define OFFSET vec2(0.0)
+#define COLOUR_1 vec4(0.871, 0.267, 0.231, 1.0)
+#define COLOUR_2 vec4(0.0, 0.42, 0.706, 1.0)
+#define COLOUR_3 vec4(0.086, 0.137, 0.145, 1.0)
+#define CONTRAST 3.5
+#define LIGTHING 0.4
+#define SPIN_AMOUNT 0.25
+#define PIXEL_FILTER 745.0
+#define SPIN_EASE 1.0
+#define IS_ROTATE false
+#define PI 3.14159265359
+
+vec4 effect(vec2 screenSize, vec2 screen_coords) {
+    // 1. 像素化逻辑：产生小丑牌特有的复古感
+    float pixel_size = length(screenSize.xy) / PIXEL_FILTER;
+    vec2 uv = (floor(screen_coords.xy * (1./pixel_size)) * pixel_size - 0.5 * screenSize.xy) / length(screenSize.xy) - OFFSET;
+    float uv_len = length(uv);
+    
+    // 2. 旋转逻辑
+    float speed = (SPIN_ROTATION * SPIN_EASE * 0.2);
+    if(IS_ROTATE){
+       speed = u_Time * speed;
+    }
+    speed += 302.2;
+    float new_pixel_angle = atan(uv.y, uv.x) + speed - SPIN_EASE * 20. * (1. * SPIN_AMOUNT * uv_len + (1. - 1. * SPIN_AMOUNT));
+    vec2 mid = (screenSize.xy / length(screenSize.xy)) / 2.;
+    uv = (vec2((uv_len * cos(new_pixel_angle) + mid.x), (uv_len * sin(new_pixel_angle) + mid.y)) - mid);
+    
+    // 3. 核心扰动循环：产生黏稠的液体感
+    uv *= 30.;
+    float time_speed = u_Time * (SPIN_SPEED);
+    vec2 uv2 = vec2(uv.x + uv.y);
+    
+    for(int i=0; i < 5; i++) {
+        uv2 += sin(max(uv.x, uv.y)) + uv;
+        uv  += 0.5 * vec2(cos(5.1123314 + 0.353 * uv2.y + time_speed * 0.131121), sin(uv2.x - 0.113 * time_speed));
+        uv  -= 1.0 * cos(uv.x + uv.y) - 1.0 * sin(uv.x * 0.711 - uv.y);
+    }
+    
+    // 4. 颜色与光照计算
+    float contrast_mod = (0.25 * CONTRAST + 0.5 * SPIN_AMOUNT + 1.2);
+    float paint_res = min(2., max(0., length(uv) * (0.035) * contrast_mod));
+    float c1p = max(0., 1. - contrast_mod * abs(1. - paint_res));
+    float c2p = max(0., 1. - contrast_mod * abs(paint_res));
+    float c3p = 1. - min(1., c1p + c2p);
+    float light = (LIGTHING - 0.2) * max(c1p * 5. - 4., 0.) + LIGTHING * max(c2p * 5. - 4., 0.);
+    
+    return (0.3 / CONTRAST) * COLOUR_1 + (1. - 0.3 / CONTRAST) * (COLOUR_1 * c1p + COLOUR_2 * c2p + vec4(c3p * COLOUR_3.rgb, c3p * COLOUR_1.a)) + light;
+}
+
+void main() {
+    // 使用内置 gl_FragCoord 配合 u_Resolution 还原 Shadertoy 的渲染环境
+    color = effect(u_Resolution, gl_FragCoord.xy);
+}
+```
+
+这段 shader 的整体思路可以概括为：**把屏幕空间的像素坐标（gl_FragCoord）转成一个“可操作的 UV 空间”，然后通过“像素化 → 极坐标旋转 → 多次扰动 → 颜色混合”这一连串变换，生成一种动态的流体/漩涡视觉效果**。具体来说，先利用 `u_Resolution` 把屏幕坐标归一化并做一次 `floor` 量化，制造出复古的“像素块”质感；接着把 UV 转成极坐标（用 `atan` 和长度），在角度上叠加一个与半径相关的旋转偏移，从而形成整体的旋转/扭曲结构；然后进入核心的 for 循环，通过多次 sin/cos 非线性扰动不断“搅动”坐标，让原本规则的空间变得像流体一样粘稠、混乱，这一步是视觉复杂度的来源；最后根据扰动后的坐标长度计算权重（c1p、c2p、c3p），在三种预设颜色之间做混合，并叠加一点类似高光的亮度计算，从而得到具有层次感的红蓝主色调效果，最终输出到屏幕上。
+
+## 着色器库
+
+加入 **ShaderLibrary（着色器库）** 是引擎资源管理系统的开端。
+
+目前，在 ExampleLayer 的构造函数里手动 reset 每一个 Shader，这会导致：
+
+1. **代码臃肿**：加载 10 个 Shader 就要写 10 行几乎重复的代码。
+2. **内存浪费**：如果两个图层都用到同一个 Shader，你会重复加载并编译两次。
+3. **管理困难**：你必须时刻持有 Shader 的指针才能使用它。
+
+**ShaderLibrary 的目标**：让你通过 m_ShaderLib.Get("Balatro") 这种字符串方式，随时随地在任何地方调用已加载的资源。
+
+**修改 Shader.h 接口**
+
+为了让库能识别 Shader，我们需要给 Shader 增加一个“名字”属性。
+
+**Glimmer/src/Glimmer/Renderer/Shader.h**:
+
+```
+namespace gl {
+    class Shader {
+    public:
+        virtual ~Shader() = default;
+        // ... 原有虚函数 ...
+
+        // ✨ 新增：获取 Shader 名字
+        virtual const std::string& GetName() const = 0;
+
+        static Ref<Shader> Create(const std::string& filepath);
+        static Ref<Shader> Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc);
+    };
+
+    // ✨ 新增：ShaderLibrary 类
+    class ShaderLibrary {
+    public:
+        // 手动添加已创建的 Shader 对象
+        void Add(const std::string& name, const Ref<Shader>& shader);
+        void Add(const Ref<Shader>& shader);
+
+        // 直接从文件加载并存入库
+        Ref<Shader> Load(const std::string& filepath);
+        Ref<Shader> Load(const std::string& name, const std::string& filepath);
+
+        // 获取资源
+        Ref<Shader> Get(const std::string& name);
+
+        bool Exists(const std::string& name) const;
+    private:
+        std::unordered_map<std::string, Ref<Shader>> m_Shaders;
+    };
+}
+```
+
+**修改 OpenGLShader 记录名字**
+
+确保 m_Name 在构造时被正确赋值（我们在之前的“文件读取”步骤中已经预留了此逻辑）。
+
+**Glimmer/src/Platform/OpenGL/OpenGLShader.h**:
+
+```
+class OpenGLShader : public Shader {
+public:
+    // ...
+    virtual const std::string& GetName() const override { return m_Name; }
+private:
+    std::string m_Name;
+    uint32_t m_RendererID;
+};
+```
+
+cpp构造函数
+
+```
+	OpenGLShader::OpenGLShader(const std::string& filepath)
+	{
+		std::string source = ReadFile(filepath);
+		auto shaderSources = PreProcess(source);
+		Compile(shaderSources);
+
+		// Extract name from filepath
+		auto lastSlash = filepath.find_last_of("/\\");
+		lastSlash = lastSlash == std::string::npos ? 0 : lastSlash + 1;
+		auto lastDot = filepath.rfind('.');
+		auto count = lastDot == std::string::npos ? filepath.size() - lastSlash : lastDot - lastSlash;
+		m_Name = filepath.substr(lastSlash, count);
+	}
+```
+
+**实现 ShaderLibrary 逻辑**
+
+**Glimmer/src/Glimmer/Renderer/Shader.cpp** (在文件末尾添加)：函数实现
+
+修改Create
+
+```
+	Ref<Shader> Shader::Create(const std::string& filepath)
+	{
+		return std::make_shared<OpenGLShader>(filepath);
+	}
+
+	Ref<Shader> Shader::Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc)
+	{
+		return std::make_shared<OpenGLShader>(name, vertexSrc, fragmentSrc);
+    }
+```
+
+以及其余函数逻辑
+
+```
+	// --- ShaderLibrary 实现 ---
+
+	void ShaderLibrary::Add(const std::string& name, const Ref<Shader>& shader)
+	{
+		GL_CORE_ASSERT(!Exists(name), "Shader already exists!");
+		m_Shaders[name] = shader;
+	}
+
+	void ShaderLibrary::Add(const Ref<Shader>& shader)
+	{
+		auto& name = shader->GetName();
+		Add(name, shader);
+	}
+	// 。。。
+```
+
+**在 Sandbox 中优雅地重构**
+
+现在，你的 ExampleLayer 构造函数和渲染逻辑会变得极其干净。
+
+**SandboxApp.cpp**:
+
+```
+class ExampleLayer : public gl::Layer {
+public:
+    ExampleLayer() : Layer("Example")
+    {
+        // ✨ 批量加载，不需要自己管理指针了
+        m_ShaderLib.Load("assets/shaders/Texture.glsl");
+        m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
+        m_ShaderLib.Load("assets/shaders/Octgrams.glsl");
+        
+        m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
+    }
+
+    void OnUpdate(gl::Timestep ts) override {
+        // ... 
+        
+        // ✨ 使用时直接通过名字取
+        auto textureShader = m_ShaderLib.Get("Texture");
+        textureShader->Bind();
+        m_Texture->Bind();
+        gl::Renderer::Submit(textureShader, m_VertexArray);
+        
+        // 如果想换背景，一句话切换
+        auto bgShader = m_ShaderLib.Get("BalatroVortex");
+        gl::Renderer::Submit(bgShader, m_bg_vortexVertexArray);
+    }
+
+private:
+    gl::ShaderLibrary m_ShaderLib; // ✨ 库对象
+    gl::Ref<gl::VertexArray> m_VertexArray;
+    gl::Ref<gl::Texture2D> m_Texture;
+    // ... 不再需要定义一堆 m_Shader1, m_Shader2 ...
+};
+```
+
+清理Sandbox多余注释
+
 ## KB
 
 ### 为什么不用动态库？
@@ -4024,3 +4276,11 @@ void main()
 
 - **你的回答**：
   “它是 GPU 上的‘插槽’。现代显卡通常有 16 到 32 个插槽。通过这个机制，我们可以在单次绘制（Draw Call）中同时使用多张贴图（比如：一张反射贴图，一张法线贴图）。我们在 C++ 中通过 glActiveTexture 选择插槽，并在 Shader 中通过 Uniform 变量告诉采样器它该读取哪个插槽。”
+
+### **为什么在引擎里要提供 ShaderLibrary 这种管理器？**
+
+**你的回答：**
+“这主要涉及 **资源生命周期管理 (Resource Lifecycle Management)** 和 **降低运行时开销** 两个方面。
+第一，**避免重复加载**。通过 unordered_map 的映射机制，我们可以确保同一个 Shader 文件在整个应用程序生命周期内只被编译和链接一次，节省了宝贵的初始化时间和显存。
+第二，**解耦逻辑与资源引用**。在复杂的场景中，不同的图层（Layer）可能需要共享同一个 Shader。通过库，我们不再需要在图层之间互相传递脆弱的原始指针，而是通过统一的‘键值（Key）’来获取资源，这极大地增强了代码的模块化和健壮性。
+第三，**集中式优化**。有了 Library 这一层，未来我们可以轻松实现‘热重载（Hot Reloading）’。即当开发者在外部修改了 .glsl 文件后，Library 可以自动重新编译对应 Shader，而无需重启游戏，从而提升开发效率。”
