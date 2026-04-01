@@ -1,6 +1,6 @@
-﻿#pragma once
+#pragma once
 
-#include "Glimmer/Core.h"
+#include "Glimmer/Core/Core.h"
 #include "Glimmer/Events/Event.h"
 #include "Glimmer/Core/Timestep.h"
 

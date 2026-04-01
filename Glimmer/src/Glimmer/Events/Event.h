@@ -1,5 +1,5 @@
-﻿#pragma once
-#include "Glimmer/Core.h"  // 我们需要在这里定义位操作宏
+#pragma once
+#include "Glimmer/Core/Core.h"  // 我们需要在这里定义位操作宏
 #include <spdlog/fmt/fmt.h>
 #include <sstream>
 #include <string>

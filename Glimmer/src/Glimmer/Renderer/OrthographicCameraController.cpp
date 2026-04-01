@@ -1,8 +1,8 @@
 #include "glpch.h"
 #include "OrthographicCameraController.h"
 
-#include "Glimmer/Input.h"
-#include "Glimmer/KeyCodes.h"
+#include "Glimmer/Core/Input.h"
+#include "Glimmer/Core/KeyCodes.h"
 
 namespace gl {
 

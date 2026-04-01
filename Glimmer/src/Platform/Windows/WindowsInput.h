@@ -1,5 +1,5 @@
 #pragma once
-#include "Glimmer/Input.h"
+#include "Glimmer/Core/Input.h"
 
 namespace gl {
     class WindowsInput : public Input {

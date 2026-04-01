@@ -12,8 +12,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include <Glimmer/Log.h>
-#include <Glimmer/Core.h>
+#include "Glimmer/Core/Log.h"
+#include "Glimmer/Core/Core.h"
 
 #ifdef GL_PLATFORM_WINDOWS
 #include <Windows.h>

@@ -1,5 +1,5 @@
 #pragma once
-#include "Glimmer/Layer.h"
+#include "Glimmer/Core/Layer.h"
 
 #include "Glimmer/Events/ApplicationEvent.h"
 #include "Glimmer/Events/KeyEvent.h"
@@ -17,8 +17,8 @@ namespace gl {
         virtual void OnEvent(Event& event) override;
         virtual void OnImGuiRender() override;
 
-        void Begin(); // Ã¿Ö¡¿ªÊ¼Ç°ºô½Ğ
-        void End();   // Ã¿Ö¡½áÊøºóºô½Ğ
+        void Begin(); // æ¯å¸§å¼€å§‹å‰å‘¼å«
+        void End();   // æ¯å¸§ç»“æŸåå‘¼å«
     private:
         bool OnMouseButtonPressedEvent(MouseButtonPressedEvent& e);
         bool OnMouseButtonReleasedEvent(MouseButtonReleasedEvent& e);

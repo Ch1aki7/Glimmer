@@ -2,14 +2,14 @@
 #pragma once
 
 // 供客户端（Sandbox）使用的总头文件
-#include "Glimmer/Application.h"
-#include "Glimmer/Layer.h"
-#include "Glimmer/Log.h"
+#include "Glimmer/Core/Application.h"
+#include "Glimmer/Core/Layer.h"
+#include "Glimmer/Core/Log.h"
 #include "Glimmer/Core/Timestep.h"
 
-#include "Glimmer/Input.h"
-#include "Glimmer/KeyCodes.h"
-#include "Glimmer/MouseButtonCodes.h"
+#include "Glimmer/Core/Input.h"
+#include "Glimmer/Core/KeyCodes.h"
+#include "Glimmer/Core/MouseButtonCodes.h"
 
 // --- 渲染器部分 ---
 #include "Glimmer/Renderer/Renderer.h"
@@ -22,6 +22,6 @@
 #include "Glimmer/Renderer/Texture.h"
 
 // --- 入口点 ---
-#include "Glimmer/EntryPoint.h"
+#include "Glimmer/Core/EntryPoint.h"
 
 #include <imgui.h> // 方便在 Layer 里写 UI

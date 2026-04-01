@@ -1,5 +1,5 @@
 #pragma once
-#include "Glimmer/Window.h"
+#include "Glimmer/Core/Window.h"
 #include "Glimmer/Renderer/GraphicsContext.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -24,7 +24,7 @@ namespace gl {
         virtual void Init(const WindowProps& props);
         virtual void Shutdown();
     private:
-        GLFWwindow* m_Window; // GLFW ԭʼָ��
+        GLFWwindow* m_Window; // GLFW 原始指针
         GraphicsContext* m_Context;
         struct WindowData {
             std::string Title;

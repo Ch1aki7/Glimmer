@@ -1,8 +1,8 @@
 // Application.h
-#include "Events/Event.h"
+#include "Glimmer/Events/Event.h"
 #include "Window.h"
 #include "Glimmer/Events/ApplicationEvent.h"
-#include "Glimmer/LayerStack.h"
+#include "Glimmer/Core/LayerStack.h"
 #include "Glimmer/ImGui/ImGuiLayer.h"
 
 #include "Glimmer/Renderer/Shader.h"
@@ -10,14 +10,14 @@
 #include "Glimmer/Renderer/VertexArray.h"
 
 #include "Glimmer/Renderer/OrthographicCamera.h"
-namespace gl { // ÊôÓÚ Glimmer ÒıÇæµÄÃüÃû¿Õ¼ä
+namespace gl { // å±äº Glimmer å¼•æ“çš„å‘½åç©ºé—´
     class Application {
     public:
         Application();
         virtual ~Application();
         void Run();
 
-        void OnEvent(Event& e); // ´¦ÀíÊÂ¼şµÄÖĞĞÄÊàÅ¦
+        void OnEvent(Event& e); // å¤„ç†äº‹ä»¶çš„ä¸­å¿ƒæ¢çº½
 
         void PushLayer(Layer* layer);
         void PushOverlay(Layer* overlay);
@@ -28,14 +28,14 @@ namespace gl { // ÊôÓÚ Glimmer ÒıÇæµÄÃüÃû¿Õ¼ä
         static float GetTime();
         float m_LastFrameTime = 0.0f;
     private:
-        bool OnWindowClose(WindowCloseEvent& e); // ×¨ÃÅ´¦Àí¹Ø±ÕµÄÂß¼­
-        std::unique_ptr<Window> m_Window; // ÒıÇæ³ÖÓĞµÄ´°¿ÚÖ¸Õë
+        bool OnWindowClose(WindowCloseEvent& e); // ä¸“é—¨å¤„ç†å…³é—­çš„é€»è¾‘
+        std::unique_ptr<Window> m_Window; // å¼•æ“æŒæœ‰çš„çª—å£æŒ‡é’ˆ
         bool m_Running = true;
 
         LayerStack m_LayerStack;
         static Application* s_Instance;
-        ImGuiLayer* m_ImGuiLayer; // ¡¾ĞÂÔö¡¿£º±£´æ ImGui ²ãµÄÖ¸Õë
+        ImGuiLayer* m_ImGuiLayer; // ã€æ–°å¢ã€‘ï¼šä¿å­˜ ImGui å±‚çš„æŒ‡é’ˆ
     };
-    // Ìá¹©¸øÍâ²¿´´½¨Ó¦ÓÃµÄ½Ó¿Ú
+    // æä¾›ç»™å¤–éƒ¨åˆ›å»ºåº”ç”¨çš„æ¥å£
     Application* CreateApplication();
 }
