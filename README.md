@@ -4121,37 +4121,6 @@ private:
 };
 ```
 
-在 2D 引擎中，我们通常不手动去算这些带小数点的顶点。我们会定义一个 **“单位正方形”**（即大小为 1x1），然后在绘制背景时，通过 Renderer::Submit 的 transform 参数将其拉大。
-
-如何使得背景shader完全贴满窗口？
-
-**第一步：定义 1x1 的背景顶点**
-
-```
-float bg_vortexVertices[4 * 5] = {
-    -1.0f, -1.0f, 0.0f,  0.0f, 0.0f,
-     1.0f, -1.0f, 0.0f,  1.0f, 0.0f,
-     1.0f,  1.0f, 0.0f,  1.0f, 1.0f,
-    -1.0f,  1.0f, 0.0f,  0.0f, 1.0f
-};
-```
-
-**第二步：在渲染时根据 AspectRatio 动态拉伸**
-
-```
-void OnUpdate(gl::Timestep ts) {
-    // ...
-    float aspect = 1280.0f / 720.0f; // 理想纵横比
-    
-    // 创建一个能覆盖整个摄像机范围的变换矩阵
-    // 宽度拉伸 aspect 倍，高度保持 1.0，整体缩放跟随 ZoomLevel (或者稍微大一点点以防万一)
-    float zoom = m_CameraController.GetZoomLevel();
-    glm::mat4 bgTransform = glm::scale(glm::mat4(1.0f), glm::vec3(aspect * zoom, zoom, 1.0f));
-
-    gl::Renderer::Submit(m_bg_vortexShader, m_bg_vortexVertexArray, bgTransform);
-}
-```
-
 ## KB
 
 ### 为什么不用动态库？

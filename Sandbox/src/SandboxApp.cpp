@@ -71,7 +71,6 @@ public:
 
         float time = gl::Application::Get().GetTime();
 		auto& window = gl::Application::Get().GetWindow();
-		float aspect = 1280.0f / 720.0f;
 		float zoom = m_CameraController.GetZoomLevel();
 
 		auto bgShader = m_ShaderLib.Get("BalatroVortex");
@@ -80,8 +79,7 @@ public:
 		bgShader->UploadUniformFloat("u_VortexAmt", vortexStrength);
 		bgShader->UploadUniformFloat("u_Time", time);
 		bgShader->UploadUniformFloat2("u_Resolution", { (float)window.GetWidth(), (float)window.GetHeight() });
-		glm::mat4 bgTransform = glm::scale(glm::mat4(1.0f), glm::vec3(aspect * zoom, zoom, 1.0f));
-		gl::Renderer::Submit(bgShader, m_bg_vortexVertexArray, bgTransform);
+		gl::Renderer::Submit(bgShader, m_bg_vortexVertexArray, glm::mat4(1.0f));
 
 		auto textureShader = m_ShaderLib.Get("Texture");
 		textureShader->Bind();
