@@ -4,7 +4,7 @@
 #include <glm/gtc/type_ptr.hpp>
 class ExampleLayer : public gl::Layer {
 public:
-    ExampleLayer() :Layer("Example"), m_Camera(-1.6f, 1.6f, -0.9f, 0.9f)
+    ExampleLayer() :Layer("Example"), m_CameraController(1280.0f / 720.0f, true)
     {
 		/*VAO设置*/
         m_VertexArray.reset(gl::VertexArray::Create());
@@ -19,11 +19,10 @@ public:
             -0.5f,  0.5f, 0.0f,  0.0f, 1.0f  // 左上
         };
 		float bg_vortexVertices[4 * 5] = {
-			// 位置 (X, Y, Z)      // UV (U, V)
-			-1.6f, -0.9f, 0.0f,   0.0f, 0.0f,
-			 1.6f, -0.9f, 0.0f,   1.0f, 0.0f,
-			 1.6f,  0.9f, 0.0f,   1.0f, 1.0f,
-			-1.6f,  0.9f, 0.0f,   0.0f, 1.0f
+			-1.0f, -1.0f, 0.0f,  0.0f, 0.0f,
+			 1.0f, -1.0f, 0.0f,  1.0f, 0.0f,
+			 1.0f,  1.0f, 0.0f,  1.0f, 1.0f,
+			-1.0f,  1.0f, 0.0f,  0.0f, 1.0f
 		};
 
 		/*VBO设置*/
@@ -63,36 +62,17 @@ public:
     }
 
     void OnUpdate(gl::Timestep ts) override {
-        // ---------------------------------------------------------
-        // A. 摄像机控制
-        // ---------------------------------------------------------
-        float moveSpeed = 2.0f;
-        float rotationSpeed = 90.0f;
-        if (gl::Input::IsKeyPressed(GL_KEY_A))
-            m_Camera.SetPosition(m_Camera.GetPosition() + glm::vec3(-moveSpeed * ts, 0, 0));
-        else if (gl::Input::IsKeyPressed(GL_KEY_D))
-            m_Camera.SetPosition(m_Camera.GetPosition() + glm::vec3(moveSpeed * ts, 0, 0));
+		m_CameraController.OnUpdate(ts);
 
-        if (gl::Input::IsKeyPressed(GL_KEY_W))
-            m_Camera.SetPosition(m_Camera.GetPosition() + glm::vec3(0, moveSpeed * ts, 0));
-        else if (gl::Input::IsKeyPressed(GL_KEY_S))
-            m_Camera.SetPosition(m_Camera.GetPosition() + glm::vec3(0, -moveSpeed * ts, 0));
-
-        if (gl::Input::IsKeyPressed(GL_KEY_Q))
-            m_Camera.SetRotation(m_Camera.GetRotation() + rotationSpeed * ts);
-        else if (gl::Input::IsKeyPressed(GL_KEY_E))
-            m_Camera.SetRotation(m_Camera.GetRotation() - rotationSpeed * ts);
-
-        // ---------------------------------------------------------
-        // B. 渲染执行 (现在图层负责提交自己的渲染任务)
-        // ---------------------------------------------------------
         gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
         gl::RenderCommand::Clear();
 
-        gl::Renderer::BeginScene(m_Camera);
+        gl::Renderer::BeginScene(m_CameraController.GetCamera());
 
         float time = gl::Application::Get().GetTime();
 		auto& window = gl::Application::Get().GetWindow();
+		float aspect = 1280.0f / 720.0f;
+		float zoom = m_CameraController.GetZoomLevel();
 
 		auto bgShader = m_ShaderLib.Get("BalatroVortex");
 		bgShader->Bind();
@@ -100,7 +80,8 @@ public:
 		bgShader->UploadUniformFloat("u_VortexAmt", vortexStrength);
 		bgShader->UploadUniformFloat("u_Time", time);
 		bgShader->UploadUniformFloat2("u_Resolution", { (float)window.GetWidth(), (float)window.GetHeight() });
-		gl::Renderer::Submit(bgShader, m_bg_vortexVertexArray, glm::mat4(1.0f));
+		glm::mat4 bgTransform = glm::scale(glm::mat4(1.0f), glm::vec3(aspect * zoom, zoom, 1.0f));
+		gl::Renderer::Submit(bgShader, m_bg_vortexVertexArray, bgTransform);
 
 		auto textureShader = m_ShaderLib.Get("Texture");
 		textureShader->Bind();
@@ -113,6 +94,7 @@ public:
 
     void OnEvent(gl::Event& event) override {
         GL_TRACE("{0}", event.ToString());
+		m_CameraController.OnEvent(event);
     }
 
     void OnImGuiRender() override {
@@ -134,7 +116,7 @@ private:
 	gl::Ref<gl::Shader> m_TunnelShader;
 
     std::shared_ptr<gl::Texture2D> m_Texture;
-    gl::OrthographicCamera m_Camera;
+	gl::OrthographicCameraController m_CameraController;
 };
 
 // 继承 Glimmer 的引擎基类

@@ -4003,6 +4003,155 @@ private:
 
 清理Sandbox多余注释
 
+## 正交摄像机控制器
+
+加入 **OrthographicCameraController（正交摄像机控制器）** 是为了将“摄像机硬件”与“用户交互”彻底解耦。
+
+**现状**：你之前的 WASD 逻辑写在 ExampleLayer 里。如果以后有多个关卡或编辑器模式，你需要重复写这些逻辑，且窗口拉伸时画面会变形。
+**目标**：封装一个控制器，让它自动处理 **移动、旋转、缩放（滚轮）** 以及 **分辨率自适应**。
+
+**第一步：创建控制器类 (OrthographicCameraController.h/cpp)**
+
+这个类将包裹 OrthographicCamera，并负责监听事件。
+
+**文件路径：Glimmer/src/Glimmer/Renderer/OrthographicCameraController.h**
+
+```
+#pragma once
+
+#include "Glimmer/Renderer/OrthographicCamera.h"
+#include "Glimmer/Core/Timestep.h"
+
+#include "Glimmer/Events/ApplicationEvent.h"
+#include "Glimmer/Events/MouseEvent.h"
+
+namespace gl {
+
+	class OrthographicCameraController
+	{
+	public:
+		OrthographicCameraController(float aspectRatio, bool rotation = false);
+
+		void OnUpdate(Timestep ts);
+		void OnEvent(Event& e);
+
+		OrthographicCamera& GetCamera() { return m_Camera; }
+		const OrthographicCamera& GetCamera() const { return m_Camera; }
+
+		float GetZoomLevel() const { return m_ZoomLevel; }
+		void SetZoomLevel(float level) { m_ZoomLevel = level; CalculateView(); }
+	private:
+		bool OnMouseScrolled(MouseScrolledEvent& e);
+		bool OnWindowResized(WindowResizeEvent& e);
+		void CalculateView();
+	private:
+		float m_AspectRatio;
+		float m_ZoomLevel = 1.0f;
+		OrthographicCamera m_Camera;
+
+		bool m_Rotation;
+		glm::vec3 m_CameraPosition = { 0.0f, 0.0f, 0.0f };
+		float m_CameraRotation = 0.0f; // 角度单位
+		float m_CameraTranslationSpeed = 5.0f, m_CameraRotationSpeed = 180.0f;
+	};
+
+}
+```
+
+cpp负责“根据输入实时更新相机的 Position / Rotation / Projection”，从而控制你看到的画面（移动、旋转、缩放、窗口自适应）
+
+整个类本质是一个“相机驱动器”：在 `OnUpdate` 里读取键盘输入（WASD 控平移，QE 控旋转），不断修改 `m_CameraPosition` 和 `m_CameraRotation`，再同步到 `m_Camera`；同时用 `m_ZoomLevel` 控制缩放，并把它反过来影响移动速度（缩得越近移动越慢，手感更自然）。在 `OnEvent` 里则监听事件系统：鼠标滚轮改变 `ZoomLevel` 实现缩放，窗口大小变化时更新 `AspectRatio`，然后统一通过 `CalculateView()` 重新计算正交投影矩阵，保证画面不会被拉伸。最终结果就是——无论是输入还是窗口变化，都会实时影响“你看到的世界范围”。
+
+**修改 OrthographicCamera.h 增加 SetProjection**
+
+你需要让摄像机能够中途修改它的投影范围。
+
+```
+// OrthographicCamera.h 中增加
+void SetProjection(float left, float right, float bottom, float top);
+
+// OrthographicCamera.cpp 实现
+void OrthographicCamera::SetProjection(float left, float right, float bottom, float top)
+{
+    m_ProjectionMatrix = glm::ortho(left, right, bottom, top, -1.0f, 1.0f);
+    m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
+}
+```
+
+**在 Sandbox 中重构**
+
+现在的 Sandbox 代码将变得极其整洁，所有的 WASD 逻辑全部消失！
+
+**SandboxApp.cpp**:
+
+```
+class ExampleLayer : public gl::Layer {
+public:
+    ExampleLayer() 
+        : Layer("Example"), 
+          m_CameraController(1280.0f / 720.0f, true) // ✨ 初始化控制器
+    {
+        // ... 加载数据逻辑不变 ...
+    }
+
+    void OnUpdate(gl::Timestep ts) override {
+        // 1. ✨ 只要这一行，移动、缩放、旋转全搞定！
+        m_CameraController.OnUpdate(ts);
+
+        // 2. 渲染指令
+        gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
+        gl::RenderCommand::Clear();
+
+        // 3. ✨ 从控制器拿摄像机
+        gl::Renderer::BeginScene(m_CameraController.GetCamera());
+        
+        // ... 执行 Submit ...
+        
+        gl::Renderer::EndScene();
+    }
+
+    void OnEvent(gl::Event& e) override {
+        // ✨ 将事件转发给控制器
+        m_CameraController.OnEvent(e);
+    }
+
+private:
+    gl::OrthographicCameraController m_CameraController; // ✨ 控制器成员
+    // ... 其他变量 ...
+};
+```
+
+在 2D 引擎中，我们通常不手动去算这些带小数点的顶点。我们会定义一个 **“单位正方形”**（即大小为 1x1），然后在绘制背景时，通过 Renderer::Submit 的 transform 参数将其拉大。
+
+如何使得背景shader完全贴满窗口？
+
+**第一步：定义 1x1 的背景顶点**
+
+```
+float bg_vortexVertices[4 * 5] = {
+    -1.0f, -1.0f, 0.0f,  0.0f, 0.0f,
+     1.0f, -1.0f, 0.0f,  1.0f, 0.0f,
+     1.0f,  1.0f, 0.0f,  1.0f, 1.0f,
+    -1.0f,  1.0f, 0.0f,  0.0f, 1.0f
+};
+```
+
+**第二步：在渲染时根据 AspectRatio 动态拉伸**
+
+```
+void OnUpdate(gl::Timestep ts) {
+    // ...
+    float aspect = 1280.0f / 720.0f; // 理想纵横比
+    
+    // 创建一个能覆盖整个摄像机范围的变换矩阵
+    // 宽度拉伸 aspect 倍，高度保持 1.0，整体缩放跟随 ZoomLevel (或者稍微大一点点以防万一)
+    float zoom = m_CameraController.GetZoomLevel();
+    glm::mat4 bgTransform = glm::scale(glm::mat4(1.0f), glm::vec3(aspect * zoom, zoom, 1.0f));
+
+    gl::Renderer::Submit(m_bg_vortexShader, m_bg_vortexVertexArray, bgTransform);
+}
+```
+
 ## KB
 
 ### 为什么不用动态库？
