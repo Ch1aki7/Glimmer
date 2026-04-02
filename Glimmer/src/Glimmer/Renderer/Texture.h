@@ -19,8 +19,7 @@ namespace gl {
 	class Texture2D : public Texture
 	{
 	public:
-		// 静态工厂方法，传入图片路径创建纹理
-		static std::shared_ptr<Texture2D> Create(const std::string& path);
+		static Ref<Texture2D> Create(const std::string& path);
 	};
 
 }

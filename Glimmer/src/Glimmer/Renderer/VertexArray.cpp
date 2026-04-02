@@ -4,10 +4,10 @@
 
 namespace gl {
 
-	VertexArray* VertexArray::Create()
+	Ref<VertexArray> VertexArray::Create()
 	{
-		// 暂时直接返回 OpenGL 版本
-		return new OpenGLVertexArray();
+		// 鏆傛椂鐩存帴杩斿洖 OpenGL 鐗堟湰
+		return std::make_shared<OpenGLVertexArray>();
 	}
 
 }

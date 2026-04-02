@@ -21,7 +21,4 @@
 #include "Glimmer/Renderer/OrthographicCameraController.h"
 #include "Glimmer/Renderer/Texture.h"
 
-// --- 入口点 ---
-#include "Glimmer/Core/EntryPoint.h"
-
 #include <imgui.h> // 方便在 Layer 里写 UI

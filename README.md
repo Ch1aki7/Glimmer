@@ -4121,6 +4121,31 @@ private:
 };
 ```
 
+## Renderer2D
+
+目前的渲染方式是：
+gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
+这要求开发者在 Sandbox 里自己管理 VAO、VBO 和 Shader。
+
+**Renderer2D 的目标是：** 建立一套极其简化的 **2D 绘图指令集**。你只需要告诉引擎：*“在 (1,1) 位置画一个红色的方块”* 或者 *“在 (0,0) 位置画一个带贴图的方块”*。
+
+并且考虑是否将SandboxApp分离出 Sandbox.h/cpp
+
+即使现在已经进行了shader库的编写，并可以从硬盘读glsl，但是sandboxapp仍有VAO、VBO的绑定等冗余代码，故抽离出Sandbox2D，以后想做一个主菜单层、一个游戏关卡层、一个结算层。每个层都应该是独立的 .h/cpp 文件。
+
+1. 新建 Sandbox2D.h 和 Sandbox2D.cpp。
+2. 将 ExampleLayer 的逻辑全部搬进去，改名叫 Sandbox2D。
+3. 在 SandboxApp.cpp 里的 Sandbox 构造函数中：PushLayer(new Sandbox2D());。
+
+在 Glimmer 引擎的架构中，EntryPoint.h 包含了真正的 int main() 函数。
+
+- **真相是：** 在 SandboxApp.cpp 里包含了 #include <Glimmer.h>（或者直接包含了 EntryPoint.h），同时在 Sandbox2D.cpp 里也包含了它。
+- **结果：** 编译器在编译这两个文件时，分别都在里面发现了一个 main 函数。当链接器（Linker）最后要把这两个文件拼成一个 .exe 时，它发现有两个入口，于是就崩溃了。
+
+**这样** **SandboxApp.cpp** **以后就只剩下几行代码，专门负责“创建游戏应用”，而真正的游戏内容全部都在** **Sandbox2D.cpp** **里了。**
+
+
+
 ## KB
 
 ### 为什么不用动态库？
