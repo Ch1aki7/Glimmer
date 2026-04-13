@@ -5,12 +5,12 @@
 namespace gl {
 	Ref<Shader> Shader::Create(const std::string& filepath)
 	{
-		return std::make_shared<OpenGLShader>(filepath);
+		return CreateRef<OpenGLShader>(filepath);
 	}
 
 	Ref<Shader> Shader::Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc)
 	{
-		return std::make_shared<OpenGLShader>(name, vertexSrc, fragmentSrc);
+		return CreateRef<OpenGLShader>(name, vertexSrc, fragmentSrc);
     }
 
 	// --- ShaderLibrary 实现 ---

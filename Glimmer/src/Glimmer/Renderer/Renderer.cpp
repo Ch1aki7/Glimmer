@@ -1,6 +1,6 @@
 #include "glpch.h"
 #include "Renderer.h"
-
+#include "Renderer2D.h"
 namespace gl {
 
 	Renderer::SceneData* Renderer::s_SceneData = new Renderer::SceneData;
@@ -8,11 +8,12 @@ namespace gl {
 	void Renderer::Init()
 	{
 		RenderCommand::Init();
+		Renderer2D::Init();
 	}
 
 	void Renderer::BeginScene(OrthographicCamera& camera)
 	{
-		// ¼ÇÂ¼ÉãÏñ»úµÄ View-Projection ¾ØÕó
+		// è®°å½•æ‘„åƒæœºçš„ View-Projection çŸ©é˜µ
 		s_SceneData->ViewProjectionMatrix = camera.GetViewProjectionMatrix();
 	}
 
@@ -25,9 +26,9 @@ namespace gl {
 		const glm::mat4& transform)
 	{
 		shader->Bind();
-		// 1. ÉÏ´«³¡¾°¾ØÕó (PV)
+		// 1. ä¸Šä¼ åœºæ™¯çŸ©é˜µ (PV)
 		shader->UploadUniformMat4("u_ViewProjection", s_SceneData->ViewProjectionMatrix);
-		// 2. ÉÏ´«ÎïÌå±ä»»¾ØÕó (M)
+		// 2. ä¸Šä¼ ç‰©ä½“å˜æ¢çŸ©é˜µ (M)
 		shader->UploadUniformMat4("u_Transform", transform);
 
 		vertexArray->Bind();

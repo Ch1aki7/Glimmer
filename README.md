@@ -4131,7 +4131,7 @@ gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
 
 并且考虑是否将SandboxApp分离出 Sandbox.h/cpp
 
-即使现在已经进行了shader库的编写，并可以从硬盘读glsl，但是sandboxapp仍有VAO、VBO的绑定等冗余代码，故抽离出Sandbox2D，以后想做一个主菜单层、一个游戏关卡层、一个结算层。每个层都应该是独立的 .h/cpp 文件。
+**即使现在已经进行了shader库的编写，并可以从硬盘读glsl，但是sandboxapp仍有VAO、VBO的绑定等冗余代码，故抽离出Sandbox2D，以后想做一个主菜单层、一个游戏关卡层、一个结算层。每个层都应该是独立的 .h/cpp 文件。**
 
 1. 新建 Sandbox2D.h 和 Sandbox2D.cpp。
 2. 将 ExampleLayer 的逻辑全部搬进去，改名叫 Sandbox2D。
@@ -4144,7 +4144,140 @@ gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
 
 **这样** **SandboxApp.cpp** **以后就只剩下几行代码，专门负责“创建游戏应用”，而真正的游戏内容全部都在** **Sandbox2D.cpp** **里了。**
 
+这套代码实现了 **2D 渲染器的第一阶段：封装 API 调用**。它引入了“白贴图”技术，让你可以用同一个接口画**纯色方块和带贴图的方块**。
 
+Glimmer/src/Glimmer/Renderer/Renderer2D.h
+
+```
+#pragma once
+
+#include "Glimmer/Renderer/OrthographicCamera.h"
+#include "Glimmer/Renderer/Texture.h"
+
+namespace gl {
+
+	class Renderer2D
+	{
+	public:
+		static void Init();
+		static void Shutdown();
+
+		static void BeginScene(const OrthographicCamera& camera);
+		static void EndScene();
+
+		// --- 基础绘图接口 (Quads) ---
+
+		// 纯色方块 (Vector2 & Vector3 坐标支持)
+		static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const glm::vec4& color);
+		static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const glm::vec4& color);
+
+		// 贴图方块
+		static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const Ref<Texture2D>& texture);
+		static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture);
+
+	};
+}
+```
+
+**Glimmer/src/Glimmer/Renderer/Renderer2D.cpp**
+
+在初始化阶段创建并保存一个通用的四边形（Quad）顶点数据（包含位置和纹理坐标）、对应的顶点数组对象（VAO）和索引缓冲，同时加载两种 Shader（纯色和纹理）；在 `BeginScene` 时将相机的视图投影矩阵和当前时间统一传入 Shader 作为全局状态；随后通过多个 `DrawQuad` 重载函数，根据传入的位置、大小以及颜色或纹理，动态构建模型变换矩阵（平移 + 缩放），绑定对应 Shader 和资源（颜色或纹理），最终复用同一个 Quad 网格调用底层 `RenderCommand::DrawIndexed` 完成绘制；整体设计上通过一个全局静态结构集中管理渲染资源，实现了“一个四边形 + 不同参数 = 渲染任意 2D 图元”的高效复用机制。
+
+现在可以在Sandbox2D里这样绘制
+
+```
+	gl::Renderer2D::DrawQuad({ -1.0f, 0.0f }, { 0.8f, 0.8f }, { 0.8f, 0.2f, 0.3f, 1.0f });
+	gl::Renderer2D::DrawQuad({ 0.5f, -0.5f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
+	gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, -0.1f }, { 1.0f, 1.0f }, m_Texture); // 背景图
+```
+
+需要让 Application 在启动时初始化这个 Renderer2D。Renderer.cpp更新Init函数
+
+```
+	void Renderer::Init()
+	{
+		RenderCommand::Init();
+		Renderer2D::Init();
+	}
+```
+
+**Renderer2D的具体作用，所有shader都要用Renderer2D处理吗，有没有必须在Sandbox2D处理的？**
+
+- **渲染器 (Renderer2D)** 负责**机制 (Mechanisms)**：它负责顶点数据的布局、批处理算法的实现、以及图形 API 的底层封装。它是一个‘无状态’或‘全局状态’的处理器。
+- **游戏逻辑层 (Sandbox)** 负责**策略 (Policies)**：它决定渲染什么内容、使用哪个 Shader、以及如何配置特定的 Uniform 材质参数。
+
+> 一、 Renderer2D 的具体作用是什么？
+>
+> 你可以把 Renderer2D 想象成一个**“专业的物流中心”**。它的核心作用有三点：
+>
+> 1. **极简化接口 (Simplicity)**：
+>    它把复杂的 OpenGL 流程（生成 VBO、绑定 VAO、设置 Layout、激活 Shader）封装成一句话：DrawQuad。
+> 2. **批处理优化 (Batching) —— 它的终极价值**：
+>    这是你下一步要做的。当你调用 1000 次 DrawQuad 时，Renderer2D 不会立刻画，而是把 1000 个方块的顶点攒在一起，最后只用**一个 Draw Call** 发给显卡。这是 Sandbox 无法高效完成的任务。
+> 3. **状态管理 (State Management)**：
+>    它记录了当前的摄像机、当前的时间，并确保每次绘图时这些全局信息能准确“注入”到显卡。
+>
+> 二、 所有 Shader 都要用 Renderer2D 处理吗？
+>
+> **答案是：不。**
+>
+> 在引擎架构中，Shader 分为两类，处理方式完全不同：
+>
+> 1. 通用 Shader (Standard Shaders) —— **Renderer2D 管**
+>
+> - **例子**：FlatColor (纯色)、Texture (普通贴图)、Sprite (带动画的图集)。
+> - **特点**：它们使用的顶点数据结构完全一样（都是 4 个点的正方形）。
+> - **做法**：这些 Shader 应该内置在 Renderer2D 内部。Sandbox 只需要传个颜色或图片指针进来，剩下的细节（Bind, Upload）都由引擎底层自动化。
+>
+> 2. 特效/特定逻辑 Shader (Custom/Post-Process Shaders) —— **Renderer2D 配合管**
+>
+> - **例子**：你的 BalatroVortex (漩涡)、GaussianBlur (模糊)、ShieldEffect (护盾特效)。
+> - **特点**：它们需要一些奇奇怪怪的参数（如 u_VortexAmt），Renderer2D 根本不知道这些参数的存在。
+> - **做法**：你需要给 Renderer2D 一个重载函数，允许 Sandbox 把“自定义 Shader”传进去。Renderer2D 只负责提供“肉体”（VAO 和变换矩阵），Sandbox 负责提供“灵魂参数”。
+>
+> 三、 有没有必须在 Sandbox2D 处理的部分？
+>
+> **有的。** 即使引擎再强大，以下三件事也必须留在 Sandbox2D（逻辑层）：
+>
+> 1. **特殊 Uniform 的赋值**：
+>    比如你之前的 u_VortexAmt。引擎底层不应该知道什么叫“漩涡强度”。codeC++`// 必须在 Sandbox2D 做： auto shader = m_ShaderLib.Get("Vortex"); shader->UploadUniformFloat("u_VortexAmt", value); // 引擎管不了这个`
+> 2. **资源的生命周期决定权**：
+>    Sandbox 决定什么时候加载“草地贴图”，什么时候卸载“雪地贴图”。引擎只提供加载工具（Texture::Create）。
+> 3. **渲染顺序（层级逻辑）**：
+>    Sandbox 决定谁先画、谁后画（决定 Z-Index）。codeC++`// Sandbox 决定了背景在第一行，玩家在最后一行 Renderer2D::DrawQuad(bg_pos, ...);  Renderer2D::DrawQuad(player_pos, ...);`
+
+现在在Renderer2D初步测试，如果引入Time接口会怎么样，用Appilication单例，需要调用对应头
+
+```
+// tmp 用于单例上传时间
+#include "Glimmer/Core/Application.h"
+
+	void Renderer2D::BeginScene(const OrthographicCamera& camera)
+	{
+		s_Data->SceneTime = gl::Application::Get().GetTime();
+
+		s_Data->FlatColorShader->Bind();
+		s_Data->FlatColorShader->UploadUniformMat4("u_ViewProjection", camera.GetViewProjectionMatrix());
+
+		s_Data->TextureShader->Bind();
+		s_Data->TextureShader->UploadUniformFloat("u_Time", s_Data->SceneTime);
+		s_Data->TextureShader->UploadUniformMat4("u_ViewProjection", camera.GetViewProjectionMatrix());
+	}
+```
+
+```
+// Sandbox2D::OnAttach
+m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
+
+// Sandbox2D::OnUpdate
+gl::Renderer2D::DrawQuad({ -1.0f, 0.0f }, { 0.8f, 0.8f }, { 0.8f, 0.2f, 0.3f, 1.0f });
+gl::Renderer2D::DrawQuad({ 0.5f, -0.5f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
+gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, -0.1f }, { 1.0f, 1.0f }, m_Texture); // 背景图
+```
+
+成功引入了时间变量，有了shader里的动态效果
+
+<img src="README.assets/image-20260413104502041.png" alt="image-20260413104502041" style="zoom:50%;" />
 
 ## KB
 

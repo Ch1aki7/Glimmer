@@ -8,8 +8,8 @@ namespace gl {
 
 	std::shared_ptr<Texture2D> Texture2D::Create(const std::string& path)
 	{
-		// 以后这里可以根据 Renderer::GetAPI() 进行分支切换
-		return std::make_shared<OpenGLTexture2D>(path);
+		// 浠ュ悗杩欓噷鍙互鏍规嵁 Renderer::GetAPI() 杩涜鍒嗘敮鍒囨崲
+		return CreateRef<OpenGLTexture2D>(path);
 	}
 
 }

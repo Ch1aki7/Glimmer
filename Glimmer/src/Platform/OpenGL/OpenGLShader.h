@@ -14,12 +14,12 @@ namespace gl {
         virtual void Unbind() const override;
 
         // 上传 Uniform 的接口
-        void UploadUniformInt(const std::string& name, int value);
+        void UploadUniformInt(const std::string& name, int value) override;
 
         void UploadUniformFloat(const std::string& name, float value) override;
-        void UploadUniformFloat2(const std::string& name, const glm::vec2& value);
-        void UploadUniformFloat3(const std::string& name, const glm::vec3& value);
-        void UploadUniformFloat4(const std::string& name, const glm::vec4& value);
+        void UploadUniformFloat2(const std::string& name, const glm::vec2& value) override;
+        void UploadUniformFloat3(const std::string& name, const glm::vec3& value) override;
+        void UploadUniformFloat4(const std::string& name, const glm::vec4& value) override;
 
         void UploadUniformMat4(const std::string& name, const glm::mat4& matrix) override;
 
