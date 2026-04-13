@@ -49,7 +49,6 @@ namespace gl {
 
 		s_Data->FlatColorShader = Shader::Create("assets/shaders/FlatColor.glsl");
 		s_Data->TextureShader = Shader::Create("assets/shaders/Texture.glsl");
-		//s_Data->TextureShader = Shader::Create("assets/shaders/BalatroVortex.glsl");
 		s_Data->TextureShader->Bind();
 		s_Data->TextureShader->UploadUniformInt("u_Texture", 0);
 
@@ -109,6 +108,28 @@ namespace gl {
 		s_Data->TextureShader->UploadUniformMat4("u_Transform", transform);
 
 		texture->Bind();
+
+		s_Data->QuadVertexArray->Bind();
+		RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
+	}
+
+	void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
+	{
+		shader->Bind();
+
+		glm::mat4 identity = glm::mat4(1.0f);
+		shader->UploadUniformMat4("u_ViewProjection", identity);
+
+		// 注意：顺序必须是 先平移(translate) 后缩放(scale)
+		glm::mat4 transform = glm::translate(identity, { 0.0f, 0.0f, depth })
+			* glm::scale(identity, glm::vec3(2.0f));
+
+		shader->UploadUniformMat4("u_Transform", transform);
+
+		// 自动上传时间、分辨率等基础参数 (保持不变)
+		shader->UploadUniformFloat("u_Time", s_Data->SceneTime);
+		auto& window = gl::Application::Get().GetWindow();
+		shader->UploadUniformFloat2("u_Resolution", { (float)window.GetWidth(), (float)window.GetHeight() });
 
 		s_Data->QuadVertexArray->Bind();
 		RenderCommand::DrawIndexed(s_Data->QuadVertexArray);

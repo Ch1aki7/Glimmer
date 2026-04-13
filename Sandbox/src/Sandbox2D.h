@@ -23,6 +23,7 @@ private:
 	gl::Ref<gl::Shader> m_TunnelShader;
 
 	gl::Ref<gl::Texture2D> m_Texture;
+	gl::Ref<gl::Texture2D> m_STSTexture;
 	gl::OrthographicCameraController m_CameraController;
 };
 

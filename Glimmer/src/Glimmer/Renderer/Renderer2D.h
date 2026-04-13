@@ -2,6 +2,7 @@
 
 #include "Glimmer/Renderer/OrthographicCamera.h"
 #include "Glimmer/Renderer/Texture.h"
+#include "Glimmer/Renderer/Shader.h"
 
 namespace gl {
 
@@ -23,6 +24,8 @@ namespace gl {
 		// 贴图方块
 		static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const Ref<Texture2D>& texture);
 		static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture);
+
+		static void DrawFullscreenQuad(const Ref<Shader>& shader, float depth = 0.0f);
 
 	};
 
