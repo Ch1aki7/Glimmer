@@ -6,10 +6,15 @@
 
 namespace gl {
 
-	std::shared_ptr<Texture2D> Texture2D::Create(const std::string& path)
+	Ref<Texture2D> Texture2D::Create(const std::string& path)
 	{
 		// 以后这里可以根据 Renderer::GetAPI() 进行分支切换
 		return CreateRef<OpenGLTexture2D>(path);
+	}
+
+	Ref<Texture2D> Texture2D::Create(uint32_t width, uint32_t height)
+	{
+		return CreateRef<OpenGLTexture2D>(width, height);
 	}
 
 }

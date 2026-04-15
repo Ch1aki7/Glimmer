@@ -18,7 +18,7 @@ namespace gl {
 	struct Renderer2DStorage
 	{
 		Ref<VertexArray> QuadVertexArray;
-		Ref<Shader> FlatColorShader;
+		Ref<Texture2D> WhiteTexture;
 		Ref<Shader> TextureShader;
 
 		float SceneTime = 0.0f;
@@ -47,7 +47,10 @@ namespace gl {
 		squareIB.reset(gl::IndexBuffer::Create(squareIndices, 6));
 		s_Data->QuadVertexArray->SetIndexBuffer(squareIB);
 
-		s_Data->FlatColorShader = Shader::Create("assets/shaders/FlatColor.glsl");
+		s_Data->WhiteTexture = Texture2D::Create(1, 1);
+		uint32_t whiteTextureData = 0xffffffff;
+		s_Data->WhiteTexture->SetData(&whiteTextureData, sizeof(uint32_t));
+
 		s_Data->TextureShader = Shader::Create("assets/shaders/Texture.glsl");
 		s_Data->TextureShader->Bind();
 		s_Data->TextureShader->UploadUniformInt("u_Texture", 0);
@@ -62,9 +65,6 @@ namespace gl {
 	void Renderer2D::BeginScene(const OrthographicCamera& camera)
 	{
 		s_Data->SceneTime = gl::Application::Get().GetTime();
-
-		s_Data->FlatColorShader->Bind();
-		s_Data->FlatColorShader->UploadUniformMat4("u_ViewProjection", camera.GetViewProjectionMatrix());
 
 		s_Data->TextureShader->Bind();
 		s_Data->TextureShader->UploadUniformFloat("u_Time", s_Data->SceneTime);
@@ -85,11 +85,12 @@ namespace gl {
 
 	void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const glm::vec4& color)
 	{
-		s_Data->FlatColorShader->Bind();
-		s_Data->FlatColorShader->UploadUniformFloat4("u_Color", color);
+		s_Data->TextureShader->Bind();
+		s_Data->TextureShader->UploadUniformFloat4("u_Color", color);
+		s_Data->WhiteTexture->Bind();
 
 		glm::mat4 transform = glm::translate(glm::mat4(1.0f), position) * glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
-		s_Data->FlatColorShader->UploadUniformMat4("u_Transform", transform);
+		s_Data->TextureShader->UploadUniformMat4("u_Transform", transform);
 
 		s_Data->QuadVertexArray->Bind();
 		RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
@@ -103,11 +104,11 @@ namespace gl {
 	void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture)
 	{
 		s_Data->TextureShader->Bind();
+		s_Data->TextureShader->UploadUniformFloat4("u_Color", glm::vec4(1.0f));
+		texture->Bind();
 
 		glm::mat4 transform = glm::translate(glm::mat4(1.0f), position) * glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
 		s_Data->TextureShader->UploadUniformMat4("u_Transform", transform);
-
-		texture->Bind();
 
 		s_Data->QuadVertexArray->Bind();
 		RenderCommand::DrawIndexed(s_Data->QuadVertexArray);

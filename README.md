@@ -4441,6 +4441,187 @@ void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
 > }
 > ```
 
+## 白贴图模式
+
+引入**白贴图（White Texture）模式**是 2D 渲染器的一次重要进化。它的核心逻辑是：**将“纯色”和“贴图”渲染逻辑统一到一个 Shader 中**。
+
+当你画纯色方块时，引擎会自动绑定一张 $1 \times 1$ 的纯白色贴图。因为任何颜色乘以白色（1.0, 1.0, 1.0, 1.0）都等于它本身，所以我们可以只用一套代码管所有 2D 绘图。
+
+---
+
+文件 1：`Glimmer/src/Glimmer/Renderer/Texture.h`
+
+我们需要增加手动设置像素数据的能力，以便创建 1x1 的白色纹理。
+
+```cpp
+namespace gl {
+    class Texture2D : public Texture {
+    public:
+        // ✨ 新增：支持指定宽高的工厂方法
+        static Ref<Texture2D> Create(uint32_t width, uint32_t height);
+        static Ref<Texture2D> Create(const std::string& path);
+
+        // ✨ 新增：手动上传像素数据的方法
+        virtual void SetData(void* data, uint32_t size) = 0;
+    };
+}
+```
+
+---
+
+文件 2：`Glimmer/src/Platform/OpenGL/OpenGLTexture2D.h/cpp`
+
+实现上面新增的接口。
+
+**OpenGLTexture2D.h**
+```cpp
+class OpenGLTexture2D : public Texture2D {
+public:
+    OpenGLTexture2D(uint32_t width, uint32_t height); // ✨ 新构造函数
+    // ...
+    virtual void SetData(void* data, uint32_t size) override;
+private:
+    uint32_t m_Width, m_Height;
+    uint32_t m_RendererID;
+    GLenum m_InternalFormat, m_DataFormat; // 记录格式信息
+};
+```
+
+**OpenGLTexture2D.cpp**
+```cpp
+OpenGLTexture2D::OpenGLTexture2D(uint32_t width, uint32_t height)
+    : m_Width(width), m_Height(height)
+    {
+        m_InternalFormat = GL_RGBA8;
+        m_DataFormat = GL_RGBA;
+
+        glCreateTextures(GL_TEXTURE_2D, 1, &m_RendererID);
+        glTextureStorage2D(m_RendererID, 1, m_InternalFormat, m_Width, m_Height);
+
+        glTextureParameteri(m_RendererID, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+        glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    }
+
+void OpenGLTexture2D::SetData(void* data, uint32_t size)
+{
+    uint32_t bpp = m_DataFormat == GL_RGBA ? 4 : 3;
+    GL_CORE_ASSERT(size == m_Width * m_Height * bpp, "Data must be entire texture!");
+    glTexImage2D(GL_TEXTURE_2D, 0, m_InternalFormat, m_Width, m_Height, 0, m_DataFormat, GL_UNSIGNED_BYTE, data);
+}
+```
+*(注意：别忘了在 `Texture.cpp` 里实现 `Texture2D::Create(width, height)` 指向这个类)*。
+
+---
+
+文件 3：`Glimmer/src/Glimmer/Renderer/Renderer2D.cpp`
+
+这是重头戏。我们**删除 `FlatColorShader`**，引入 `WhiteTexture`。
+
+```cpp
+namespace gl {
+
+    struct Renderer2DStorage {
+        Ref<VertexArray> QuadVertexArray;
+        Ref<Shader> TextureShader; // ✨ 只需要这一个 Shader
+        Ref<Texture2D> WhiteTexture; // ✨ 引入白贴图
+
+        glm::mat4 ViewProjectionMatrix;
+        float SceneTime = 0.0f;
+    };
+
+    static Renderer2DStorage* s_Data;
+
+    void Renderer2D::Init() {
+        s_Data = new Renderer2DStorage();
+        // ... (VAO/VBO/IBO 设置保持不变) ...
+
+        // ✨ 核心逻辑 1：创建 1x1 纯白贴图
+        s_Data->WhiteTexture = Texture2D::Create(1, 1);
+        uint32_t whiteTextureData = 0xffffffff; // 纯白色
+        s_Data->WhiteTexture->SetData(&whiteTextureData, sizeof(uint32_t));
+
+        // ✨ 核心逻辑 2：只加载 TextureShader
+        s_Data->TextureShader = Shader::Create("assets/shaders/Texture.glsl");
+        s_Data->TextureShader->Bind();
+        s_Data->TextureShader->UploadUniformInt("u_Texture", 0);
+    }
+
+    void Renderer2D::BeginScene(const OrthographicCamera& camera) {
+        s_Data->SceneTime = Application::Get().GetTime();
+        s_Data->ViewProjectionMatrix = camera.GetViewProjectionMatrix();
+
+        s_Data->TextureShader->Bind();
+        s_Data->TextureShader->UploadUniformMat4("u_ViewProjection", s_Data->ViewProjectionMatrix);
+        s_Data->TextureShader->UploadUniformFloat("u_Time", s_Data->SceneTime);
+    }
+
+    // --- 修改纯色 DrawQuad ---
+    void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const glm::vec4& color) {
+        s_Data->TextureShader->Bind();
+        s_Data->TextureShader->UploadUniformFloat4("u_Color", color); // 设置目标颜色
+        s_Data->WhiteTexture->Bind(); // ✨ 绑定白色贴图，让 Shader 采样出 1.0
+
+        glm::mat4 transform = glm::translate(glm::mat4(1.0f), position) 
+                            * glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
+        s_Data->TextureShader->UploadUniformMat4("u_Transform", transform);
+
+        s_Data->QuadVertexArray->Bind();
+        RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
+    }
+
+    // --- 修改贴图 DrawQuad ---
+    void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture) {
+        s_Data->TextureShader->Bind();
+        s_Data->TextureShader->UploadUniformFloat4("u_Color", glm::vec4(1.0f)); // ✨ 设为白色，不改变贴图原色
+        texture->Bind(); // 绑定真实贴图
+
+        glm::mat4 transform = glm::translate(glm::mat4(1.0f), position) 
+                            * glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
+        s_Data->TextureShader->UploadUniformMat4("u_Transform", transform);
+
+        s_Data->QuadVertexArray->Bind();
+        RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
+    }
+}
+```
+
+---
+
+文件 4：`assets/shaders/Texture.glsl`
+
+由于现在所有的方块（纯色或贴图）都用这一个 Shader，必须确保它的计算公式包含 `u_Color`。
+
+```glsl
+#type fragment
+#version 330 core
+
+layout(location = 0) out vec4 color;
+
+in vec2 v_TexCoord;
+uniform sampler2D u_Texture;
+uniform vec4 u_Color; // 接收 C++ 传来的颜色
+
+void main() {
+    // ✨ 核心公式：采样出的贴图颜色 * 外部颜色
+    // 对于纯色块：采样出 (1,1,1,1) * u_Color = u_Color
+    // 对于贴图：采样出 ImageColor * (1,1,1,1) = ImageColor (如果外部传白)
+    color = texture(u_Texture, v_TexCoord) * u_Color;
+}
+```
+
+---
+
+为什么要这么做？
+
+1.  **性能优化**：通过统一 Shader，我们减少了 GPU 的 **状态切换（State Change）**。在 OpenGL 中，切换 Shader 程序是非常昂贵的。
+2.  **灵活性**：现在的贴图方块也支持变色了！你可以给 `m_Texture` 版的 `DrawQuad` 传一个红色，原本的图片就会被染上一层红色的阴影（Tinting），这在实现“受击变红”等特效时极其方便。
+3.  **批处理（Batching）的前奏**：这是最重要的原因。批处理要求一组物体共用同一个 Shader 和贴图。有了白贴图，纯色方块现在在显卡眼里也是“带贴图的方块”了，未来它们可以完美地合并成一个 Draw Call 发送出去。
+
+<img src="README.assets/image-20260415211525172.png" alt="image-20260415211525172" style="zoom: 50%;" />
+
 ## KB
 
 ### 为什么不用动态库？
@@ -4722,3 +4903,14 @@ void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
 第一，**避免重复加载**。通过 unordered_map 的映射机制，我们可以确保同一个 Shader 文件在整个应用程序生命周期内只被编译和链接一次，节省了宝贵的初始化时间和显存。
 第二，**解耦逻辑与资源引用**。在复杂的场景中，不同的图层（Layer）可能需要共享同一个 Shader。通过库，我们不再需要在图层之间互相传递脆弱的原始指针，而是通过统一的‘键值（Key）’来获取资源，这极大地增强了代码的模块化和健壮性。
 第三，**集中式优化**。有了 Library 这一层，未来我们可以轻松实现‘热重载（Hot Reloading）’。即当开发者在外部修改了 .glsl 文件后，Library 可以自动重新编译对应 Shader，而无需重启游戏，从而提升开发效率。”
+
+### **我看你在纹理上传时使用了 glTextureSubImage2D，为什么不使用传统的 glTexImage2D？**
+
+**你的回答：**
+“我选择了 **DSA (Direct State Access)** 模式。
+传统的 OpenGL API 强依赖于‘绑定-编辑（Bind-to-Edit）’模型，这在大型引擎开发中会导致两个严重问题：
+
+1. **状态污染**：频繁的 Bind/Unbind 容易导致不可预见的渲染错误。
+2. **性能开销**：为了确保操作正确，开发者往往需要不断查询或重置全局绑定状态，增加了驱动程序的开销。
+
+通过使用以 glTexture... 开头的 DSA 函数，我可以绕过上下文绑定点，直接通过 **Object Handle（资源句柄）** 操作 GPU 资源。这不仅使代码更加**线程安全**且逻辑清晰，还减少了驱动层的状态验证次数。这在我的 Glimmer 引擎中是迈向高性能、现代化渲染管线的重要一步。”
