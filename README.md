@@ -4861,7 +4861,75 @@ int main(int argc, char** argv)
 
 ![image-20260416160508341](README.assets/image-20260416160508341.png)
 
-## KB
+## Renderer2D升级
+
+为 Renderer2D 增加旋转支持、颜色染色（Tinting）以及纹理平铺（Tiling）
+
+需要在 Shader 中增加 u_TilingFactor（平铺系数）的计算。
+
+新增接口
+
+```
+// Glimmer/src/Glimmer/Renderer/Renderer2D.h
+namespace gl {
+    class Renderer2D {
+    public:
+        // ... Init, BeginScene, EndScene ...
+
+        // 1. 基础 DrawQuad (带平铺和染色)
+        static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
+        static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
+
+        // 2. 旋转 DrawQuad (纯色)
+        static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color);
+        static void DrawRotatedQuad(const glm::vec3& position, const glm::vec2& size, float rotation, const glm::vec4& color);
+
+        // 3. 旋转 DrawQuad (贴图 + 平铺 + 染色)
+        static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
+        static void DrawRotatedQuad(const glm::vec3& position, const glm::vec2& size, float rotation, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
+    };
+}
+```
+
+实现 Renderer2D.cpp 逻辑
+
+这里最核心的变化是变换矩阵的计算顺序：**平移 -> 旋转 -> 缩放**。
+
+2D/3D 渲染中关于 **“深度缓冲区（Depth Buffer）”与“透明度（Alpha）”** 的核心矛盾。
+
+看到的“透明背景挡住下面物体”，在图形学中被称为 **“深度遮挡（Depth Occlusion）”**。
+
+> 在 OpenGL 中，当你开启了 GL_DEPTH_TEST（深度测试）后，显卡的工作逻辑是这样的：
+>
+> 1. **计算位置**：显卡画出一个方块（Quad），确定它在屏幕上的位置和深度（Z=0.0）。
+> 2. **深度测试**：显卡检查这个位置的“深度记录”。如果现在的 Z 值小于或等于记录值，就允许画。
+> 3. **写入深度**：**重点来了！** 只要方块在这个像素点上有任何输出（即使是 100% 透明的像素），它都会把自己的 Z 值（0.0）写进深度缓冲区。
+> 4. **后续判定**：当你画第二个方块（RotatedQuad）时，它也在 Z=0.0。由于深度缓冲区里已经有一个 0.0 的记录了，显卡会认为：“这里已经有东西占位了，而且离我一样近（或更近）”，于是**直接丢弃**了后面那个方块的像素。
+>
+> **结果**：第一个方块的“透明边框”虽然看不见颜色，但它在深度图里占了坑，导致后面重叠的物体被“空气”挡住了。
+
+在 Shader 中开启 discard
+
+这是解决 2D 透明物体遮挡问题的标准做法。我们告诉显卡：如果这个像素的透明度很低，就**彻底丢弃它，不要写深度缓存**。
+
+**修改 assets/shaders/Texture.glsl：**
+
+```
+void main() {
+    vec4 texColor = texture(u_Texture, v_TexCoord * u_TilingFactor) * u_Color;
+    
+    // ✨ 核心修复：如果透明度低于一个很小的阈值，直接扔掉这个像素
+    // 这样它就不会去更新深度缓冲区了
+    if (texColor.a < 0.1)
+        discard;
+
+    color = texColor;
+}
+```
+
+效果如图
+
+<img src="README.assets/image-20260416175835039.png" alt="image-20260416175835039" style="zoom:50%;" />
 
 ### 为什么不用动态库？
 

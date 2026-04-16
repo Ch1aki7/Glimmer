@@ -24,8 +24,17 @@ in vec2 v_TexCoord;
 
 uniform vec4 u_Color;
 uniform sampler2D u_Texture;
+uniform float u_TilingFactor;
 
 void main()
 {
-	color = texture(u_Texture, v_TexCoord) * u_Color;
+	// UV 坐标乘以平铺系数，实现贴图重复（需贴图设为 GL_REPEAT）
+	vec4 texColor = texture(u_Texture, v_TexCoord * u_TilingFactor) * u_Color;
+
+	// 如果透明度低于一个很小的阈值，直接扔掉这个像素
+	// 这样它就不会去更新深度缓冲区了
+	if (texColor.a < 0.1)
+		discard;
+
+	color = texColor;
 }

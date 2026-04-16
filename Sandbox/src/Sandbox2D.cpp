@@ -14,6 +14,7 @@ void Sandbox2D::OnAttach() {
 	m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
 	m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
 	m_STSTexture = gl::Texture2D::Create("assets/textures/STS.png");
+	m_HenryTexture = gl::Texture2D::Create("assets/textures/Henry.jpg");
 }
 
 void Sandbox2D::OnDetach() {
@@ -40,8 +41,11 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
 
 		gl::Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
+		gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, 45, { 0.2f, 0.3f, 0.8f, 1.0f });
 		gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
-		gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_STSTexture);
+		gl::Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, 45, m_Texture, 3, {0.8f, 0.3f, 0.8f, 1.0f });
+		gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
+		gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
 
 		gl::Renderer2D::EndScene();
 
