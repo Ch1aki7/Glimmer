@@ -5,7 +5,7 @@
 
 namespace gl {
     // 关键点：在这里初始化静态单例指针
-    Input* Input::s_Instance = new WindowsInput();
+	Scope<Input> Input::s_Instance = CreateScope<WindowsInput>();
 
     bool WindowsInput::IsKeyPressedImpl(int keycode) {
         // 拿到原生 GLFW 窗口指针

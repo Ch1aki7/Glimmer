@@ -28,6 +28,8 @@ namespace gl {
 
 	void Renderer2D::Init()
 	{
+		GL_PROFILE_FUNCTION();
+
 		s_Data = new Renderer2DStorage();
 		s_Data->QuadVertexArray = VertexArray::Create();
 		float squareVertices[5 * 4] = {
@@ -59,11 +61,15 @@ namespace gl {
 
 	void Renderer2D::Shutdown()
 	{
+		GL_PROFILE_FUNCTION();
+
 		delete s_Data;
 	}
 
 	void Renderer2D::BeginScene(const OrthographicCamera& camera)
 	{
+		GL_PROFILE_FUNCTION();
+
 		s_Data->SceneTime = gl::Application::Get().GetTime();
 
 		s_Data->TextureShader->Bind();
@@ -73,7 +79,8 @@ namespace gl {
 
 	void Renderer2D::EndScene()
 	{
-		
+		GL_PROFILE_FUNCTION();
+
 	}
 
 	// --- 绘图函数重载实现 ---
@@ -85,6 +92,8 @@ namespace gl {
 
 	void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const glm::vec4& color)
 	{
+		GL_PROFILE_FUNCTION();
+
 		s_Data->TextureShader->Bind();
 		s_Data->TextureShader->UploadUniformFloat4("u_Color", color);
 		s_Data->WhiteTexture->Bind();
@@ -103,6 +112,8 @@ namespace gl {
 
 	void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture)
 	{
+		GL_PROFILE_FUNCTION();
+
 		s_Data->TextureShader->Bind();
 		s_Data->TextureShader->UploadUniformFloat4("u_Color", glm::vec4(1.0f));
 		texture->Bind();
@@ -116,6 +127,8 @@ namespace gl {
 
 	void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
 	{
+		GL_PROFILE_FUNCTION();
+
 		shader->Bind();
 
 		glm::mat4 identity = glm::mat4(1.0f);

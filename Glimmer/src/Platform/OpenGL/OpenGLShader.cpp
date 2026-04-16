@@ -19,6 +19,8 @@ namespace gl {
 
 	OpenGLShader::OpenGLShader(const std::string& filepath)
 	{
+		GL_PROFILE_FUNCTION();
+
 		std::string source = ReadFile(filepath);
 		auto shaderSources = PreProcess(source);
 		Compile(shaderSources);
@@ -34,6 +36,8 @@ namespace gl {
 	OpenGLShader::OpenGLShader(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc)
 		: m_Name(name)
 	{
+		GL_PROFILE_FUNCTION();
+
 		std::unordered_map<GLenum, std::string> sources;
 		sources[GL_VERTEX_SHADER] = vertexSrc;
 		sources[GL_FRAGMENT_SHADER] = fragmentSrc;
@@ -42,11 +46,15 @@ namespace gl {
 
     OpenGLShader::~OpenGLShader()
     {
+		GL_PROFILE_FUNCTION();
+
         glDeleteProgram(m_RendererID);
     }
 
 	std::string OpenGLShader::ReadFile(const std::string& filepath)
 	{
+		GL_PROFILE_FUNCTION();
+
 		std::string result;
 		std::ifstream in(filepath, std::ios::in | std::ios::binary);
 		if (in)
@@ -68,6 +76,8 @@ namespace gl {
 
 	std::unordered_map<GLenum, std::string> OpenGLShader::PreProcess(const std::string& source)
 	{
+		GL_PROFILE_FUNCTION();
+
 		std::unordered_map<GLenum, std::string> shaderSources;
 
 		const char* typeToken = "#type";
@@ -91,6 +101,8 @@ namespace gl {
 
 	void OpenGLShader::Compile(const std::unordered_map<GLenum, std::string>& shaderSources)
 	{
+		GL_PROFILE_FUNCTION();
+
 		GLuint program = glCreateProgram();
 		std::vector<GLenum> glShaderIDs(shaderSources.size());
 		for (auto& kv : shaderSources)
@@ -160,40 +172,56 @@ namespace gl {
 
     void OpenGLShader::Bind() const
     {
+		GL_PROFILE_FUNCTION();
+
         glUseProgram(m_RendererID);
     }
 
     void OpenGLShader::Unbind() const
     {
+		GL_PROFILE_FUNCTION();
+
         glUseProgram(0);
     }
 
     void OpenGLShader::UploadUniformInt(const std::string& name, int value) {
+		GL_PROFILE_FUNCTION();
+
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
         glUniform1i(location, value);
     }
 
     void OpenGLShader::UploadUniformFloat(const std::string& name, float value) {
+		GL_PROFILE_FUNCTION();
+
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
         glUniform1f(location, value);
     }
 
     void OpenGLShader::UploadUniformFloat2(const std::string& name, const glm::vec2& value) {
+		GL_PROFILE_FUNCTION();
+
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
         glUniform2f(location, value.x, value.y);
     }
 
     void OpenGLShader::UploadUniformFloat3(const std::string& name, const glm::vec3& value) {
+		GL_PROFILE_FUNCTION();
+
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
         glUniform3f(location, value.x, value.y, value.z);
     }
 
     void OpenGLShader::UploadUniformFloat4(const std::string& name, const glm::vec4& value) {
+		GL_PROFILE_FUNCTION();
+
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
         glUniform4f(location, value.x, value.y, value.z, value.w);
     }
 
     void OpenGLShader::UploadUniformMat4(const std::string& name, const glm::mat4& matrix) {
+		GL_PROFILE_FUNCTION();
+
         GLint location = glGetUniformLocation(m_RendererID, name.c_str());
         // 参数：位置, 数量, 是否转置(GLM默认列优先，填FALSE), 数据指针
         glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(matrix));

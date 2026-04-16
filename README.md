@@ -4857,6 +4857,10 @@ int main(int argc, char** argv)
 
 ![image-20260416124421235](README.assets/image-20260416124421235.png)
 
+在函数入口加入`GL_PROFILE_FUNCTION()`
+
+![image-20260416160508341](README.assets/image-20260416160508341.png)
+
 ## KB
 
 ### 为什么不用动态库？

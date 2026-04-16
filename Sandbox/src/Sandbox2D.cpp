@@ -5,6 +5,8 @@ Sandbox2D::Sandbox2D() :Layer("Sandbox2D"), m_CameraController(1280.0f / 720.0f,
 }
 
 void Sandbox2D::OnAttach() {
+	GL_PROFILE_FUNCTION();
+
 	///*路径设置*/
 	//m_ShaderLib.Load("assets/shaders/Texture.glsl");
 	//m_ShaderLib.Load("assets/shaders/Tunnel.glsl");
@@ -15,15 +17,14 @@ void Sandbox2D::OnAttach() {
 }
 
 void Sandbox2D::OnDetach() {
+	GL_PROFILE_FUNCTION();
 
 }
 
 void Sandbox2D::OnUpdate(gl::Timestep ts) {
 	GL_PROFILE_FUNCTION();
-	{
-		GL_PROFILE_SCOPE("CameraController::OnUpdate");
-		m_CameraController.OnUpdate(ts);
-	}
+
+	m_CameraController.OnUpdate(ts);
 
 	{
 		GL_PROFILE_SCOPE("Renderer Prep");

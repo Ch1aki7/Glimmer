@@ -16,6 +16,8 @@ namespace gl {
     ImGuiLayer::~ImGuiLayer() {}
 
     void ImGuiLayer::OnAttach() {
+		GL_PROFILE_FUNCTION();
+
         // 设置 ImGui 上下文
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -45,18 +47,24 @@ namespace gl {
     }
 
     void ImGuiLayer::OnDetach() {
+		GL_PROFILE_FUNCTION();
+
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
     }
 
     void ImGuiLayer::Begin() {
+		GL_PROFILE_FUNCTION();
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
     }
 
     void ImGuiLayer::End() {
+		GL_PROFILE_FUNCTION();
+
         ImGuiIO& io = ImGui::GetIO();
         Application& app = Application::Get();
         io.DisplaySize = ImVec2((float)app.GetWindow().GetWidth(), (float)app.GetWindow().GetHeight());

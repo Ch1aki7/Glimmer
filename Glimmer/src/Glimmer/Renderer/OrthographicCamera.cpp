@@ -7,11 +7,15 @@ namespace gl {
 	OrthographicCamera::OrthographicCamera(float left, float right, float bottom, float top)
 		: m_ProjectionMatrix(glm::ortho(left, right, bottom, top, -1.0f, 1.0f)), m_ViewMatrix(1.0f)
 	{
+		GL_PROFILE_FUNCTION();
+
 		m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
 	}
 
 	void OrthographicCamera::RecalculateViewMatrix()
 	{
+		GL_PROFILE_FUNCTION();
+
 		// 计算 View 矩阵：先平移再旋转，最后取逆
 		// 在 2D 中，摄像机往左移，物体看起来就往右移
 		glm::mat4 transform = glm::translate(glm::mat4(1.0f), m_Position) *
@@ -23,6 +27,8 @@ namespace gl {
 
 	void OrthographicCamera::SetProjection(float left, float right, float bottom, float top)
 	{
+		GL_PROFILE_FUNCTION();
+
 		m_ProjectionMatrix = glm::ortho(left, right, bottom, top, -1.0f, 1.0f);
 		m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
 	}

@@ -24,6 +24,6 @@ namespace gl {
 
     private:
         // 静态单例指针
-        static Input* s_Instance;
+		static Scope<Input> s_Instance;
     };
 }

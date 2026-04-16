@@ -25,7 +25,7 @@ namespace gl {
         virtual void Shutdown();
     private:
         GLFWwindow* m_Window; // GLFW 原始指针
-        GraphicsContext* m_Context;
+		Scope<GraphicsContext> m_Context;
         struct WindowData {
             std::string Title;
             unsigned int Width, Height;

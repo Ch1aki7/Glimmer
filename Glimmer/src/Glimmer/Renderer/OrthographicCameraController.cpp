@@ -15,6 +15,8 @@ namespace gl {
 
 	void OrthographicCameraController::OnUpdate(Timestep ts)
 	{
+		GL_PROFILE_FUNCTION();
+
 		// 1. 处理移动
 		if (Input::IsKeyPressed(GL_KEY_A))
 			m_CameraPosition.x -= m_CameraTranslationSpeed * ts;
@@ -45,6 +47,8 @@ namespace gl {
 
 	void OrthographicCameraController::OnEvent(Event& e)
 	{
+		GL_PROFILE_FUNCTION();
+
 		EventDispatcher dispatcher(e);
 		dispatcher.Dispatch<MouseScrolledEvent>(BIND_EVENT_FN(OrthographicCameraController::OnMouseScrolled));
 		dispatcher.Dispatch<WindowResizeEvent>(BIND_EVENT_FN(OrthographicCameraController::OnWindowResized));
@@ -52,6 +56,8 @@ namespace gl {
 
 	bool OrthographicCameraController::OnMouseScrolled(MouseScrolledEvent& e)
 	{
+		GL_PROFILE_FUNCTION();
+
 		// 鼠标滚轮控制缩放级别
 		m_ZoomLevel -= e.GetYOffset() * 0.25f;
 		m_ZoomLevel = std::max(m_ZoomLevel, 0.25f); // 最小缩放限制
@@ -61,6 +67,8 @@ namespace gl {
 
 	bool OrthographicCameraController::OnWindowResized(WindowResizeEvent& e)
 	{
+		GL_PROFILE_FUNCTION();
+
 		// 关键点：当窗口改变大小时，重新计算纵横比，防止画面拉伸
 		m_AspectRatio = (float)e.GetWidth() / (float)e.GetHeight();
 		CalculateView();
