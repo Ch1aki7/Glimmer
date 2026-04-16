@@ -4622,6 +4622,241 @@ void main() {
 
 <img src="README.assets/image-20260415211525172.png" alt="image-20260415211525172" style="zoom: 50%;" />
 
+## 仪器测量
+
+为了让你的 **Glimmer Engine** 从“能跑”进化到“高性能工业级”水平，我们必须建立一套科学的性能观测体系。
+
+我将这个过程分为两个大的阶段：
+1.  **仪器测量（Instrumentation）**：在 CPU 层面追踪每个函数的耗时，并生成可视化报告。
+2.  **渲染器统计与批处理（Renderer2D Evolution）**：实时监测 Draw Call 次数，并进化到批处理模式。
+
+本篇对话我们先攻克 **“第一阶段：全引擎性能剖析器（Profiler）”**。
+
+---
+
+**第一阶段：全引擎仪器测量 (Instrumentation)**
+
+我们要实现一套类似 Chrome 的性能追踪工具。它能生成一个 `.json` 文件，你只需在 Chrome 浏览器打开 `chrome://tracing` 就能看到类似电影剪辑软件那样的全引擎时间轴。
+
+创建性能监测核心类 (`Instrumentor.h`)
+
+在 `Glimmer/src/Glimmer/Debug` 目录下创建。这个类负责将每个函数的开始和结束时间记录到文件中。
+
+**文件：`Glimmer/src/Glimmer/Debug/Instrumentor.h`**
+
+```cpp
+#pragma once
+#include <string>
+#include <chrono>
+#include <algorithm>
+#include <fstream>
+#include <thread>
+
+namespace gl {
+
+	struct ProfileResult {
+		std::string Name;
+		long long Start, End;
+		uint32_t ThreadID;
+	};
+
+	struct InstrumentationSession {
+		std::string Name;
+	};
+
+	class Instrumentor
+	{
+	private:
+		InstrumentationSession* m_CurrentSession;
+		std::ofstream m_OutputStream;
+		int m_ProfileCount;
+	public:
+		Instrumentor() : m_CurrentSession(nullptr), m_ProfileCount(0) {}
+
+		void BeginSession(const std::string& name, const std::string& filepath = "results.json")
+		{
+			m_OutputStream.open(filepath);
+			WriteHeader();
+			m_CurrentSession = new InstrumentationSession{ name };
+		}
+
+		void EndSession()
+		{
+			WriteFooter();
+			m_OutputStream.close();
+			delete m_CurrentSession;
+			m_CurrentSession = nullptr;
+			m_ProfileCount = 0;
+		}
+
+		void WriteProfile(const ProfileResult& result)
+		{
+			if (m_ProfileCount++ > 0) m_OutputStream << ",";
+
+			std::string name = result.Name;
+			std::replace(name.begin(), name.end(), '"', '\'');
+
+			m_OutputStream << "{";
+			m_OutputStream << "\"cat\":\"function\",";
+			m_OutputStream << "\"dur\":" << (result.End - result.Start) << ',';
+			m_OutputStream << "\"name\":\"" << name << "\",";
+			m_OutputStream << "\"ph\":\"X\",";
+			m_OutputStream << "\"pid\":1,";
+			m_OutputStream << "\"tid\":" << result.ThreadID << ",";
+			m_OutputStream << "\"ts\":" << result.Start;
+			m_OutputStream << "}";
+
+			m_OutputStream.flush();
+		}
+
+		static Instrumentor& Get() {
+			static Instrumentor instance;
+			return instance;
+		}
+
+	private:
+		void WriteHeader() { m_OutputStream << "{\"otherData\": {},\"traceEvents\":["; m_OutputStream.flush(); }
+		void WriteFooter() { m_OutputStream << "]}"; m_OutputStream.flush(); }
+	};
+
+	// 专门负责自动结束计时的计时器
+	class InstrumentationTimer
+	{
+	public:
+		InstrumentationTimer(const char* name)
+			: m_Name(name), m_Stopped(false)
+		{
+			m_StartTimepoint = std::chrono::high_resolution_clock::now();
+		}
+
+		~InstrumentationTimer() { if (!m_Stopped) Stop(); }
+
+		void Stop()
+		{
+			auto endTimepoint = std::chrono::high_resolution_clock::now();
+
+			long long start = std::chrono::time_point_cast<std::chrono::microseconds>(m_StartTimepoint).time_since_epoch().count();
+			long long end = std::chrono::time_point_cast<std::chrono::microseconds>(endTimepoint).time_since_epoch().count();
+
+			uint32_t threadID = std::hash<std::thread::id>{}(std::this_thread::get_id());
+			Instrumentor::Get().WriteProfile({ m_Name, start, end, threadID });
+
+			m_Stopped = true;
+		}
+	private:
+		const char* m_Name;
+		std::chrono::time_point<std::chrono::high_resolution_clock> m_StartTimepoint;
+		bool m_Stopped;
+	};
+}
+```
+
+---
+
+在 `Core.h` 中添加便捷宏
+
+为了不破坏代码美感，我们用宏来封装调用。
+
+**文件：`Glimmer/src/Glimmer/Core.h`**
+```cpp
+// ... 之前的宏 ...
+
+#define GL_PROFILE 1
+#if GL_PROFILE
+	#define GL_PROFILE_BEGIN_SESSION(name, filepath) ::gl::Instrumentor::Get().BeginSession(name, filepath)
+	#define GL_PROFILE_END_SESSION() ::gl::Instrumentor::Get().EndSession()
+    // ✨ 核心宏：放在函数第一行即可追踪整个函数
+	#define GL_PROFILE_FUNCTION() GL_PROFILE_SCOPE(__FUNCSIG__)
+	#define GL_PROFILE_SCOPE(name) ::gl::InstrumentationTimer timer##__LINE__(name)
+#else
+	#define GL_PROFILE_BEGIN_SESSION(name, filepath)
+	#define GL_PROFILE_END_SESSION()
+	#define GL_PROFILE_FUNCTION()
+	#define GL_PROFILE_SCOPE(name)
+#endif
+```
+
+---
+
+如何使用？(以 Sandbox2D 为例)
+
+你只需要在想要观察的函数第一行加上 `GL_PROFILE_FUNCTION();`。
+
+**文件：`Sandbox2D.cpp`**
+```cpp
+void Sandbox2D::OnUpdate(gl::Timestep ts)
+{
+    GL_PROFILE_FUNCTION(); // ✨ 自动计时
+
+    {
+        GL_PROFILE_SCOPE("CameraController::OnUpdate"); // ✨ 追踪特定代码块
+        m_CameraController.OnUpdate(ts);
+    }
+
+    // ... 渲染代码 ...
+}
+```
+
+同时，在 `Application.cpp` 的生命周期中开启会话：
+```cpp
+void Application::Run() {
+    GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Runtime.json");
+    
+    while (m_Running) { ... }
+    
+    GL_PROFILE_END_SESSION();
+}
+```
+
+在EntryPoint继承
+
+```
+int main(int argc, char** argv)
+{
+    gl::Log::Init();
+
+    GL_INFO("Ready to build something epic?");
+
+	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Startup.json");
+    auto app = gl::CreateApplication();
+	GL_PROFILE_END_SESSION();
+
+	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Runtime.json");
+    app->Run();
+	GL_PROFILE_END_SESSION();
+
+	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Shutdown.json");
+    delete app;
+	GL_PROFILE_END_SESSION();
+}
+```
+
+---
+
+为什么用 Chrome Tracing？
+
+**为什么不直接在 ImGui 里画个简单的毫秒数，非要搞这个 JSON 导出报告？**
+“ImGui 的实时数值只能看到**‘现状’**，而不能分析**‘因果’**。
+通过 `Instrumentor` 生成的 Chrome Tracing 报告，我可以清晰地看到：
+
+1. **函数调用链**：哪个底层 gl 函数被哪个高级渲染指令调用。
+2. **多线程瓶颈**：如果未来引入渲染线程，我可以直观地看到 CPU 逻辑线程是在等待 GPU 提交，还是在等待 IO 读取。
+3. **微小的抖动（Jitter）**：有些 Bug 是偶发的（比如每 100 帧卡一下），实时数值很难捕捉。通过时间轴回放，我可以精准定位到那一帧里到底是哪个函数突然耗时暴增。
+这套体系让性能优化从‘拍脑袋猜’变成了‘数据驱动决策’，是专业引擎开发的基石。”
+
+---
+
+🚀 接下来的操作流程：
+
+1.  **配置 `Instrumentor.h`**。
+2.  **修改 `Application.cpp`**：在 `Run` 的开头加 `BEGIN_SESSION`，结尾加 `END_SESSION`。
+3.  **大面积撒网**：在你的 `Renderer2D::DrawQuad`、`OpenGLShader::Bind`、`WindowsWindow::OnUpdate` 等函数里全部加上 `GL_PROFILE_FUNCTION()`。
+4.  **运行并查看**：运行几秒后关闭。在你的项目根目录找到 `GlimmerProfile-Runtime.json`，打开 Chrome 浏览器，输入 `chrome://tracing`，把文件拖进去。
+
+![image-20260416124445368](README.assets/image-20260416124445368.png)
+
+![image-20260416124421235](README.assets/image-20260416124421235.png)
+
 ## KB
 
 ### 为什么不用动态库？

@@ -74,12 +74,6 @@ namespace gl {
         }
     }
 
-    void ImGuiLayer::OnImGuiRender() {
-        // 在这里你可以画一个默认的测试面板，比如：
-        // static bool show = true;
-        // ImGui::ShowDemoWindow(&show);
-    }
-
     void ImGuiLayer::OnUpdate(Timestep ts)
     {
     }

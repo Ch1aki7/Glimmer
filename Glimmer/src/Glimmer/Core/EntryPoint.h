@@ -10,11 +10,17 @@ int main(int argc, char** argv)
 
     GL_INFO("Ready to build something epic?");
 
+	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Startup.json");
     auto app = gl::CreateApplication();
+	GL_PROFILE_END_SESSION();
 
+	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Runtime.json");
     app->Run();
+	GL_PROFILE_END_SESSION();
 
+	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Shutdown.json");
     delete app;
+	GL_PROFILE_END_SESSION();
 }
 
 #endif

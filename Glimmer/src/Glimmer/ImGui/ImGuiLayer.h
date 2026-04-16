@@ -15,7 +15,6 @@ namespace gl {
         virtual void OnDetach() override;
         virtual void OnUpdate(Timestep ts) override;
         virtual void OnEvent(Event& event) override;
-        virtual void OnImGuiRender() override;
 
         void Begin(); // 每帧开始前呼叫
         void End();   // 每帧结束后呼叫
