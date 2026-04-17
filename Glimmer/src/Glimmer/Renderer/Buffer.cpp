@@ -3,14 +3,16 @@
 #include "Platform/OpenGL/OpenGLBuffer.h"
 
 namespace gl {
+	Ref<VertexBuffer> VertexBuffer::Create(uint32_t size) {
+		return CreateRef<OpenGLVertexBuffer>(size);
+	}
 
-    VertexBuffer* VertexBuffer::Create(float* vertices, uint32_t size) {
-        // 未来可以在这里写 switch(Renderer::GetAPI()) 来切换平台
-        return new OpenGLVertexBuffer(vertices, size);
+	Ref<VertexBuffer> VertexBuffer::Create(float* vertices, uint32_t size) {
+        return CreateRef<OpenGLVertexBuffer>(vertices, size);
     }
 
-    IndexBuffer* IndexBuffer::Create(uint32_t* indices, uint32_t count) {
-        return new OpenGLIndexBuffer(indices, count);
+	Ref<IndexBuffer> IndexBuffer::Create(uint32_t* indices, uint32_t count) {
+        return CreateRef<OpenGLIndexBuffer>(indices, count);
     }
 
 }

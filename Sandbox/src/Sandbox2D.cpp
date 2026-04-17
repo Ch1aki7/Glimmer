@@ -41,7 +41,7 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
 
 		gl::Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
-		gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, 45, { 0.2f, 0.3f, 0.8f, 1.0f });
+		gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, -45, { 0.2f, 0.3f, 0.8f, 1.0f });
 		gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
 		gl::Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, 45, m_Texture, 3, {0.8f, 0.3f, 0.8f, 1.0f });
 		gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);

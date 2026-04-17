@@ -15,6 +15,7 @@ namespace gl {
 
         // 上传 Uniform 的接口
         void UploadUniformInt(const std::string& name, int value) override;
+		void UploadUniformIntArray(const std::string& name, int* values, uint32_t count) override;
 
         void UploadUniformFloat(const std::string& name, float value) override;
         void UploadUniformFloat2(const std::string& name, const glm::vec2& value) override;

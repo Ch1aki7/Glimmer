@@ -4931,6 +4931,235 @@ void main() {
 
 <img src="README.assets/image-20260416175835039.png" alt="image-20260416175835039" style="zoom:50%;" />
 
+## 2D 批处理渲染
+
+在 Glimmer 引擎的批渲染（Batch Rendering）第一阶段重构中，我们完成了从**“即时模式（一物一画）”**到**“缓冲模式（攒够再画）”**的底层逻辑转型。以下是这一阶段的核心工作梳理与架构思考：
+
+### 纯色方块
+
+**第一步：定义顶点数据契约 (The Data Contract)**
+
+在批处理中，CPU 与 GPU 的沟通不再通过离散的 glUniform，而是通过一块连续的内存。我们定义了 **QuadVertex** 结构体，它将每个顶点的“坐标、颜色、纹理坐标”打包在一起。
+
+```
+	struct QuadVertex
+	{
+		glm::vec3 Position;
+		glm::vec4 Color;
+		glm::vec2 TexCoord;
+	};
+```
+
+**第二步：显存空间的预留与索引复用 (Resource Pre-allocation)**
+
+在 Init 函数中，我们不再根据单个物体的顶点来创建缓冲区，而是直接预申请了足以容纳 **10,000 个方块** 的显存额度。同时，由于所有 2D 方块的拓扑结构（即由两个三角形拼成，索引顺序为 0,1,2, 2,3,0）是恒定不变的，我们预先计算并填充了整个 **IndexBuffer**。
+
+```
+void Renderer2D::Init()
+{
+	GL_PROFILE_FUNCTION();
+
+	s_Data.QuadVertexArray = VertexArray::Create();
+
+	s_Data.QuadVertexBuffer = VertexBuffer::Create(s_Data.MaxVertices * sizeof(QuadVertex));
+	s_Data.QuadVertexBuffer->SetLayout({
+		{ ShaderDataType::Float3, "a_Position" },
+		{ ShaderDataType::Float4, "a_Color" },
+		{ ShaderDataType::Float2, "a_TexCoord" }
+		});
+	s_Data.QuadVertexArray->AddVertexBuffer(s_Data.QuadVertexBuffer);
+
+	s_Data.QuadVertexBufferBase = new QuadVertex[s_Data.MaxVertices];
+
+	// 预计算所有索引
+	uint32_t* quadIndices = new uint32_t[s_Data.MaxIndices];
+	uint32_t offset = 0;
+	for (uint32_t i = 0; i < s_Data.MaxIndices; i += 6) {
+		quadIndices[i + 0] = offset + 0;
+		quadIndices[i + 1] = offset + 1;
+		quadIndices[i + 2] = offset + 2;
+		quadIndices[i + 3] = offset + 2;
+		quadIndices[i + 4] = offset + 3;
+		quadIndices[i + 5] = offset + 0;
+		offset += 4;
+	}
+
+	Ref<IndexBuffer> quadIB = IndexBuffer::Create(quadIndices, s_Data.MaxIndices);
+	s_Data.QuadVertexArray->SetIndexBuffer(quadIB);
+	delete[] quadIndices;
+
+	s_Data.WhiteTexture = Texture2D::Create(1, 1);
+	uint32_t whiteTextureData = 0xffffffff;
+	s_Data.WhiteTexture->SetData(&whiteTextureData, sizeof(uint32_t));
+
+	s_Data.TextureShader = Shader::Create("assets/shaders/Texture.glsl");
+	s_Data.TextureShader->Bind();
+	s_Data.TextureShader->UploadUniformInt("u_Texture", 0);
+
+}
+```
+
+索引缓冲区的复用是性能优化的关键。无论我们画多少个方块，索引的逻辑排列是重复的，这种“一次计算，终身使用”的方法极大地节省了运行时的 CPU 开销。
+
+**第三步：建立 CPU 端的“内存草稿本” (Memory Scratchpad)**
+
+我们在 Renderer2DData 中分配了一块和显存等大的 CPU 内存（QuadVertexBase）。
+
+```
+	struct Renderer2DData
+	{
+		const uint32_t MaxQuads = 10000;
+		const uint32_t MaxVertices = MaxQuads * 4;
+		const uint32_t MaxIndices = MaxQuads * 6;
+
+		Ref<VertexArray> QuadVertexArray;
+		Ref<VertexBuffer> QuadVertexBuffer;
+		Ref<Shader> TextureShader;
+		Ref<Texture2D> WhiteTexture;
+
+		uint32_t QuadIndexCount = 0;
+		QuadVertex* QuadVertexBufferBase = nullptr;
+		QuadVertex* QuadVertexBufferPtr = nullptr;
+		float SceneTime = 0.0f;
+	};
+```
+
+之所以不直接往 GPU 写数据，是因为 CPU 内存的随机读写速度远快于跨总线操作 GPU 显存。我们引入了 QuadVertexBufferPtr 指针，它像一个画笔的笔尖，随着 DrawQuad 的调用在草稿本上不断向后移动，记录数据。
+
+**第四步：重构渲染生命周期 (The Lifecycle Transformation)**
+
+我们重写了 BeginScene 和 EndScene。
+
+1. **BeginScene**：将指针重置到草稿本的起始位置，宣告新一轮“数据采集”开始。
+2. **EndScene**：计算这一帧指针移动的总距离，通过 SetData（底层为 glBufferSubData）将整个草稿本一次性“拍”给 GPU。
+3. **Flush**：执行最终的 DrawCall。
+
+- 这种模式将原本分散在 10,000 次绘图中的 CPU-GPU 通讯压力，压缩到了 EndScene 中的那一次提交。这便是批处理性能飞跃的根本原因。
+
+**第五步：将几何变换从 GPU 回收至 CPU (Coordinate Transformation)**
+
+这是最显着的改变。在旧代码中，我们把 Model Matrix 传给 Shader 算位置。而在第一阶段批处理中，我们在 DrawQuad 里手动计算了四个顶点的世界坐标（例如 position.x + size.x）。
+
+由于 GPU 在一个 Draw Call 中只能接收一组 Uniform 矩阵，我们无法为 10,000 个物体传 10,000 个矩阵。因此，我们将“矩阵乘法”的工作收回到 CPU 完成。虽然这增加了 CPU 的浮点运算量，但相比于频繁切换渲染状态带来的指令开销，这是极度划算的交换。
+
+**第六步：Shader 的解耦与简化 (Shader Simplification)**
+
+为了配合批处理，我们的 **Texture.glsl** 发生了质变。顶点着色器现在直接接收处理好的 a_Position（世界坐标）和 a_Color，而不再依赖 u_Transform。
+
+Shader 变得更加“通用化”。它不再关心物体是怎么移动的，它只负责把传进来的颜色和坐标正确地投射到屏幕上。
+
+**阶段总结**：
+第一阶段完成后，你的引擎已经实现了**“纯色方块”的批处理**。目前即使在屏幕上画 10,000 个变色方块，也只会产生 **1 个 Draw Call**。这是你的 Glimmer 引擎从“业余框架”迈向“专业渲染器”的里程碑。
+
+**下一步挑战**：目前的批处理还不能处理不同的纹理（一旦切换纹理，批处理就会中断）。我们需要在下一阶段引入 **纹理插槽（Texture Slots）** 数组，让显卡能在一通指令里识别出不同的图片。
+
+### 纹理绑定
+
+**第一步：扩展顶点数据结构以承载纹理元数据**
+
+为了让 GPU 知道每个方块该贴哪张图，我们必须在顶点结构 QuadVertex 中新增两个属性。
+
+- **TexIndex (纹理索引)**：这是一个浮点数，代表该顶点指向纹理数组中的哪一个位置。
+- **TilingFactor (平铺系数)**：控制纹理的重复频率。
+- 在 BufferLayout 中，这两个属性被定义为 Float。虽然索引本质上是整数，但在顶点属性传输中统一使用浮点数能简化数据对齐，并允许 Shader 在插值后通过 int() 强制转换回索引，这是批处理的通用做法。
+
+**第二步：构建纹理插槽状态池**
+
+由于显卡单次绘制支持的纹理绑定数量有限（通常为 32 个），我们在 Renderer2DData 中建立了一个**纹理插槽数组** TextureSlots。
+
+- **白贴图占位**：在 Init 中将 TextureSlots[0] 固定为 WhiteTexture。
+- **动态计数器**：引入 TextureSlotIndex。在每一帧 BeginScene 时，除了重置顶点指针，还需要将该索引重置为 1。
+- **思考**：这相当于在 CPU 端维护了一个“显存插槽预览图”。我们不再即时绑定纹理，而是记录下“谁将要在哪个位置被绑定”。
+
+**第三步：建立 GPU 采样器阵列映射**
+
+在 Init 函数中，我们不再是简单的 UploadUniformInt("u_Texture", 0)，而是创建了一个包含 0 到 31 的整数数组。
+
+- **一次性注入**：通过 UploadUniformIntArray("u_Textures", samplers, 32)，一次性告知 Shader：数组中的 0 号元素对应 0 号槽位，1 号对应 1 号，依此类推。
+- **思考**：这一步打通了 Shader 内部 uniform sampler2D u_Textures[32] 的寻址链路。自此，Shader 具备了在一次绘制中“挑选”图片的能力。
+
+**第四步：实现纹理重用与动态分配算法**
+
+这是 DrawQuad 实现中最核心的逻辑改进。当 Sandbox 传入一张贴图时，引擎不再盲目绑定，而是执行以下操作：
+
+1. **线性搜索**：遍历当前已登记的 TextureSlots，检查这张贴图是否已经“排队”了。
+2. **命中重用**：如果找到了，直接复用其索引（textureIndex）。
+3. **新增分配**：如果没有找到，则将其放入下一个可用的插槽，并递增 TextureSlotIndex。
+4. **思考**：这套逻辑极大地优化了渲染开销。如果你的场景里有 1000 个方块共用 1 张背景图，引擎只会占用 1 个插槽，并且在数据填充阶段赋予它们完全相同的 textureIndex，完美符合批处理的特征。
+
+**第五步：实现延迟绑定与最终 Flush**
+
+这是纹理出现在屏幕上的最后一公里。在旧的渲染模式下，Bind() 是在 DrawQuad 里立即发生的；而在批处理模式下，绑定动作被推迟到了 Flush。
+
+- **集中绑定**：在 Flush 内部，通过一个循环 TextureSlots[i]->Bind(i)，将这一批次积累的所有贴图依次插入显卡的物理插槽。
+- **思考**：这种“延迟绑定”策略确保了所有贴图在 GPU 执行 glDrawElements 的那一刻都在其位，解决了“一物一绑”带来的管线停顿问题。
+
+**第六步：Shader 端的采样逻辑适配**
+
+配合 C++ 端的改动，GLSL 里的 main 函数不再采样单一对象，而是根据 v_TexIndex 进行索引。
+
+- **动态索引采样**：texture(u_Textures[int(v_TexIndex)], v_TexCoord * v_TilingFactor)。
+- **思考**：通过将顶点属性传入的 float 转回 int 作为数组下标，我们实现了在 GPU 端的动态分发。至此，即使是不同图片的方块，也能在同一个批次内被正确涂色。
+
+<img src="README.assets/image-20260417190927104.png" alt="image-20260417190927104" style="zoom:50%;" />
+
+### 融入全屏shader
+
+现在的DrawFullScreenQuad接口是实现批处理渲染之前的版本，无法起效。这是因为原版绑定了 s_Data.QuadVertexArray。但是，这个 VAO 对应的是那个巨大的、空的动态缓冲区。现在没有向这个缓冲区里填入全屏的 4 个顶点，也没有调用 SetData 把数据发给显卡。且批处理通过 s_Data.QuadIndexCount 来记录画了多少个索引。但在 DrawFullscreenQuad 中，直接调用了底层的 DrawIndexed。如果此时还没画任何批处理方块，索引数可能是 0，显卡就什么都不画。
+
+在引擎开发中，全屏 Pass 通常不和普通的批处理混在一起。最好的做法是在 Init 时准备一个专门的、**静态的**单位矩形（Unit Quad），专门给全屏 Shader 使用。
+
+**修改 Renderer2DData 结构**
+
+增加一个专门存放全屏矩形（-1 到 1）的 VAO。
+
+```
+struct Renderer2DData {
+    // ... 原有成员 ...
+    Ref<VertexArray> FullscreenVertexArray; // ✨ 新增：专门给全屏/后处理用的静态VAO
+};
+```
+
+**在 Init() 中初始化静态全屏矩形**
+
+这个矩形永远不变，所以我们不需要每帧更新它
+
+```
+void Renderer2D::Init() {
+    // ... 原有批处理初始化代码 ...
+
+    // ✨ 初始化全屏专用资源
+    s_Data.FullscreenVertexArray = VertexArray::Create();
+
+    // 定义覆盖全屏（NDC空间 -1 到 1）的顶点
+    float fullscreenVertices[5 * 4] = {
+        -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
+         1.0f, -1.0f, 0.0f, 1.0f, 0.0f,
+         1.0f,  1.0f, 0.0f, 1.0f, 1.0f,
+        -1.0f,  1.0f, 0.0f, 0.0f, 1.0f
+    };
+
+    auto fVBO = VertexBuffer::Create(fullscreenVertices, sizeof(fullscreenVertices));
+    fVBO->SetLayout({
+        { ShaderDataType::Float3, "a_Position" },
+        { ShaderDataType::Float2, "a_TexCoord" }
+    });
+    s_Data.FullscreenVertexArray->AddVertexBuffer(fVBO);
+
+    uint32_t fIndices[6] = { 0, 1, 2, 2, 3, 0 };
+    auto fIBO = IndexBuffer::Create(fIndices, 6);
+    s_Data.FullscreenVertexArray->SetIndexBuffer(fIBO);
+}
+```
+
+**修改 DrawFullscreenQuad 函数**
+
+逻辑调整：**在画全屏之前，先清空当前的批处理队列（Flush），然后切换到静态 VAO 进行绘制。**
+
+<img src="README.assets/image-20260417194046593.png" alt="image-20260417194046593" style="zoom:50%;" />
+
+## KB
+
 ### 为什么不用动态库？
 
 如果用动态链接库，将会出现每次生成解决方案都要手动复制一遍dll文件的情况

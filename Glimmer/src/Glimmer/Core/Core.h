@@ -35,7 +35,7 @@
 
 #define BIND_EVENT_FN(x) std::bind(&x, this, std::placeholders::_1)
 
-#define GL_PROFILE 1
+#define GL_PROFILE 0
 #if GL_PROFILE
 #define GL_PROFILE_BEGIN_SESSION(name, filepath) ::gl::Instrumentor::Get().BeginSession(name, filepath)
 #define GL_PROFILE_END_SESSION() ::gl::Instrumentor::Get().EndSession()
