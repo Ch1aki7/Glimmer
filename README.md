@@ -5158,6 +5158,161 @@ void Renderer2D::Init() {
 
 <img src="README.assets/image-20260417194046593.png" alt="image-20260417194046593" style="zoom:50%;" />
 
+### 更新旋转绘图接口
+
+将旧版本的DrawRotateQuad()绘图接口更新至批处理渲染版本
+
+**第一步：建立局部空间“顶点模板” (The Vertex Template)**
+
+在 `Renderer2DData` 结构体中，新增了 `glm::vec4 QuadVertexPositions[4]`。
+*   **做法**：在 `Init()` 函数里，预先定义了一个中心在原点、边长为 1.0 的标准正方形四个角的坐标。
+*   **思考**：这是实现旋转的基石。在之前的非批处理版本中，这些坐标是写死在 VBO 里的。现在我们将它们存为 CPU 内存中的常量，作为所有方块的“原始形状”。使用 `vec4` 而不是 `vec3` 是为了方便后续直接与 4x4 变换矩阵进行数学运算。
+
+**第二步：计算完整的变换矩阵 (Matrix Composition)**
+
+在 `DrawRotatedQuad` 内部，不再依赖 Shader 里的 `u_Transform`。
+*   **做法**：利用 GLM 构造一个复合矩阵：`Translate * Rotate * Scale`。
+*   **思考**：注意矩阵乘法的顺序。在 GLM 中，变换是从右向左应用的。这个顺序（平移 * 旋转 * 缩放）确保了物体首先在局部空间缩放，然后在原点自转，最后被平移到世界空间的指定位置。如果顺序反了，方块会绕着世界中心旋转。
+
+**第三步：坐标空间的物理迁移 (CPU-Side Transformation)**
+
+这是批渲染中最核心的代码改动。
+*   **做法**：在填充缓冲区前，执行 `transform * s_Data.QuadVertexPositions[i]`。
+*   **思考**：我们将原本属于显卡的“几何变换”工作收回到了 CPU 端的 `DrawRotatedQuad` 函数中。
+    *   **原因**：批处理的一个 Draw Call 只能对应一个 Uniform。如果有 100 个方块旋转角度各不相同，我们无法传 100 个不同的 `u_Transform` 给 Shader。
+    *   **结果**：通过 CPU 预计算，我们直接把计算好的、处于**世界空间**的最终坐标存入 `QuadVertex` 结构体。对于 GPU 来说，它只需要机械地画出你给它的坐标，而不需要关心这些点是否经过了旋转。
+
+**第四步：顶点属性的线性填充 (Sequential Buffer Filling)**
+
+改动了数据存入方式，不再调用任何 OpenGL 绑定指令。
+*   **做法**：通过 `s_Data.QuadVertexBufferPtr` 指针，将计算好的 `Position`、`Color`、`TexCoord` 以及新增的 `TexIndex` 等连贯地写入内存。
+*   **思考**：每调用一次 `DrawRotatedQuad`，指针就向后移动 4 个 `QuadVertex` 的跨度。这种内存操作极快，远胜于频繁的 `glUniform` 调用。
+
+**第五步：纹理插槽的动态匹配 (Texture Slot Mapping)**
+
+为了让旋转的带贴图方块也能批处理，代码引入了纹理搜索逻辑。
+*   **做法**：遍历 `TextureSlots` 数组，查找当前传入的纹理是否已在槽位中。若不在，则占用一个新的槽位。
+*   **思考**：这一步保证了即使旋转方块和普通方块交替绘制，只要它们共用贴图，就能保持在同一个批次内，不会触发 `Flush`。
+
+**第六步：Shader 的极简适配 (Shader Stripping)**
+
+由于位置已经在 CPU 算好了，`Texture.glsl` 发生了对应的“瘦身”。
+*   **做法**：顶点着色器（Vertex Shader）中删除了 `u_Transform` 矩阵，直接使用 `u_ViewProjection * vec4(a_Position, 1.0)`。
+*   **思考**：Shader 变得极其纯粹，它只负责摄像机视角的转换。这让渲染管线变得异常稳健。
+
+**总结与思考**
+
+实现 `DrawRotatedQuad` 的过程，本质上是**将 GPU 的计算压力部分转移给 CPU，以换取 CPU 与 GPU 通讯频率的大幅降低**。
+
+阴间bug：实现具体DrawRotatedQuad时，屏幕会出现一个彩色正方形，且即便不调用 DrawRotatedQuad，屏幕上也会出现一个正方形，这说明**批处理缓冲区（Buffer）里有脏数据**。
+
+这样，我新建一个ExampleLayer，逐行测试我的接口问题
+
+测试结果：
+
+只启用DrawFullscreenQuad，结果正常；
+
+只启用DrawRotatedQuad纯色，出现彩色正方形(bug)；
+
+只启用DrawQuad纯色，出现彩色正方形(bug)；
+
+其余接口全部bug，但修改DrawRotatedQuad前正常，推测1.BeginScene问题；2.DrawRotatedQuad问题
+
+尝试回调DrawRotatedQuad纯色
+
+回调为原版之后，全部正常加载，无彩色正方形
+
+```
+		s_Data.TextureShader->Bind();
+		s_Data.TextureShader->UploadUniformFloat4("u_Color", color);
+		s_Data.TextureShader->UploadUniformFloat("u_TilingFactor", 1.0f);
+		s_Data.WhiteTexture->Bind();
+
+		glm::mat4 transform = glm::translate(glm::mat4(1.0f), position)
+			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0.0f, 0.0f, 1.0f })
+			* glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
+
+		s_Data.TextureShader->UploadUniformMat4("u_Transform", transform);
+
+		s_Data.QuadVertexArray->Bind();
+		RenderCommand::DrawIndexed(s_Data.QuadVertexArray);
+```
+
+为何新版会导致接口全部bug？
+
+```
+		//const float textureIndex = 0.0f; // White Texture
+		//const float tilingFactor = 1.0f;
+
+		//glm::mat4 transform = glm::translate(glm::mat4(1.0f), position)
+		//	* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0.0f, 0.0f, 1.0f })
+		//	* glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
+
+		//for (int i = 0; i < 4; i++)
+		//{
+		//	// 关键点：矩阵 * 局部坐标 = 旋转后的世界坐标
+		//	s_Data.QuadVertexBufferPtr->Position = transform * s_Data.QuadVertexPositions[i];
+		//	s_Data.QuadVertexBufferPtr->Color = color;
+		//	s_Data.QuadVertexBufferPtr->TexCoord = { (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
+		//	s_Data.QuadVertexBufferPtr->TexIndex = textureIndex;
+		//	s_Data.QuadVertexBufferPtr->TilingFactor = tilingFactor;
+		//	s_Data.QuadVertexBufferPtr++;
+		//}
+
+		//s_Data.QuadIndexCount += 6;
+```
+
+依旧未解决，择日再战
+
+终于发现了，原因在于Flush中为了防止其他 Shader 的干扰，一定要重新 Bind 自己的 VAO
+
+```
+	void Renderer2D::Flush()
+	{
+		// Bind textures
+		for (uint32_t i = 0; i < s_Data.TextureSlotIndex; i++)
+			s_Data.TextureSlots[i]->Bind(i);
+
+		s_Data.QuadVertexArray->Bind();
+		RenderCommand::DrawIndexed(s_Data.QuadVertexArray, s_Data.QuadIndexCount);
+	}
+```
+
+```
+s_Data.QuadVertexArray->Bind();
+```
+
+DrawIndexed接口内
+
+```
+	void OpenGLRendererAPI::DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount)
+	{
+		uint32_t count = indexCount ? vertexArray->GetIndexBuffer()->GetCount() : indexCount;
+		glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+```
+
+glBindTexture(GL_TEXTURE_2D, 0);解绑当前绑定到 `GL_TEXTURE_2D` 目标的纹理
+
+`glBindTexture(GL_TEXTURE_2D, 0)` 的作用是：**解绑当前 2D 纹理，防止后续操作误作用到之前的纹理对象。**
+
+有一个原因说法：我的全屏shader：s_Data.FullscreenVertexArray->Bind(); // 这里把状态改了！！同时又因为我的旋转接口是最后一个修改批处理的对象，所以导致整个流程只有全屏shader进行过bind
+
+所以也可以在Draw里进行bind，经检验效果一样
+
+```
+	void OpenGLRendererAPI::DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount)
+	{
+		vertexArray->Bind();
+		uint32_t count = indexCount ? vertexArray->GetIndexBuffer()->GetCount() : indexCount;
+		glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
+		glBindTexture(GL_TEXTURE_2D, 0);
+	}
+```
+
+<img src="README.assets/image-20260421113429547.png" alt="image-20260421113429547" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？

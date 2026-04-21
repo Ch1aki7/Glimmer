@@ -1,10 +1,10 @@
-#include "Sandbox2D.h"
+#include "ExampleLayer.h"
 #include <glm/gtc/type_ptr.hpp>
-Sandbox2D::Sandbox2D() :Layer("Sandbox2D"), m_CameraController(1280.0f / 720.0f, true) {
+ExampleLayer::ExampleLayer() :Layer("ExampleLayer"), m_CameraController(1280.0f / 720.0f, true) {
 
 }
 
-void Sandbox2D::OnAttach() {
+void ExampleLayer::OnAttach() {
 	GL_PROFILE_FUNCTION();
 
 	///*路径设置*/
@@ -17,12 +17,12 @@ void Sandbox2D::OnAttach() {
 	m_HenryTexture = gl::Texture2D::Create("assets/textures/Henry.jpg");
 }
 
-void Sandbox2D::OnDetach() {
+void ExampleLayer::OnDetach() {
 	GL_PROFILE_FUNCTION();
 
 }
 
-void Sandbox2D::OnUpdate(gl::Timestep ts) {
+void ExampleLayer::OnUpdate(gl::Timestep ts) {
 	GL_PROFILE_FUNCTION();
 
 	m_CameraController.OnUpdate(ts);
@@ -46,7 +46,7 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
 		gl::Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
 		gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
-		gl::Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, {0.8f, 0.3f, 0.8f, 1.0f });
+		gl::Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, { 0.8f, 0.3f, 0.8f, 1.0f });
 		gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
 		gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
 
@@ -55,7 +55,7 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 	}
 }
 
-void Sandbox2D::OnImGuiRender() {
+void ExampleLayer::OnImGuiRender() {
 	GL_PROFILE_FUNCTION();
 
 	ImGui::Begin("Glimmer Test Window");
@@ -66,7 +66,7 @@ void Sandbox2D::OnImGuiRender() {
 	ImGui::ShowDemoWindow(&show_demo_window);
 }
 
-void Sandbox2D::OnEvent(gl::Event& event) {
+void ExampleLayer::OnEvent(gl::Event& event) {
 	GL_TRACE("{0}", event.ToString());
 	m_CameraController.OnEvent(event);
 }

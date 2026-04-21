@@ -36,4 +36,5 @@ void main() {
 	if (texColor.a < 0.1)
 		discard;
 	color = texColor;
+	//color = texture(u_Textures[int(v_TexIndex)], v_TexCoord * v_TilingFactor) * v_Color;
 }

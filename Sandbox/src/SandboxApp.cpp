@@ -4,18 +4,7 @@
 #include "Platform/OpenGL/OpenGLShader.h"
 #include <glm/gtc/type_ptr.hpp>
 #include "Sandbox2D.h"
-class ExampleLayer : public gl::Layer {
-public:
-    void OnUpdate(gl::Timestep ts) override {
-    }
-
-    void OnEvent(gl::Event& event) override {
-    }
-
-    void OnImGuiRender() override {
-    }
-private:
-};
+#include "ExampleLayer.h"
 
 // 继承 Glimmer 的引擎基类
 class Sandbox : public gl::Application {
@@ -23,6 +12,7 @@ public:
     Sandbox() 
     {
 		PushLayer(new Sandbox2D());
+		//PushLayer(new ExampleLayer());
     }
     ~Sandbox() {}
 };
