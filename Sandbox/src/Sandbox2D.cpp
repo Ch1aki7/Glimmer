@@ -19,6 +19,8 @@ void Sandbox2D::OnAttach() {
 
 	m_MeshModel = gl::CreateRef<gl::Model>("assets/models/penguin.obj");
 	m_3DShader = gl::Shader::Create("assets/shaders/Model3D.glsl");
+
+	m_TestTexture = gl::Texture2D::Create("assets/models/penguin.png");
 }
 
 void Sandbox2D::OnDetach() {
@@ -52,9 +54,15 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		gl::Renderer::BeginScene(m_CameraController.GetCamera());
 
 		m_3DShader->Bind();
+
+		m_3DShader->UploadUniformFloat3("u_LightPos", m_LightPos);
+		m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f }); // 白光
+		// 传入摄像机位置（用于高光计算）
+		m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
 		glm::mat4 transform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
 			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
 			* glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
+		m_TestTexture->Bind(0);
 		m_MeshModel->Draw(m_3DShader, transform);
 
 		gl::Renderer::EndScene();
@@ -79,6 +87,7 @@ void Sandbox2D::OnImGuiRender() {
 
 	ImGui::Begin("Glimmer Test Window");
 	ImGui::Text("Hello World! ImGui is Working!");
+	ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
 	ImGui::End();
 
 	bool show_demo_window = true;

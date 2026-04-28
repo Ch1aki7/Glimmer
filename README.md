@@ -5850,6 +5850,210 @@ void Model::Draw(const Ref<Shader>& shader, const glm::mat4& transform)
 
 <img src="README.assets/image-20260428155345962.png" alt="image-20260428155345962" style="zoom:50%;" />
 
+## 3D全局光照
+
+目前 3D 模型虽然能显示，但由于没有光影，它看起来像是一个“扁平的色块”。我们要引入工业界最经典的 **冯氏光照模型 (Phong Lighting Model)**。
+
+这一步的实现分为三个部分：**Shader 逻辑升级**、**C++ 数据上传**、以及**架构优化**。
+
+**第一步：编写 3D 光照着色器 (assets/shaders/Model3D.glsl)**
+
+光照计算主要发生在 **Fragment Shader** 中。我们需要利用顶点传来的 **法线 (Normal)** 来计算光线照射的角度。
+
+```
+#type vertex
+#version 330 core
+
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec3 a_Normal; // 之前在 Mesh 里存好的法线
+layout(location = 2) in vec2 a_TexCoord;
+
+uniform mat4 u_ViewProjection;
+uniform mat4 u_Transform;
+
+out vec2 v_TexCoord;
+out vec3 v_Normal;
+out vec3 v_WorldPos; // 传出世界坐标，用于计算光线方向
+
+void main()
+{
+	v_TexCoord = a_TexCoord;
+
+	// 核心：法线也需要旋转。使用“法线矩阵”防止非等比缩放导致法线畸变
+	v_Normal = mat3(transpose(inverse(u_Transform))) * a_Normal;
+
+	v_WorldPos = vec3(u_Transform * vec4(a_Position, 1.0));
+	gl_Position = u_ViewProjection * vec4(v_WorldPos, 1.0);
+}
+
+#type fragment
+#version 330 core
+
+layout(location = 0) out vec4 color;
+
+in vec2 v_TexCoord;
+in vec3 v_Normal;
+in vec3 v_WorldPos;
+
+uniform sampler2D u_Texture;
+uniform vec3 u_LightPos;    // 光源位置
+uniform vec3 u_LightColor;  // 灯光颜色
+uniform vec3 u_ViewPos;     // 摄像机位置（用于高光）
+
+void main()
+{
+	// 1. 环境光 (Ambient) - 保证没光的地方不是全黑
+	float ambientStrength = 0.2;
+	vec3 ambient = ambientStrength * u_LightColor;
+
+	// 2. 漫反射 (Diffuse) - 根据物体朝向光的角度决定亮度
+	vec3 norm = normalize(v_Normal);
+	vec3 lightDir = normalize(u_LightPos - v_WorldPos);
+	float diff = max(dot(norm, lightDir), 0.0);
+	vec3 diffuse = diff * u_LightColor;
+
+	// 3. 高光 (Specular) - 金属或光滑表面的反光
+	float specularStrength = 0.5;
+	vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
+	vec3 reflectDir = reflect(-lightDir, norm);
+	float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32); // 32 是发光反光度
+	vec3 specular = specularStrength * spec * u_LightColor;
+
+	// 结合贴图颜色
+	vec4 texColor = texture(u_Texture, v_TexCoord);
+	vec3 result = (ambient + diffuse + specular) * texColor.rgb;
+
+	color = vec4(result, texColor.a);
+}
+
+```
+
+**第二步：在 Sandbox2D 中配置光源**
+
+你需要把灯的位置、颜色和相机位置传给 Shader。
+
+**修改 Sandbox2D::OnUpdate：**
+
+```
+void Sandbox2D::OnUpdate(gl::Timestep ts)
+{
+    // ... 之前的清屏逻辑 ...
+
+    m_3DShader->Bind();
+
+    // 设置灯光参数
+    glm::vec3 lightPos(2.0f, 2.0f, 2.0f); // 灯在右上方
+    m_3DShader->UploadUniformFloat3("u_LightPos", lightPos);
+    m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f }); // 白光
+    
+    // 传入摄像机位置（用于高光计算）
+    m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
+
+    // 渲染模型
+    glm::mat4 transform = glm::translate(glm::mat4(1.0f), {0, 0, 0})
+                        * glm::rotate(glm::mat4(1.0f), (float)gl::Application::Get().GetTime(), {0, 1, 0});
+                        
+    m_MeshModel->Draw(m_3DShader, transform);
+}
+```
+
+<img src="README.assets/image-20260428163358738.png" alt="image-20260428163358738" style="zoom:50%;" />
+
+ImGui集成了一个简单光源位置改变
+
+<img src="README.assets/image-20260428164532729.png" alt="image-20260428164532729" style="zoom:50%;" />
+
+卡通风格shader
+
+```
+void main()
+{
+    vec3 norm = normalize(v_Normal);
+    vec3 lightDir = normalize(u_LightPos - v_WorldPos);
+    vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
+
+    // 1. 核心：将漫反射强度“阶梯化”
+    float diff = dot(norm, lightDir);
+    float intensity = smoothstep(0.0, 0.05, diff) * 0.5 + 
+                     smoothstep(0.4, 0.45, diff) * 0.5; // 只有两层亮度
+    
+    vec3 diffuse = intensity * u_LightColor;
+
+    // 2. 边缘光 (Rim Light)：在物体轮廓处产生发光感
+    float rim = 1.0 - max(dot(viewDir, norm), 0.0);
+    rim = pow(rim, 4.0); // 调整边缘光的细度
+    vec3 rimColor = u_LightColor * rim * 0.5;
+
+    vec4 texColor = texture(u_Texture, v_TexCoord);
+    // 卡通色块 + 基础环境光 + 边缘光
+    vec3 result = (vec3(0.3) + diffuse + rimColor) * texColor.rgb;
+    
+    color = vec4(result, texColor.a);
+}
+```
+
+<img src="README.assets/image-20260428164842698.png" alt="image-20260428164842698" style="zoom:50%;" />
+
+Blinn-Phong
+
+```
+void main()
+{
+    vec3 norm = normalize(v_Normal);
+    vec3 lightDir = normalize(u_LightPos - v_WorldPos);
+    vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
+
+    // 1. 漫反射
+    float diff = max(dot(norm, lightDir), 0.0);
+    vec3 diffuse = diff * u_LightColor;
+
+    // 2. ✨ Blinn-Phong 核心：计算半角向量
+    vec3 halfwayDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(norm, halfwayDir), 0.0), 64.0); // 64 是反光锐度
+    vec3 specular = 0.5 * spec * u_LightColor;
+
+    vec4 texColor = texture(u_Texture, v_TexCoord);
+    color = vec4((vec3(0.1) + diffuse + specular) * texColor.rgb, texColor.a);
+}
+```
+
+<img src="README.assets/image-20260428164932054.png" alt="image-20260428164932054" style="zoom:50%;" />
+
+## 为3D对象绑定贴图
+
+核心是**让** **Mesh** **类持有纹理引用，并在** **Model** **绘制时进行绑定。**
+
+```
+// ✨ 构造函数增加纹理参数
+Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, Ref<Texture2D> texture);
+// ✨ 获取纹理的接口
+const Ref<Texture2D>& GetTexture() const { return m_Texture; }
+```
+
+**修改 Model 的加载与绘制逻辑**
+
+这里有两种方式：
+
+1. **手动指定**：在 Sandbox 里加载模型后，手动塞给它一张图。
+2. **自动加载**：读取 .obj 时，自动去读它配套的 .mtl 文件里写的图片路径。
+
+**实现“自动加载”模式**
+
+**修改** **Glimmer/src/Glimmer/Renderer/Model.cpp**：
+
+在 `Model::Model` 里，首先根据模型路径提取出所在目录，并把它设置给 tinyobj，这样在解析 `.obj` 的同时就能正确找到 `.mtl` 和贴图文件；然后调用 tinyobj 读取模型数据，拿到顶点（attrib）、几何（shapes）和材质（materials）。接着遍历每个 shape，一边构建顶点/索引数据，一边根据该 shape 关联的材质 ID 查找对应的漫反射贴图（diffuse texture），如果存在就加载成 `Texture2D`，最后把“顶点数据 + 索引 + 贴图”封装成一个 Mesh 存进 `m_Meshes`。
+
+而在 `Model::Draw` 里，则是逐个 Mesh 渲染：先绑定 shader、上传矩阵（VP 和 transform），然后**在绘制前绑定这个 Mesh 自己的贴图**，最后绑定 VAO 并调用 `DrawIndexed` 送到 GPU。这样每个 Mesh 都能用自己的材质/贴图正确渲染出来。
+
+绑定纹理并测试
+
+```
+		m_TestTexture->Bind(0);
+		m_MeshModel->Draw(m_3DShader, transform);
+```
+
+<img src="README.assets/image-20260428171507539.png" alt="image-20260428171507539" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？

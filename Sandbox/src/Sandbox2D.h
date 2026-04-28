@@ -29,6 +29,10 @@ private:
 
 	gl::Ref<gl::Model> m_MeshModel;
 	gl::Ref<gl::Shader> m_3DShader;
+	gl::Ref<gl::Texture2D> m_TestTexture;
+
+	// 设置灯光参数
+	glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };
 };
 
 
