@@ -33,6 +33,7 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 
 	m_CameraController.OnUpdate(ts);
 
+	gl::Renderer2D::ResetStats();
 	{
 		GL_PROFILE_SCOPE("Renderer Prep");
 		gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
@@ -59,7 +60,7 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f }); // 白光
 		// 传入摄像机位置（用于高光计算）
 		m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
-		glm::mat4 transform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
+		glm::mat4 transform = glm::translate(glm::mat4(1.0f), { 0.0f, -1.0f, 0.0f })
 			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
 			* glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
 		m_TestTexture->Bind(0);
@@ -79,6 +80,18 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 
 		gl::Renderer2D::EndScene();
 
+		// 渲染统计测试
+		//gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
+		//for (float y = -5.0f; y < 5.0f; y += 0.5f)
+		//{
+		//	for (float x = -5.0f; x < 5.0f; x += 0.5f)
+		//	{
+		//		glm::vec4 color = { (x + 5.0f) / 10.0f, 0.4f, (y + 5.0f) / 10.0f, 0.7f };
+		//		gl::Renderer2D::DrawQuad({ x, y }, { 0.45f, 0.45f }, color);
+		//	}
+		//}
+		//gl::Renderer2D::EndScene();
+
 	}
 }
 
@@ -88,6 +101,15 @@ void Sandbox2D::OnImGuiRender() {
 	ImGui::Begin("Glimmer Test Window");
 	ImGui::Text("Hello World! ImGui is Working!");
 	ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
+
+	auto stats = gl::Renderer2D::GetStats();
+	ImGui::Text("Renderer2D Stats:");
+	ImGui::Text("Draw Calls: %d", stats.DrawCalls);
+	ImGui::Text("Quads: %d", stats.QuadCount);
+	ImGui::Text("Vertices: %d", stats.GetTotalVertexCount());
+	ImGui::Text("Indices: %d", stats.GetTotalIndexCount());
+
+	ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 	ImGui::End();
 
 	bool show_demo_window = true;

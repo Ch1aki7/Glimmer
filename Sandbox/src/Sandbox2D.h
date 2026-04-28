@@ -33,6 +33,7 @@ private:
 
 	// 设置灯光参数
 	glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };
+	glm::vec4 m_SquareColor = { 0.1f, 0.1f, 0.1f, 1 };
 };
 
 
