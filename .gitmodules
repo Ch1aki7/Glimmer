@@ -11,3 +11,6 @@
 [submodule "Glimmer/vendor/glm"]
 	path = Glimmer/vendor/glm
 	url = https://github.com/g-truc/glm.git
+[submodule "Glimmer/vendor/assimp"]
+	path = Glimmer/vendor/assimp
+	url = https://github.com/assimp/assimp.git

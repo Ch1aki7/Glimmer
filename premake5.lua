@@ -57,7 +57,8 @@ project "Glimmer"
         "%{prj.name}/vendor/imgui",
         "%{prj.name}/vendor/imgui/backends",
         "%{prj.name}/vendor/glm",
-        "%{prj.name}/vendor/stb_image"
+        "%{prj.name}/vendor/stb_image",
+        "%{prj.name}/vendor/tinyobjloader"
     }
 
     links {

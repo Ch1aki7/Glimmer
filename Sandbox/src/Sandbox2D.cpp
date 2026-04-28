@@ -12,9 +12,13 @@ void Sandbox2D::OnAttach() {
 	//m_ShaderLib.Load("assets/shaders/Tunnel.glsl");
 
 	m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
+	m_ShaderLib.Load("assets/shaders/StarNest.glsl");
 	m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
 	m_STSTexture = gl::Texture2D::Create("assets/textures/STS.png");
 	m_HenryTexture = gl::Texture2D::Create("assets/textures/Henry.jpg");
+
+	m_MeshModel = gl::CreateRef<gl::Model>("assets/models/penguin.obj");
+	m_3DShader = gl::Shader::Create("assets/shaders/Model3D.glsl");
 }
 
 void Sandbox2D::OnDetach() {
@@ -38,11 +42,26 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		rotation += ts * 50.0f;
 
 		GL_PROFILE_SCOPE("Renderer Draw");
-		auto bgShader = m_ShaderLib.Get("BalatroVortex");
-		gl::Renderer2D::DrawFullscreenQuad(bgShader, 0.9f);
+		//auto bgShader = m_ShaderLib.Get("BalatroVortex");
+		//gl::Renderer2D::DrawFullscreenQuad(bgShader, 0.9f);
 
+		auto stShader = m_ShaderLib.Get("StarNest");
+		gl::Renderer2D::DrawFullscreenQuad(stShader, 0.9f);
+
+		// 3D obj渲染
+		gl::Renderer::BeginScene(m_CameraController.GetCamera());
+
+		m_3DShader->Bind();
+		glm::mat4 transform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
+			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
+			* glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
+		m_MeshModel->Draw(m_3DShader, transform);
+
+		gl::Renderer::EndScene();
+
+		// 2D 批处理渲染
 		gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
-
+		
 		gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
 		gl::Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
 		gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);

@@ -5313,6 +5313,543 @@ glBindTexture(GL_TEXTURE_2D, 0);解绑当前绑定到 `GL_TEXTURE_2D` 目标的�
 
 <img src="README.assets/image-20260421113429547.png" alt="image-20260421113429547" style="zoom:50%;" />
 
+## 加载obj文件
+
+在我的CG课程中呢，已经学习了如何使用OpenGL渲染obj文件，当时是采用手写解析函数进行加载的，但实际引擎其实需要满足更多要求，比如：如果用这个函数去加载从 Blender、Maya 或网上下载的专业模型，会有大概率报错或显示乱码。原因如下：
+
+- **多边形限制**：很多 .obj 文件包含**四边形面（Quads）**。你的代码遇到四边形会直接报错退出（redundency.length() >= 5 那段逻辑）。
+- **缺失材质支持**：.obj 文件通常配有一个 .mtl 文件来描述颜色、反光等。你的代码完全忽略了材质系统。
+- **格式容错率低**：如果文件里有注释（#）、空格不规范、或者使用了组（g）、平滑组（s）等高级指令，你的 file >> lineHeader 逻辑就会错位。
+- **只有 OBJ**：现实中的模型更多是 .fbx（带骨骼动画）、.gltf（现代网页标准）、.stl（工业模具）。手写这些二进制格式的解析器需要消耗数月时间。
+
+因此，我决定集成第三方库 **Assimp (Open Asset Import Library)**。它可以处理 .obj, .fbx, .gltf 等几十种格式，并将其统一转换为引擎易于读取的数据结构。
+
+```
+git submodule add https://github.com/assimp/assimp.git Glimmer/vendor/assimp
+```
+
+**修改 Premake 配置**
+
+Assimp 源代码非常多，为了缩短编译时间，我们通常只开启必要的格式（如 OBJ, FBX, GLTF）。
+
+在 Glimmer/vendor/assimp/ 下创建 **premake5.lua**：
+*(这是一个精简版配置，只保留常用功能，避免编译几千个文件)*
+
+```
+project "Assimp"
+    kind "StaticLib"
+    language "C++"
+    cppdialect "C++17"
+    staticruntime "on"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "include/**.h",
+        "include/**.hpp",
+        "code/**.cpp",
+        "code/**.h",
+        -- 包含内置依赖 zlib
+        "contrib/zlib/**.c",
+        "contrib/zlib/**.h"
+    }
+
+    includedirs {
+        "include",
+        "code",
+        "contrib/zlib"
+    }
+
+    defines {
+        "ASSIMP_BUILD_NO_OWN_ZLIB",
+        "ASSIMP_BUILD_NO_EXPORT",
+        -- 禁用不需要的格式以提速 (可选)
+        "ASSIMP_BUILD_NO_X_IMPORTER",
+        "ASSIMP_BUILD_NO_3DS_IMPORTER",
+        "ASSIMP_BUILD_NO_MD3_IMPORTER",
+        "ASSIMP_BUILD_NO_PLY_IMPORTER"
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        defines { "WIN32_LEAN_AND_MEAN" }
+```
+
+修改根目录的 premake5.lua
+
+```
+include "Glimmer/vendor/assimp" -- 1. 包含项目
+
+project "Glimmer"
+    -- ...
+    includedirs {
+        -- ...
+        "%{prj.name}/vendor/assimp/include" -- 2. 包含头文件
+    }
+    links { "Assimp" } -- 3. 链接静态库
+```
+
+运行 GenerateProject.bat
+
+**建立 3D 渲染数据结构**
+
+3D 模型由多个 **Mesh（网格）** 组成，每个 Mesh 拥有自己的材质和顶点数据。
+
+**定义顶点结构 (Mesh.h)**
+
+在 Glimmer/src/Glimmer/Renderer/Mesh.h 中：
+
+```
+#pragma once
+#include <glm/glm.hpp>
+#include "Glimmer/Renderer/VertexArray.h"
+#include "Glimmer/Renderer/Shader.h"
+
+namespace gl {
+    struct Vertex {
+        glm::vec3 Position;
+        glm::vec3 Normal;   // 法线
+        glm::vec2 TexCoord; // UV
+    };
+
+    class Mesh {
+    public:
+        Mesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
+        {
+            m_VAO.reset(VertexArray::Create());
+            auto vbo = VertexBuffer::Create((float*)vertices.data(), vertices.size() * sizeof(Vertex));
+            vbo->SetLayout({
+                { ShaderDataType::Float3, "a_Position" },
+                { ShaderDataType::Float3, "a_Normal" },
+                { ShaderDataType::Float2, "a_TexCoord" }
+            });
+            m_VAO->AddVertexBuffer(vbo);
+            m_VAO->SetIndexBuffer(IndexBuffer::Create(indices.data(), indices.size()));
+            m_IndexCount = indices.size();
+        }
+
+        void Draw() { m_VAO->Bind(); /* 调用底层 DrawCall */ }
+    private:
+        Ref<VertexArray> m_VAO;
+        uint32_t m_IndexCount;
+    };
+}
+```
+
+**实现模型加载类 (Model.h/cpp)**
+
+这是 Assimp 发挥作用的地方。
+
+**Glimmer/src/Glimmer/Renderer/Model.h**:
+
+```
+#pragma once
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+#include "Mesh.h"
+
+namespace gl {
+    class Model {
+    public:
+        Model(const std::string& path);
+        void Draw(const Ref<Shader>& shader, const glm::mat4& transform);
+    private:
+        void LoadModel(const std::string& path);
+        void ProcessNode(aiNode* node, const aiScene* scene);
+        Mesh ProcessMesh(aiMesh* mesh, const aiScene* scene);
+    private:
+        std::vector<Mesh> m_Meshes;
+        std::string m_Directory;
+    };
+}
+```
+
+**Glimmer/src/Glimmer/Renderer/Model.cpp**: (核心逻辑)
+
+```
+#include "glpch.h"
+#include "Model.h"
+#include "Renderer.h"
+
+namespace gl {
+    Model::Model(const std::string& path) { LoadModel(path); }
+
+    void Model::LoadModel(const std::string& path) {
+        Assimp::Importer importer;
+        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenNormals);
+
+        if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+            GL_CORE_ERROR("Assimp Error: {0}", importer.GetErrorString());
+            return;
+        }
+        ProcessNode(scene->mRootNode, scene);
+    }
+
+    void Model::ProcessNode(aiNode* node, const aiScene* scene) {
+        for(unsigned int i = 0; i < node->mNumMeshes; i++) {
+            aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
+            m_Meshes.push_back(ProcessMesh(mesh, scene));
+        }
+        for(unsigned int i = 0; i < node->mNumChildren; i++) {
+            ProcessNode(node->mChildren[i], scene);
+        }
+    }
+
+    Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene) {
+        std::vector<Vertex> vertices;
+        std::vector<uint32_t> indices;
+
+        for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
+            Vertex vertex;
+            vertex.Position = { mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z };
+            vertex.Normal = { mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z };
+            if(mesh->mTextureCoords[0])
+                vertex.TexCoord = { mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y };
+            else
+                vertex.TexCoord = { 0.0f, 0.0f };
+            vertices.push_back(vertex);
+        }
+
+        for(unsigned int i = 0; i < mesh->mNumFaces; i++) {
+            aiFace face = mesh->mFaces[i];
+            for(unsigned int j = 0; j < face.mNumIndices; j++)
+                indices.push_back(face.mIndices[j]);
+        }
+        return Mesh(vertices, indices);
+    }
+}
+```
+
+此时编译验证发现
+
+```
+E:\Zaproject\Engine\Glimmer\Glimmer\vendor\assimp\include\assimp\defs.h(55,10): fatal  error C1083: 无法打开包括文件: “assimp/config.h”: No such file or directory
+```
+
+这是因为在 Assimp 的源码中，config.h 是一个**动态生成文件**。当你使用 CMake 配置项目时，它会根据你的系统环境自动生成这个文件。因为你现在使用的是 **Premake** 跳过了 CMake 的配置步骤，所以你的硬盘里根本不存在这个 config.h。
+
+所以现在需要**手动提供一个静态的 config.h**。
+
+Glimmer/vendor/assimp/include/assimp/ 下，手动新建一个文本文件，命名为 **config.h**。
+
+```
+#ifndef ASSIMP_CONFIG_H_INC
+#define ASSIMP_CONFIG_H_INC
+
+#define ASSIMP_DOUBLE_PRECISION 0
+/* #undef ASSIMP_OPT_BUILD_PACKED */
+
+#define ASSIMP_BUILD_NO_OWN_ZLIB 1
+
+/* #undef ASSIMP_BUILD_X_IMPORTER */
+/* #undef ASSIMP_BUILD_OBJ_IMPORTER */
+// ... 这里可以根据需要开启或关闭特定的 Importer
+
+#endif // !! ASSIMP_CONFIG_H_INC
+```
+
+ok啊又是一堆报错，打算先不管了，用tinyobjloader
+
+去git库下载头文件，存放在Glimmer/vendor/tinyobjloader/tiny_obj_loader.h
+
+由于它是一个 Header-only 库，需要在该目录下建一个 .cpp 文件来生成实现。
+
+**文件：Glimmer/vendor/tinyobjloader/tiny_obj_loader.cpp**
+
+```
+#include "glpch.h"
+#define TINYOBJLOADER_IMPLEMENTATION // 必须定义这个宏
+#include "tiny_obj_loader.h"
+```
+
+**修改 Premake**：
+在 project "Glimmer" 的 includedirs 中加入：
+"%{prj.name}/vendor/tinyobjloader"。
+
+**重写加载逻辑**
+
+**Mesh.h —— 网格数据容器**
+
+**作用**：存储单个几何体的 GPU 资源（VAO/VBO/IBO）。
+
+```
+#pragma once
+#include <glm/glm.hpp>
+#include "Glimmer/Renderer/VertexArray.h"
+#include "Glimmer/Renderer/Buffer.h"
+
+namespace gl {
+
+	struct Vertex {
+		glm::vec3 Position;
+		glm::vec3 Normal;
+		glm::vec2 TexCoord;
+	};
+
+	class Mesh {
+	public:
+		Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+		
+		void Bind() const;
+		uint32_t GetIndexCount() const { return m_IndexCount; }
+
+	private:
+		Ref<VertexArray> m_VertexArray;
+		uint32_t m_IndexCount;
+	};
+
+}
+```
+
+**Mesh.cpp —— 实现缓冲区绑定**
+
+**作用**：将内存中的顶点向量上传至显存。
+
+```
+#include "glpch.h"
+#include "Mesh.h"
+#include "Glimmer/Renderer/RenderCommand.h"
+
+namespace gl {
+
+	Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
+		: m_IndexCount((uint32_t)indices.size())
+	{
+		m_VertexArray = VertexArray::Create();
+
+		// 创建顶点缓冲区 (VBO)
+		auto vbo = VertexBuffer::Create((float*)vertices.data(), (uint32_t)(vertices.size() * sizeof(Vertex)));
+		
+		// 定义符合 Vertex 结构体的布局
+		vbo->SetLayout({
+			{ ShaderDataType::Float3, "a_Position" },
+			{ ShaderDataType::Float3, "a_Normal" },
+			{ ShaderDataType::Float2, "a_TexCoord" }
+		});
+		m_VertexArray->AddVertexBuffer(vbo);
+
+		// 创建索引缓冲区 (IBO)
+		auto ibo = IndexBuffer::Create((uint32_t*)indices.data(), (uint32_t)indices.size());
+		m_VertexArray->SetIndexBuffer(ibo);
+	}
+
+	void Mesh::Bind() const
+	{
+		m_VertexArray->Bind();
+	}
+
+}
+```
+
+**Model.h —— 模型加载器**
+
+**作用**：管理一个 .obj 文件中包含的所有网格。
+
+```
+#pragma once
+#include "Mesh.h"
+#include "Glimmer/Renderer/Shader.h"
+#include <vector>
+#include <string>
+
+namespace gl {
+
+	class Model {
+	public:
+		Model(const std::string& path);
+		
+		// 渲染模型的所有子网格
+		void Draw(const Ref<Shader>& shader, const glm::mat4& transform);
+
+	private:
+		std::vector<Ref<Mesh>> m_Meshes;
+	};
+
+}
+```
+
+**Model.cpp —— TinyObjLoader 核心解析逻辑**
+
+**作用**：读取 OBJ 文件，处理顶点去重，并生成 Mesh 对象。
+
+```
+#include "glpch.h"
+#include "Model.h"
+#include "Glimmer/Renderer/Renderer.h"
+#include "tiny_obj_loader.h"
+#include <unordered_map>
+
+namespace gl {
+
+	Model::Model(const std::string& path)
+	{
+		tinyobj::ObjReaderConfig reader_config;
+		reader_config.mtl_search_path = "./assets/models"; // 材质搜索路径
+
+		tinyobj::ObjReader reader;
+		if (!reader.ParseFromFile(path, reader_config)) {
+			if (!reader.Error().empty()) {
+				GL_CORE_ERROR("TinyObjLoader Error: {0}", reader.Error());
+			}
+			return;
+		}
+
+		auto& attrib = reader.GetAttrib();
+		auto& shapes = reader.GetShapes();
+
+		// 遍历模型中的每个物体（Shape）
+		for (size_t s = 0; s < shapes.size(); s++) {
+			std::vector<Vertex> vertices;
+			std::vector<uint32_t> indices;
+			// 用于顶点去重，提升性能
+			std::unordered_map<size_t, uint32_t> uniqueVertices{};
+
+			for (const auto& index : shapes[s].mesh.indices) {
+				Vertex vertex{};
+
+				// 提取位置
+				vertex.Position = {
+					attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2]
+				};
+
+				// 提取法线
+				if (index.normal_index >= 0) {
+					vertex.Normal = {
+						attrib.normals[3 * index.normal_index + 0],
+						attrib.normals[3 * index.normal_index + 1],
+						attrib.normals[3 * index.normal_index + 2]
+					};
+				}
+
+				// 提取UV
+				if (index.texcoord_index >= 0) {
+					vertex.TexCoord = {
+						attrib.texcoords[2 * index.texcoord_index + 0],
+						attrib.texcoords[2 * index.texcoord_index + 1]
+					};
+				}
+
+				// 简单的去重逻辑：如果这个顶点组合没出现过，就加入 vertices
+				// 这里为了演示清晰使用线性填充，实际可用 Hash 优化
+				indices.push_back((uint32_t)vertices.size());
+				vertices.push_back(vertex);
+			}
+
+			m_Meshes.push_back(CreateRef<Mesh>(vertices, indices));
+		}
+		GL_CORE_INFO("Successfully loaded model: {0}", path);
+	}
+
+	void Model::Draw(const Ref<Shader>& shader, const glm::mat4& transform)
+	{
+		for (auto& mesh : m_Meshes)
+		{
+			// 利用你现有的 Renderer 系统提交绘制
+			// 注意：这里暂时使用基础的 Submit，不走 2D 批处理
+			shader->Bind();
+			shader->UploadUniformMat4("u_Transform", transform);
+			mesh->GetVertexArray()->Bind();
+			RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
+		}
+	}
+
+}
+```
+
+**3D渲染**
+
+由于之前一直专注于 **Renderer2D**，引擎目前就像是一个“平面的纸片世界”。要看到 3D 物体，需要打破 2D 的限制
+
+**第一步：准备一个 3D 着色器 (assets/shaders/Model3D.glsl)**
+
+之前的 Texture.glsl 是为 2D 批处理优化的，没有处理 3D 变换。我们需要一个标准的 3D Shader，它重新引入了 u_Transform（模型矩阵）。
+
+**第二步：记得开启深度测试 (Depth Test)**
+
+**第三步：使用透视摄像机 (Perspective Camera)**
+
+现在的 OrthographicCamera 是“平行投影”，没有近大远小的感觉。看到 3D 模型最好的方式是换成**透视投影**。
+
+你可以临时在 Sandbox2D 里修改摄像机的初始化逻辑：
+
+**第四步：在 Sandbox2D 中加载并绘制**
+
+这是最后一步，将模型放进场景。
+
+```
+// 1. 定义成员变量
+gl::Ref<gl::Model> m_MeshModel;
+gl::Ref<gl::Shader> m_3DShader;
+
+// 2. OnAttach 中加载
+void Sandbox2D::OnAttach() {
+    m_MeshModel = gl::CreateRef<gl::Model>("assets/models/cube.obj");
+    m_3DShader = gl::Shader::Create("assets/shaders/Model3D.glsl");
+}
+
+// 3. OnUpdate 中渲染
+void Sandbox2D::OnUpdate(gl::Timestep ts) {
+    // ... 清屏 ...
+    
+    // 我们手动控制 3D 物体旋转
+    static float rotation = 0.0f;
+    rotation += ts * 50.0f;
+
+    glm::mat4 transform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
+                        * glm::rotate(glm::mat4(1.0f), glm::radians(rotation), {0, 1, 0})
+                        * glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
+
+    // ✨ 渲染 3D 模型
+    gl::Renderer::BeginScene(m_CameraController.GetCamera()); // 依然使用你的相机
+    m_MeshModel->Draw(m_3DShader, transform);
+    gl::Renderer::EndScene();
+    
+    // 渲染你原本的 2D 东西
+    gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
+    // gl::Renderer2D::DrawQuad(...);
+    gl::Renderer2D::EndScene();
+}
+```
+
+但渲染出来发现没有效果，经排查，原因是之前抽象2D渲染层是统一上传了摄像机矩阵而本测试用到的是其它接口
+
+为了让 Model 类能拿到当前的摄像机矩阵，我们需要在 Renderer.h 增加一个静态 Getter。
+
+```
+// 增加这个静态函数
+static inline glm::mat4 GetViewProjection() { return s_SceneData->ViewProjectionMatrix; }
+```
+
+**修改 Model.cpp 补全上传逻辑**
+
+**Glimmer/src/Glimmer/Renderer/Model.cpp**:
+
+```
+void Model::Draw(const Ref<Shader>& shader, const glm::mat4& transform)
+{
+    for (auto& mesh : m_Meshes)
+    {
+        shader->Bind();
+        // ✨ 核心修复：手动从 Renderer 拿摄像机矩阵并上传
+        shader->UploadUniformMat4("u_ViewProjection", Renderer::GetViewProjection());
+        shader->UploadUniformMat4("u_Transform", transform);
+        
+        mesh->Bind();
+        RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
+    }
+}
+```
+
+旋转的神秘企鹅🐧
+
+<img src="README.assets/image-20260428153708790.png" alt="image-20260428153708790" style="zoom:50%;" />
+
+<img src="README.assets/image-20260428155345962.png" alt="image-20260428155345962" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？

@@ -26,6 +26,9 @@ private:
 	gl::Ref<gl::Texture2D> m_STSTexture;
 	gl::Ref<gl::Texture2D> m_HenryTexture;
 	gl::OrthographicCameraController m_CameraController;
+
+	gl::Ref<gl::Model> m_MeshModel;
+	gl::Ref<gl::Shader> m_3DShader;
 };
 
 

@@ -21,5 +21,7 @@
 #include "Glimmer/Renderer/OrthographicCamera.h"
 #include "Glimmer/Renderer/OrthographicCameraController.h"
 #include "Glimmer/Renderer/Texture.h"
+#include "Glimmer/Renderer/Model.h"
+#include "Glimmer/Renderer/Mesh.h"
 
 #include <imgui.h> // 方便在 Layer 里写 UI
