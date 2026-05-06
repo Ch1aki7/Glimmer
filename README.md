@@ -6054,6 +6054,224 @@ const Ref<Texture2D>& GetTexture() const { return m_Texture; }
 
 <img src="README.assets/image-20260428171507539.png" alt="image-20260428171507539" style="zoom:50%;" />
 
+## 帧缓冲 (Framebuffers)
+
+**为什么要这一步？**
+
+目前的游戏画面是直接绘制到显卡提供的“默认画布”上的，这会导致两个限制：
+
+- **无法做后期处理**：你没法给整个屏幕加模糊、调色或泛光（Bloom），因为画面一画完就显示了，你抓不住它。
+- **无法做“Unity 式”的编辑器**：在 Unity 里，你会发现游戏画面是在一个名为 **Viewport** 的窗口里的。要实现这个，我们需要把游戏渲染到一张**贴图**上，然后把这张图贴进 ImGui 的窗口里。
+
+**这一步的工作内容**
+
+我们要实现一套 Framebuffer 类，它允许我们：
+
+1. 创建一个离屏渲染目标（Off-screen Render Target）。
+2. 让渲染器（Renderer2D/3D）把东西画在这个目标上。
+3. 实时调整这个目标的大小（以适配窗口缩放）。
+
+---
+
+**第一步：定义帧缓冲接口 (`Framebuffer.h`)**
+
+在 `Glimmer/src/Glimmer/Renderer` 下创建。
+
+**Glimmer/src/Glimmer/Renderer/Framebuffer.h**
+```cpp
+#pragma once
+#include <memory>
+
+namespace gl {
+
+	struct FramebufferSpecification
+	{
+		uint32_t Width, Height;
+		uint32_t Samples = 1; // 用于多重采样抗锯齿
+
+		bool SwapChainTarget = false; // 是否直接渲染到屏幕
+	};
+
+	class Framebuffer
+	{
+	public:
+		virtual ~Framebuffer() = default;
+
+		virtual void Bind() = 0;
+		virtual void Unbind() = 0;
+
+		virtual void Resize(uint32_t width, uint32_t height) = 0;
+
+		// 获取渲染出来的那个“图片”ID
+		virtual uint32_t GetColorAttachmentRendererID() const = 0;
+
+		virtual const FramebufferSpecification& GetSpecification() const = 0;
+
+		static Ref<Framebuffer> Create(const FramebufferSpecification& spec);
+	};
+
+}
+```
+
+Glimmer/src/Glimmer/Renderer/Framebuffer.cpp
+
+```
+#include "glpch.h"
+#include "Framebuffer.h"
+
+#include "Glimmer/Renderer/Renderer.h"
+#include "Platform/OpenGL/OpenGLFramebuffer.h"
+
+namespace gl {
+
+	Ref<Framebuffer> Framebuffer::Create(const FramebufferSpecification& spec)
+	{
+		switch (Renderer::GetAPI())
+		{
+			case RendererAPI::API::None:    GL_CORE_ASSERT(false, "RendererAPI::None is currently not supported!"); return nullptr;
+			case RendererAPI::API::OpenGL:  return CreateRef<OpenGLFramebuffer>(spec);
+		}
+
+		GL_CORE_ASSERT(false, "Unknown RendererAPI!");
+		return nullptr;
+	}
+
+}
+```
+
+---
+
+**第二步：实现 OpenGL 帧缓冲 (`OpenGLFramebuffer.cpp`)**
+
+这一步最核心的工作是：**向显卡申请一块内存画布，并挂载一个“颜色附件”和“深度附件”。**
+
+**Glimmer/src/Platform/OpenGL/OpenGLFramebuffer.cpp (核心片段)**
+```cpp
+#include "glpch.h"
+#include "OpenGLFramebuffer.h"
+
+#include <glad/glad.h>
+
+namespace gl {
+
+	OpenGLFramebuffer::OpenGLFramebuffer(const FramebufferSpecification& spec)
+		: m_Specification(spec)
+	{
+		Invalidate();
+	}
+
+	OpenGLFramebuffer::~OpenGLFramebuffer()
+	{
+		glDeleteFramebuffers(1, &m_RendererID);
+		glDeleteTextures(1, &m_ColorAttachment);
+		glDeleteTextures(1, &m_DepthAttachment);
+	}
+
+	void OpenGLFramebuffer::Invalidate()
+	{
+		if (m_RendererID)
+		{
+			glDeleteFramebuffers(1, &m_RendererID);
+			glDeleteTextures(1, &m_ColorAttachment);
+			glDeleteTextures(1, &m_DepthAttachment);
+		}
+
+		// 使用 DSA (Direct State Access) 风格创建 Framebuffer
+		glCreateFramebuffers(1, &m_RendererID);
+		
+		// --- 颜色附件 (Color Attachment) ---
+		glCreateTextures(GL_TEXTURE_2D, 1, &m_ColorAttachment);
+		glBindTexture(GL_TEXTURE_2D, m_ColorAttachment);
+		
+		// 为颜色附件分配存储空间
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_Specification.Width, m_Specification.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+		
+		// 设置过滤参数，防止 ImGui 渲染时出现采样问题
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+		// 将纹理附加到帧缓冲
+		glNamedFramebufferTexture(m_RendererID, GL_COLOR_ATTACHMENT0, m_ColorAttachment, 0);
+
+		// --- 深度/模板附件 (Depth/Stencil Attachment) ---
+		glCreateTextures(GL_TEXTURE_2D, 1, &m_DepthAttachment);
+		glBindTexture(GL_TEXTURE_2D, m_DepthAttachment);
+		
+		// 使用 glTexStorage2D 分配不可变的深度存储
+		glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8, m_Specification.Width, m_Specification.Height);
+		
+		// 将深度纹理附加到帧缓冲
+		glNamedFramebufferTexture(m_RendererID, GL_DEPTH_STENCIL_ATTACHMENT, m_DepthAttachment, 0);
+
+		// 完整性检查
+		GL_CORE_ASSERT(glCheckNamedFramebufferStatus(m_RendererID, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "Framebuffer is incomplete!");
+	}
+
+	void OpenGLFramebuffer::Bind()
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, m_RendererID);
+		// 绑定后需要同步更新视口大小，确保渲染到正确的画布区域
+		glViewport(0, 0, m_Specification.Width, m_Specification.Height);
+	}
+
+	void OpenGLFramebuffer::Unbind()
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	}
+
+	void OpenGLFramebuffer::Resize(uint32_t width, uint32_t height)
+	{
+		// 简单的防零检查
+		if (width == 0 || height == 0)
+		{
+			GL_CORE_WARN("Attempted to resize framebuffer to {0}, {1}", width, height);
+			return;
+		}
+
+		m_Specification.Width = width;
+		m_Specification.Height = height;
+
+		Invalidate();
+	}
+
+}
+```
+
+---
+
+**第三步：在 Sandbox2D 中实现“画中画”**
+
+当你有了 Framebuffer，你的渲染流程会发生翻天覆地的变化：
+
+```cpp
+void Sandbox2D::OnUpdate(gl::Timestep ts) {
+    // 1. ✨ 核心改变：绑定自己的画布，而不是屏幕
+    m_Framebuffer->Bind();
+
+    // 2. 执行你所有的 2D/3D 渲染指令
+    gl::RenderCommand::Clear();
+    gl::Renderer::BeginScene(...);
+    m_Model->Draw(...);
+    gl::Renderer::EndScene();
+
+    // 3. 解绑画布，回到默认屏幕
+    m_Framebuffer->Unbind();
+}
+
+void Sandbox2D::OnImGuiRender() {
+    // 4. ✨ 将画布上的图片画在 ImGui 窗口里！
+    ImGui::Begin("Viewport");
+    
+    uint32_t textureID = m_Framebuffer->GetColorAttachmentRendererID();
+    // 强制转换为 ImTextureID 并显示
+    ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ 1280, 720 }, ImVec2{ 0, 1 }, ImVec2{ 1, 0 });
+    
+    ImGui::End();
+}
+```
+
+<img src="README.assets/image-20260506180243041.png" alt="image-20260506180243041" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？
@@ -6346,3 +6564,11 @@ const Ref<Texture2D>& GetTexture() const { return m_Texture; }
 2. **性能开销**：为了确保操作正确，开发者往往需要不断查询或重置全局绑定状态，增加了驱动程序的开销。
 
 通过使用以 glTexture... 开头的 DSA 函数，我可以绕过上下文绑定点，直接通过 **Object Handle（资源句柄）** 操作 GPU 资源。这不仅使代码更加**线程安全**且逻辑清晰，还减少了驱动层的状态验证次数。这在我的 Glimmer 引擎中是迈向高性能、现代化渲染管线的重要一步。”
+
+### **为什么我们要通过 Framebuffer 进行间接渲染，而不是直接画在窗口上？**
+
+**你的回答：**
+“这是为了实现 **‘渲染管线的虚拟化’**。
+首先，它解决了**编辑器集成**的问题。通过将渲染结果输出为纹理，我们可以利用 ImGui 等 UI 库在同一个 OS 窗口内组织多个视口（Viewport），实现类似 Unity 的工作流。
+其次，它为 **渲染后期（Post-Processing）** 提供了底座。一旦画面存在于纹理中，我们就可以对这块显存执行模糊、调色、抗锯齿（FXAA/MSAA）等计算，而不会影响原始的几何体渲染。
+最后，它允许我们实现 **‘分辨率独立渲染’**。游戏逻辑可以运行在 4K 画布上，但最终通过缩放显示在 1080p 的窗口中，这种灵活性是现代高性能引擎的基石。”

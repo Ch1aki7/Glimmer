@@ -23,7 +23,9 @@ namespace gl { // 属于 Glimmer 引擎的命名空间
         void PushOverlay(Layer* overlay);
 
         inline static Application& Get() { return *s_Instance; }
-        inline Window& GetWindow() { return *m_Window; }        
+        inline Window& GetWindow() { return *m_Window; }
+
+		void Close();
 
         static float GetTime();
         float m_LastFrameTime = 0.0f;

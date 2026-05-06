@@ -51,6 +51,11 @@ namespace gl {
 		overlay->OnAttach();
 	}
 
+	void Application::Close()
+	{
+		m_Running = false;
+	}
+
 	void Application::OnEvent(Event& e) {
 		GL_PROFILE_FUNCTION();
 

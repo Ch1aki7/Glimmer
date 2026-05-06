@@ -34,6 +34,8 @@ private:
 	gl::Ref<gl::Texture2D> m_TestTexture;
 	gl::Ref<gl::Texture2D> m_GirlTexture;
 
+	gl::Ref<gl::Framebuffer> m_Framebuffer;
+
 	// 设置灯光参数
 	glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };
 	glm::vec4 m_SquareColor = { 0.1f, 0.1f, 0.1f, 1 };

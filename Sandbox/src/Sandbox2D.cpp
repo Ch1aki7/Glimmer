@@ -26,6 +26,12 @@ void Sandbox2D::OnAttach() {
 	//m_TestTexture = gl::Texture2D::Create("assets/models/penguin.png");
 	m_TestTexture = gl::Texture2D::Create("assets/models/Final_Texture.png");
 	m_GirlTexture = gl::Texture2D::Create("assets/models/girl.png");
+
+
+	gl::FramebufferSpecification fbSpec;
+	fbSpec.Width = 1280;
+	fbSpec.Height = 720;
+	m_Framebuffer = gl::Framebuffer::Create(fbSpec);
 }
 
 void Sandbox2D::OnDetach() {
@@ -41,6 +47,7 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 	gl::Renderer2D::ResetStats();
 	{
 		GL_PROFILE_SCOPE("Renderer Prep");
+		m_Framebuffer->Bind();
 		gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
 		gl::RenderCommand::Clear();
 	}
@@ -115,28 +122,83 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		//}
 		//gl::Renderer2D::EndScene();
 
+		m_Framebuffer->Unbind();
 	}
 }
 
 void Sandbox2D::OnImGuiRender() {
 	GL_PROFILE_FUNCTION();
 
-	ImGui::Begin("Glimmer Test Window");
-	ImGui::Text("Hello World! ImGui is Working!");
-	ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
+	static bool dockspaceOpen = true;
+	static bool opt_fullscreen_persistant = true;
+	bool opt_fullscreen = opt_fullscreen_persistant;
+	static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
 
+	// 设置窗口标志：无标题栏、无缩放、无移动、无遮挡、带菜单栏
+	ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+	if (opt_fullscreen)
+	{
+		ImGuiViewport* viewport = ImGui::GetMainViewport();
+		ImGui::SetNextWindowPos(viewport->Pos);
+		ImGui::SetNextWindowSize(viewport->Size);
+		ImGui::SetNextWindowViewport(viewport->ID);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+		window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+		window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+	}
+
+	// 开启 DockSpace 窗口
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	ImGui::Begin("DockSpace Demo", &dockspaceOpen, window_flags);
+	ImGui::PopStyleVar();
+
+	if (opt_fullscreen)
+		ImGui::PopStyleVar(2);
+
+	// 真正的停靠空间核心
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable)
+	{
+		ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+		ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
+	}
+
+	// 这里可以加引擎顶部的菜单栏（如 File, Edit）
+	if (ImGui::BeginMenuBar())
+	{
+		if (ImGui::BeginMenu("File"))
+		{
+			if (ImGui::MenuItem("Exit")) gl::Application::Get().Close();
+			ImGui::EndMenu();
+		}
+		ImGui::EndMenuBar();
+	}
+
+	// 面板 A: 状态统计
+	ImGui::Begin("Stats");
 	auto stats = gl::Renderer2D::GetStats();
 	ImGui::Text("Renderer2D Stats:");
 	ImGui::Text("Draw Calls: %d", stats.DrawCalls);
 	ImGui::Text("Quads: %d", stats.QuadCount);
 	ImGui::Text("Vertices: %d", stats.GetTotalVertexCount());
 	ImGui::Text("Indices: %d", stats.GetTotalIndexCount());
-
+	ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
 	ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 	ImGui::End();
 
-	bool show_demo_window = true;
-	ImGui::ShowDemoWindow(&show_demo_window);
+	// 面板 B: 游戏视口 (Viewport)
+	ImGui::Begin("Viewport");
+	ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+	// 自动 Resize Framebuffer 的逻辑建议放在这里
+	uint32_t textureID = m_Framebuffer->GetColorAttachmentRendererID();
+	ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, ImVec2{ 0, 1 }, ImVec2{ 1, 0 });
+	ImGui::End();
+
+	ImGui::End();
+
+	//bool show_demo_window = true;
+	//ImGui::ShowDemoWindow(&show_demo_window);
 }
 
 void Sandbox2D::OnEvent(gl::Event& event) {
