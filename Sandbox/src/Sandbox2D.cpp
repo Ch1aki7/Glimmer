@@ -32,6 +32,9 @@ void Sandbox2D::OnAttach() {
 	fbSpec.Width = 1280;
 	fbSpec.Height = 720;
 	m_Framebuffer = gl::Framebuffer::Create(fbSpec);
+	m_PostProcessFB = gl::Framebuffer::Create(fbSpec);
+
+	m_ShaderLib.Load("assets/shaders/PostProcess.glsl");
 }
 
 void Sandbox2D::OnDetach() {
@@ -123,6 +126,24 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		//gl::Renderer2D::EndScene();
 
 		m_Framebuffer->Unbind();
+
+		if (m_PostProcessEnabled)
+		{
+			m_PostProcessFB->Bind();
+			gl::RenderCommand::Clear();
+
+			auto grayscaleShader = m_ShaderLib.Get("PostProcess");
+
+			gl::Renderer2D::DrawPostProcess(grayscaleShader, m_Framebuffer->GetColorAttachmentRendererID());
+
+			m_PostProcessFB->Unbind();
+
+			m_FinalSceneTexture = m_PostProcessFB->GetColorAttachmentRendererID();
+		}
+		else
+		{
+			m_FinalSceneTexture = m_Framebuffer->GetColorAttachmentRendererID();
+		}
 	}
 }
 
@@ -175,7 +196,7 @@ void Sandbox2D::OnImGuiRender() {
 		ImGui::EndMenuBar();
 	}
 
-	// 面板 A: 状态统计
+	// 状态统计
 	ImGui::Begin("Stats");
 	auto stats = gl::Renderer2D::GetStats();
 	ImGui::Text("Renderer2D Stats:");
@@ -183,16 +204,28 @@ void Sandbox2D::OnImGuiRender() {
 	ImGui::Text("Quads: %d", stats.QuadCount);
 	ImGui::Text("Vertices: %d", stats.GetTotalVertexCount());
 	ImGui::Text("Indices: %d", stats.GetTotalIndexCount());
+	ImGui::End();
+
+	// 调试信息
+	ImGui::Begin("Settings");
+	ImGui::Checkbox("Enable Post-Processing", &m_PostProcessEnabled);
 	ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
 	ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 	ImGui::End();
 
-	// 面板 B: 游戏视口 (Viewport)
+	// 游戏视口 (Viewport)
 	ImGui::Begin("Viewport");
 	ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
-	// 自动 Resize Framebuffer 的逻辑建议放在这里
-	uint32_t textureID = m_Framebuffer->GetColorAttachmentRendererID();
-	ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, ImVec2{ 0, 1 }, ImVec2{ 1, 0 });
+	auto& spec = m_Framebuffer->GetSpecification();
+	if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&
+		(spec.Width != viewportPanelSize.x || spec.Height != viewportPanelSize.y))
+	{
+		m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
+		m_PostProcessFB->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
+
+	}
+	uint32_t textureID = m_FinalSceneTexture;
+	ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
 	ImGui::End();
 
 	ImGui::End();

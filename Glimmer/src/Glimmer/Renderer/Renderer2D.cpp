@@ -369,6 +369,16 @@ namespace gl {
 		s_Data.Stats.QuadCount++;
 	}
 
+	void Renderer2D::DrawPostProcess(const Ref<Shader>& shader, uint32_t inputTextureID)
+	{
+		shader->Bind();
+		// 假设后期 Shader 里的采样器变量名统一叫 "u_SceneTexture"
+		std::dynamic_pointer_cast<OpenGLShader>(shader)->BindTexture("u_SceneTexture", 0, inputTextureID);
+
+		// 调用之前写好的全屏绘制逻辑
+		DrawFullscreenQuad(shader, 0.0f);
+	}
+
 	void Renderer2D::ResetStats()
 	{
 		memset(&s_Data.Stats, 0, sizeof(Statistics));

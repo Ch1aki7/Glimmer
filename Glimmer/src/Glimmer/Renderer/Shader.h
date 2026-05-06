@@ -20,6 +20,8 @@ namespace gl {
 		virtual void UploadUniformFloat4(const std::string& name, const glm::vec4& value) = 0;
         virtual void UploadUniformMat4(const std::string& name, const glm::mat4& matrix) = 0;
 
+		virtual void BindTexture(const std::string& name, uint32_t slot, uint32_t textureID) = 0;
+
 		virtual const std::string& GetName() const = 0;
 
 		static Ref<Shader> Create(const std::string& filepath);

@@ -35,6 +35,7 @@ namespace gl {
 		static void DrawRotatedQuad(const glm::vec3& position, const glm::vec2& size, float rotation, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
 
 		static void DrawFullscreenQuad(const Ref<Shader>& shader, float depth = 0.0f);
+		static void DrawPostProcess(const Ref<Shader>& shader, uint32_t inputTextureID);
 
 		// Stats
 		struct Statistics

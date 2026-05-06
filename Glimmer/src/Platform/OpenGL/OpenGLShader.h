@@ -24,6 +24,8 @@ namespace gl {
 
         void UploadUniformMat4(const std::string& name, const glm::mat4& matrix) override;
 
+		void BindTexture(const std::string& name, uint32_t slot, uint32_t textureID) override;
+
 		virtual const std::string& GetName() const override { return m_Name; }
     private:
 		std::string ReadFile(const std::string& filepath);

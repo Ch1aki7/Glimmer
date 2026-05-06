@@ -234,4 +234,14 @@ namespace gl {
 		// 参数：位置, 数量, 是否转置(GLM默认列优先，填FALSE), 数据指针
 		glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(matrix));
 	}
+
+	void OpenGLShader::BindTexture(const std::string& name, uint32_t slot, uint32_t textureID)
+	{
+		// 1. 设置这个插槽应该对应的采样器 ID
+		UploadUniformInt(name, slot);
+
+		// 2. 将真实的纹理 ID 绑定到那个物理插槽上
+		glActiveTexture(GL_TEXTURE0 + slot);
+		glBindTexture(GL_TEXTURE_2D, textureID);
+	}
 }
