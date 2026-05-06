@@ -22,6 +22,10 @@ void Sandbox2D::OnAttach() {
 	m_ChairModel = gl::CreateRef<gl::Model>("assets/models/chair.obj");
 	m_GirlModel = gl::CreateRef<gl::Model>("assets/models/girl.obj");
 	m_3DShader = gl::Shader::Create("assets/shaders/Model3D.glsl");
+	//m_PhoneShader = gl::Shader::Create("assets/shaders/Phong.glsl");
+	//m_ToonShader = gl::Shader::Create("assets/shaders/Toon.glsl");
+	//m_BlinnPhongShader = gl::Shader::Create("assets/shaders/BlinnPhong.glsl");
+	//m_HologramShader = gl::Shader::Create("assets/shaders/Hologram.glsl");
 
 	//m_TestTexture = gl::Texture2D::Create("assets/models/penguin.png");
 	m_TestTexture = gl::Texture2D::Create("assets/models/Final_Texture.png");
@@ -35,6 +39,10 @@ void Sandbox2D::OnAttach() {
 	m_PostProcessFB = gl::Framebuffer::Create(fbSpec);
 
 	m_ShaderLib.Load("assets/shaders/PostProcess.glsl");
+	m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
+	m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
+	m_ShaderLib.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
+	m_ShaderLib.Load("Hologram", "assets/shaders/Hologram.glsl");
 }
 
 void Sandbox2D::OnDetach() {
@@ -205,6 +213,28 @@ void Sandbox2D::OnImGuiRender() {
 	ImGui::Text("Vertices: %d", stats.GetTotalVertexCount());
 	ImGui::Text("Indices: %d", stats.GetTotalIndexCount());
 	ImGui::End();
+
+	ImGui::Begin("3Dshader");
+	ImGui::Text("Select Lighting Model:");
+	// ImGui 下拉菜单组件
+	// 参数：标签, 当前索引指针, 选项数组, 数组长度
+	if (ImGui::Combo("Shader Type", &m_SelectedShaderIndex, m_ShaderNames, IM_ARRAYSIZE(m_ShaderNames)))
+	{
+		// 这里可以添加选中后的即时逻辑，例如打印日志
+		GL_CORE_INFO("Switched to Shader: {0}", m_ShaderNames[m_SelectedShaderIndex]);
+		m_3DShader = m_ShaderLib.Get(m_ShaderNames[m_SelectedShaderIndex]);
+	}
+
+	ImGui::Separator(); // 画一条分割线
+
+	// 可以在这里放一些和 3D Shader 相关的动态调参
+	if (m_SelectedShaderIndex == 3) // 如果选了全息(Hologram)
+	{
+		ImGui::Text("Hologram Settings");
+		// 这里可以放一些特有的滑动条
+	}
+	ImGui::End();
+
 
 	// 调试信息
 	ImGui::Begin("Settings");

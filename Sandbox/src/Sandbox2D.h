@@ -28,6 +28,12 @@ private:
 	gl::OrthographicCameraController m_CameraController;
 
 	gl::Ref<gl::Shader> m_3DShader;
+	gl::Ref<gl::Shader> m_PhoneShader;
+	gl::Ref<gl::Shader> m_ToonShader;
+	gl::Ref<gl::Shader> m_BlinnPhongShader;
+	gl::Ref<gl::Shader> m_HologramShader;
+	int m_SelectedShaderIndex = 0;
+	const char* m_ShaderNames[4] = { "Phong", "Toon", "Blinn-Phong", "Hologram" };
 	gl::Ref<gl::Model> m_MeshModel;
 	gl::Ref<gl::Model> m_ChairModel;
 	gl::Ref<gl::Model> m_GirlModel;
