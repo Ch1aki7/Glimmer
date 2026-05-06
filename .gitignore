@@ -18,7 +18,6 @@
 mono_crash.*
 
 # Build results
-[Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/
@@ -420,6 +419,8 @@ FodyWeavers.xsd
 # Self
 bin/
 bin-int/
+!vendor/bin/
+!vendor/bin/**
 
 *.sln
 *.vcxproj
