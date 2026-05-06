@@ -223,6 +223,7 @@ void Sandbox2D::OnImGuiRender() {
 		m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
 		m_PostProcessFB->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
 
+		m_CameraController.OnResize(viewportPanelSize.x, viewportPanelSize.y);
 	}
 	uint32_t textureID = m_FinalSceneTexture;
 	ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
