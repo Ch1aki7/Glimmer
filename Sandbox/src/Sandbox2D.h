@@ -27,9 +27,12 @@ private:
 	gl::Ref<gl::Texture2D> m_HenryTexture;
 	gl::OrthographicCameraController m_CameraController;
 
-	gl::Ref<gl::Model> m_MeshModel;
 	gl::Ref<gl::Shader> m_3DShader;
+	gl::Ref<gl::Model> m_MeshModel;
+	gl::Ref<gl::Model> m_ChairModel;
+	gl::Ref<gl::Model> m_GirlModel;
 	gl::Ref<gl::Texture2D> m_TestTexture;
+	gl::Ref<gl::Texture2D> m_GirlTexture;
 
 	// 设置灯光参数
 	glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };

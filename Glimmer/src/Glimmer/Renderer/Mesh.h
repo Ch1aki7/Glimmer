@@ -10,6 +10,10 @@ namespace gl {
 		glm::vec3 Position;
 		glm::vec3 Normal;
 		glm::vec2 TexCoord;
+
+		bool operator==(const Vertex& other) const {
+			return Position == other.Position && Normal == other.Normal && TexCoord == other.TexCoord;
+		}
 	};
 
 	class Mesh {

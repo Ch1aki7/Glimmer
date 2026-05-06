@@ -40,7 +40,7 @@ uniform vec3 u_ViewPos;     // 摄像机位置（用于高光）
 void main()
 {
 	// 1. 环境光 (Ambient) - 保证没光的地方不是全黑
-	float ambientStrength = 0.2;
+	float ambientStrength = 0.6;
 	vec3 ambient = ambientStrength * u_LightColor;
 
 	// 2. 漫反射 (Diffuse) - 根据物体朝向光的角度决定亮度

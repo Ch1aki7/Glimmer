@@ -17,10 +17,15 @@ void Sandbox2D::OnAttach() {
 	m_STSTexture = gl::Texture2D::Create("assets/textures/STS.png");
 	m_HenryTexture = gl::Texture2D::Create("assets/textures/Henry.jpg");
 
-	m_MeshModel = gl::CreateRef<gl::Model>("assets/models/penguin.obj");
+	//m_MeshModel = gl::CreateRef<gl::Model>("assets/models/penguin.obj");
+	m_MeshModel = gl::CreateRef<gl::Model>("assets/models/企鹅高松灯.obj");
+	m_ChairModel = gl::CreateRef<gl::Model>("assets/models/chair.obj");
+	m_GirlModel = gl::CreateRef<gl::Model>("assets/models/girl.obj");
 	m_3DShader = gl::Shader::Create("assets/shaders/Model3D.glsl");
 
-	m_TestTexture = gl::Texture2D::Create("assets/models/penguin.png");
+	//m_TestTexture = gl::Texture2D::Create("assets/models/penguin.png");
+	m_TestTexture = gl::Texture2D::Create("assets/models/Final_Texture.png");
+	m_GirlTexture = gl::Texture2D::Create("assets/models/girl.png");
 }
 
 void Sandbox2D::OnDetach() {
@@ -53,18 +58,36 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 
 		// 3D obj渲染
 		gl::Renderer::BeginScene(m_CameraController.GetCamera());
-
 		m_3DShader->Bind();
 
+		// --- 统一上传光照全局参数 (只需上传一次，所有 3D 模型通用) ---
 		m_3DShader->UploadUniformFloat3("u_LightPos", m_LightPos);
-		m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f }); // 白光
-		// 传入摄像机位置（用于高光计算）
+		m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f });
 		m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
-		glm::mat4 transform = glm::translate(glm::mat4(1.0f), { 0.0f, -1.0f, 0.0f })
+		// 显式告诉 3D Shader 去 0 号插槽找图
+		m_3DShader->UploadUniformInt("u_Texture", 0);
+
+		// --- 绘制企鹅 ---
+		glm::mat4 penguinTransform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
+			* glm::rotate(glm::mat4(1.0f), glm::radians(-rotation), { 0, 1, 0 })
+			* glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+		m_TestTexture->Bind(0); // 确保绑定到 0
+		m_MeshModel->Draw(m_3DShader, penguinTransform);
+
+		// --- 绘制椅子 (给它一张默认贴图，防止变黑) ---
+		glm::mat4 chairTransform = glm::translate(glm::mat4(1.0f), { 1.0f, 1.0f, 0.0f })
 			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
-			* glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
-		m_TestTexture->Bind(0);
-		m_MeshModel->Draw(m_3DShader, transform);
+			* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
+		// 这里可以使用引擎的白贴图，或者任何通用贴图
+		//gl::Renderer2D::GetWhiteTexture()->Bind(0);
+		m_ChairModel->Draw(m_3DShader, chairTransform);
+
+		// --- 绘制女孩 ---
+		glm::mat4 girlTransform = glm::translate(glm::mat4(1.0f), { -1.0f, -1.0f, 0.1f })
+			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
+			* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
+		m_GirlTexture->Bind(0);
+		m_GirlModel->Draw(m_3DShader, girlTransform);
 
 		gl::Renderer::EndScene();
 

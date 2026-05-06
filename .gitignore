@@ -427,3 +427,6 @@ bin-int/
 *.vcxproj.user
 
 .vs/
+
+# assets
+Sandbox/assets/models/scifi-girl-v01/
