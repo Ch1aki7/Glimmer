@@ -56,7 +56,8 @@ void EditorLayer::OnDetach() {
 void EditorLayer::OnUpdate(gl::Timestep ts) {
 	GL_PROFILE_FUNCTION();
 
-	m_CameraController.OnUpdate(ts);
+	if (m_ViewportFocused)
+		m_CameraController.OnUpdate(ts);
 
 	gl::Renderer2D::ResetStats();
 	{
@@ -248,6 +249,11 @@ void EditorLayer::OnImGuiRender() {
 
 	// 游戏视口 (Viewport)
 	ImGui::Begin("Viewport");
+
+	m_ViewportFocused = ImGui::IsWindowFocused();
+	m_ViewportHovered = ImGui::IsWindowHovered();
+	gl::Application::Get().GetImGuiLayer()->BlockEvents(!m_ViewportFocused || !m_ViewportHovered);
+
 	ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
 	auto& spec = m_Framebuffer->GetSpecification();
 	if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&

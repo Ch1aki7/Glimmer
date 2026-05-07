@@ -27,6 +27,8 @@ namespace gl { // 属于 Glimmer 引擎的命名空间
 
 		void Close();
 
+		ImGuiLayer* GetImGuiLayer() { return m_ImGuiLayer; }
+
         static float GetTime();
         float m_LastFrameTime = 0.0f;
     private:

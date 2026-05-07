@@ -44,6 +44,7 @@ private:
 	gl::Ref<gl::Framebuffer> m_PostProcessFB;
 	bool m_PostProcessEnabled = false;
 	uint32_t m_FinalSceneTexture = 0;
+	bool m_ViewportFocused = false, m_ViewportHovered = false;
 
 	// 设置灯光参数
 	glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };
