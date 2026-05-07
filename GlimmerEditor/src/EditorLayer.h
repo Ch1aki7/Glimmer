@@ -33,7 +33,7 @@ private:
 	gl::Ref<gl::Shader> m_BlinnPhongShader;
 	gl::Ref<gl::Shader> m_HologramShader;
 	int m_SelectedShaderIndex = 0;
-	const char* m_ShaderNames[5] = { "Phong", "Toon", "Blinn-Phong", "Hologram", "Normal" };
+	const char* m_ShaderNames[7] = { "Phong", "Toon", "Blinn-Phong", "Hologram", "Normal", "CrossHatch", "InkOutline" };
 	gl::Ref<gl::Model> m_MeshModel;
 	gl::Ref<gl::Model> m_ChairModel;
 	gl::Ref<gl::Model> m_GirlModel;

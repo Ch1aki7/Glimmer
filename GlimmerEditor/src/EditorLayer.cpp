@@ -44,6 +44,8 @@ void EditorLayer::OnAttach() {
 	m_ShaderLib.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
 	m_ShaderLib.Load("Hologram", "assets/shaders/Hologram.glsl");
 	m_ShaderLib.Load("Normal", "assets/shaders/Normal.glsl");
+	m_ShaderLib.Load("CrossHatch", "assets/shaders/CrossHatch.glsl");
+	m_ShaderLib.Load("InkOutline", "assets/shaders/InkOutline.glsl");
 }
 
 void EditorLayer::OnDetach() {
