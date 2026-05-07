@@ -430,4 +430,5 @@ bin-int/
 .vs/
 
 # assets
-Sandbox/assets/models/scifi-girl-v01/
+Sandbox/assets/models/
+GlimmerEditor/assets/models/

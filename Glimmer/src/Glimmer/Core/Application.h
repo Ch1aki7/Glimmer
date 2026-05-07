@@ -13,7 +13,7 @@
 namespace gl { // 属于 Glimmer 引擎的命名空间
     class Application {
     public:
-        Application();
+		Application(const std::string& name = "Glimmer App");
         virtual ~Application();
         void Run();
 

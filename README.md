@@ -6272,6 +6272,98 @@ void Sandbox2D::OnImGuiRender() {
 
 <img src="README.assets/image-20260506180243041.png" alt="image-20260506180243041" style="zoom:50%;" />
 
+## 建立新项目
+
+打开根目录的 **premake5.lua**，参考 Sandbox 的配置，在文件末尾增加一个新项目块。
+
+```
+project "GlimmerEditor"
+    location "GlimmerEditor"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++17"
+    staticruntime "on"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.name}/src/**.h",
+        "%{prj.name}/src/**.cpp",
+    }
+
+    includedirs {
+        "Glimmer/src",
+        "Glimmer/vendor/spdlog/include",
+        "Glimmer/vendor/imgui",
+        "Glimmer/vendor/glm"
+    }
+
+    links {
+        "Glimmer"
+    }
+
+    filter "system:windows"
+    buildoptions { "/utf-8" }
+    systemversion "latest"
+    defines {
+        "GL_PLATFORM_WINDOWS"
+    }
+```
+
+创建EditorApp并设为启动项目，添加对应Layer和assets
+
+```
+#include <Glimmer.h>
+#include "Glimmer/Core/EntryPoint.h"
+#include "EditorLayer.h"
+
+class GlimmerEditor : public gl::Application {
+public:
+	GlimmerEditor() {
+		PushLayer(new EditorLayer());
+	}
+};
+
+gl::Application* gl::CreateApplication() {
+	return new GlimmerEditor();
+}
+
+```
+
+正常运行
+
+<img src="README.assets/image-20260507090001321.png" alt="image-20260507090001321" style="zoom:50%;" />
+
+另外为了区分App，重写Application函数
+
+```
+Application::Application(const std::string& name)
+m_Window = Window::Create(WindowProps(name));
+```
+
+在App引用
+
+```
+#include <Glimmer.h>
+#include "Glimmer/Core/EntryPoint.h"
+#include "EditorLayer.h"
+
+class GlimmerEditor : public gl::Application {
+public:
+	GlimmerEditor():Application("Glimmer Editor") {
+		PushLayer(new EditorLayer());
+	}
+};
+
+gl::Application* gl::CreateApplication() {
+	return new GlimmerEditor();
+}
+
+```
+
+![image-20260507090436321](README.assets/image-20260507090436321.png)
+
 ## KB
 
 ### 为什么不用动态库？

@@ -47,6 +47,8 @@ project "Glimmer"
 		"%{prj.name}/vendor/glm/glm/**.inl",
         "%{prj.name}/vendor/stb_image/**.h",
 		"%{prj.name}/vendor/stb_image/**.cpp",
+        "%{prj.name}/vendor/tinyobjloader/tiny_obj_loader.h",
+        "%{prj.name}/vendor/tinyobjloader/tiny_obj_loader.cpp"
     }
     
     includedirs {
@@ -100,6 +102,40 @@ project "Sandbox"
 
     links {
         "Glimmer" -- 沙盒链接引擎的静态库
+    }
+
+    filter "system:windows"
+    buildoptions { "/utf-8" }
+    systemversion "latest"
+    defines {
+        "GL_PLATFORM_WINDOWS"
+    }
+
+    
+project "GlimmerEditor"
+    location "GlimmerEditor"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++17"
+    staticruntime "on"
+
+    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.name}/src/**.h",
+        "%{prj.name}/src/**.cpp",
+    }
+
+    includedirs {
+        "Glimmer/src",
+        "Glimmer/vendor/spdlog/include",
+        "Glimmer/vendor/imgui",
+        "Glimmer/vendor/glm"
+    }
+
+    links {
+        "Glimmer"
     }
 
     filter "system:windows"

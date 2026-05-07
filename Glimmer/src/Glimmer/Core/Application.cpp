@@ -13,13 +13,13 @@
 namespace gl {
 	Application* Application::s_Instance = nullptr;
 
-	Application::Application() {
+	Application::Application(const std::string& name) {
 		GL_PROFILE_FUNCTION();
 
 		GL_CORE_ASSERT(!s_Instance, "Application already exists!"); // 防止实例化多次
 		s_Instance = this; // 【新增】：把自己存入单例
 
-		m_Window = std::unique_ptr<Window>(Window::Create());
+		m_Window = std::unique_ptr<Window>(Window::Create(WindowProps(name)));
 		// 使用 Lambda 表达式把事件传给 OnEvent
 		m_Window->SetEventCallback([this](Event& e) {
 			this->OnEvent(e);
