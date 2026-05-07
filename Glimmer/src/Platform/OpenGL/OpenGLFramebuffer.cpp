@@ -5,6 +5,8 @@
 
 namespace gl {
 
+	static const uint32_t s_MaxFramebufferSize = 8192;
+
 	OpenGLFramebuffer::OpenGLFramebuffer(const FramebufferSpecification& spec)
 		: m_Specification(spec)
 	{
@@ -72,8 +74,7 @@ namespace gl {
 
 	void OpenGLFramebuffer::Resize(uint32_t width, uint32_t height)
 	{
-		// 简单的防零检查
-		if (width == 0 || height == 0)
+		if (width == 0 || height == 0 || width > s_MaxFramebufferSize || height > s_MaxFramebufferSize)
 		{
 			GL_CORE_WARN("Attempted to resize framebuffer to {0}, {1}", width, height);
 			return;

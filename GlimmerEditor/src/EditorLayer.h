@@ -42,6 +42,10 @@ private:
 
 	gl::Ref<gl::Framebuffer> m_Framebuffer;
 	gl::Ref<gl::Framebuffer> m_PostProcessFB;
+
+	gl::Ref<gl::Scene> m_ActiveScene;
+	gl::Entity m_SquareEntity;
+
 	bool m_PostProcessEnabled = false;
 	uint32_t m_FinalSceneTexture = 0;
 	bool m_ViewportFocused = false, m_ViewportHovered = false;

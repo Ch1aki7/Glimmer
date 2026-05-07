@@ -60,7 +60,8 @@ project "Glimmer"
         "%{prj.name}/vendor/imgui/backends",
         "%{prj.name}/vendor/glm",
         "%{prj.name}/vendor/stb_image",
-        "%{prj.name}/vendor/tinyobjloader"
+        "%{prj.name}/vendor/tinyobjloader",
+        "%{prj.name}/vendor/entt/src"
     }
 
     links {
@@ -97,7 +98,8 @@ project "Sandbox"
         "Glimmer/src", -- 沙盒需要引用引擎的代码
         "Glimmer/vendor/spdlog/include",
         "Glimmer/vendor/imgui",
-        "Glimmer/vendor/glm"
+        "Glimmer/vendor/glm",
+        "Glimmer/vendor/entt/src"
     }
 
     links {
@@ -131,7 +133,8 @@ project "GlimmerEditor"
         "Glimmer/src",
         "Glimmer/vendor/spdlog/include",
         "Glimmer/vendor/imgui",
-        "Glimmer/vendor/glm"
+        "Glimmer/vendor/glm",
+        "Glimmer/vendor/entt/src"
     }
 
     links {

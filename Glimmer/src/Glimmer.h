@@ -26,3 +26,8 @@
 #include "Glimmer/Renderer/FrameBuffer.h"
 
 #include <imgui.h> // 方便在 Layer 里写 UI
+
+// --- ECS部分 ---
+#include "Glimmer/Scene/Scene.h"
+#include "Glimmer/Scene/Entity.h"
+#include "Glimmer/Scene/Components.h"

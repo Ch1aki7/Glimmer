@@ -38,7 +38,7 @@
 
   使用第三方神库 **EnTT** 作为底层的 ECS 管理器。实现 Scene（场景类）和 Entity（实体类）。
 
-  实现各种核心组件：TransformComponent（位置、旋转、缩放）、SpriteRendererComponent（图片渲染）、CameraComponent（摄像机属性）。此时，引擎内部终于有了“往场景里添加一个物体，然后给它挂组件”的概念。
+  实现各种核心组件：TransformComponent（位置、旋转、缩放）、SpriteRendererComponent（图片渲染）、CameraComponent（摄像机属性）。此时，引擎内部终于有了”往场景里添加一个物体，然后给它挂组件”的概念。
 
 阶段五：惊艳亮相（Hazel Editor 可视化编辑器）
 
@@ -6363,6 +6363,354 @@ gl::Application* gl::CreateApplication() {
 ```
 
 ![image-20260507090436321](README.assets/image-20260507090436321.png)
+
+## ECS
+
+在之前的开发中，你的企鹅、方块、椅子都是在 Sandbox2D 里手动创建的变量。如果游戏有 1000 个物体，你的代码会彻底失控。ECS 的出现就是为了解决**海量物体的管理、逻辑解耦以及 CPU 性能优化**。
+
+我们将引入 C++ 业界最顶级的 ECS 库 —— **EnTT**。
+
+**EnTT** 是一个纯头文件（Header-only）的高性能库，集成非常简单。
+
+1. **添加子模块**：
+   在根目录运行：
+
+   ```
+   git submodule add https://github.com/skypjack/entt.git Glimmer/vendor/entt
+   ```
+
+2. **修改 Premake**：
+   在 project "Glimmer" 和 project "Sandbox"（以及 Editor）的 includedirs 中加入：
+   "%{prj.name}/vendor/entt/include"。
+
+我们需要建立三个核心类：Scene（场景）、Entity（实体）和 Components（组件）。
+
+**ECS 代码说明**：
+
+- **Components.h** —— 定义了所有组件结构体。`TagComponent`（实体名称标签）、`TransformComponent`（4×4 变换矩阵）、`SpriteRendererComponent`（纯色渲染，含四维颜色向量）。组件是纯数据，不含逻辑。
+- **Entity.h / Entity.cpp** —— 实体是对 `entt::entity` 的轻量包装。提供 `AddComponent<T>()`、`GetComponent<T>()`、`HasComponent<T>()`、`RemoveComponent<T>()` 四个模板方法，内部调用 `Scene::m_Registry` 完成组件增删查改。通过 `operator bool` 和 `operator entt::entity` 可隐式转换为底层 handle。
+- **Scene.h / Scene.cpp** —— 场景持有 `entt::registry`（ECS 世界的核心容器）。`CreateEntity()` 创建实体时自动挂载 `TransformComponent` 和 `TagComponent`；`OnUpdateRuntime()` 通过 `registry.group<TransformComponent>(entt::get<SpriteRendererComponent>)` 遍历所有含渲染组件的实体并提交绘制；`OnComponentAdded<T>()` 采用模板特化模式，为不同组件提供添加时的回调钩子。
+
+**1. 定义组件 (Components.h)**
+
+组件应该是纯粹的数据结构。
+
+**Glimmer/src/Glimmer/Scene/Components.h**:
+
+```
+#pragma once
+#include <glm/glm.hpp>
+#include <string>
+
+namespace gl {
+
+	struct TagComponent
+	{
+		std::string Tag;
+
+		TagComponent() = default;
+		TagComponent(const TagComponent&) = default;
+		TagComponent(const std::string& tag) : Tag(tag) {}
+	};
+
+	struct TransformComponent
+	{
+		glm::mat4 Transform{ 1.0f };
+
+		TransformComponent() = default;
+		TransformComponent(const TransformComponent&) = default;
+		TransformComponent(const glm::mat4& transform) : Transform(transform) {}
+
+		operator glm::mat4& () { return Transform; }
+		operator const glm::mat4& () const { return Transform; }
+	};
+
+	struct SpriteRendererComponent
+	{
+		glm::vec4 Color{ 1.0f, 1.0f, 1.0f, 1.0f };
+
+		SpriteRendererComponent() = default;
+		SpriteRendererComponent(const SpriteRendererComponent&) = default;
+		SpriteRendererComponent(const glm::vec4& color) : Color(color) {}
+	};
+
+}
+```
+
+**2. 创建场景类 (Scene.h/cpp)**
+
+场景是 EnTT 注册表（Registry）的容器。
+
+**Glimmer/src/Glimmer/Scene/Scene.h**:
+
+```
+#pragma once
+
+#include "entt/entt.hpp"
+#include "Glimmer/Core/Timestep.h"
+
+namespace gl {
+
+	class Entity;
+
+	class Scene
+	{
+	public:
+		Scene();
+		~Scene();
+
+		Entity CreateEntity(const std::string& name = std::string());
+		void DestroyEntity(Entity entity);
+
+		void OnUpdateRuntime(Timestep ts);
+		void OnViewportResize(uint32_t width, uint32_t height);
+
+	private:
+		template<typename T>
+		void OnComponentAdded(Entity entity, T& component);
+
+	private:
+		entt::registry m_Registry;
+		uint32_t m_ViewportWidth = 0, m_ViewportHeight = 0;
+
+		friend class Entity;
+		friend class SceneHierarchyPanel; // 预留给未来的编辑器面板
+	};
+
+}
+```
+
+cpp
+
+```
+#include "glpch.h"
+#include "Scene.h"
+
+#include "Components.h"
+#include "Glimmer/Renderer/Renderer2D.h"
+#include "Entity.h"
+
+#include <glm/glm.hpp>
+
+namespace gl {
+
+	Scene::Scene()
+	{
+	}
+
+	Scene::~Scene()
+	{
+	}
+
+	Entity Scene::CreateEntity(const std::string& name)
+	{
+		Entity entity = { m_Registry.create(), this };
+		entity.AddComponent<TransformComponent>();
+		auto& tag = entity.AddComponent<TagComponent>();
+		tag.Tag = name.empty() ? "Entity" : name;
+		return entity;
+	}
+
+	void Scene::DestroyEntity(Entity entity)
+	{
+		m_Registry.destroy(entity);
+	}
+
+	void Scene::OnUpdateRuntime(Timestep ts)
+	{
+		// 渲染 2D Sprites
+		// 这里通过 EnTT 的 group 功能，筛选出同时拥有 Transform 和 SpriteRenderer 的实体
+		auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
+		for (auto entity : group)
+		{
+			auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entity);
+
+			// 调用此前封装好的 Renderer2D 进行批量渲染
+			// 注意：这里假设 transform 存储的是 glm::mat4。
+			// 如果 Renderer2D 接口需要 position/size，此处需从矩阵解算或修改接口
+			Renderer2D::DrawQuad(transform.Transform, sprite.Color);
+		}
+	}
+
+	void Scene::OnViewportResize(uint32_t width, uint32_t height)
+	{
+		m_ViewportWidth = width;
+		m_ViewportHeight = height;
+		// 可以在此处更新带有 CameraComponent 的实体的纵横比
+	}
+
+	// 各个组件添加时的回调模板特化
+	template<typename T>
+	void Scene::OnComponentAdded(Entity entity, T& component)
+	{
+	}
+
+	template<>
+	void Scene::OnComponentAdded<TransformComponent>(Entity entity, TransformComponent& component)
+	{
+	}
+
+	template<>
+	void Scene::OnComponentAdded<SpriteRendererComponent>(Entity entity, SpriteRendererComponent& component)
+	{
+	}
+
+	template<>
+	void Scene::OnComponentAdded<TagComponent>(Entity entity, TagComponent& component)
+	{
+	}
+
+}
+```
+
+**3. 创建实体包装类 (Entity.h/cpp)**
+
+在 EnTT 中，实体只是一个 uint32 的 ID。为了方便使用，我们把它包装成一个类，让你能写出 entity.AddComponent<T>() 这种顺手的代码。
+
+**Glimmer/src/Glimmer/Scene/Entity.h**:
+
+```
+#pragma once
+
+#include "Scene.h"
+#include "entt.hpp"
+
+namespace gl {
+
+	class Entity
+	{
+	public:
+		Entity() = default;
+		Entity(entt::entity handle, Scene* scene);
+		Entity(const Entity& other) = default;
+
+		template<typename T, typename... Args>
+		T& AddComponent(Args&&... args)
+		{
+			GL_CORE_ASSERT(!HasComponent<T>(), "Entity already has component!");
+			T& component = m_Scene->m_Registry.emplace<T>(m_EntityHandle, std::forward<Args>(args)...);
+			m_Scene->OnComponentAdded<T>(*this, component);
+			return component;
+		}
+
+		template<typename T>
+		T& GetComponent()
+		{
+			GL_CORE_ASSERT(HasComponent<T>(), "Entity does not have component!");
+			return m_Scene->m_Registry.get<T>(m_EntityHandle);
+		}
+
+		template<typename T>
+		bool HasComponent()
+		{
+			return m_Scene->m_Registry.all_of<T>(m_EntityHandle);
+		}
+
+		template<typename T>
+		void RemoveComponent()
+		{
+			GL_CORE_ASSERT(HasComponent<T>(), "Entity does not have component!");
+			m_Scene->m_Registry.remove<T>(m_EntityHandle);
+		}
+
+		operator bool() const { return m_EntityHandle != entt::null; }
+		operator entt::entity() const { return m_EntityHandle; }
+		operator uint32_t() const { return (uint32_t)m_EntityHandle; }
+
+		bool operator==(const Entity& other) const
+		{
+			return m_EntityHandle == other.m_EntityHandle && m_Scene == other.m_Scene;
+		}
+
+		bool operator!=(const Entity& other) const
+		{
+			return !(*this == other);
+		}
+
+	private:
+		entt::entity m_EntityHandle{ entt::null };
+		Scene* m_Scene = nullptr;
+	};
+
+}
+```
+
+cpp
+
+```
+#include "glpch.h"
+#include "Entity.h"
+
+namespace gl {
+
+	Entity::Entity(entt::entity handle, Scene* scene)
+		: m_EntityHandle(handle), m_Scene(scene)
+	{
+	}
+
+}
+```
+
+过程中出现了很多命名空间问题，例如：成功#include "entt.hpp"后一直显示entt::registry m_Registry;，entt::entity handle，entt命名空间没有xxx。 "%{prj.name}/vendor/entt/src/entt"
+
+![image-20260507143501483](README.assets/image-20260507143501483.png)
+
+  根因：EnTT v3.16+ 改用了 #include <concepts>、<compare> 和 requires requires { ... } 语法，这些全是 C++20 特性。C++17
+  模式下 MSVC 解析不到这些语法，entt 命名空间内的所有声明（registry、entity、view 等）会全部静默失败——#include
+  本身不报错（路径正确），但编译到 entt::registry m_Registry; 时发现命名空间里什么也没有。
+
+premake改动后正常
+
+<img src="README.assets/image-20260507144414741.png" alt="image-20260507144414741" style="zoom:50%;" />
+
+![image-20260507144126770](README.assets/image-20260507144126770.png)
+
+新增Renderer2D Draw接口
+
+```
+static void DrawQuad(const glm::mat4& transform, const glm::vec4& color);
+static void DrawQuad(const glm::mat4& transform, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
+```
+
+现在的主要绘图在transform为参数的接口内，详见Renderer2D.cpp
+
+EditorLayer加入组件
+
+```
+	m_ActiveScene = gl::CreateRef<gl::Scene>();
+
+	auto square = m_ActiveScene->CreateEntity("Green Square");
+	square.AddComponent<gl::SpriteRendererComponent>(glm::vec4{ 0.0f, 1.0f, 0.0f, 1.0f });
+	//。。。
+		if (m_SquareEntity)
+	{
+		ImGui::Separator();
+		auto& tag = m_SquareEntity.GetComponent<gl::TagComponent>().Tag;
+		ImGui::Text("%s", tag.c_str());
+
+		auto& squareColor = m_SquareEntity.GetComponent<gl::SpriteRendererComponent>().Color;
+		ImGui::ColorEdit4("Square Color", glm::value_ptr(squareColor));
+		ImGui::Separator();
+	}
+```
+
+EnTT库依然出现很多隐式报错
+
+  根因：EnTT 子模块追踪的是 master 分支（v4.0.0-dev），meta 反射系统在 MSVC 上存在 concept 兼容性 bug，导致 meta_traits
+  的 operator&/operator| 无法解析。
+
+  已执行修复：将 Glimmer/vendor/entt 切到稳定标签 v3.16.0：
+  git checkout v3.16.0  (HEAD detached at b4e58bdd3)
+
+但这样一来又导致，C++20 后，tiny_obj_loader.h 内的 fast_float 库通过
+  __cpp_lib_constexpr_algorithms >= 201806L 检测到 C++20 constexpr 算法支持，把函数标记为 constexpr。但 MSVC 14.37 的
+  std::distance 并非 constexpr，导致 error C3615
+
+所以再次将premake改为C++17，重新构建后成功运行
+
+现在可在ImGui中实时操控场景面板
+
+<img src="README.assets/image-20260507160731040.png" alt="image-20260507160731040" style="zoom:50%;" />
 
 ## KB
 

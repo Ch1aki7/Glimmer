@@ -46,6 +46,13 @@ void EditorLayer::OnAttach() {
 	m_ShaderLib.Load("Normal", "assets/shaders/Normal.glsl");
 	m_ShaderLib.Load("CrossHatch", "assets/shaders/CrossHatch.glsl");
 	m_ShaderLib.Load("InkOutline", "assets/shaders/InkOutline.glsl");
+
+	m_ActiveScene = gl::CreateRef<gl::Scene>();
+
+	auto square = m_ActiveScene->CreateEntity("Green Square");
+	square.AddComponent<gl::SpriteRendererComponent>(glm::vec4{ 0.0f, 1.0f, 0.0f, 1.0f });
+
+	m_SquareEntity = square;
 }
 
 void EditorLayer::OnDetach() {
@@ -244,7 +251,16 @@ void EditorLayer::OnImGuiRender() {
 	ImGui::Begin("Settings");
 	ImGui::Checkbox("Enable Post-Processing", &m_PostProcessEnabled);
 	ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
-	ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
+	if (m_SquareEntity)
+	{
+		ImGui::Separator();
+		auto& tag = m_SquareEntity.GetComponent<gl::TagComponent>().Tag;
+		ImGui::Text("%s", tag.c_str());
+
+		auto& squareColor = m_SquareEntity.GetComponent<gl::SpriteRendererComponent>().Color;
+		ImGui::ColorEdit4("Square Color", glm::value_ptr(squareColor));
+		ImGui::Separator();
+	}
 	ImGui::End();
 
 	// 游戏视口 (Viewport)

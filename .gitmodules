@@ -14,3 +14,6 @@
 [submodule "Glimmer/vendor/assimp"]
 	path = Glimmer/vendor/assimp
 	url = https://github.com/assimp/assimp.git
+[submodule "Glimmer/vendor/entt"]
+	path = Glimmer/vendor/entt
+	url = https://github.com/skypjack/entt.git

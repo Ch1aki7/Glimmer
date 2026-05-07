@@ -1,0 +1,34 @@
+#pragma once
+
+#include "entt/entt.hpp"
+#include "Glimmer/Core/Timestep.h"
+
+namespace gl {
+
+	class Entity;
+
+	class Scene
+	{
+	public:
+		Scene();
+		~Scene();
+
+		Entity CreateEntity(const std::string& name = std::string());
+		void DestroyEntity(Entity entity);
+
+		void OnUpdateRuntime(Timestep ts);
+		void OnViewportResize(uint32_t width, uint32_t height);
+
+	private:
+		template<typename T>
+		void OnComponentAdded(Entity entity, T& component);
+
+	private:
+		entt::registry m_Registry;
+		uint32_t m_ViewportWidth = 0, m_ViewportHeight = 0;
+
+		friend class Entity;
+		friend class SceneHierarchyPanel; // 预留给未来的编辑器面板
+	};
+
+}
