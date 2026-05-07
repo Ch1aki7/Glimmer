@@ -43,6 +43,7 @@ void EditorLayer::OnAttach() {
 	m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
 	m_ShaderLib.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
 	m_ShaderLib.Load("Hologram", "assets/shaders/Hologram.glsl");
+	m_ShaderLib.Load("Normal", "assets/shaders/Normal.glsl");
 }
 
 void EditorLayer::OnDetach() {
