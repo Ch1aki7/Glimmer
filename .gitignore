@@ -421,6 +421,7 @@ bin/
 bin-int/
 !vendor/bin/
 !vendor/bin/**
+.claude/
 CLAUDE.md
 
 *.sln

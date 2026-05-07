@@ -53,6 +53,13 @@ void EditorLayer::OnAttach() {
 	square.AddComponent<gl::SpriteRendererComponent>(glm::vec4{ 0.0f, 1.0f, 0.0f, 1.0f });
 
 	m_SquareEntity = square;
+
+	m_CameraEntity = m_ActiveScene->CreateEntity("Camera Entity");
+	m_CameraEntity.AddComponent<gl::CameraComponent>();
+
+	m_SecondCamera = m_ActiveScene->CreateEntity("Clip-Space Entity");
+	auto& cc = m_SecondCamera.AddComponent<gl::CameraComponent>();
+	cc.Primary = false;
 }
 
 void EditorLayer::OnDetach() {
@@ -63,10 +70,23 @@ void EditorLayer::OnDetach() {
 void EditorLayer::OnUpdate(gl::Timestep ts) {
 	GL_PROFILE_FUNCTION();
 
+	if (gl::FramebufferSpecification spec = m_Framebuffer->GetSpecification();
+		m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f &&
+		(spec.Width != m_ViewportSize.x || spec.Height != m_ViewportSize.y))
+	{
+		m_Framebuffer->Resize((uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
+		m_PostProcessFB->Resize((uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
+
+		m_CameraController.OnResize(m_ViewportSize.x, m_ViewportSize.y);
+
+		m_ActiveScene->OnViewportResize((uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
+	}
+
 	if (m_ViewportFocused)
 		m_CameraController.OnUpdate(ts);
 
 	gl::Renderer2D::ResetStats();
+
 	{
 		GL_PROFILE_SCOPE("Renderer Prep");
 		m_Framebuffer->Bind();
@@ -96,39 +116,39 @@ void EditorLayer::OnUpdate(gl::Timestep ts) {
 		// 显式告诉 3D Shader 去 0 号插槽找图
 		m_3DShader->UploadUniformInt("u_Texture", 0);
 
-		// --- 绘制企鹅 ---
-		glm::mat4 penguinTransform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
-			* glm::rotate(glm::mat4(1.0f), glm::radians(-rotation), { 0, 1, 0 })
-			* glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
-		m_TestTexture->Bind(0); // 确保绑定到 0
-		m_MeshModel->Draw(m_3DShader, penguinTransform);
+		//// --- 绘制企鹅 ---
+		//glm::mat4 penguinTransform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
+		//	* glm::rotate(glm::mat4(1.0f), glm::radians(-rotation), { 0, 1, 0 })
+		//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+		//m_TestTexture->Bind(0); // 确保绑定到 0
+		//m_MeshModel->Draw(m_3DShader, penguinTransform);
 
-		// --- 绘制椅子 (给它一张默认贴图，防止变黑) ---
-		glm::mat4 chairTransform = glm::translate(glm::mat4(1.0f), { 1.0f, 1.0f, 0.0f })
-			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
-			* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
-		// 这里可以使用引擎的白贴图，或者任何通用贴图
-		//gl::Renderer2D::GetWhiteTexture()->Bind(0);
-		m_ChairModel->Draw(m_3DShader, chairTransform);
+		//// --- 绘制椅子 (给它一张默认贴图，防止变黑) ---
+		//glm::mat4 chairTransform = glm::translate(glm::mat4(1.0f), { 1.0f, 1.0f, 0.0f })
+		//	* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
+		//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
+		//// 这里可以使用引擎的白贴图，或者任何通用贴图
+		////gl::Renderer2D::GetWhiteTexture()->Bind(0);
+		//m_ChairModel->Draw(m_3DShader, chairTransform);
 
-		// --- 绘制女孩 ---
-		glm::mat4 girlTransform = glm::translate(glm::mat4(1.0f), { -1.0f, -1.0f, 0.1f })
-			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
-			* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
-		m_GirlTexture->Bind(0);
-		m_GirlModel->Draw(m_3DShader, girlTransform);
+		//// --- 绘制女孩 ---
+		//glm::mat4 girlTransform = glm::translate(glm::mat4(1.0f), { -1.0f, -1.0f, 0.1f })
+		//	* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
+		//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
+		//m_GirlTexture->Bind(0);
+		//m_GirlModel->Draw(m_3DShader, girlTransform);
 
 		gl::Renderer::EndScene();
 
 		// 2D 批处理渲染
 		gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
 
-		gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
-		gl::Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
-		gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
-		gl::Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, { 0.8f, 0.3f, 0.8f, 1.0f });
-		gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
-		gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
+		//gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
+		//gl::Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
+		//gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
+		//gl::Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, { 0.8f, 0.3f, 0.8f, 1.0f });
+		//gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
+		//gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
 
 		gl::Renderer2D::EndScene();
 
@@ -144,6 +164,8 @@ void EditorLayer::OnUpdate(gl::Timestep ts) {
 		//}
 		//gl::Renderer2D::EndScene();
 
+		// Update scene
+		m_ActiveScene->OnUpdateRuntime(ts);
 		m_Framebuffer->Unbind();
 
 		if (m_PostProcessEnabled)
@@ -246,7 +268,6 @@ void EditorLayer::OnImGuiRender() {
 	}
 	ImGui::End();
 
-
 	// 调试信息
 	ImGui::Begin("Settings");
 	ImGui::Checkbox("Enable Post-Processing", &m_PostProcessEnabled);
@@ -261,9 +282,27 @@ void EditorLayer::OnImGuiRender() {
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(squareColor));
 		ImGui::Separator();
 	}
+
+	ImGui::DragFloat3("Camera Transform",
+		glm::value_ptr(m_CameraEntity.GetComponent<gl::TransformComponent>().Translation));
+
+	if (ImGui::Checkbox("Camera A", &m_PrimaryCamera))
+	{
+		m_CameraEntity.GetComponent<gl::CameraComponent>().Primary = m_PrimaryCamera;
+		m_SecondCamera.GetComponent<gl::CameraComponent>().Primary = !m_PrimaryCamera;
+	}
+
+	{
+		auto& camera = m_SecondCamera.GetComponent<gl::CameraComponent>().Camera;
+		float orthoSize = camera.GetOrthographicSize();
+		if (ImGui::DragFloat("Second Camera Ortho Size", &orthoSize))
+			camera.SetOrthographicSize(orthoSize);
+	}
+
 	ImGui::End();
 
 	// 游戏视口 (Viewport)
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
 	ImGui::Begin("Viewport");
 
 	m_ViewportFocused = ImGui::IsWindowFocused();
@@ -271,18 +310,12 @@ void EditorLayer::OnImGuiRender() {
 	gl::Application::Get().GetImGuiLayer()->BlockEvents(!m_ViewportFocused || !m_ViewportHovered);
 
 	ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
-	auto& spec = m_Framebuffer->GetSpecification();
-	if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&
-		(spec.Width != viewportPanelSize.x || spec.Height != viewportPanelSize.y))
-	{
-		m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
-		m_PostProcessFB->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
+	m_ViewportSize = { viewportPanelSize.x, viewportPanelSize.y };
 
-		m_CameraController.OnResize(viewportPanelSize.x, viewportPanelSize.y);
-	}
 	uint32_t textureID = m_FinalSceneTexture;
-	ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
+	ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ m_ViewportSize.x, m_ViewportSize.y }, { 0, 1 }, { 1, 0 });
 	ImGui::End();
+	ImGui::PopStyleVar();
 
 	ImGui::End();
 
@@ -291,6 +324,5 @@ void EditorLayer::OnImGuiRender() {
 }
 
 void EditorLayer::OnEvent(gl::Event& event) {
-	GL_TRACE("{0}", event.ToString());
 	m_CameraController.OnEvent(event);
 }

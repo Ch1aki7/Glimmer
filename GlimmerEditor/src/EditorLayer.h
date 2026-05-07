@@ -45,10 +45,15 @@ private:
 
 	gl::Ref<gl::Scene> m_ActiveScene;
 	gl::Entity m_SquareEntity;
+	gl::Entity m_CameraEntity;
+	gl::Entity m_SecondCamera;
+
+	bool m_PrimaryCamera = true;
 
 	bool m_PostProcessEnabled = false;
 	uint32_t m_FinalSceneTexture = 0;
 	bool m_ViewportFocused = false, m_ViewportHovered = false;
+	glm::vec2 m_ViewportSize = { 0.0f, 0.0f };
 
 	// 设置灯光参数
 	glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };

@@ -150,6 +150,23 @@ namespace gl {
 		s_Data.TextureSlotIndex = 1;
 	}
 
+	void Renderer2D::BeginScene(const Camera& camera, const glm::mat4& transform)
+	{
+		GL_PROFILE_FUNCTION();
+
+		s_Data.SceneTime = gl::Application::Get().GetTime();
+		glm::mat4 viewProj = camera.GetProjection() * glm::inverse(transform);
+
+		s_Data.TextureShader->Bind();
+		s_Data.TextureShader->UploadUniformFloat("u_Time", s_Data.SceneTime);
+		s_Data.TextureShader->UploadUniformMat4("u_ViewProjection", viewProj);
+
+		s_Data.QuadIndexCount = 0;
+		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
+
+		s_Data.TextureSlotIndex = 1;
+	}
+
 	void Renderer2D::EndScene()
 	{
 		GL_PROFILE_FUNCTION();

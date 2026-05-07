@@ -6712,6 +6712,300 @@ EnTT库依然出现很多隐式报错
 
 <img src="README.assets/image-20260507160731040.png" alt="image-20260507160731040" style="zoom:50%;" />
 
+## 相机组件
+
+在 ECS 架构中，相机不应该只是一个全局变量，而应该是一个可以挂载到任何实体上的组件。
+
+![image-20260507175205979](README.assets/image-20260507175205979.png)
+
+【文件】Glimmer/src/Glimmer/Renderer/Camera.h
+
+```
+#pragma once
+#include <glm/glm.hpp>
+
+namespace gl {
+
+	class Camera
+	{
+	public:
+		Camera() = default;
+		Camera(const glm::mat4& projection)
+			: m_Projection(projection) {}
+
+		virtual ~Camera() = default;
+
+		const glm::mat4& GetProjection() const { return m_Projection; }
+	protected:
+		glm::mat4 m_Projection = glm::mat4(1.0f);
+	};
+
+}
+```
+
+【文件】Glimmer/src/Glimmer/Scene/SceneCamera.h
+
+```
+#pragma once
+#include "Glimmer/Renderer/Camera.h"
+
+namespace gl {
+
+	class SceneCamera : public Camera
+	{
+	public:
+		enum class ProjectionType { Perspective = 0, Orthographic = 1 };
+	public:
+		SceneCamera();
+		virtual ~SceneCamera() = default;
+
+		void SetOrthographic(float size, float nearClip, float farClip);
+		void SetPerspective(float verticalFOV, float nearClip, float farClip);
+
+		void SetViewportSize(uint32_t width, uint32_t height);
+
+		float GetOrthographicSize() const { return m_OrthographicSize; }
+		void SetOrthographicSize(float size) { m_OrthographicSize = size; RecalculateProjection(); }
+
+		ProjectionType GetProjectionType() const { return m_ProjectionType; }
+		void SetProjectionType(ProjectionType type) { m_ProjectionType = type; RecalculateProjection(); }
+	private:
+		void RecalculateProjection();
+	private:
+		ProjectionType m_ProjectionType = ProjectionType::Orthographic;
+
+		float m_OrthographicSize = 10.0f;
+		float m_OrthographicNear = -1.0f, m_OrthographicFar = 1.0f;
+
+		float m_PerspectiveFOV = glm::radians(45.0f);
+		float m_PerspectiveNear = 0.01f, m_PerspectiveFar = 1000.0f;
+
+		float m_AspectRatio = 0.0f;
+	};
+
+}
+```
+
+【文件】Glimmer/src/Glimmer/Scene/SceneCamera.cpp
+
+```
+#include "glpch.h"
+#include "SceneCamera.h"
+#include <glm/gtc/matrix_transform.hpp>
+
+namespace gl {
+
+	SceneCamera::SceneCamera()
+	{
+		RecalculateProjection();
+	}
+
+	void SceneCamera::SetOrthographic(float size, float nearClip, float farClip)
+	{
+		m_ProjectionType = ProjectionType::Orthographic;
+		m_OrthographicSize = size;
+		m_OrthographicNear = nearClip;
+		m_OrthographicFar = farClip;
+		RecalculateProjection();
+	}
+
+	void SceneCamera::SetPerspective(float verticalFOV, float nearClip, float farClip)
+	{
+		m_ProjectionType = ProjectionType::Perspective;
+		m_PerspectiveFOV = verticalFOV;
+		m_PerspectiveNear = nearClip;
+		m_PerspectiveFar = farClip;
+		RecalculateProjection();
+	}
+
+	void SceneCamera::SetViewportSize(uint32_t width, uint32_t height)
+	{
+		m_AspectRatio = (float)width / (float)height;
+		RecalculateProjection();
+	}
+
+	void SceneCamera::RecalculateProjection()
+	{
+		if (m_ProjectionType == ProjectionType::Perspective)
+		{
+			m_Projection = glm::perspective(m_PerspectiveFOV, m_AspectRatio, m_PerspectiveNear, m_PerspectiveFar);
+		}
+		else
+		{
+			float orthoLeft = -m_OrthographicSize * m_AspectRatio * 0.5f;
+			float orthoRight = m_OrthographicSize * m_AspectRatio * 0.5f;
+			float orthoBottom = -m_OrthographicSize * 0.5f;
+			float orthoTop = m_OrthographicSize * 0.5f;
+
+			m_Projection = glm::ortho(orthoLeft, orthoRight,
+				orthoBottom, orthoTop, m_OrthographicNear, m_OrthographicFar);
+		}
+	}
+
+}
+```
+
+修改Components.h，添加
+
+```
+	struct CameraComponent
+	{
+		gl::SceneCamera Camera;
+		bool Primary = true; // 是否为当前主相机
+		bool FixedAspectRatio = false; // 是否固定纵横比
+
+		CameraComponent() = default;
+		CameraComponent(const CameraComponent&) = default;
+	};
+```
+
+同时为Renderer2D::BeginScene添加重载
+
+```
+	void Renderer2D::BeginScene(const Camera& camera, const glm::mat4& transform)
+	{
+		GL_PROFILE_FUNCTION();
+
+		s_Data.SceneTime = gl::Application::Get().GetTime();
+		glm::mat4 viewProj = camera.GetProjection() * glm::inverse(transform);
+
+		s_Data.TextureShader->Bind();
+		s_Data.TextureShader->UploadUniformFloat("u_Time", s_Data.SceneTime);
+		s_Data.TextureShader->UploadUniformMat4("u_ViewProjection", viewProj);
+
+		s_Data.QuadIndexCount = 0;
+		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
+
+		s_Data.TextureSlotIndex = 1;
+	}
+```
+
+实体加载具体流程：
+
+  m_ActiveScene ────────────► gl::Scene 实例（持有 entt::registry）
+    │
+    ├─ m_SquareEntity ──────► "Green Square" 实体
+    │     ├─ TransformComponent ──► Translation=(0,0,0), Scale=(1,1,1)
+    │     ├─ SpriteRendererComponent ──► Color=绿色 rgba(0,1,0,1)
+    │     └─ TagComponent ──► Tag="Green Square"
+    │
+    ├─ m_CameraEntity ──────► "Camera Entity" 实体
+    │     ├─ TransformComponent ──► 默认原点
+    │     ├─ CameraComponent ──► Primary=true, Camera=SceneCamera(ortho size=10)
+    │     └─ TagComponent
+    │
+    └─ m_SecondCamera ──────► "Clip-Space Entity" 实体
+          ├─ TransformComponent
+          └─ CameraComponent ──► Primary=false
+
+  关键点：绿色方块是 ECS 实体，存在 m_ActiveScene 的 entt::registry 里。它不是直接绘制的——必须通过
+  Scene::OnUpdateRuntime() 遍历 ECS 才能被提交到 GPU。
+
+![image-20260507192017901](README.assets/image-20260507192017901.png)
+
+为什么有两个绿色方块，一个由wasd控制，一个由ECS控制？
+
+![image-20260507192536791](README.assets/image-20260507192536791.png)
+
+  历史原因：m_CameraController 是早期硬编码渲染阶段的产物，直接驱动 3D 模型和调试贴图。后来引入 ECS 架构时，新增了
+  m_CameraEntity 作为场景相机，但没有替换掉旧的。
+
+  根本差异：
+  - 旧相机是 C++ 对象，直接被 BeginScene(OrthographicCamera&) 消费
+  - ECS 相机是 Entity + Component，被 Scene::OnUpdateRuntime 遍历取出投影矩阵和 view 矩阵后传给 BeginScene(mat4, mat4)
+
+### 相机组件架构总览
+
+**类层次**
+
+```
+Camera (抽象基类, Renderer/Camera.h)
+  └─ GetProjection() → 返回投影矩阵 (glm::mat4)
+       │
+       └─ SceneCamera (Scene/SceneCamera.h)
+            ├─ ProjectionType: Perspective / Orthographic
+            ├─ SetOrthographic(size, near, far)
+            ├─ SetPerspective(fov, near, far)
+            ├─ SetViewportSize(width, height) → 更新宽高比
+            └─ RecalculateProjection() → 重新计算 m_Projection
+```
+
+**ECS 组件挂载**
+
+```
+CameraComponent (Components.h)
+  ├─ SceneCamera Camera        ← 投影计算（正交/透视）
+  ├─ bool Primary              ← 是否为主相机（Scene 选第一个 Primary=true 的）
+  └─ bool FixedAspectRatio     ← 视口大小变化时是否保持固定纵横比
+```
+
+任何 Entity 挂上 `TransformComponent` + `CameraComponent` 即成为场景相机。
+
+**Renderer2D 桥接**
+
+`BeginScene(const Camera&, const glm::mat4& transform)` 重载是 ECS 相机与渲染器的唯一连接点：
+
+```
+viewProj = camera.GetProjection() * glm::inverse(transform)
+上传 u_ViewProjection uniform
+```
+
+参数语义：`camera` 提供投影，`transform` 是相机实体的世界矩阵，其逆矩阵即为 view 矩阵。
+
+**Scene::OnUpdateRuntime 渲染流程**
+
+```
+1. 遍历 Registry 中所有含 TransformComponent + CameraComponent 的实体
+2. 挑选第一个 Primary == true 的相机
+3. 取出 SceneCamera::GetProjection() + TransformComponent::GetTransform()
+4. 调用 Renderer2D::BeginScene(projection, inverse(cameraTransform))
+5. 遍历所有含 TransformComponent + SpriteRendererComponent 的实体
+6. 对每个 Sprite 调用 Renderer2D::DrawQuad(transform, color)
+7. 调用 Renderer2D::EndScene() → Flush() 提交 GPU 绘制
+```
+
+**Scene::OnViewportResize 响应**
+
+视口大小变化时，遍历所有 `CameraComponent`，对 `FixedAspectRatio == false` 的相机调用 `SetViewportSize(width, height)`，自动重算投影矩阵。
+
+**Scene::OnComponentAdded<CameraComponent> 初始化**
+
+新挂载的相机如果当前已记录视口尺寸，立刻同步一次 `SetViewportSize`，避免首帧投影矩阵宽高为零。
+
+**EditorLayer 中的双相机架构**
+
+| 相机 | 类型 | 控制方式 | 渲染目标 |
+|---|---|---|---|
+| `m_CameraController` | `OrthographicCameraController` | 键盘 WASD + 滚轮 | 3D 模型（企鹅/椅子/女孩）+ 编辑器调试贴图 |
+| `m_CameraEntity` (ECS) | `CameraComponent` | ImGui 面板 | 场景中所有 SpriteRendererComponent 实体 |
+
+两套相机各自独立工作，渲染到同一个 Framebuffer。WASD 相机通过 `Renderer::BeginScene` 和 `Renderer2D::BeginScene(OrthographicCamera&)` 驱动；ECS 相机通过 `Scene::OnUpdateRuntime` 内部调用 `BeginScene(Camera&, mat4)` 驱动。
+
+**ImGui 相机面板控件含义**
+
+| 控件 | 操作对象 | 直观效果 |
+|---|---|---|
+| `DragFloat3("Camera Transform")` | `m_CameraEntity.TransformComponent.Translation` | 拖拽 XYZ 改变相机世界位置，view 矩阵随之变化，视口中所有 ECS Sprite 反向移动 |
+| `Checkbox("Camera A")` | 切换 `m_CameraEntity` 与 `m_SecondCamera` 的 `Primary` | 切换主相机——当前仅影响绿色方块的视角来源 |
+| `DragFloat("Second Camera Ortho Size")` | `m_SecondCamera.CameraComponent.Camera` 的正交尺寸 | 数值越大视野越宽（等效缩小），仅在 SecondCamera 为 Primary 时有可见效果 |
+
+渲染层级总览（EditorLayer 每帧绘制顺序）
+
+```
+① Framebuffer Clear (深灰底色)
+② StarNest 全屏 Shader 背景
+③ 3D 模型层 ──────────── 相机 = m_CameraController (WASD)
+    企鹅 + 椅子 + 女孩
+④ ECS Sprite 层 ──────── 相机 = m_CameraEntity (ImGui)
+    绿色方块 (m_SquareEntity)
+    ← 此处由 m_ActiveScene->OnUpdateRuntime(ts) 驱动
+⑤ 编辑器 2D 调试层 ───── 相机 = m_CameraController (WASD)
+    Balatro / STS / Henry 贴图
+⑥ 后处理 (可选)
+```
+
+<img src="README.assets/image-20260507193832578.png" alt="image-20260507193832578" style="zoom: 50%;" />
+
 ## KB
 
 ### 为什么不用动态库？
