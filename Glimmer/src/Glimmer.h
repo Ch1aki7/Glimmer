@@ -30,4 +30,5 @@
 // --- ECS部分 ---
 #include "Glimmer/Scene/Scene.h"
 #include "Glimmer/Scene/Entity.h"
+#include "Glimmer/Scene/ScriptableEntity.h"
 #include "Glimmer/Scene/Components.h"

@@ -1,5 +1,9 @@
 #include "EditorLayer.h"
 #include <glm/gtc/type_ptr.hpp>
+
+// scripts
+#include "CameraController.h"
+
 EditorLayer::EditorLayer() :Layer("EditorLayer"), m_CameraController(1280.0f / 720.0f, true) {
 
 }
@@ -60,6 +64,8 @@ void EditorLayer::OnAttach() {
 	m_SecondCamera = m_ActiveScene->CreateEntity("Clip-Space Entity");
 	auto& cc = m_SecondCamera.AddComponent<gl::CameraComponent>();
 	cc.Primary = false;
+
+	m_CameraEntity.AddComponent<gl::NativeScriptComponent>().Bind<CameraController>();
 }
 
 void EditorLayer::OnDetach() {

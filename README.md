@@ -7006,6 +7006,32 @@ viewProj = camera.GetProjection() * glm::inverse(transform)
 
 <img src="README.assets/image-20260507193832578.png" alt="image-20260507193832578" style="zoom: 50%;" />
 
+## 原生脚本系统
+
+其核心原理是：定义一个 ScriptableEntity 基类，用户通过继承它来编写逻辑。引擎通过 NativeScriptComponent 组件持有脚本实例，并在场景更新时调用其生命周期函数。
+
+**ScriptableEntity.h**（新增）  
+定义 C++ 原生脚本的抽象基类。将 OnCreate、OnUpdate、OnDestroy 设为 protected 虚函数供派生类重写；提供模板方法 GetComponent\<T\>() 便捷访问同实体上的其他组件。内部持有一个 Entity 引用并通过 friend Scene 允许场景在实例化时注入。
+
+**Components.h**（修改）  
+新增 NativeScriptComponent 组件，作为连接 ECS 与脚本逻辑的桥梁。采用函数指针工厂模式实现类型擦除：InstantiateScript 负责延迟构造脚本实例，DestroyScript 管理回收；Bind\<T\>() 模板方法通过无捕获 lambda 生成工厂函数指针，使用 static_cast 实现派生类到基类的安全转换。
+
+**Scene.cpp**（修改）  
+在 OnUpdateRuntime 中集成脚本系统的完整生命周期。执行顺序为：先遍历所有 NativeScriptComponent——若脚本尚未实例化则通过工厂函数延迟创建、利用 Entity 构造回注实体引用、调用 OnCreate 初始化，随后每帧执行 OnUpdate；完成脚本更新后再执行主相机查找与精灵渲染管线。新增 OnComponentAdded\<NativeScriptComponent\> 显式特化。
+
+**CameraController.h**（新增）  
+基于脚本系统实现的 WASD 键盘控制示例。继承 ScriptableEntity 后重写 OnUpdate，直接调用 gl::Input::IsKeyPressed 读取键盘状态并修改自身的 TransformComponent 位移量，验证了脚本层与输入子系统、ECS 组件的互操作能力。
+
+**EditorLayer.cpp**（修改）  
+引入 CameraController 脚本头文件，在 OnAttach 中通过 m_CameraEntity.AddComponent\<gl::NativeScriptComponent\>().Bind\<CameraController\>() 将键盘控制脚本挂载到 ECS 主相机实体上，使视口内的绿色方块可随键盘 WASD 拖拽相机视图。
+
+**Glimmer.h**（修改）  
+ECS 部分新增 ScriptableEntity.h 包含，使下游客户端（Sandbox、EditorLayer）通过统一聚合头即可使用脚本基类。
+
+两个方块通过不同方式控制，中心对称移动
+
+<img src="README.assets/image-20260508173136130.png" alt="image-20260508173136130" style="zoom:50%;" />
+
 ## KB
 
 ### 为什么不用动态库？

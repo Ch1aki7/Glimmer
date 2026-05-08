@@ -37,6 +37,23 @@ namespace gl {
 		glm::mat4 cameraTransform;
 
 		{
+			// update scripts
+			{
+				m_Registry.view<NativeScriptComponent>().each([&](auto entity, auto& nsc)
+					{
+						// 如果脚本还没实例化，则在此处创建（延迟加载）
+						if (!nsc.Instance)
+						{
+							nsc.Instance = nsc.InstantiateScript();
+							nsc.Instance->m_Entity = Entity{ entity, this };
+							nsc.Instance->OnCreate();
+						}
+
+						nsc.Instance->OnUpdate(ts);
+					});
+			}
+
+			// 寻找主相机
 			auto view = m_Registry.view<TransformComponent, CameraComponent>();
 			view.each([&](auto entity, auto& transform, auto& camera) {
 				if (camera.Primary)
@@ -47,6 +64,7 @@ namespace gl {
 				});
 		}
 
+		// 执行渲染
 		if (mainCamera)
 		{
 			// 视图矩阵是相机变换矩阵的逆矩阵
@@ -103,5 +121,8 @@ namespace gl {
 		if (m_ViewportWidth > 0 && m_ViewportHeight > 0)
 			component.Camera.SetViewportSize(m_ViewportWidth, m_ViewportHeight);
 	}
+
+	template<>
+	void Scene::OnComponentAdded<NativeScriptComponent>(Entity entity, NativeScriptComponent& component) {}
 
 }

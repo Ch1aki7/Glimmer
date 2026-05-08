@@ -3,6 +3,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <string>
 #include "SceneCamera.h"
+#include "ScriptableEntity.h"
 
 namespace gl {
 
@@ -54,6 +55,23 @@ namespace gl {
 
 		CameraComponent() = default;
 		CameraComponent(const CameraComponent&) = default;
+	};
+
+	struct NativeScriptComponent
+	{
+		ScriptableEntity* Instance = nullptr;
+
+		// 函数指针，用于实例化和销毁脚本对象
+		ScriptableEntity* (*InstantiateScript)();
+		void (*DestroyScript)(NativeScriptComponent*);
+
+		// 模板绑定函数
+		template<typename T>
+		void Bind()
+		{
+			InstantiateScript = []() { return static_cast<ScriptableEntity*>(new T()); };
+			DestroyScript = [](NativeScriptComponent* nsc) { delete nsc->Instance; nsc->Instance = nullptr; };
+		}
 	};
 
 }
