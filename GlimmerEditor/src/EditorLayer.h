@@ -1,6 +1,9 @@
 #pragma once
 #include "Glimmer.h"
-class EditorLayer : public gl::Layer {
+
+namespace gl {
+
+class EditorLayer : public Layer {
 public:
 	EditorLayer();
 	virtual ~EditorLayer() = default;
@@ -8,45 +11,45 @@ public:
 	virtual void OnAttach() override;
 	virtual void OnDetach() override;
 
-	virtual void OnUpdate(gl::Timestep ts) override;
+	virtual void OnUpdate(Timestep ts) override;
 	virtual void OnImGuiRender() override;
-	virtual void OnEvent(gl::Event& event) override;
+	virtual void OnEvent(Event& event) override;
 
 private:
-	gl::ShaderLibrary m_ShaderLib;
+	ShaderLibrary m_ShaderLib;
 
-	gl::Ref<gl::VertexArray> m_VertexArray;
-	gl::Ref<gl::VertexArray> m_bg_vortexVertexArray;
+	Ref<VertexArray> m_VertexArray;
+	Ref<VertexArray> m_bg_vortexVertexArray;
 
-	gl::Ref<gl::Shader> m_TextureShader;
-	gl::Ref<gl::Shader> m_bg_vortexShader;
-	gl::Ref<gl::Shader> m_TunnelShader;
+	Ref<Shader> m_TextureShader;
+	Ref<Shader> m_bg_vortexShader;
+	Ref<Shader> m_TunnelShader;
 
-	gl::Ref<gl::Texture2D> m_Texture;
-	gl::Ref<gl::Texture2D> m_STSTexture;
-	gl::Ref<gl::Texture2D> m_HenryTexture;
-	gl::OrthographicCameraController m_CameraController;
+	Ref<Texture2D> m_Texture;
+	Ref<Texture2D> m_STSTexture;
+	Ref<Texture2D> m_HenryTexture;
+	OrthographicCameraController m_CameraController;
 
-	gl::Ref<gl::Shader> m_3DShader;
-	gl::Ref<gl::Shader> m_PhoneShader;
-	gl::Ref<gl::Shader> m_ToonShader;
-	gl::Ref<gl::Shader> m_BlinnPhongShader;
-	gl::Ref<gl::Shader> m_HologramShader;
+	Ref<Shader> m_3DShader;
+	Ref<Shader> m_PhoneShader;
+	Ref<Shader> m_ToonShader;
+	Ref<Shader> m_BlinnPhongShader;
+	Ref<Shader> m_HologramShader;
 	int m_SelectedShaderIndex = 0;
 	const char* m_ShaderNames[7] = { "Phong", "Toon", "Blinn-Phong", "Hologram", "Normal", "CrossHatch", "InkOutline" };
-	gl::Ref<gl::Model> m_MeshModel;
-	gl::Ref<gl::Model> m_ChairModel;
-	gl::Ref<gl::Model> m_GirlModel;
-	gl::Ref<gl::Texture2D> m_TestTexture;
-	gl::Ref<gl::Texture2D> m_GirlTexture;
+	Ref<Model> m_MeshModel;
+	Ref<Model> m_ChairModel;
+	Ref<Model> m_GirlModel;
+	Ref<Texture2D> m_TestTexture;
+	Ref<Texture2D> m_GirlTexture;
 
-	gl::Ref<gl::Framebuffer> m_Framebuffer;
-	gl::Ref<gl::Framebuffer> m_PostProcessFB;
+	Ref<Framebuffer> m_Framebuffer;
+	Ref<Framebuffer> m_PostProcessFB;
 
-	gl::Ref<gl::Scene> m_ActiveScene;
-	gl::Entity m_SquareEntity;
-	gl::Entity m_CameraEntity;
-	gl::Entity m_SecondCamera;
+	Ref<Scene> m_ActiveScene;
+	Entity m_SquareEntity;
+	Entity m_CameraEntity;
+	Entity m_SecondCamera;
 
 	bool m_PrimaryCamera = true;
 
@@ -60,4 +63,4 @@ private:
 	glm::vec4 m_SquareColor = { 0.1f, 0.1f, 0.1f, 1 };
 };
 
-
+}

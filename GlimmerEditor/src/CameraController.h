@@ -1,21 +1,25 @@
 #pragma once
 #include <Glimmer.h>
 
-class CameraController : public gl::ScriptableEntity
+namespace gl {
+
+class CameraController : public ScriptableEntity
 {
 public:
-	void OnUpdate(gl::Timestep ts) override
+	void OnUpdate(Timestep ts) override
 	{
-		auto& transform = GetComponent<gl::TransformComponent>();
+		auto& transform = GetComponent<TransformComponent>();
 		float speed = 5.0f;
 
-		if (gl::Input::IsKeyPressed(GL_KEY_A))
+		if (Input::IsKeyPressed(GL_KEY_A))
 			transform.Translation.x -= speed * ts;
-		if (gl::Input::IsKeyPressed(GL_KEY_D))
+		if (Input::IsKeyPressed(GL_KEY_D))
 			transform.Translation.x += speed * ts;
-		if (gl::Input::IsKeyPressed(GL_KEY_W))
+		if (Input::IsKeyPressed(GL_KEY_W))
 			transform.Translation.y += speed * ts;
-		if (gl::Input::IsKeyPressed(GL_KEY_S))
+		if (Input::IsKeyPressed(GL_KEY_S))
 			transform.Translation.y -= speed * ts;
 	}
 };
+
+}

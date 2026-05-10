@@ -5,7 +5,7 @@
 class GlimmerEditor : public gl::Application {
 public:
 	GlimmerEditor():Application("Glimmer Editor") {
-		PushLayer(new EditorLayer());
+		PushLayer(new gl::EditorLayer());
 	}
 };
 

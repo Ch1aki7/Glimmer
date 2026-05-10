@@ -7032,6 +7032,61 @@ ECS 部分新增 ScriptableEntity.h 包含，使下游客户端（Sandbox、Edit
 
 <img src="README.assets/image-20260508173136130.png" alt="image-20260508173136130" style="zoom:50%;" />
 
+## 代码审查+RenderDoc
+
+为便于后续调试，做出如下改动：
+
+<img src="README.assets/image-20260510194552904.png" alt="image-20260510194552904" style="zoom:50%;" />
+
+
+
+**RenderDoc**
+
+RenderDoc 是调试 3D 渲染的利器——它能拦截所有 OpenGL 指令，让你逐帧、逐像素地拆解渲染过程。在 Glimmer Engine 里加载模型、调 Batch Renderer、排查 Shader 传参问题，基本上都靠它。
+
+**连接与捕获**
+
+打开 RenderDoc，在 Executable Path 填入 Sandbox.exe 的路径。Working Directory 必须设为包含 assets 的目录（一般是工程根目录），不然 Shader 加载会直接失败。点 Launch 运行游戏，到了想分析的那一帧按 F12（或 PrintScreen）捕获。双击捕获到的缩略图，RenderDoc 会还原那一帧的全部显卡状态。
+
+**四个核心面板**
+
+Event Browser 按顺序列出了这一帧里所有的 glClear、glDrawElements 调用。用它来验证 Batch Renderer 是否真的把几千个方块合并成了一个 DrawCall——如果这里 Draw 指令铺满屏幕，说明批处理在某个环节断开了。
+
+Pipeline State 显示当前 DrawCall 发生时显卡的全部配置。Input Assembler 里看 BufferLayout 是否正确、Offset 有没有错位。Rasterizer 里看 Cull Mode——模型转个身就消失，大概率是背面剔除的锅。Blend State 里确认 Alpha 混合是否开启。
+
+Mesh View 是排查"模型不显示"最常用的面板。VS Input 显示 CPU 传给显卡的原始顶点，如果这里是 0，说明 Model.cpp 读文件那一步就挂了。VS Output 显示经过 u_ViewProjection * u_Transform 变换后的坐标。Input 有数据但 Output 全变成 0 或无穷大——矩阵乘法算错了。Output 正常但预览窗没东西——物体在相机裁剪面外面。
+
+Texture Viewer 的 Inputs 标签可以看到当前 DrawCall 绑定的所有纹理。确认 0 号位是不是那张 1x1 白贴图，确认你的贴图是否真的传进了对应的采样器插槽。
+
+**排查"模型黑色或不显示"的思路**
+
+按渲染管线顺序倒着查。先看 Mesh View 的 VS Input，顶点数据是否正确解包上传——如果全是 0，回去查 tinyobjloader 的解析。再看 VS Output，坐标正常说明几何阶段没问题，顶点被拉伸到极远说明 u_ViewProjection 矩阵上传有问题。然后进 Pipeline State：确认 u_Texture 采样器指向了正确的纹理单元，确认 Depth Test 没有因为之前画 2D 背景时忘记清理缓存而导致 3D 模型被错误剔除。
+
+RenderDoc 不光是修 Bug 用的，验证优化假设也很好使。比如调 Batch Renderer 的时候，对比开启和关闭批处理前后的 Draw Call 数量和显存带宽占用，比对着代码瞎猜直观得多。
+
+![image-20260510184039610](README.assets/image-20260510184039610.png)
+
+![image-20260510184048818](README.assets/image-20260510184048818.png)
+
+发现了大正方形是120000，一眼我之前写的Renderer2D批处理
+
+```
+		static const uint32_t MaxQuads = 20000;
+		static const uint32_t MaxVertices = MaxQuads * 4;
+		static const uint32_t MaxIndices = MaxQuads * 6;
+		static const uint32_t MaxTextureSlots = 32;
+```
+
+于是检查Layer源代码发现：由于遮挡关系，部分注释掉了之前的一些资产绘制
+
+<img src="README.assets/image-20260510192003036.png" alt="image-20260510192003036" style="zoom:67%;" />
+
+但是一旦使用BeginScene，场景就会进行一次批量提交，结果导致了这次DC
+
+此时任意解除一个Draw的注释或完全注释该块，幽灵方块都会瞬间消失
+
+至此，双绿色方块之谜已告破
+
 ## KB
 
 ### 为什么不用动态库？

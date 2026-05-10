@@ -1,5 +1,8 @@
 #include "Sandbox2D.h"
 #include <glm/gtc/type_ptr.hpp>
+
+namespace gl {
+
 Sandbox2D::Sandbox2D() :Layer("Sandbox2D"), m_CameraController(1280.0f / 720.0f, true) {
 
 }
@@ -13,30 +16,30 @@ void Sandbox2D::OnAttach() {
 
 	m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
 	m_ShaderLib.Load("assets/shaders/StarNest.glsl");
-	m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
-	m_STSTexture = gl::Texture2D::Create("assets/textures/STS.png");
-	m_HenryTexture = gl::Texture2D::Create("assets/textures/Henry.jpg");
+	m_Texture = Texture2D::Create("assets/textures/Balatro.png");
+	m_STSTexture = Texture2D::Create("assets/textures/STS.png");
+	m_HenryTexture = Texture2D::Create("assets/textures/Henry.jpg");
 
-	//m_MeshModel = gl::CreateRef<gl::Model>("assets/models/penguin.obj");
-	m_MeshModel = gl::CreateRef<gl::Model>("assets/models/企鹅高松灯.obj");
-	m_ChairModel = gl::CreateRef<gl::Model>("assets/models/chair.obj");
-	m_GirlModel = gl::CreateRef<gl::Model>("assets/models/girl.obj");
-	m_3DShader = gl::Shader::Create("assets/shaders/Model3D.glsl");
-	//m_PhoneShader = gl::Shader::Create("assets/shaders/Phong.glsl");
-	//m_ToonShader = gl::Shader::Create("assets/shaders/Toon.glsl");
-	//m_BlinnPhongShader = gl::Shader::Create("assets/shaders/BlinnPhong.glsl");
-	//m_HologramShader = gl::Shader::Create("assets/shaders/Hologram.glsl");
+	//m_MeshModel = CreateRef<Model>("assets/models/penguin.obj");
+	m_MeshModel = CreateRef<Model>("assets/models/企鹅高松灯.obj");
+	m_ChairModel = CreateRef<Model>("assets/models/chair.obj");
+	m_GirlModel = CreateRef<Model>("assets/models/girl.obj");
+	m_3DShader = Shader::Create("assets/shaders/Model3D.glsl");
+	//m_PhoneShader = Shader::Create("assets/shaders/Phong.glsl");
+	//m_ToonShader = Shader::Create("assets/shaders/Toon.glsl");
+	//m_BlinnPhongShader = Shader::Create("assets/shaders/BlinnPhong.glsl");
+	//m_HologramShader = Shader::Create("assets/shaders/Hologram.glsl");
 
-	//m_TestTexture = gl::Texture2D::Create("assets/models/penguin.png");
-	m_TestTexture = gl::Texture2D::Create("assets/models/Final_Texture.png");
-	m_GirlTexture = gl::Texture2D::Create("assets/models/girl.png");
+	//m_TestTexture = Texture2D::Create("assets/models/penguin.png");
+	m_TestTexture = Texture2D::Create("assets/models/Final_Texture.png");
+	m_GirlTexture = Texture2D::Create("assets/models/girl.png");
 
 
-	gl::FramebufferSpecification fbSpec;
+	FramebufferSpecification fbSpec;
 	fbSpec.Width = 1280;
 	fbSpec.Height = 720;
-	m_Framebuffer = gl::Framebuffer::Create(fbSpec);
-	m_PostProcessFB = gl::Framebuffer::Create(fbSpec);
+	m_Framebuffer = Framebuffer::Create(fbSpec);
+	m_PostProcessFB = Framebuffer::Create(fbSpec);
 
 	m_ShaderLib.Load("assets/shaders/PostProcess.glsl");
 	m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
@@ -50,17 +53,17 @@ void Sandbox2D::OnDetach() {
 
 }
 
-void Sandbox2D::OnUpdate(gl::Timestep ts) {
+void Sandbox2D::OnUpdate(Timestep ts) {
 	GL_PROFILE_FUNCTION();
 
 	m_CameraController.OnUpdate(ts);
 
-	gl::Renderer2D::ResetStats();
+	Renderer2D::ResetStats();
 	{
 		GL_PROFILE_SCOPE("Renderer Prep");
 		m_Framebuffer->Bind();
-		gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
-		gl::RenderCommand::Clear();
+		RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
+		RenderCommand::Clear();
 	}
 
 	{
@@ -69,13 +72,13 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 
 		GL_PROFILE_SCOPE("Renderer Draw");
 		//auto bgShader = m_ShaderLib.Get("BalatroVortex");
-		//gl::Renderer2D::DrawFullscreenQuad(bgShader, 0.9f);
+		//Renderer2D::DrawFullscreenQuad(bgShader, 0.9f);
 
 		auto stShader = m_ShaderLib.Get("StarNest");
-		gl::Renderer2D::DrawFullscreenQuad(stShader, 0.9f);
+		Renderer2D::DrawFullscreenQuad(stShader, 0.9f);
 
 		// 3D obj渲染
-		gl::Renderer::BeginScene(m_CameraController.GetCamera());
+		Renderer::BeginScene(m_CameraController.GetCamera());
 		m_3DShader->Bind();
 
 		// --- 统一上传光照全局参数 (只需上传一次，所有 3D 模型通用) ---
@@ -97,7 +100,7 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
 			* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
 		// 这里可以使用引擎的白贴图，或者任何通用贴图
-		//gl::Renderer2D::GetWhiteTexture()->Bind(0);
+		//Renderer2D::GetWhiteTexture()->Bind(0);
 		m_ChairModel->Draw(m_3DShader, chairTransform);
 
 		// --- 绘制女孩 ---
@@ -107,42 +110,42 @@ void Sandbox2D::OnUpdate(gl::Timestep ts) {
 		m_GirlTexture->Bind(0);
 		m_GirlModel->Draw(m_3DShader, girlTransform);
 
-		gl::Renderer::EndScene();
+		Renderer::EndScene();
 
 		// 2D 批处理渲染
-		gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
+		Renderer2D::BeginScene(m_CameraController.GetCamera());
 		
-		gl::Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
-		gl::Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
-		gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
-		gl::Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, {0.8f, 0.3f, 0.8f, 1.0f });
-		gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
-		gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
+		Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
+		Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
+		Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
+		Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, {0.8f, 0.3f, 0.8f, 1.0f });
+		Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
+		Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
 
-		gl::Renderer2D::EndScene();
+		Renderer2D::EndScene();
 
 		// 渲染统计测试
-		//gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
+		//Renderer2D::BeginScene(m_CameraController.GetCamera());
 		//for (float y = -5.0f; y < 5.0f; y += 0.5f)
 		//{
 		//	for (float x = -5.0f; x < 5.0f; x += 0.5f)
 		//	{
 		//		glm::vec4 color = { (x + 5.0f) / 10.0f, 0.4f, (y + 5.0f) / 10.0f, 0.7f };
-		//		gl::Renderer2D::DrawQuad({ x, y }, { 0.45f, 0.45f }, color);
+		//		Renderer2D::DrawQuad({ x, y }, { 0.45f, 0.45f }, color);
 		//	}
 		//}
-		//gl::Renderer2D::EndScene();
+		//Renderer2D::EndScene();
 
 		m_Framebuffer->Unbind();
 
 		if (m_PostProcessEnabled)
 		{
 			m_PostProcessFB->Bind();
-			gl::RenderCommand::Clear();
+			RenderCommand::Clear();
 
 			auto grayscaleShader = m_ShaderLib.Get("PostProcess");
 
-			gl::Renderer2D::DrawPostProcess(grayscaleShader, m_Framebuffer->GetColorAttachmentRendererID());
+			Renderer2D::DrawPostProcess(grayscaleShader, m_Framebuffer->GetColorAttachmentRendererID());
 
 			m_PostProcessFB->Unbind();
 
@@ -198,7 +201,7 @@ void Sandbox2D::OnImGuiRender() {
 	{
 		if (ImGui::BeginMenu("File"))
 		{
-			if (ImGui::MenuItem("Exit")) gl::Application::Get().Close();
+			if (ImGui::MenuItem("Exit")) Application::Get().Close();
 			ImGui::EndMenu();
 		}
 		ImGui::EndMenuBar();
@@ -206,7 +209,7 @@ void Sandbox2D::OnImGuiRender() {
 
 	// 状态统计
 	ImGui::Begin("Stats");
-	auto stats = gl::Renderer2D::GetStats();
+	auto stats = Renderer2D::GetStats();
 	ImGui::Text("Renderer2D Stats:");
 	ImGui::Text("Draw Calls: %d", stats.DrawCalls);
 	ImGui::Text("Quads: %d", stats.QuadCount);
@@ -265,7 +268,9 @@ void Sandbox2D::OnImGuiRender() {
 	//ImGui::ShowDemoWindow(&show_demo_window);
 }
 
-void Sandbox2D::OnEvent(gl::Event& event) {
+void Sandbox2D::OnEvent(Event& event) {
 	GL_TRACE("{0}", event.ToString());
 	m_CameraController.OnEvent(event);
+}
+
 }
