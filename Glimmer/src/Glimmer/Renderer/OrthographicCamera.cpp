@@ -5,7 +5,7 @@
 namespace gl {
 
 	OrthographicCamera::OrthographicCamera(float left, float right, float bottom, float top)
-		: m_ProjectionMatrix(glm::ortho(left, right, bottom, top, -1.0f, 1.0f)), m_ViewMatrix(1.0f)
+		: m_ProjectionMatrix(glm::ortho(left, right, bottom, top, -100.0f, 100.0f)), m_ViewMatrix(1.0f)
 	{
 		GL_PROFILE_FUNCTION();
 
@@ -29,7 +29,7 @@ namespace gl {
 	{
 		GL_PROFILE_FUNCTION();
 
-		m_ProjectionMatrix = glm::ortho(left, right, bottom, top, -1.0f, 1.0f);
+		m_ProjectionMatrix = glm::ortho(left, right, bottom, top, -100.0f, 100.0f);
 		m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
 	}
 }

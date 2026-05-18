@@ -6,16 +6,58 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 
-// 1. 实现顶点去重需要的哈希结构
+// 顶点去重所需的哈希结构
 namespace std {
 	template<> struct hash<gl::Vertex> {
 		size_t operator()(gl::Vertex const& v) const {
-			return ((hash<glm::vec3>()(v.Position) ^ (hash<glm::vec3>()(v.Normal) << 1)) >> 1) ^ (hash<glm::vec2>()(v.TexCoord) << 1);
+			return ((hash<glm::vec3>()(v.Position) ^ (hash<glm::vec3>()(v.Normal) << 1)) >> 1)
+				^ (hash<glm::vec3>()(v.Tangent) << 1)
+				^ (hash<glm::vec2>()(v.TexCoord) << 1);
 		}
 	};
 }
 
 namespace gl {
+
+	// Mikktspace 兼容的切向量计算
+	static void ComputeTangents(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
+	{
+		if (indices.empty()) return;
+
+		std::vector<glm::vec3> tanAccum(vertices.size(), glm::vec3(0.0f));
+
+		for (size_t i = 0; i < indices.size(); i += 3)
+		{
+			Vertex& v0 = vertices[indices[i + 0]];
+			Vertex& v1 = vertices[indices[i + 1]];
+			Vertex& v2 = vertices[indices[i + 2]];
+
+			glm::vec3 edge1 = v1.Position - v0.Position;
+			glm::vec3 edge2 = v2.Position - v0.Position;
+			glm::vec2 deltaUV1 = v1.TexCoord - v0.TexCoord;
+			glm::vec2 deltaUV2 = v2.TexCoord - v0.TexCoord;
+
+			float f = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
+			if (std::isinf(f) || std::isnan(f)) continue;
+
+			glm::vec3 tangent;
+			tangent.x = f * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x);
+			tangent.y = f * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y);
+			tangent.z = f * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z);
+
+			tanAccum[indices[i + 0]] += tangent;
+			tanAccum[indices[i + 1]] += tangent;
+			tanAccum[indices[i + 2]] += tangent;
+		}
+
+		// Gram-Schmidt 正交化：Tangent = normalize(T - N * dot(N, T))
+		for (size_t i = 0; i < vertices.size(); i++)
+		{
+			glm::vec3& n = vertices[i].Normal;
+			glm::vec3& t = tanAccum[i];
+			vertices[i].Tangent = glm::normalize(t - n * glm::dot(n, t));
+		}
+	}
 
 	Model::Model(const std::string& path)
 	{
@@ -37,8 +79,6 @@ namespace gl {
 		auto& shapes = reader.GetShapes();
 		auto& materials = reader.GetMaterials();
 
-		// 核心重构：为了支持多材质，我们不能按 Shape 存，要按“材质ID”分网格
-		// map 的 Key 是 material_id，Value 是该材质对应的顶点和索引数据
 		struct MeshData {
 			std::vector<Vertex> vertices;
 			std::vector<uint32_t> indices;
@@ -48,7 +88,6 @@ namespace gl {
 		for (const auto& shape : shapes) {
 			size_t index_offset = 0;
 			for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++) {
-				// 获取该面的材质 ID
 				int matID = shape.mesh.material_ids[f];
 				auto& meshData = materialToMeshData[matID];
 
@@ -75,7 +114,6 @@ namespace gl {
 						};
 					}
 
-					// 2. 真正的顶点去重
 					if (meshData.uniqueVertices.count(vertex) == 0) {
 						meshData.uniqueVertices[vertex] = (uint32_t)meshData.vertices.size();
 						meshData.vertices.push_back(vertex);
@@ -86,8 +124,10 @@ namespace gl {
 			}
 		}
 
-		// 3. 将拆分好的材质数据转化为引擎的 Mesh 对象
 		for (auto& [matID, data] : materialToMeshData) {
+			// 切向量在去重后计算，确保归一化正确
+			ComputeTangents(data.vertices, data.indices);
+
 			Ref<Texture2D> tex = nullptr;
 			if (matID >= 0 && matID < materials.size()) {
 				std::string texName = materials[matID].diffuse_texname;
@@ -110,10 +150,6 @@ namespace gl {
 			if (mesh->GetTexture()) {
 				mesh->GetTexture()->Bind(0);
 				shader->UploadUniformInt("u_Texture", 0);
-			}
-			else {
-				// 如果没贴图，绑定引擎的白贴图防止变黑
-				// Renderer2D::GetWhiteTexture()->Bind(0);
 			}
 
 			mesh->Bind();
