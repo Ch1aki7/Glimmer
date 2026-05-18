@@ -28,6 +28,7 @@ private:
 	Ref<Texture2D> m_Texture;
 	Ref<Texture2D> m_STSTexture;
 	Ref<Texture2D> m_HenryTexture;
+	Ref<Texture2D> m_NoiseSource;
 	OrthographicCameraController m_CameraController;
 
 	Ref<Shader> m_3DShader;
