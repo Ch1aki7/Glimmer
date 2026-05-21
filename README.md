@@ -7087,6 +7087,58 @@ RenderDoc 不光是修 Bug 用的，验证优化假设也很好使。比如调 B
 
 至此，双绿色方块之谜已告破
 
+**为着色器库添加卸载功能**
+
+```
+	void ShaderLibrary::Remove(const std::string& name)
+	{
+		GL_CORE_ASSERT(Exists(name), "Shader not found for removal!");
+		m_Shaders.erase(name);
+        // 从 Map 中移除这个 key。
+        // 这会使该 Shader 对象的引用计数（Ref Count）减 1。
+        // ✨ 这里的魔法在于：
+        // 如果没有任何 Layer 或物体还在持有这个 Shader 的 Ref 指针，
+        // C++ 会自动调用 Shader 的析构函数 (~OpenGLShader)，
+        // 进而触发 glDeleteProgram(m_RendererID)，
+        // 从而真正释放了 GPU 显存！
+	}
+}
+```
+
+**如果我 Unload 了某个 Shader，但某个图层还在使用它，会发生什么？程序会崩吗？**
+“这就是使用 **std::shared_ptr (Ref)** 的优势所在。
+
+1. **安全性**：调用 ShaderLibrary::Unload 只是切断了库对该资源的引用。如果某个 Layer 内部还存着这个 Shader 的 Ref，那么对象**不会被销毁**，程序依然能正常运行，不会崩溃。
+2. **延迟释放**：只有当最后一个持有该资源的人也释放了指针（比如图层被 Detach），资源才会真正从显存中抹除。这实现了一种**‘逻辑上的卸载，物理上的安全释放’**。
+   这种设计避免了传统引擎中因手动 delete 导致的‘悬空指针（Dangling Pointer）’和‘野指针访问’问题。”
+
+理解 erase 为什么减小引用计数，得先看清 shared_ptr（引擎里叫 Ref）的工作方式。
+
+**引用计数的增加**
+
+把一个 Shader 存入 unordered_map 时：
+
+```cpp
+Ref<Shader> myShader = Shader::Create(...);
+// 此时引用计数 = 1，由 myShader 持有
+
+m_Shaders["Texture"] = myShader;
+// 发生拷贝赋值，Map 内部也持有一份指向该 Shader 的 Ref
+// 引用计数变为 2
+```
+
+**引用计数的减少**
+
+执行 m_Shaders.erase("Texture") 时，unordered_map 做了两件事：从哈希表中移除键值对，然后销毁 Value 对象。Value 是 shared_ptr，销毁它时会调 shared_ptr 的析构函数——析构函数的工作就是去控制块里把引用计数减 1。
+
+**两种可能的后续**
+
+如果没有任何其他地方持有这个 Shader 的引用，erase 之后计数从 1 变 0，触发 Shader 对象的 delete，显存释放，资源彻底消失。
+
+如果 ExampleLayer 还在用这个 Shader（手里还攥着一份 Ref），erase 之后计数从 2 变 1。Map 里找不到了，但 Shader 对象还在内存里——直到 ExampleLayer 也销毁、计数变为 0，才真正释放。
+
+这正是用智能指针而不是原始指针的意义：库不知道外部是否还在使用这个资源，如果直接 delete 原始指针，外部拿着野指针下次渲染必崩。erase 只是库放弃了所有权，物理释放什么时候发生取决于所有持有者什么时候释放，逻辑删除和物理释放是分开的。这样做资产管理比手动管理稳得多，不用担心过河拆桥导致的崩溃。
+
 ## KB
 
 ### 为什么不用动态库？

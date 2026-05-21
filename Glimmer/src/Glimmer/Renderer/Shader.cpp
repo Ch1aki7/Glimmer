@@ -51,4 +51,10 @@ namespace gl {
 	{
 		return m_Shaders.find(name) != m_Shaders.end();
 	}
+
+	void ShaderLibrary::Remove(const std::string& name)
+	{
+		GL_CORE_ASSERT(Exists(name), "Shader not found for removal!");
+		m_Shaders.erase(name);
+	}
 }
