@@ -20,6 +20,7 @@
 #include "Glimmer/Renderer/VertexArray.h"
 #include "Glimmer/Renderer/OrthographicCamera.h"
 #include "Glimmer/Renderer/OrthographicCameraController.h"
+#include "Glimmer/Renderer/PerspectiveCamera.h"
 #include "Glimmer/Renderer/Texture.h"
 #include "Glimmer/Renderer/Model.h"
 #include "Glimmer/Renderer/Mesh.h"

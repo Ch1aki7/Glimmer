@@ -19,8 +19,12 @@ namespace gl {
 
 	void Renderer::BeginScene(OrthographicCamera& camera)
 	{
-		// 记录摄像机的 View-Projection 矩阵
 		s_SceneData->ViewProjectionMatrix = camera.GetViewProjectionMatrix();
+	}
+
+	void Renderer::BeginScene(const glm::mat4& viewProjection)
+	{
+		s_SceneData->ViewProjectionMatrix = viewProjection;
 	}
 
 	void Renderer::EndScene()

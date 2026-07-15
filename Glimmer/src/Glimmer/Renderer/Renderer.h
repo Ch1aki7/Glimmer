@@ -12,6 +12,7 @@ namespace gl {
 		static void Shutdown();
 
 		static void BeginScene(OrthographicCamera& camera);
+		static void BeginScene(const glm::mat4& viewProjection);
 		static void EndScene();
 
 		static inline glm::mat4 GetViewProjection() { return s_SceneData->ViewProjectionMatrix; }
