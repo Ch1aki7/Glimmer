@@ -21,9 +21,9 @@ void Sandbox2D::OnAttach() {
 	m_HenryTexture = Texture2D::Create("assets/textures/Henry.jpg");
 
 	//m_MeshModel = CreateRef<Model>("assets/models/penguin.obj");
-	m_MeshModel = CreateRef<Model>("assets/models/企鹅高松灯.obj");
-	m_ChairModel = CreateRef<Model>("assets/models/chair.obj");
-	m_GirlModel = CreateRef<Model>("assets/models/girl.obj");
+	//m_MeshModel = CreateRef<Model>("assets/models/企鹅高松灯.obj");
+	//m_ChairModel = CreateRef<Model>("assets/models/chair.obj");
+	//m_GirlModel = CreateRef<Model>("assets/models/girl.obj");
 	m_3DShader = Shader::Create("assets/shaders/Model3D.glsl");
 	//m_PhoneShader = Shader::Create("assets/shaders/Phong.glsl");
 	//m_ToonShader = Shader::Create("assets/shaders/Toon.glsl");
@@ -31,8 +31,8 @@ void Sandbox2D::OnAttach() {
 	//m_HologramShader = Shader::Create("assets/shaders/Hologram.glsl");
 
 	//m_TestTexture = Texture2D::Create("assets/models/penguin.png");
-	m_TestTexture = Texture2D::Create("assets/models/Final_Texture.png");
-	m_GirlTexture = Texture2D::Create("assets/models/girl.png");
+	//m_TestTexture = Texture2D::Create("assets/models/Final_Texture.png");
+	//m_GirlTexture = Texture2D::Create("assets/models/girl.png");
 
 
 	FramebufferSpecification fbSpec;
@@ -78,39 +78,39 @@ void Sandbox2D::OnUpdate(Timestep ts) {
 		Renderer2D::DrawFullscreenQuad(stShader, 0.9f);
 
 		// 3D obj渲染
-		Renderer::BeginScene(m_CameraController.GetCamera());
-		m_3DShader->Bind();
+		//Renderer::BeginScene(m_CameraController.GetCamera());
+		//m_3DShader->Bind();
 
-		// --- 统一上传光照全局参数 (只需上传一次，所有 3D 模型通用) ---
-		m_3DShader->UploadUniformFloat3("u_LightPos", m_LightPos);
-		m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f });
-		m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
-		// 显式告诉 3D Shader 去 0 号插槽找图
-		m_3DShader->UploadUniformInt("u_Texture", 0);
+		//// --- 统一上传光照全局参数 (只需上传一次，所有 3D 模型通用) ---
+		//m_3DShader->UploadUniformFloat3("u_LightPos", m_LightPos);
+		//m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f });
+		//m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
+		//// 显式告诉 3D Shader 去 0 号插槽找图
+		//m_3DShader->UploadUniformInt("u_Texture", 0);
 
-		// --- 绘制企鹅 ---
-		glm::mat4 penguinTransform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
-			* glm::rotate(glm::mat4(1.0f), glm::radians(-rotation), { 0, 1, 0 })
-			* glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
-		m_TestTexture->Bind(0); // 确保绑定到 0
-		m_MeshModel->Draw(m_3DShader, penguinTransform);
+		//// --- 绘制企鹅 ---
+		//glm::mat4 penguinTransform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
+		//	* glm::rotate(glm::mat4(1.0f), glm::radians(-rotation), { 0, 1, 0 })
+		//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+		//m_TestTexture->Bind(0); // 确保绑定到 0
+		//m_MeshModel->Draw(m_3DShader, penguinTransform);
 
-		// --- 绘制椅子 (给它一张默认贴图，防止变黑) ---
-		glm::mat4 chairTransform = glm::translate(glm::mat4(1.0f), { 1.0f, 1.0f, 0.0f })
-			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
-			* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
-		// 这里可以使用引擎的白贴图，或者任何通用贴图
-		//Renderer2D::GetWhiteTexture()->Bind(0);
-		m_ChairModel->Draw(m_3DShader, chairTransform);
+		//// --- 绘制椅子 (给它一张默认贴图，防止变黑) ---
+		//glm::mat4 chairTransform = glm::translate(glm::mat4(1.0f), { 1.0f, 1.0f, 0.0f })
+		//	* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
+		//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
+		//// 这里可以使用引擎的白贴图，或者任何通用贴图
+		////Renderer2D::GetWhiteTexture()->Bind(0);
+		//m_ChairModel->Draw(m_3DShader, chairTransform);
 
-		// --- 绘制女孩 ---
-		glm::mat4 girlTransform = glm::translate(glm::mat4(1.0f), { -1.0f, -1.0f, 0.1f })
-			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
-			* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
-		m_GirlTexture->Bind(0);
-		m_GirlModel->Draw(m_3DShader, girlTransform);
+		//// --- 绘制女孩 ---
+		//glm::mat4 girlTransform = glm::translate(glm::mat4(1.0f), { -1.0f, -1.0f, 0.1f })
+		//	* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0, 1, 0 })
+		//	* glm::scale(glm::mat4(1.0f), glm::vec3(0.01f));
+		//m_GirlTexture->Bind(0);
+		//m_GirlModel->Draw(m_3DShader, girlTransform);
 
-		Renderer::EndScene();
+		//Renderer::EndScene();
 
 		// 2D 批处理渲染
 		Renderer2D::BeginScene(m_CameraController.GetCamera());
