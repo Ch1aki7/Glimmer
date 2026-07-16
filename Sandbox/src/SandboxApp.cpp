@@ -9,16 +9,16 @@
 // 继承 Glimmer 的引擎基类
 class Sandbox : public gl::Application {
 public:
-    Sandbox() 
-    {
-		PushLayer(new Sandbox2D());
+	Sandbox()
+	{
+		PushLayer(new gl::Sandbox2D());
 		//PushLayer(new ExampleLayer());
-    }
-    ~Sandbox() {}
+	}
+	~Sandbox() {}
 };
 
 // 告诉引擎，我要启动这个沙盒游戏
-gl::Application* gl::CreateApplication() 
+gl::Application* gl::CreateApplication()
 {
-    return new Sandbox();
+	return new Sandbox();
 }
