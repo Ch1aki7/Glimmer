@@ -1,5 +1,6 @@
 #pragma once
 #include "Glimmer.h"
+#include "SceneHierarchyPanel.h"
 
 namespace gl {
 
@@ -21,6 +22,7 @@ namespace gl {
 		Ref<Texture2D> m_Texture;
 		Ref<Texture2D> m_STSTexture;
 		Ref<Texture2D> m_HenryTexture;
+		Ref<Texture2D> m_WhiteTexture; // 修复 DrawIndexed 解绑 slot 0 导致无贴图模型全黑
 		OrthographicCameraController m_CameraController;
 
 		Ref<Shader> m_3DShader;
@@ -36,6 +38,14 @@ namespace gl {
 		Ref<Framebuffer> m_PostProcessFB;
 		bool m_PostProcessEnabled = false;
 		uint32_t m_FinalSceneTexture = 0;
+
+		// 场景 & 层级面板
+		Ref<Scene> m_ActiveScene;
+		SceneHierarchyPanel m_HierarchyPanel;
+
+		// 视口
+		glm::vec2 m_ViewportSize = { 0.0f, 0.0f };
+		glm::vec2 m_ViewportBounds[2];
 
 		// 设置灯光参数
 		glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };

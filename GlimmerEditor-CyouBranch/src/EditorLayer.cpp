@@ -16,6 +16,11 @@ namespace gl {
 		m_STSTexture = Texture2D::Create("assets/textures/STS.png");
 		m_HenryTexture = Texture2D::Create("assets/textures/Henry.jpg");
 
+		// 白贴图：修复 DrawIndexed 后 slot 0 被解绑导致无贴图 3D 模型全黑
+		m_WhiteTexture = Texture2D::Create(1, 1);
+		uint32_t whitePixel = 0xffffffff;
+		m_WhiteTexture->SetData(&whitePixel, sizeof(uint32_t));
+
 		m_3DShader = Shader::Create("assets/shaders/Model3D.glsl");
 
 		// --- 加载所有 OBJ 模型 ---
@@ -23,7 +28,6 @@ namespace gl {
 			auto model = CreateRef<Model>(path);
 			if (model) {
 				m_Models.push_back(model);
-				// 从路径提取文件名作为显示名称
 				auto lastSlash = path.find_last_of("/\\");
 				auto lastDot = path.rfind('.');
 				auto start = (lastSlash == std::string::npos) ? 0 : lastSlash + 1;
@@ -51,6 +55,46 @@ namespace gl {
 		m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
 		m_ShaderLib.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
 		m_ShaderLib.Load("Hologram", "assets/shaders/Hologram.glsl");
+
+		// ============================================================
+		// 场景 & 层级面板测试
+		// ============================================================
+		m_ActiveScene = CreateRef<Scene>();
+
+		// --- 测试实体 1: 主相机 (Z=0，宽裁剪面确保可见) ---
+		auto cameraEntity = m_ActiveScene->CreateEntity("Main Camera");
+		auto& camComp = cameraEntity.AddComponent<CameraComponent>();
+		camComp.Camera.SetOrthographic(10.0f, -10.0f, 10.0f);
+		// 初始化投影：首帧 m_ViewportSize 为 0 会导致投影宽度为零，在此直接用 Framebuffer 尺寸
+		m_ActiveScene->OnViewportResize(1280, 720);
+
+		// --- 测试实体 2~4: 彩色方块 ---
+		auto redSquare = m_ActiveScene->CreateEntity("Red Square");
+		redSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 1.0f, 0.2f, 0.2f, 1.0f });
+		redSquare.GetComponent<TransformComponent>().Translation = { -2.0f, 1.0f, 0.0f };
+
+		auto greenSquare = m_ActiveScene->CreateEntity("Green Square");
+		greenSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.2f, 1.0f, 0.2f, 1.0f });
+		greenSquare.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 0.0f };
+
+		auto blueSquare = m_ActiveScene->CreateEntity("Blue Square");
+		blueSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.2f, 0.2f, 1.0f, 1.0f });
+		blueSquare.GetComponent<TransformComponent>().Translation = { 2.0f, -1.0f, -0.1f };
+
+		// --- 测试实体 5: 无渲染组件的纯逻辑实体 ---
+		auto logicNode = m_ActiveScene->CreateEntity("Logic Controller");
+		// 仅 Tag + Transform，无 Sprite/Camera/Script，验证面板 badges
+
+		// --- 初始化层级面板 ---
+		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.OnEntitySelected = [&](Entity e) {
+			if (e && e.HasComponent<TagComponent>())
+				GL_CORE_TRACE("Hierarchy selected: {0}", e.GetComponent<TagComponent>().Tag);
+		};
+		m_HierarchyPanel.OnEntityDeleted = [&](Entity e) {
+			if (e && e.HasComponent<TagComponent>())
+				GL_CORE_TRACE("Hierarchy deleted: {0}", e.GetComponent<TagComponent>().Tag);
+		};
 	}
 
 	void EditorLayer::OnDetach() {
@@ -71,17 +115,27 @@ namespace gl {
 			RenderCommand::Clear();
 		}
 
+		// Viewport resize 同步给场景
+		if (FramebufferSpecification spec = m_Framebuffer->GetSpecification();
+			m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
+		{
+			m_ActiveScene->OnViewportResize((uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
+		}
+
 		{
 			static float rotation = 0.0f;
 			rotation += ts * 50.0f;
 
 			GL_PROFILE_SCOPE("Renderer Draw");
-			auto bgShader = m_ShaderLib.Get("BalatroVortex");
-			Renderer2D::DrawFullscreenQuad(bgShader, 0.9f);
+			//auto bgShader = m_ShaderLib.Get("BalatroVortex");
+			//Renderer2D::DrawFullscreenQuad(bgShader, 0.9f);
 
 			// --- 3D 模型渲染 ---
 			if (m_SelectedModelIndex >= 0 && m_SelectedModelIndex < (int)m_Models.size())
 			{
+				// 确保 slot 0 有白贴图（修复 DrawIndexed 解绑导致的黑色问题）
+				m_WhiteTexture->Bind(0);
+
 				Renderer::BeginScene(m_CameraController.GetCamera());
 				m_3DShader->Bind();
 
@@ -100,6 +154,9 @@ namespace gl {
 
 				Renderer::EndScene();
 			}
+
+			// --- 场景 ECS 渲染（遍历 Sprite 实体） ---
+			m_ActiveScene->OnUpdateRuntime(ts);
 
 			// 2D 批处理渲染
 			Renderer2D::BeginScene(m_CameraController.GetCamera());
@@ -143,7 +200,6 @@ namespace gl {
 		bool opt_fullscreen = opt_fullscreen_persistant;
 		static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
 
-		// 设置窗口标志：无标题栏、无缩放、无移动、无遮挡、带菜单栏
 		ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
 		if (opt_fullscreen)
 		{
@@ -157,7 +213,6 @@ namespace gl {
 			window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
 		}
 
-		// 开启 DockSpace 窗口
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 		ImGui::Begin("DockSpace Demo", &dockspaceOpen, window_flags);
 		ImGui::PopStyleVar();
@@ -165,7 +220,6 @@ namespace gl {
 		if (opt_fullscreen)
 			ImGui::PopStyleVar(2);
 
-		// 真正的停靠空间核心
 		ImGuiIO& io = ImGui::GetIO();
 		if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable)
 		{
@@ -173,7 +227,6 @@ namespace gl {
 			ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
 		}
 
-		// 这里可以加引擎顶部的菜单栏（如 File, Edit）
 		if (ImGui::BeginMenuBar())
 		{
 			if (ImGui::BeginMenu("File"))
@@ -184,7 +237,12 @@ namespace gl {
 			ImGui::EndMenuBar();
 		}
 
-		// 状态统计
+		// ============================================================
+		// Scene Hierarchy 面板（低耦合：仅通过回调通信）
+		// ============================================================
+		m_HierarchyPanel.OnImGuiRender();
+
+		// Stats
 		ImGui::Begin("Stats");
 		auto stats = Renderer2D::GetStats();
 		ImGui::Text("Renderer2D Stats:");
@@ -194,7 +252,7 @@ namespace gl {
 		ImGui::Text("Indices: %d", stats.GetTotalIndexCount());
 		ImGui::End();
 
-		// Shader 选择
+		// 3D Settings
 		ImGui::Begin("3D Settings");
 		ImGui::Text("Select Lighting Model:");
 		if (ImGui::Combo("Shader Type", &m_SelectedShaderIndex, m_ShaderNames, IM_ARRAYSIZE(m_ShaderNames)))
@@ -205,10 +263,8 @@ namespace gl {
 
 		ImGui::Separator();
 
-		// 模型选择
 		if (!m_ModelNames.empty())
 		{
-			// 构建 C 风格字符串数组兼容旧版 ImGui Combo
 			std::vector<const char*> modelNameCStrs;
 			for (auto& name : m_ModelNames)
 				modelNameCStrs.push_back(name.c_str());
@@ -221,41 +277,113 @@ namespace gl {
 		}
 
 		ImGui::Separator();
-
-		// Shader 特有的动态调参
-		if (m_SelectedShaderIndex == 3) // 全息(Hologram)
+		if (m_SelectedShaderIndex == 3)
 		{
 			ImGui::Text("Hologram Settings");
 		}
 		ImGui::End();
 
-		// 调试信息
+		// ============================================================
+		// Inspector / Properties（根据 Hierarchy 选中自动更新）
+		// ============================================================
+		ImGui::Begin("Properties");
+		Entity selected = m_HierarchyPanel.GetSelectedEntity();
+		if (selected && selected.HasComponent<TagComponent>())
+		{
+			auto& tag = selected.GetComponent<TagComponent>().Tag;
+			char buffer[256];
+			strncpy(buffer, tag.c_str(), sizeof(buffer));
+			buffer[sizeof(buffer) - 1] = 0;
+			if (ImGui::InputText("Tag", buffer, sizeof(buffer)))
+				tag = buffer;
+
+			ImGui::Separator();
+
+			// Transform
+			if (selected.HasComponent<TransformComponent>())
+			{
+				if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					auto& t = selected.GetComponent<TransformComponent>();
+					ImGui::DragFloat3("Position", glm::value_ptr(t.Translation), 0.1f);
+					ImGui::DragFloat3("Rotation", glm::value_ptr(t.Rotation), 1.0f);
+					ImGui::DragFloat3("Scale", glm::value_ptr(t.Scale), 0.05f, 0.01f, 10.0f);
+				}
+			}
+
+			// SpriteRenderer
+			if (selected.HasComponent<SpriteRendererComponent>())
+			{
+				if (ImGui::CollapsingHeader("Sprite Renderer", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					auto& sr = selected.GetComponent<SpriteRendererComponent>();
+					ImGui::ColorEdit4("Color", glm::value_ptr(sr.Color));
+				}
+			}
+
+			// Camera
+			if (selected.HasComponent<CameraComponent>())
+			{
+				if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					auto& cc = selected.GetComponent<CameraComponent>();
+					ImGui::Checkbox("Primary", &cc.Primary);
+					ImGui::Checkbox("Fixed Aspect Ratio", &cc.FixedAspectRatio);
+					float ortho = cc.Camera.GetOrthographicSize();
+					if (ImGui::DragFloat("Ortho Size", &ortho, 0.1f))
+						cc.Camera.SetOrthographicSize(ortho);
+				}
+			}
+
+			// 组件标签列表
+			ImGui::Separator();
+			ImGui::TextDisabled("Attached Components:");
+			ImGui::BulletText("TagComponent");
+			if (selected.HasComponent<TransformComponent>())    ImGui::BulletText("TransformComponent");
+			if (selected.HasComponent<SpriteRendererComponent>()) ImGui::BulletText("SpriteRendererComponent");
+			if (selected.HasComponent<CameraComponent>())       ImGui::BulletText("CameraComponent");
+			if (selected.HasComponent<NativeScriptComponent>())  ImGui::BulletText("NativeScriptComponent");
+		}
+		else
+		{
+			ImGui::TextDisabled("No entity selected");
+		}
+		ImGui::End();
+
+		// Settings
 		ImGui::Begin("Settings");
 		ImGui::Checkbox("Enable Post-Processing", &m_PostProcessEnabled);
 		ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 		ImGui::End();
 
-		// 游戏视口 (Viewport)
+		// Viewport
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
 		ImGui::Begin("Viewport");
+
+		auto viewportMinRegion = ImGui::GetWindowContentRegionMin();
+		auto viewportMaxRegion = ImGui::GetWindowContentRegionMax();
+		auto viewportOffset = ImGui::GetWindowPos();
+		m_ViewportBounds[0] = { viewportMinRegion.x + viewportOffset.x, viewportMinRegion.y + viewportOffset.y };
+		m_ViewportBounds[1] = { viewportMaxRegion.x + viewportOffset.x, viewportMaxRegion.y + viewportOffset.y };
+
 		ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
+		m_ViewportSize = { viewportPanelSize.x, viewportPanelSize.y };
+
 		auto& spec = m_Framebuffer->GetSpecification();
 		if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&
 			(spec.Width != viewportPanelSize.x || spec.Height != viewportPanelSize.y))
 		{
 			m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
 			m_PostProcessFB->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
-
 			m_CameraController.OnResize(viewportPanelSize.x, viewportPanelSize.y);
 		}
 		uint32_t textureID = m_FinalSceneTexture;
 		ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
 		ImGui::End();
+		ImGui::PopStyleVar();
 
 		ImGui::End();
-
-		//bool show_demo_window = true;
-		//ImGui::ShowDemoWindow(&show_demo_window);
 	}
 
 	void EditorLayer::OnEvent(Event& event) {

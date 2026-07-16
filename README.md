@@ -7141,6 +7141,140 @@ m_Shaders["Texture"] = myShader;
 
 ## 透视相机
 
+
+## 场景层级面板 (Scene Hierarchy Panel)
+
+### 设计目标
+
+在编辑器中实现一个低耦合的层级面板，能列出场景中所有实体、展示其组件类型、支持选中和删除操作。核心设计原则：**面板只依赖引擎公共接口，通过回调与编辑器通信，可独立实例化测试**。
+
+### 架构设计
+
+```
+SceneHierarchyPanel (独立类, SceneHierarchyPanel.h/.cpp)
+  │
+  │ 依赖: Scene, Entity (引擎公共接口)
+  │ 不依赖: EditorLayer, Application, 任何具体编辑器逻辑
+  │
+  ├─ SetContext(Ref<Scene>)     ← 绑定要展示的场景
+  ├─ OnImGuiRender()             ← 每帧在 ImGui 中绘制
+  ├─ GetSelectedEntity()         ← 获取当前选中的实体
+  │
+  └─ 回调 (std::function):
+      ├─ OnEntitySelected(Entity)  ← 选中变化时通知外部
+      └─ OnEntityDeleted(Entity)   ← 删除操作完成时通知外部
+```
+
+与编辑器层的通信完全通过回调完成，不使用继承、不持有编辑器引用。这意味着你可以在任何地方（Sandbox、单元测试、独立窗口）实例化该面板，只需给它一个 Scene。
+
+### 实现要点
+
+**实体列表遍历**
+
+利用 Scene 对 `SceneHierarchyPanel` 的 friend 声明，直接访问 `entt::registry` 遍历所有带 `TagComponent` 的实体：
+
+```cpp
+m_Context->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
+    Entity entity{ handle, m_Context.get() };
+    if (entity.HasComponent<TagComponent>()) {
+        DrawEntityNode(entity, idCounter);
+    }
+});
+```
+
+**组件徽章系统**
+
+每个实体节点后附加其拥有的组件缩写，一目了然：
+
+```
+Entity Node Label + [Cam] [Spr] [Scr]
+                     │     │     │
+                     │     │     └─ NativeScriptComponent
+                     │     └─ SpriteRendererComponent
+                     └─ CameraComponent
+```
+
+```cpp
+std::string badges;
+if (entity.HasComponent<CameraComponent>())          badges += " [Cam]";
+if (entity.HasComponent<SpriteRendererComponent>())  badges += " [Spr]";
+if (entity.HasComponent<NativeScriptComponent>())    badges += " [Scr]";
+```
+
+**ImGui 节点渲染**
+
+使用 `ImGui::TreeNodeEx` 配合 `ImGuiTreeNodeFlags_Leaf` 和 `SpanAvailWidth` 实现实体列表项。选中状态通过 `ImGuiTreeNodeFlags_Selected` 高亮，利用 `ImGui::IsItemClicked()` 检测左键点击：
+
+```cpp
+ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf
+    | ImGuiTreeNodeFlags_SpanAvailWidth
+    | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+if (m_SelectionContext == entity)
+    flags |= ImGuiTreeNodeFlags_Selected;
+
+ImGui::TreeNodeEx((void*)(uint64_t)(uint32_t)entity, flags, "%s", label.c_str());
+
+if (ImGui::IsItemClicked()) {
+    m_SelectionContext = entity;
+    if (OnEntitySelected) OnEntitySelected(entity);
+}
+```
+
+**右键删除 (带确认弹窗)**
+
+右键弹出上下文菜单 → 点击 Delete → 弹出 Modal 确认框 → 确认后删除实体：
+
+```cpp
+if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::MenuItem("Delete")) {
+        m_RightClickedEntity = entity;
+        m_ShowDeletePopup = true;    // 下一帧弹出 Modal
+    }
+    ImGui::EndPopup();
+}
+```
+
+删除前通过 `OnEntityDeleted` 回调通知外部，如果被删除的实体恰好是当前选中项则清空选中状态，防止悬空引用。
+
+**与旧版 EnTT 的兼容**
+
+项目使用的 EnTT 版本较老，没有 `registry.alive()` 公开方法。原本计划在工具栏显示实体计数（如 `"(5 entities)"`），因 API 不存在而移除。这是引擎开发中常见的依赖版本适配问题——公共 API 在不同版本间可能完全不同。
+
+### 集成测试 (GlimmerEditor-CyouBranch)
+
+在 `EditorLayer::OnAttach` 中创建 5 个测试实体覆盖所有验证场景：
+
+| 实体 | 组件 | 验证目的 |
+|------|------|---------|
+| Main Camera | Tag + Transform + Camera | [Cam] 徽章 + Primary 相机 + Properties 面板 Camera 参数 |
+| Red Square | Tag + Transform + SpriteRenderer(红) | [Spr] 徽章 + 颜色属性编辑 |
+| Green Square | Tag + Transform + SpriteRenderer(绿) | ECS 场景渲染可见性 |
+| Blue Square | Tag + Transform + SpriteRenderer(蓝) | 多实体选择切换 |
+| Logic Controller | Tag + Transform (仅此两项) | 无特殊徽章，验证纯逻辑实体也能正确显示 |
+
+实例化并注册回调：
+
+```cpp
+m_HierarchyPanel.SetContext(m_ActiveScene);
+m_HierarchyPanel.OnEntitySelected = [&](Entity e) {
+    GL_CORE_TRACE("Hierarchy selected: {0}", e.GetComponent<TagComponent>().Tag);
+};
+m_HierarchyPanel.OnEntityDeleted = [&](Entity e) {
+    GL_CORE_TRACE("Hierarchy deleted: {0}", e.GetComponent<TagComponent>().Tag);
+};
+```
+
+`OnImGuiRender` 中只需一行调用即可渲染面板：
+
+```cpp
+m_HierarchyPanel.OnImGuiRender();
+```
+
+配合 Properties 面板，通过 `m_HierarchyPanel.GetSelectedEntity()` 获取选中实体，按需展示其 Tag/Transform/SpriteRenderer/Camera 组件属性。这样 Hierarchy 和 Properties 之间没有直接耦合——它们只通过 EditorLayer 持有的选中状态间接通信。
+
+![[README.assets/Pasted image 20260716151430.png]]
+
 ## KB
 
 ### 为什么不用动态库？

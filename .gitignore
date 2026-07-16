@@ -423,6 +423,7 @@ bin-int/
 !vendor/bin/**
 .claude/
 CLAUDE.md
+.obsidian
 
 *.sln
 *.vcxproj
