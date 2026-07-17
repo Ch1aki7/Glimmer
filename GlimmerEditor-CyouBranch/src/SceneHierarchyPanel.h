@@ -28,6 +28,7 @@ namespace gl {
 
 	private:
 		void DrawEntityNode(Entity entity, uint32_t& idCounter);
+		void DrawComponents(Entity entity); // 组件属性检查器
 
 		Ref<Scene> m_Context;
 		Entity m_SelectionContext;

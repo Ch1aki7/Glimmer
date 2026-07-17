@@ -7314,6 +7314,105 @@ ImGuiStyle& style = ImGui::GetStyle();
 
 ![[README.assets/Pasted image 20260717141100.png]]
 
+
+## 场景层级面板完善：内联组件检查器
+
+上一步实现了层级面板的实体列表、选中、删除功能，但组件属性编辑在另一个独立的 Properties 窗口中。参照 Hazel 上游设计，将 `DrawComponents` 方法整合进 `SceneHierarchyPanel`，使层级面板成为一个自包含的实体管理工具——选中实体后直接在面板底部展开组件检查器，无需跳转到其他窗口。
+
+### SceneCamera API 补全
+
+组件检查器需要运行时独立读写每个投影参数，但引擎 `SceneCamera` 的透视/正交近远面参数全为 `private` 且无公开访问器，只能通过 `SetOrthographic(size, near, far)` 一次性设置。为此在 `SceneCamera` 中新增 10 个 getter/setter：
+
+```cpp
+// 透视参数
+float GetPerspectiveVerticalFOV() const;
+void SetPerspectiveVerticalFOV(float fov);    // 弧度制，UI 层用 glm::degrees 转换
+float GetPerspectiveNearClip() const;
+void SetPerspectiveNearClip(float nearClip);
+float GetPerspectiveFarClip() const;
+void SetPerspectiveFarClip(float farClip);
+
+// 正交参数
+float GetOrthographicNearClip() const;
+void SetOrthographicNearClip(float nearClip);
+float GetOrthographicFarClip() const;
+void SetOrthographicFarClip(float farClip);
+```
+
+每个 setter 调用后自动触发 `RecalculateProjection()`，确保投影矩阵立即生效。
+
+### DrawComponents 实现
+
+触发时机：`OnImGuiRender` 中，实体列表下方，检测到 `m_SelectionContext` 有效时调用 `DrawComponents(m_SelectionContext)`。
+
+**Tag 组件**
+
+```
+Tag: [Main Camera________]  ← ImGui::InputText，实时修改实体名称
+```
+
+**Transform 组件**
+
+```
+▼ Transform                       ← ImGui::TreeNodeEx，默认展开
+  Position  [ -0.00] [  1.00] [  0.00]   ← DragFloat3
+  Rotation  [  0.0 ] [  0.0 ] [  0.0 ]
+  Scale     [  1.00] [  1.00] [  1.00]   ← 限幅 0.01 ~ 10.0
+```
+
+适配本引擎的 `TransformComponent` 结构（`Translation / Rotation / Scale`），而非 tmp 参考代码中的 `Transform` 矩阵形式。
+
+**Camera 组件**
+
+```
+▼ Camera                          ← 默认展开
+  [✓] Primary
+  Projection: [Perspective ▼]     ← ImGui::BeginCombo 下拉切换
+
+  透视模式:
+    Vertical FOV: [45.0]°         ← DragFloat (1° ~ 179°)
+    Near:  [0.01]
+    Far:   [1000.0]
+
+  正交模式:
+    Size: [10.0]
+    Near: [-1.0]
+    Far:  [ 1.0]
+    [ ] Fixed Aspect Ratio
+```
+
+**SpriteRenderer 组件**
+
+```
+▼ Sprite Renderer                 ← 默认展开
+  Color: [■] [1.00, 0.20, 0.20, 1.00]  ← ImGui::ColorEdit4
+```
+
+## 修复：无贴图 3D 模型全黑 Bug
+
+### 问题现象
+
+在 GlimmerEditor-CyouBranch 中，将 2D 批处理渲染注释掉后，OBJ 模型（bunny / dragon / suzanne 等无贴图模型）渲染结果变为全黑，而非预期的光照着色效果。
+
+### 根因定位
+
+`OpenGLRendererAPI::DrawIndexed` 每次绘制结束后调用 `glBindTexture(GL_TEXTURE_2D, 0)` 从当前活跃纹理单元解绑纹理。此调用不知道哪个 slot 是活跃的——它只解绑最后一条 `glActiveTexture` 指向的 slot。
+
+**2D 批处理启用时**：`Flush` 依次绑定白贴图 → slot 0、balatro.png → slot 1、STS.png → slot 2、henry.jpg → slot 3，最后活跃的是 slot 3。`DrawIndexed` 解绑 slot 3，**slot 0 的白贴图完好无损**。
+
+**2D 批处理注释后**：ECS 场景的 `EndScene → Flush` 仅绑定白贴图到 slot 0，`DrawIndexed` 随后将其解绑。下一帧 3D 模型采样 slot 0 时获取到空纹理，片段着色器中：
+
+```
+vec4 texColor = texture(u_Texture, v_TexCoord);  // (0,0,0,0)
+vec3 result = (ambient + diffuse + specular) * texColor.rgb;  // = (0,0,0)
+```
+
+光照计算结果乘以 0，整个模型变黑。
+
+### 修复方案
+
+在 `EditorLayer::OnAttach` 中创建 1×1 白像素纹理 `m_WhiteTexture`，每次 3D 模型渲染前显式调用 `m_WhiteTexture->Bind(0)`，保障 slot 0 始终有有效的白色纹理，不再依赖 2D 批处理的副作用。
+
 ## KB
 
 ### 为什么不用动态库？

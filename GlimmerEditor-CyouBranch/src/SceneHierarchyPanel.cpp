@@ -1,4 +1,5 @@
 #include "SceneHierarchyPanel.h"
+#include <glm/gtc/type_ptr.hpp>
 
 namespace gl {
 
@@ -19,7 +20,6 @@ namespace gl {
 			if (OnEntitySelected) OnEntitySelected(entity);
 		}
 
-
 		ImGui::Separator();
 
 		// --- 实体列表 ---
@@ -30,6 +30,13 @@ namespace gl {
 				DrawEntityNode(entity, idCounter);
 			}
 		});
+
+		// --- 选中实体的组件检查器 ---
+		ImGui::Separator();
+		if (m_SelectionContext && m_SelectionContext.HasComponent<TagComponent>())
+		{
+			DrawComponents(m_SelectionContext);
+		}
 
 		// --- 右键删除弹窗 ---
 		if (m_ShowDeletePopup) {
@@ -70,19 +77,16 @@ namespace gl {
 	{
 		auto& tag = entity.GetComponent<TagComponent>().Tag;
 
-		// --- 组件图标 ---
 		std::string label;
 		label += tag.empty() ? "Unnamed" : tag;
 
-		// 拼接组件缩写标记
 		std::string badges;
-		if (entity.HasComponent<CameraComponent>())    badges += " [Cam]";
-		if (entity.HasComponent<SpriteRendererComponent>()) badges += " [Spr]";
-		if (entity.HasComponent<NativeScriptComponent>())   badges += " [Scr]";
+		if (entity.HasComponent<CameraComponent>())          badges += " [Cam]";
+		if (entity.HasComponent<SpriteRendererComponent>())  badges += " [Spr]";
+		if (entity.HasComponent<NativeScriptComponent>())    badges += " [Scr]";
 
 		label += badges;
 
-		// --- 选中高亮 ---
 		ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf
 			| ImGuiTreeNodeFlags_SpanAvailWidth
 			| ImGuiTreeNodeFlags_NoTreePushOnOpen;
@@ -90,16 +94,13 @@ namespace gl {
 		if (m_SelectionContext == entity)
 			flags |= ImGuiTreeNodeFlags_Selected;
 
-		// 基于 idCounter 让不同帧同一实体保持稳定 ID
 		ImGui::TreeNodeEx((void*)(uint64_t)(uint32_t)entity, flags, "%s", label.c_str());
 
-		// --- 左键选中 ---
 		if (ImGui::IsItemClicked()) {
 			m_SelectionContext = entity;
 			if (OnEntitySelected) OnEntitySelected(entity);
 		}
 
-		// --- 右键菜单 ---
 		if (ImGui::BeginPopupContextItem()) {
 			if (ImGui::MenuItem("Delete")) {
 				m_RightClickedEntity = entity;
@@ -108,8 +109,112 @@ namespace gl {
 			ImGui::EndPopup();
 		}
 
-		// 禁止未使用的参数警告
 		(void)idCounter;
+	}
+
+	void SceneHierarchyPanel::DrawComponents(Entity entity)
+	{
+		// --- Tag ---
+		if (entity.HasComponent<TagComponent>())
+		{
+			auto& tag = entity.GetComponent<TagComponent>().Tag;
+
+			char buffer[256];
+			memset(buffer, 0, sizeof(buffer));
+			strncpy(buffer, tag.c_str(), sizeof(buffer) - 1);
+			if (ImGui::InputText("Tag", buffer, sizeof(buffer)))
+			{
+				tag = std::string(buffer);
+			}
+		}
+
+		// --- Transform ---
+		if (entity.HasComponent<TransformComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(TransformComponent).hash_code(), ImGuiTreeNodeFlags_DefaultOpen, "Transform"))
+			{
+				auto& tc = entity.GetComponent<TransformComponent>();
+				ImGui::DragFloat3("Position", glm::value_ptr(tc.Translation), 0.1f);
+				ImGui::DragFloat3("Rotation", glm::value_ptr(tc.Rotation), 1.0f);
+				ImGui::DragFloat3("Scale",    glm::value_ptr(tc.Scale), 0.05f, 0.01f, 10.0f);
+				ImGui::TreePop();
+			}
+		}
+
+		// --- Camera ---
+		if (entity.HasComponent<CameraComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(CameraComponent).hash_code(), ImGuiTreeNodeFlags_DefaultOpen, "Camera"))
+			{
+				auto& cameraComponent = entity.GetComponent<CameraComponent>();
+				auto& camera = cameraComponent.Camera;
+
+				ImGui::Checkbox("Primary", &cameraComponent.Primary);
+
+				const char* projectionTypeStrings[] = { "Perspective", "Orthographic" };
+				const char* currentProjectionTypeString = projectionTypeStrings[(int)camera.GetProjectionType()];
+				if (ImGui::BeginCombo("Projection", currentProjectionTypeString))
+				{
+					for (int i = 0; i < 2; i++)
+					{
+						bool isSelected = currentProjectionTypeString == projectionTypeStrings[i];
+						if (ImGui::Selectable(projectionTypeStrings[i], isSelected))
+						{
+							currentProjectionTypeString = projectionTypeStrings[i];
+							camera.SetProjectionType((SceneCamera::ProjectionType)i);
+						}
+						if (isSelected)
+							ImGui::SetItemDefaultFocus();
+					}
+					ImGui::EndCombo();
+				}
+
+				if (camera.GetProjectionType() == SceneCamera::ProjectionType::Perspective)
+				{
+					float perspectiveVerticalFov = glm::degrees(camera.GetPerspectiveVerticalFOV());
+					if (ImGui::DragFloat("Vertical FOV", &perspectiveVerticalFov, 0.5f, 1.0f, 179.0f))
+						camera.SetPerspectiveVerticalFOV(glm::radians(perspectiveVerticalFov));
+
+					float perspectiveNear = camera.GetPerspectiveNearClip();
+					if (ImGui::DragFloat("Near", &perspectiveNear, 0.01f, 0.001f))
+						camera.SetPerspectiveNearClip(perspectiveNear);
+
+					float perspectiveFar = camera.GetPerspectiveFarClip();
+					if (ImGui::DragFloat("Far", &perspectiveFar, 1.0f))
+						camera.SetPerspectiveFarClip(perspectiveFar);
+				}
+
+				if (camera.GetProjectionType() == SceneCamera::ProjectionType::Orthographic)
+				{
+					float orthoSize = camera.GetOrthographicSize();
+					if (ImGui::DragFloat("Size", &orthoSize, 0.1f, 0.1f))
+						camera.SetOrthographicSize(orthoSize);
+
+					float orthoNear = camera.GetOrthographicNearClip();
+					if (ImGui::DragFloat("Near", &orthoNear, 0.1f))
+						camera.SetOrthographicNearClip(orthoNear);
+
+					float orthoFar = camera.GetOrthographicFarClip();
+					if (ImGui::DragFloat("Far", &orthoFar, 0.1f))
+						camera.SetOrthographicFarClip(orthoFar);
+
+					ImGui::Checkbox("Fixed Aspect Ratio", &cameraComponent.FixedAspectRatio);
+				}
+
+				ImGui::TreePop();
+			}
+		}
+
+		// --- Sprite Renderer ---
+		if (entity.HasComponent<SpriteRendererComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(SpriteRendererComponent).hash_code(), ImGuiTreeNodeFlags_DefaultOpen, "Sprite Renderer"))
+			{
+				auto& src = entity.GetComponent<SpriteRendererComponent>();
+				ImGui::ColorEdit4("Color", glm::value_ptr(src.Color));
+				ImGui::TreePop();
+			}
+		}
 	}
 
 }
