@@ -1,5 +1,6 @@
 #include "EditorLayer.h"
 #include "Glimmer/Scene/SceneSerializer.h"
+#include "Glimmer/Utils/FileDialog.h"
 #include <glm/gtc/type_ptr.hpp>
 
 namespace gl {
@@ -196,6 +197,34 @@ namespace gl {
 	void EditorLayer::OnImGuiRender() {
 		GL_PROFILE_FUNCTION();
 
+		// --- 全局快捷键（独立于菜单焦点） ---
+		auto& io = ImGui::GetIO();
+		if (ImGui::IsKeyChordPressed(ImGuiKey_N | ImGuiMod_Ctrl)) {
+			m_ActiveScene = CreateRef<Scene>();
+			m_HierarchyPanel.SetContext(m_ActiveScene);
+			m_HierarchyPanel.SetSelectedEntity({});
+		}
+		if (ImGui::IsKeyChordPressed(ImGuiKey_S | ImGuiMod_Ctrl)) {
+			std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+			if (!path.empty()) {
+				SceneSerializer serializer(m_ActiveScene);
+				serializer.Serialize(path);
+				GL_CORE_INFO("Scene saved to {0}", path);
+			}
+		}
+		if (ImGui::IsKeyChordPressed(ImGuiKey_O | ImGuiMod_Ctrl)) {
+			std::string path = FileDialog::OpenFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+			if (!path.empty()) {
+				auto newScene = CreateRef<Scene>();
+				SceneSerializer serializer(newScene);
+				if (serializer.Deserialize(path)) {
+					m_ActiveScene = newScene;
+					m_HierarchyPanel.SetContext(m_ActiveScene);
+					m_HierarchyPanel.SetSelectedEntity({});
+				}
+			}
+		}
+
 		static bool dockspaceOpen = true;
 		static bool opt_fullscreen_persistant = true;
 		bool opt_fullscreen = opt_fullscreen_persistant;
@@ -221,7 +250,6 @@ namespace gl {
 		if (opt_fullscreen)
 			ImGui::PopStyleVar(2);
 
-		ImGuiIO& io = ImGui::GetIO();
 		if (io.ConfigFlags & ImGuiConfigFlags_DockingEnable)
 		{
 			ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
@@ -238,21 +266,27 @@ namespace gl {
 						m_HierarchyPanel.SetContext(m_ActiveScene);
 						m_HierarchyPanel.SetSelectedEntity({});
 					}
-					if (ImGui::MenuItem("Save", "Ctrl+S"))
+					if (ImGui::MenuItem("Save As...", "Ctrl+S"))
 					{
-						SceneSerializer serializer(m_ActiveScene);
-						serializer.Serialize("assets/scenes/demo.glimmer");
-						GL_CORE_INFO("Scene saved");
+						std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+						if (!path.empty()) {
+							SceneSerializer serializer(m_ActiveScene);
+							serializer.Serialize(path);
+							GL_CORE_INFO("Scene saved to {0}", path);
+						}
 					}
-					if (ImGui::MenuItem("Open", "Ctrl+O"))
+					if (ImGui::MenuItem("Open...", "Ctrl+O"))
 					{
-						auto newScene = CreateRef<Scene>();
-						SceneSerializer serializer(newScene);
-						if (serializer.Deserialize("assets/scenes/demo.glimmer"))
-						{
-							m_ActiveScene = newScene;
-							m_HierarchyPanel.SetContext(m_ActiveScene);
-							m_HierarchyPanel.SetSelectedEntity({});
+						std::string path = FileDialog::OpenFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+						if (!path.empty()) {
+							auto newScene = CreateRef<Scene>();
+							SceneSerializer serializer(newScene);
+							if (serializer.Deserialize(path))
+							{
+								m_ActiveScene = newScene;
+								m_HierarchyPanel.SetContext(m_ActiveScene);
+								m_HierarchyPanel.SetSelectedEntity({});
+							}
 						}
 					}
 					ImGui::Separator();
@@ -319,6 +353,9 @@ namespace gl {
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
 		ImGui::Begin("Viewport");
 
+		m_ViewportFocused = ImGui::IsWindowFocused();
+		m_ViewportHovered = ImGui::IsWindowHovered();
+
 		auto viewportMinRegion = ImGui::GetWindowContentRegionMin();
 		auto viewportMaxRegion = ImGui::GetWindowContentRegionMax();
 		auto viewportOffset = ImGui::GetWindowPos();
@@ -346,6 +383,20 @@ namespace gl {
 
 	void EditorLayer::OnEvent(Event& event) {
 		GL_TRACE("{0}", event.ToString());
+
+		// 当 ImGui 需要键盘时（正在输入文本框中），不转发给相机
+		if (event.IsInCategory(EventCategoryKeyboard)) {
+			if (ImGui::GetIO().WantCaptureKeyboard)
+				return;
+		}
+
+		// 仅当视口悬停时才把事件给相机
+		// （点击 UI 面板时不应拖动场景）
+		if (event.IsInCategory(EventCategoryMouse)) {
+			if (!m_ViewportHovered)
+				return;
+		}
+
 		m_CameraController.OnEvent(event);
 	}
 

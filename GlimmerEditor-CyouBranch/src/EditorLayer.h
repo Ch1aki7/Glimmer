@@ -46,6 +46,7 @@ namespace gl {
 		// 视口
 		glm::vec2 m_ViewportSize = { 0.0f, 0.0f };
 		glm::vec2 m_ViewportBounds[2];
+		bool m_ViewportFocused = false, m_ViewportHovered = false;
 
 		// 设置灯光参数
 		glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };

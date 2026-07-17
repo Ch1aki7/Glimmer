@@ -7682,6 +7682,120 @@ Entities:
 可实现单场景的读取
 ![[README.assets/Pasted image 20260717153228.png]]
 
+
+## 原生文件对话框 (Windows File Dialog)
+
+### 设计目标
+
+替换场景序列化中的硬编码文件路径，接入 Windows 原生文件对话框，支持用户通过 GUI 浏览和选择文件。
+
+### 架构分层
+
+```
+Glimmer/Utils/FileDialog.h                    ← 平台无关接口
+    │
+    └── Platform/Windows/WindowsFileDialog.cpp ← Windows 实现
+            │
+            ├── GetOpenFileNameA()   → 打开文件对话框
+            ├── GetSaveFileNameA()   → 保存文件对话框
+            └── glfwGetWin32Window() → GLFW 窗口 → HWND（模态化父窗口）
+```
+
+### 接口设计
+
+```cpp
+namespace gl::FileDialog {
+
+    // 返回所选文件路径，取消时返回空字符串
+    // filter 格式: "描述1\0*.ext1\0描述2\0*.ext2\0"
+    std::string OpenFile(const char* filter);
+    std::string SaveFile(const char* filter);
+
+}
+```
+
+函数而非类——无状态、无生命周期管理，调用即用完。符合工具函数语义。
+
+### Windows 实现要点
+
+**OPENFILENAME 结构**
+
+```cpp
+OPENFILENAMEA ofn = {};
+ofn.lStructSize = sizeof(OPENFILENAMEA);
+ofn.hwndOwner   = hwnd;                     // 父窗口 HWND，模态化
+ofn.lpstrFilter = filter;                   // 双 null 终止的过滤器字符串
+ofn.lpstrFile   = filePath;                 // 结果缓冲区
+ofn.nMaxFile    = MAX_PATH;                 // 缓冲区大小
+ofn.lpstrDefExt = defaultExt;               // 默认扩展名
+ofn.Flags = OFN_PATHMUSTEXIST               // 路径必须存在
+          | OFN_HIDEREADONLY                 // 隐藏只读复选框
+          | OFN_NOCHANGEDIR;                 // 不改变当前工作目录
+```
+
+**模态化父窗口**
+
+对话框需要原生 HWND 作为父窗口以保持模态。Glimmer 使用 GLFW，需通过 `glfwGetWin32Window()` 转换：
+
+```cpp
+auto* native = static_cast<GLFWwindow*>(Application::Get().GetWindow().GetNativeWindow());
+HWND hwnd = glfwGetWin32Window(native);
+```
+
+`glfwGetWin32Window` 受 `GLFW_EXPOSE_NATIVE_WIN32` 条件编译保护，必须在 `#include <GLFW/glfw3native.h>` 之前定义。
+
+### 编辑器快捷键集成
+
+菜单快捷键在 DockSpace 架构下不可靠——焦点在子面板时菜单加速器可能不触发。改用 ImGui 全局快捷键：
+
+```cpp
+// OnImGuiRender 顶部，独立于任何窗口焦点
+if (ImGui::IsKeyChordPressed(ImGuiKey_S | ImGuiMod_Ctrl)) {
+    // Save...
+}
+if (ImGui::IsKeyChordPressed(ImGuiKey_O | ImGuiMod_Ctrl)) {
+    // Open...
+}
+```
+
+**焦点分流**：编辑文本（如 Tag InputText）时 `WantCaptureKeyboard` 阻止相机移动：
+
+```cpp
+void EditorLayer::OnEvent(Event& event) {
+    if (event.IsInCategory(EventCategoryKeyboard)) {
+        if (ImGui::GetIO().WantCaptureKeyboard) return;  // ImGui 占用键盘
+    }
+    if (event.IsInCategory(EventCategoryMouse)) {
+        if (!m_ViewportHovered) return;                   // 鼠标在 UI 面板上
+    }
+    m_CameraController.OnEvent(event);
+}
+```
+
+这样在层级面板编辑 Tag 名称时，Ctrl+S 触发保存而非相机移动。点击属性拖拽条时滚轮调整值而非缩放视口。
+
+### 调用示例
+
+```cpp
+// 保存
+std::string path = FileDialog::SaveFile(
+    "Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+if (!path.empty()) {
+    SceneSerializer serializer(m_ActiveScene);
+    serializer.Serialize(path);
+}
+
+// 打开
+std::string path = FileDialog::OpenFile(
+    "Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+if (!path.empty()) {
+    SceneSerializer serializer(newScene);
+    serializer.Deserialize(path);
+}
+```
+
+![[README.assets/Pasted image 20260717163457.png]]
+
 ## KB
 
 ### 为什么不用动态库？
