@@ -33,7 +33,8 @@ project "Glimmer"
         "vendor/stb_image",
         "vendor/tinyobjloader",
         "vendor/entt/src",
-		"vendor/yaml-cpp/include"
+		"vendor/yaml-cpp/include",
+		"vendor/ImGuizmo/src"
     }
 
     links {
@@ -41,6 +42,7 @@ project "Glimmer"
         "Glad",
         "ImGui",
         "yaml-cpp",
+		"ImGuizmo",
 		"opengl32.lib"
     }
 

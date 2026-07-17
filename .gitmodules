@@ -20,3 +20,6 @@
 [submodule "Glimmer/vendor/yaml-cpp"]
 	path = Glimmer/vendor/yaml-cpp
 	url = https://github.com/jbeder/yaml-cpp.git
+[submodule "Glimmer/vendor/ImGuizmo"]
+	path = Glimmer/vendor/ImGuizmo
+	url = https://github.com/CedricGuillemet/ImGuizmo.git

@@ -18,7 +18,8 @@ project "GlimmerEditor-CyouBranch"
         "../" .. IncludeDir["spdlog"],
         "../" .. IncludeDir["ImGui"],
         "../" .. IncludeDir["glm"],
-        "../" .. IncludeDir["entt"]
+        "../" .. IncludeDir["entt"],
+		"../" .. IncludeDir["ImGuizmo"]
     }
 
     links {

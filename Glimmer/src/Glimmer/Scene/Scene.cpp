@@ -31,6 +31,18 @@ namespace gl {
 		m_Registry.destroy(entity);
 	}
 
+	Entity Scene::GetPrimaryCameraEntity()
+	{
+		auto view = m_Registry.view<CameraComponent>();
+		for (auto entity : view)
+		{
+			const auto& camera = view.get<CameraComponent>(entity);
+			if (camera.Primary)
+				return Entity{ entity, this };
+		}
+		return {};
+	}
+
 	void Scene::OnUpdateRuntime(Timestep ts)
 	{
 		Camera* mainCamera = nullptr;
@@ -54,14 +66,14 @@ namespace gl {
 			}
 
 			// 寻找主相机
-			auto view = m_Registry.view<TransformComponent, CameraComponent>();
-			view.each([&](auto entity, auto& transform, auto& camera) {
-				if (camera.Primary)
+			{
+				Entity camEntity = GetPrimaryCameraEntity();
+				if (camEntity)
 				{
-					mainCamera = &camera.Camera;
-					cameraTransform = transform.GetTransform();
+					mainCamera = &camEntity.GetComponent<CameraComponent>().Camera;
+					cameraTransform = camEntity.GetComponent<TransformComponent>().GetTransform();
 				}
-				});
+			}
 		}
 
 		// 执行渲染

@@ -48,6 +48,9 @@ namespace gl {
 		glm::vec2 m_ViewportBounds[2];
 		bool m_ViewportFocused = false, m_ViewportHovered = false;
 
+		// Gizmos
+		int m_GizmoType = 0; // 0=Translate, 1=Rotate, 2=Scale
+
 		// 设置灯光参数
 		glm::vec3 m_LightPos = { 2.0f, 2.0f, 2.0f };
 		glm::vec4 m_SquareColor = { 0.1f, 0.1f, 0.1f, 1 };

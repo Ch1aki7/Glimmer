@@ -3,6 +3,10 @@
 #include "Glimmer/Utils/FileDialog.h"
 #include <glm/gtc/type_ptr.hpp>
 
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/matrix_decompose.hpp>
+#include <ImGuizmo.h>
+
 namespace gl {
 
 	EditorLayer::EditorLayer() :Layer("EditorLayer"), m_CameraController(1280.0f / 720.0f, true) {
@@ -133,44 +137,44 @@ namespace gl {
 			//Renderer2D::DrawFullscreenQuad(bgShader, 0.9f);
 
 			// --- 3D 模型渲染 ---
-			if (m_SelectedModelIndex >= 0 && m_SelectedModelIndex < (int)m_Models.size())
-			{
-				// 确保 slot 0 有白贴图（修复 DrawIndexed 解绑导致的黑色问题）
-				m_WhiteTexture->Bind(0);
+			//if (m_SelectedModelIndex >= 0 && m_SelectedModelIndex < (int)m_Models.size())
+			//{
+			//	// 确保 slot 0 有白贴图（修复 DrawIndexed 解绑导致的黑色问题）
+			//	m_WhiteTexture->Bind(0);
 
-				Renderer::BeginScene(m_CameraController.GetCamera());
-				m_3DShader->Bind();
+			//	Renderer::BeginScene(m_CameraController.GetCamera());
+			//	m_3DShader->Bind();
 
-				m_3DShader->UploadUniformFloat3("u_LightPos", m_LightPos);
-				m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f });
-				m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
-				m_3DShader->UploadUniformInt("u_Texture", 0);
+			//	m_3DShader->UploadUniformFloat3("u_LightPos", m_LightPos);
+			//	m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f });
+			//	m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
+			//	m_3DShader->UploadUniformInt("u_Texture", 0);
 
-				auto& model = m_Models[m_SelectedModelIndex];
-				glm::mat4 modelTransform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
-					* glm::rotate(glm::mat4(1.0f), glm::radians(-rotation), { 0, 1, 0 })
-					* glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
+			//	auto& model = m_Models[m_SelectedModelIndex];
+			//	glm::mat4 modelTransform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
+			//		* glm::rotate(glm::mat4(1.0f), glm::radians(-rotation), { 0, 1, 0 })
+			//		* glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
 
-				m_3DShader->UploadUniformMat4("u_Transform", modelTransform);
-				model->Draw(m_3DShader, modelTransform);
+			//	m_3DShader->UploadUniformMat4("u_Transform", modelTransform);
+			//	model->Draw(m_3DShader, modelTransform);
 
-				Renderer::EndScene();
-			}
+			//	Renderer::EndScene();
+			//}
 
 			// --- 场景 ECS 渲染（遍历 Sprite 实体） ---
 			m_ActiveScene->OnUpdateRuntime(ts);
 
 			// 2D 批处理渲染
-			Renderer2D::BeginScene(m_CameraController.GetCamera());
+			//Renderer2D::BeginScene(m_CameraController.GetCamera());
 
-			Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
-			Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
-			Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
-			Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, { 0.8f, 0.3f, 0.8f, 1.0f });
-			Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
-			Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
+			//Renderer2D::DrawRotatedQuad({ 1.0f, -0.5f, -0.1f }, { 0.1f, 0.1f }, -rotation, { 1.0f, 1.0f, 1.0f, 1.0f });
+			//Renderer2D::DrawQuad({ 1.0f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
+			//Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
+			//Renderer2D::DrawRotatedQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, rotation, m_Texture, 3, { 0.8f, 0.3f, 0.8f, 1.0f });
+			//Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 2.0f, 1.0f }, m_STSTexture, 2);
+			//Renderer2D::DrawQuad({ 0.0f, 0.0f, 0.0f }, { 1.3f, 1.0f }, m_HenryTexture);
 
-			Renderer2D::EndScene();
+			//Renderer2D::EndScene();
 
 			m_Framebuffer->Unbind();
 
@@ -223,6 +227,13 @@ namespace gl {
 					m_HierarchyPanel.SetSelectedEntity({});
 				}
 			}
+		}
+
+		// --- Gizmo 快捷键 (1/2/3 切换变换模式) ---
+		if (m_ViewportHovered) {
+			if (ImGui::IsKeyPressed(ImGuiKey_1)) m_GizmoType = 0;
+			if (ImGui::IsKeyPressed(ImGuiKey_2)) m_GizmoType = 1;
+			if (ImGui::IsKeyPressed(ImGuiKey_3)) m_GizmoType = 2;
 		}
 
 		static bool dockspaceOpen = true;
@@ -336,6 +347,11 @@ namespace gl {
 		}
 
 		ImGui::Separator();
+		{
+			const char* gizmoNames[] = { "Translate (W)", "Rotate (E)", "Scale (R)" };
+			ImGui::Combo("Gizmo", &m_GizmoType, gizmoNames, 3);
+		}
+
 		if (m_SelectedShaderIndex == 3)
 		{
 			ImGui::Text("Hologram Settings");
@@ -375,6 +391,56 @@ namespace gl {
 		}
 		uint32_t textureID = m_FinalSceneTexture;
 		ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
+
+		// --- ImGuizmo 变换控件 ---
+		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
+		if (selectedEntity && selectedEntity.HasComponent<TransformComponent>())
+		{
+			// 获取相机矩阵：优先 ECS 主相机，否则回退到 Controller
+			glm::mat4 view, proj;
+			Entity camEntity = m_ActiveScene->GetPrimaryCameraEntity();
+			if (camEntity && camEntity.HasComponent<TransformComponent>()) {
+				auto& ct = camEntity.GetComponent<TransformComponent>();
+				auto& cc = camEntity.GetComponent<CameraComponent>();
+				view = glm::inverse(ct.GetTransform());
+				proj = cc.Camera.GetProjection();
+			} else {
+				auto& c = m_CameraController.GetCamera();
+				view = c.GetViewMatrix();
+				proj = c.GetProjectionMatrix();
+			}
+
+			ImGuizmo::SetOrthographic(false);
+			ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+			ImGuizmo::SetRect(
+				m_ViewportBounds[0].x, m_ViewportBounds[0].y,
+				m_ViewportBounds[1].x - m_ViewportBounds[0].x,
+				m_ViewportBounds[1].y - m_ViewportBounds[0].y);
+
+			auto& tc = selectedEntity.GetComponent<TransformComponent>();
+			glm::mat4 transform = tc.GetTransform();
+
+			static const ImGuizmo::OPERATION ops[] = {
+				ImGuizmo::OPERATION::TRANSLATE,
+				ImGuizmo::OPERATION::ROTATE,
+				ImGuizmo::OPERATION::SCALE
+			};
+
+			ImGuizmo::Manipulate(
+				glm::value_ptr(view), glm::value_ptr(proj),
+				ops[m_GizmoType], ImGuizmo::MODE::LOCAL,
+				glm::value_ptr(transform));
+
+			if (ImGuizmo::IsUsing())
+			{
+				glm::vec3 skew;
+				glm::vec4 perspective;
+				glm::quat rotation;
+				glm::decompose(transform, tc.Scale, rotation, tc.Translation, skew, perspective);
+				tc.Rotation = glm::degrees(glm::eulerAngles(rotation));
+			}
+		}
+
 		ImGui::End();
 		ImGui::PopStyleVar();
 
