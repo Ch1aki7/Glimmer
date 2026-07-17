@@ -32,14 +32,16 @@ project "Glimmer"
         "vendor/glm",
         "vendor/stb_image",
         "vendor/tinyobjloader",
-        "vendor/entt/src"
+        "vendor/entt/src",
+		"vendor/yaml-cpp/include"
     }
 
     links {
         "GLFW",
         "Glad",
         "ImGui",
-        "opengl32.lib"
+        "yaml-cpp",
+		"opengl32.lib"
     }
 
     filter "system:windows"
@@ -48,5 +50,6 @@ project "Glimmer"
 
         defines {
             "GL_PLATFORM_WINDOWS",
-            "GL_BUILD_DLL"
+            "GL_BUILD_DLL",
+			"YAML_CPP_STATIC_DEFINE"
         }

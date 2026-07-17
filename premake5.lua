@@ -34,11 +34,13 @@ IncludeDir["glm"] = "Glimmer/vendor/glm"
 IncludeDir["stb_image"] = "Glimmer/vendor/stb_image"
 IncludeDir["tinyobjloader"] = "Glimmer/vendor/tinyobjloader"
 IncludeDir["entt"] = "Glimmer/vendor/entt/src"
+IncludeDir["yaml-cpp"] = "Glimmer/vendor/yaml-cpp/include"
 
 group "Dependencies"
 include "Glimmer/vendor/GLFW"
 include "Glimmer/vendor/Glad"
 include "Glimmer/vendor/imgui"
+include "Glimmer/vendor/yaml-cpp"
 group ""
 
 include "Glimmer"

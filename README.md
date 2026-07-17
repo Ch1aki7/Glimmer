@@ -7413,6 +7413,275 @@ vec3 result = (ambient + diffuse + specular) * texColor.rgb;  // = (0,0,0)
 
 在 `EditorLayer::OnAttach` 中创建 1×1 白像素纹理 `m_WhiteTexture`，每次 3D 模型渲染前显式调用 `m_WhiteTexture->Bind(0)`，保障 slot 0 始终有有效的白色纹理，不再依赖 2D 批处理的副作用。
 
+
+## 场景序列化 (Scene Serialization)
+
+### 设计目标
+
+将编辑器中的场景（Entity + Component 集合）持久化为 YAML 文件，支持随时保存和恢复。选型优先人类可读性，便于调试和手动编辑。
+
+### 依赖引入：yaml-cpp
+
+引擎的 vendor 目录现有库均为 header-only 或小体积静态库。yaml-cpp 需要编译为独立的静态库再链接入 Glimmer。
+
+**目录结构**
+
+```
+Glimmer/vendor/yaml-cpp/
+├── include/yaml-cpp/     ← 头文件
+├── src/                  ← 31 个 .cpp 源文件
+└── premake5.lua          ← 静态库编译配置
+```
+
+**premake5.lua 关键配置**
+
+```lua
+project "yaml-cpp"
+    kind "StaticLib"
+    language "C++"
+    cppdialect "C++17"
+
+    filter "system:windows"
+        defines { "YAML_CPP_STATIC_DEFINE" }  -- 强制静态链接模式
+```
+
+`YAML_CPP_STATIC_DEFINE` 必须同时在 yaml-cpp 自身和所有链接方（Glimmer）中定义，否则 Windows 下头文件会插入 `__declspec(dllimport)`，导致链接器寻找 DLL 符号而失败。这是最常见的集成坑——默认行为是导出 DLL 符号，但项目选择静态链接。
+
+**根 premake 集成**
+
+```lua
+IncludeDir["yaml-cpp"] = "Glimmer/vendor/yaml-cpp/include"
+group "Dependencies"
+    include "Glimmer/vendor/yaml-cpp"
+```
+
+```lua
+-- Glimmer/premake5.lua
+includedirs { "vendor/yaml-cpp/include" }
+links { "yaml-cpp" }
+defines { "YAML_CPP_STATIC_DEFINE" }
+```
+
+### 序列化架构
+
+```
+SceneSerializer (Scene/SceneSerializer.h)
+    │
+    ├─ Serialize(path)    → 遍历 Registry → YAML::Emitter → 写入 .glimmer 文件
+    └─ Deserialize(path)  → YAML::LoadFile → 逐实体创建 → 重建 Registry
+```
+
+`SceneSerializer` 持有 `Ref<Scene>`，通过 `Scene` 的 `friend class SceneSerializer` 声明访问私有 `m_Registry`，直接遍历 entt 实体和组件。
+
+### 组件序列化策略
+
+每个组件类型一对静态函数，通过重载 + YAML key 匹配实现类型分发：
+
+```cpp
+// 序列化：YAML::Emitter 写入
+static void SerializeComponent(YAML::Emitter& out, const TagComponent& comp);
+static void SerializeComponent(YAML::Emitter& out, const CameraComponent& comp);
+// ...
+
+// 反序列化：YAML::Node 读取
+static void DeserializeComponent(const YAML::Node& node, TagComponent& comp);
+static void DeserializeComponent(const YAML::Node& node, CameraComponent& comp);
+// ...
+```
+
+新增组件类型只需加一对函数，无需修改 SceneSerializer 主流程。
+
+### 各组件序列化格式
+
+**TagComponent**
+
+```yaml
+TagComponent: "Main Camera"
+```
+
+纯字符串，直接 emit / as\<string\>。
+
+**TransformComponent**
+
+```yaml
+TransformComponent:
+  Translation: [0.0, 0.0, 0.0]
+  Rotation: [0.0, 0.0, 0.0]
+  Scale: [1.0, 1.0, 1.0]
+```
+
+glm::vec3 序列化为 YAML Flow Sequence `[x, y, z]`，通过辅助函数 `SerializeVec3` / `DeserializeVec3` 统一处理。
+
+**SpriteRendererComponent**
+
+```yaml
+SpriteRendererComponent:
+  Color: [1.0, 0.2, 0.2, 1.0]
+```
+
+glm::vec4 同理，`SerializeVec4` / `DeserializeVec4`。
+
+**CameraComponent**
+
+```yaml
+CameraComponent:
+  Primary: true
+  FixedAspectRatio: false
+  ProjectionType: 1           # 0=Perspective, 1=Orthographic
+  OrthoSize: 10.0
+  OrthoNear: -10.0
+  OrthoFar: 10.0
+  PerspFOV: 0.785398          # 弧度制
+  PerspNear: 0.01
+  PerspFar: 1000.0
+```
+
+所有投影参数独立存储，加载时通过 `SceneCamera` 的 getter/setter 逐个恢复。`ProjectionType` 用 int 值表示枚举。正交和透视的全部参数都写入文件，加载时根据 `ProjectionType` 分别恢复。
+
+**NativeScriptComponent**
+
+暂不序列化。脚本组件持有函数指针（`InstantiateScript` / `DestroyScript`），无法持久化为 YAML。这是 ECS 序列化的经典难点——C++ 原生脚本没有反射信息。未来方案：脚本工厂注册表将类型名映射到函数指针，YAML 只存类型名字符串。
+
+### Scene::Serialize 完整流程
+
+```cpp
+void SceneSerializer::Serialize(const std::string& filepath)
+{
+    YAML::Emitter out;
+    out << YAML::BeginMap;
+    out << YAML::Key << "Scene" << YAML::Value << "Untitled";
+    out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
+
+    // 遍历 registry 中所有实体
+    m_Scene->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
+        Entity entity{ handle, m_Scene.get() };
+        if (!entity.HasComponent<TagComponent>()) return;  // 跳过无效实体
+
+        out << YAML::BeginMap;
+        out << YAML::Key << "Entity" << YAML::Value << (uint32_t)entity;
+        out << YAML::Key << "Components" << YAML::Value << YAML::BeginMap;
+
+        // 逐组件分发序列化
+        if (entity.HasComponent<TagComponent>())
+            SerializeComponent(out, entity.GetComponent<TagComponent>());
+        if (entity.HasComponent<TransformComponent>())
+            SerializeComponent(out, entity.GetComponent<TransformComponent>());
+        if (entity.HasComponent<SpriteRendererComponent>())
+            SerializeComponent(out, entity.GetComponent<SpriteRendererComponent>());
+        if (entity.HasComponent<CameraComponent>())
+            SerializeComponent(out, entity.GetComponent<CameraComponent>());
+
+        out << YAML::EndMap;  // Components
+        out << YAML::EndMap;  // Entity
+    });
+
+    out << YAML::EndSeq;  // Entities
+    out << YAML::EndMap;  // Root
+
+    std::ofstream fout(filepath);
+    fout << out.c_str();
+}
+```
+
+遍历 → 检查 TagComponent（过滤无效实体）→ 逐组件调用对应的 `SerializeComponent` 重载 → 每个实体包裹在 `Entity + Components` 键下 → 写入文件。
+
+### Scene::Deserialize 反序列化
+
+```cpp
+bool SceneSerializer::Deserialize(const std::string& filepath)
+{
+    YAML::Node data = YAML::LoadFile(filepath);
+
+    for (auto entityNode : data["Entities"])
+    {
+        auto& comps = entityNode["Components"];
+
+        // 1. 先读 TagComponent 获取实体名
+        std::string name = comps["TagComponent"].as<std::string>();
+        Entity entity = m_Scene->CreateEntity(name);
+
+        // 2. 恢复 Tag（覆盖 CreateEntity 的默认值）
+        DeserializeComponent(comps["TagComponent"], entity.GetComponent<TagComponent>());
+
+        // 3. 按需恢复其余组件
+        //    Transform 每个实体都有（CreateEntity 自动添加）
+        if (comps["TransformComponent"])
+            DeserializeComponent(comps["TransformComponent"], entity.GetComponent<TransformComponent>());
+
+        //    SpriteRenderer / Camera 按 key 存在与否决定是否添加
+        if (comps["SpriteRendererComponent"]) {
+            auto& sc = entity.AddComponent<SpriteRendererComponent>();
+            DeserializeComponent(comps["SpriteRendererComponent"], sc);
+        }
+        if (comps["CameraComponent"]) {
+            auto& cc = entity.AddComponent<CameraComponent>();
+            DeserializeComponent(comps["CameraComponent"], cc);
+        }
+    }
+    return true;
+}
+```
+
+注意：`CreateEntity` 已自动添加 `TransformComponent` 和 `TagComponent`，反序列化时是对已有组件赋值而非重新添加。`SpriteRenderer` 和 `Camera` 等可选组件通过 YAML key 存在性检测后 `AddComponent`。
+
+### 编辑器集成
+
+CyoutBranch 的 File 菜单中增加了 New / Save / Open 三项：
+
+```
+File → New  (Ctrl+N)  → 创建空白 Scene，刷新层级面板
+File → Save (Ctrl+S)  → SceneSerializer::Serialize("assets/scenes/demo.glimmer")
+File → Open (Ctrl+O)  → SceneSerializer::Deserialize("assets/scenes/demo.glimmer")
+                           加载成功后替换当前场景并刷新层级面板
+```
+
+当前使用固定路径 `assets/scenes/demo.glimmer` 作为测试入口，后续可接入 Windows 原生文件对话框（`GetOpenFileName` / `GetSaveFileName`）实现任意路径选择。
+
+### 完整的 .glimmer 文件示例
+
+```yaml
+Scene: Untitled
+Entities:
+  - Entity: 0
+    Components:
+      TagComponent: Main Camera
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      CameraComponent:
+        Primary: true
+        FixedAspectRatio: false
+        ProjectionType: 1
+        OrthoSize: 10.0
+        OrthoNear: -10.0
+        OrthoFar: 10.0
+        PerspFOV: 0.785398
+        PerspNear: 0.01
+        PerspFar: 1000.0
+  - Entity: 1
+    Components:
+      TagComponent: Green Square
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      SpriteRendererComponent:
+        Color: [0.2, 1.0, 0.2, 1.0]
+```
+
+### 已知限制
+
+| 限制 | 说明 |
+|------|------|
+| NativeScript 不可序列化 | 函数指针无法持久化，需要脚本工厂注册表 |
+| 实体 ID 不保持 | 反序列化后 `entt::entity` 值会变化，但组件数据完整保留 |
+| 固定文件路径 | 未接入原生文件对话框，Save/Open 均使用 `assets/scenes/demo.glimmer` |
+| 无多场景支持 | 当前仅处理单个 Scene，未来可扩展为 Project 文件（引用多个 Scene） |
+
+可实现单场景的读取
+![[README.assets/Pasted image 20260717153228.png]]
+
 ## KB
 
 ### 为什么不用动态库？

@@ -1,4 +1,5 @@
 #include "EditorLayer.h"
+#include "Glimmer/Scene/SceneSerializer.h"
 #include <glm/gtc/type_ptr.hpp>
 
 namespace gl {
@@ -227,15 +228,39 @@ namespace gl {
 			ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
 		}
 
-		if (ImGui::BeginMenuBar())
-		{
-			if (ImGui::BeginMenu("File"))
+			if (ImGui::BeginMenuBar())
 			{
-				if (ImGui::MenuItem("Exit")) Application::Get().Close();
-				ImGui::EndMenu();
+				if (ImGui::BeginMenu("File"))
+				{
+					if (ImGui::MenuItem("New", "Ctrl+N"))
+					{
+						m_ActiveScene = CreateRef<Scene>();
+						m_HierarchyPanel.SetContext(m_ActiveScene);
+						m_HierarchyPanel.SetSelectedEntity({});
+					}
+					if (ImGui::MenuItem("Save", "Ctrl+S"))
+					{
+						SceneSerializer serializer(m_ActiveScene);
+						serializer.Serialize("assets/scenes/demo.glimmer");
+						GL_CORE_INFO("Scene saved");
+					}
+					if (ImGui::MenuItem("Open", "Ctrl+O"))
+					{
+						auto newScene = CreateRef<Scene>();
+						SceneSerializer serializer(newScene);
+						if (serializer.Deserialize("assets/scenes/demo.glimmer"))
+						{
+							m_ActiveScene = newScene;
+							m_HierarchyPanel.SetContext(m_ActiveScene);
+							m_HierarchyPanel.SetSelectedEntity({});
+						}
+					}
+					ImGui::Separator();
+					if (ImGui::MenuItem("Exit")) Application::Get().Close();
+					ImGui::EndMenu();
+				}
+				ImGui::EndMenuBar();
 			}
-			ImGui::EndMenuBar();
-		}
 
 		// ============================================================
 		// Scene Hierarchy 面板（低耦合：仅通过回调通信）

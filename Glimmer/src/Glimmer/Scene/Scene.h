@@ -28,7 +28,8 @@ namespace gl {
 		uint32_t m_ViewportWidth = 0, m_ViewportHeight = 0;
 
 		friend class Entity;
-		friend class SceneHierarchyPanel; // 预留给未来的编辑器面板
+		friend class SceneHierarchyPanel;
+		friend class SceneSerializer;
 	};
 
 }
