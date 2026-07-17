@@ -12,82 +12,95 @@
 
 namespace gl {
 
-    ImGuiLayer::ImGuiLayer() : Layer("ImGuiLayer") {}
-    ImGuiLayer::~ImGuiLayer() {}
+	ImGuiLayer::ImGuiLayer() : Layer("ImGuiLayer") {}
+	ImGuiLayer::~ImGuiLayer() {}
 
-    void ImGuiLayer::OnAttach() {
+	void ImGuiLayer::OnAttach() {
 		GL_PROFILE_FUNCTION();
 
-        // 设置 ImGui 上下文
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO(); (void)io;
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // 允许键盘控制
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;     // 允许停靠
-        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;   // 允许多窗口拖拽
+		// 设置 ImGui 上下文
+		IMGUI_CHECKVERSION();
+		ImGui::CreateContext();
+		ImGuiIO& io = ImGui::GetIO(); (void)io;
+		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // 允许键盘控制
+		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;     // 允许停靠
+		io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;   // 允许多窗口拖拽
 
-        io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
-        io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;
+		io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
+		io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;
 
-        ImGui::StyleColorsDark(); // 深色主题
+		// 多窗口模式下的样式微调
+		ImGuiStyle& style = ImGui::GetStyle();
+		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+			ImGui::StyleColorsLight();
+			style.ScaleAllSizes(1.2f);
+			style.WindowPadding = { 16.0f, 16.0f };
+			style.FramePadding = { 8.0f, 5.0f };
 
-        // 多窗口模式下的样式微调
-        ImGuiStyle& style = ImGui::GetStyle();
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-            style.WindowRounding = 0.0f;
-            style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-        }
+			style.WindowTitleAlign = { 0.5f, 0.5f };
 
-        Application& app = Application::Get();
-        GLFWwindow* window = static_cast<GLFWwindow*>(app.GetWindow().GetNativeWindow());
+			style.MouseCursorScale = 0.5f;
 
-        // 初始化后端
-        ImGui_ImplGlfw_InitForOpenGL(window, true);
-        ImGui_ImplOpenGL3_Init("#version 410"); // 指定 OpenGL 核心版本
-    }
+			style.WindowRounding = 16.0f;
+			style.ChildRounding = 12.0f;
+			style.PopupRounding = 16.0f;
+			style.FrameRounding = 16.0f;
+			style.GrabRounding = 12.0f;
 
-    void ImGuiLayer::OnDetach() {
+			style.FrameBorderSize = 1;
+			style.PopupBorderSize = 1;
+		}
+
+		Application& app = Application::Get();
+		GLFWwindow* window = static_cast<GLFWwindow*>(app.GetWindow().GetNativeWindow());
+
+		// 初始化后端
+		ImGui_ImplGlfw_InitForOpenGL(window, true);
+		ImGui_ImplOpenGL3_Init("#version 410"); // 指定 OpenGL 核心版本
+	}
+
+	void ImGuiLayer::OnDetach() {
 		GL_PROFILE_FUNCTION();
 
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
-    }
+		ImGui_ImplOpenGL3_Shutdown();
+		ImGui_ImplGlfw_Shutdown();
+		ImGui::DestroyContext();
+	}
 
-    void ImGuiLayer::Begin() {
+	void ImGuiLayer::Begin() {
 		GL_PROFILE_FUNCTION();
 
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-    }
+		ImGui_ImplOpenGL3_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
+	}
 
-    void ImGuiLayer::End() {
+	void ImGuiLayer::End() {
 		GL_PROFILE_FUNCTION();
 
-        ImGuiIO& io = ImGui::GetIO();
-        Application& app = Application::Get();
-        io.DisplaySize = ImVec2((float)app.GetWindow().GetWidth(), (float)app.GetWindow().GetHeight());
+		ImGuiIO& io = ImGui::GetIO();
+		Application& app = Application::Get();
+		io.DisplaySize = ImVec2((float)app.GetWindow().GetWidth(), (float)app.GetWindow().GetHeight());
 
-        // 渲染
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+		// 渲染
+		ImGui::Render();
+		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        // 多窗口模式的特殊处理：将脱离主窗口的 UI 渲染到桌面
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-            GLFWwindow* backup_current_context = glfwGetCurrentContext();
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-            glfwMakeContextCurrent(backup_current_context);
-        }
-    }
+		// 多窗口模式的特殊处理：将脱离主窗口的 UI 渲染到桌面
+		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+			GLFWwindow* backup_current_context = glfwGetCurrentContext();
+			ImGui::UpdatePlatformWindows();
+			ImGui::RenderPlatformWindowsDefault();
+			glfwMakeContextCurrent(backup_current_context);
+		}
+	}
 
-    void ImGuiLayer::OnUpdate(Timestep ts)
-    {
-    }
+	void ImGuiLayer::OnUpdate(Timestep ts)
+	{
+	}
 
-    void ImGuiLayer::OnEvent(Event& event)
-    {
+	void ImGuiLayer::OnEvent(Event& event)
+	{
 		if (m_BlockEvents) {
 			// 如果希望 UI 拦截所有事件，可以在这里根据 ImGui 的状态设置 event.Handled
 			ImGuiIO& io = ImGui::GetIO();
@@ -108,74 +121,74 @@ namespace gl {
 			dispatcher.Dispatch<KeyTypedEvent>(BIND_EVENT_FN(ImGuiLayer::OnKeyTypedEvent));
 			dispatcher.Dispatch<WindowResizeEvent>(BIND_EVENT_FN(ImGuiLayer::OnWindowResizeEvent));
 		}
-    }
+	}
 
-    bool ImGuiLayer::OnMouseButtonPressedEvent(MouseButtonPressedEvent& e)
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        io.MouseDown[e.GetMouseButton()] = true;
+	bool ImGuiLayer::OnMouseButtonPressedEvent(MouseButtonPressedEvent& e)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		io.MouseDown[e.GetMouseButton()] = true;
 
-        return false;
-    }
+		return false;
+	}
 
-    bool ImGuiLayer::OnMouseButtonReleasedEvent(MouseButtonReleasedEvent& e)
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        io.MouseDown[e.GetMouseButton()] = false;
+	bool ImGuiLayer::OnMouseButtonReleasedEvent(MouseButtonReleasedEvent& e)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		io.MouseDown[e.GetMouseButton()] = false;
 
-        return false;
-    }
+		return false;
+	}
 
-    bool ImGuiLayer::OnMouseMovedEvent(MouseMovedEvent& e)
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        io.MousePos = ImVec2(e.GetX(), e.GetY());
+	bool ImGuiLayer::OnMouseMovedEvent(MouseMovedEvent& e)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		io.MousePos = ImVec2(e.GetX(), e.GetY());
 
-        return false;
-    }
+		return false;
+	}
 
-    bool ImGuiLayer::OnMouseScrolledEvent(MouseScrolledEvent& e)
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        io.MouseWheelH += e.GetXOffset();
-        io.MouseWheel += e.GetYOffset();
+	bool ImGuiLayer::OnMouseScrolledEvent(MouseScrolledEvent& e)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		io.MouseWheelH += e.GetXOffset();
+		io.MouseWheel += e.GetYOffset();
 
-        return false;
-    }
+		return false;
+	}
 
-    //bool ImGuiLayer::OnKeyPressedEvent(KeyPressedEvent& e)
-    //{
-    //    ImGuiIO& io = ImGui::GetIO();
-    //    // 最新 API：参数1是 ImGuiKey 枚举，参数2是是否按下
-    //    // 由于 GLFW 的键码和 ImGui 的枚举不完全一致，这里最省事的做法是直接转换
-    //    io.AddKeyEvent(ImGui_ImplGlfw_KeyToImGuiKey(e.GetKeyCode()), true);
-    //    return false;
-    //}
+	//bool ImGuiLayer::OnKeyPressedEvent(KeyPressedEvent& e)
+	//{
+	//    ImGuiIO& io = ImGui::GetIO();
+	//    // 最新 API：参数1是 ImGuiKey 枚举，参数2是是否按下
+	//    // 由于 GLFW 的键码和 ImGui 的枚举不完全一致，这里最省事的做法是直接转换
+	//    io.AddKeyEvent(ImGui_ImplGlfw_KeyToImGuiKey(e.GetKeyCode()), true);
+	//    return false;
+	//}
 
-    //bool ImGuiLayer::OnKeyReleasedEvent(KeyReleasedEvent& e)
-    //{
-    //    ImGuiIO& io = ImGui::GetIO();
-    //    io.AddKeyEvent(ImGui_ImplGlfw_KeyToImGuiKey(e.GetKeyCode()), false);
-    //    return false;
-    //}
+	//bool ImGuiLayer::OnKeyReleasedEvent(KeyReleasedEvent& e)
+	//{
+	//    ImGuiIO& io = ImGui::GetIO();
+	//    io.AddKeyEvent(ImGui_ImplGlfw_KeyToImGuiKey(e.GetKeyCode()), false);
+	//    return false;
+	//}
 
-    bool ImGuiLayer::OnKeyTypedEvent(KeyTypedEvent& e)
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        int keycode = e.GetKeyCode();
-        if (keycode > 0 && keycode < 0x10000)
-            io.AddInputCharacter((unsigned short)keycode);
+	bool ImGuiLayer::OnKeyTypedEvent(KeyTypedEvent& e)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		int keycode = e.GetKeyCode();
+		if (keycode > 0 && keycode < 0x10000)
+			io.AddInputCharacter((unsigned short)keycode);
 
-        return false;
-    }
+		return false;
+	}
 
-    bool ImGuiLayer::OnWindowResizeEvent(WindowResizeEvent& e)
-    {
-        ImGuiIO& io = ImGui::GetIO();
-        io.DisplaySize = ImVec2(e.GetWidth(), e.GetHeight());
-        io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
-        glViewport(0, 0, e.GetWidth(), e.GetHeight());
+	bool ImGuiLayer::OnWindowResizeEvent(WindowResizeEvent& e)
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		io.DisplaySize = ImVec2(e.GetWidth(), e.GetHeight());
+		io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+		glViewport(0, 0, e.GetWidth(), e.GetHeight());
 
-        return false;
-    }
+		return false;
+	}
 }

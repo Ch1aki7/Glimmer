@@ -7275,6 +7275,33 @@ m_HierarchyPanel.OnImGuiRender();
 
 ![[README.assets/Pasted image 20260716151430.png]]
 
+## ImGUI自定义风格
+
+```
+ImGuiStyle& style = ImGui::GetStyle();
+		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+			ImGui::StyleColorsLight();
+			style.ScaleAllSizes(1.2f);
+			style.WindowPadding = { 16.0f, 16.0f };
+			style.FramePadding = { 8.0f, 5.0f };
+
+			style.WindowTitleAlign = { 0.5f, 0.5f };
+
+			style.MouseCursorScale = 0.5f;
+
+			style.WindowRounding = 16.0f;
+			style.ChildRounding = 12.0f;
+			style.PopupRounding = 16.0f;
+			style.FrameRounding = 16.0f;
+			style.GrabRounding = 12.0f;
+
+			style.FrameBorderSize = 1;
+			style.PopupBorderSize = 1;
+		}
+```
+
+![[README.assets/Pasted image 20260717133307.png]]
+
 ## KB
 
 ### 为什么不用动态库？
