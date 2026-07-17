@@ -7302,6 +7302,18 @@ ImGuiStyle& style = ImGui::GetStyle();
 
 ![[README.assets/Pasted image 20260717133307.png]]
 
+添加字体
+```
+//io.Fonts->AddFontFromFileTTF("assets/fonts/Montenegrin_Gothic_One/MontenegrinGothicOne-Regular.ttf", 16.0f);
+		io.Fonts->AddFontFromFileTTF("assets/fonts/Josefin_Sans/static/JosefinSans-Regular.ttf", 16.0f);
+		//io.Fonts->AddFontFromFileTTF("assets/fonts/Caveat/static/Caveat-Regular.ttf", 20.0f);
+		//io.Fonts->AddFontFromFileTTF("assets/fonts/Open_Sans/static/OpenSans_SemiCondensed-LightItalic.ttf", 20.0f);
+```
+
+![[README.assets/Pasted image 20260717141005.png]]
+
+![[README.assets/Pasted image 20260717141100.png]]
+
 ## KB
 
 ### 为什么不用动态库？
