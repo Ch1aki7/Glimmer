@@ -23,3 +23,9 @@
 [submodule "Glimmer/vendor/ImGuizmo"]
 	path = Glimmer/vendor/ImGuizmo
 	url = https://github.com/CedricGuillemet/ImGuizmo.git
+[submodule "Glimmer/vendor/Vulkan-Headers"]
+	path = Glimmer/vendor/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+[submodule "Glimmer/vendor/SPIRV-Cross"]
+	path = Glimmer/vendor/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross.git
