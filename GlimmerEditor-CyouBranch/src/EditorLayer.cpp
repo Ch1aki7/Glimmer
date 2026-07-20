@@ -1,10 +1,8 @@
 #include "EditorLayer.h"
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Utils/FileDialog.h"
+#include "Glimmer/Core/Input.h"
 #include <glm/gtc/type_ptr.hpp>
-
-#define GLM_ENABLE_EXPERIMENTAL
-#include <glm/gtx/matrix_decompose.hpp>
 #include <ImGuizmo.h>
 
 namespace gl {
@@ -67,25 +65,25 @@ namespace gl {
 		// ============================================================
 		m_ActiveScene = CreateRef<Scene>();
 
-		// --- 测试实体 1: 主相机 (Z=0，宽裁剪面确保可见) ---
+		// --- 测试实体 1: 主相机 (透视，原点，看向 -Z) ---
 		auto cameraEntity = m_ActiveScene->CreateEntity("Main Camera");
 		auto& camComp = cameraEntity.AddComponent<CameraComponent>();
-		camComp.Camera.SetOrthographic(10.0f, -10.0f, 10.0f);
-		// 初始化投影：首帧 m_ViewportSize 为 0 会导致投影宽度为零，在此直接用 Framebuffer 尺寸
-		m_ActiveScene->OnViewportResize(1280, 720);
+		camComp.Camera.SetPerspective(glm::radians(45.0f), 0.1f, 100.0f);
+		camComp.Camera.SetViewportSize(1280, 720);
+		// 相机在原点，view = inverse(identity) = identity，实体在 z < 0 即为前方
 
-		// --- 测试实体 2~4: 彩色方块 ---
+		// --- 测试实体 2~4: 彩色方块 (z < 0，透视前方) ---
 		auto redSquare = m_ActiveScene->CreateEntity("Red Square");
 		redSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 1.0f, 0.2f, 0.2f, 1.0f });
-		redSquare.GetComponent<TransformComponent>().Translation = { -2.0f, 1.0f, 0.0f };
+		redSquare.GetComponent<TransformComponent>().Translation = { -2.0f, 1.0f, -3.0f };
 
 		auto greenSquare = m_ActiveScene->CreateEntity("Green Square");
 		greenSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.2f, 1.0f, 0.2f, 1.0f });
-		greenSquare.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 0.0f };
+		greenSquare.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, -3.0f };
 
 		auto blueSquare = m_ActiveScene->CreateEntity("Blue Square");
 		blueSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.2f, 0.2f, 1.0f, 1.0f });
-		blueSquare.GetComponent<TransformComponent>().Translation = { 2.0f, -1.0f, -0.1f };
+		blueSquare.GetComponent<TransformComponent>().Translation = { 2.0f, -1.0f, -3.1f };
 
 		// --- 测试实体 5: 无渲染组件的纯逻辑实体 ---
 		auto logicNode = m_ActiveScene->CreateEntity("Logic Controller");
@@ -396,19 +394,11 @@ namespace gl {
 		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
 		if (selectedEntity && selectedEntity.HasComponent<TransformComponent>())
 		{
-			// 获取相机矩阵：优先 ECS 主相机，否则回退到 Controller
-			glm::mat4 view, proj;
 			Entity camEntity = m_ActiveScene->GetPrimaryCameraEntity();
-			if (camEntity && camEntity.HasComponent<TransformComponent>()) {
-				auto& ct = camEntity.GetComponent<TransformComponent>();
-				auto& cc = camEntity.GetComponent<CameraComponent>();
-				view = glm::inverse(ct.GetTransform());
-				proj = cc.Camera.GetProjection();
-			} else {
-				auto& c = m_CameraController.GetCamera();
-				view = c.GetViewMatrix();
-				proj = c.GetProjectionMatrix();
-			}
+			auto& ct = camEntity.GetComponent<TransformComponent>();
+			auto& cc = camEntity.GetComponent<CameraComponent>();
+			glm::mat4 view  = glm::inverse(ct.GetTransform());
+			glm::mat4 proj  = cc.Camera.GetProjection();
 
 			ImGuizmo::SetOrthographic(false);
 			ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
@@ -420,24 +410,28 @@ namespace gl {
 			auto& tc = selectedEntity.GetComponent<TransformComponent>();
 			glm::mat4 transform = tc.GetTransform();
 
-			static const ImGuizmo::OPERATION ops[] = {
-				ImGuizmo::OPERATION::TRANSLATE,
-				ImGuizmo::OPERATION::ROTATE,
-				ImGuizmo::OPERATION::SCALE
-			};
+			bool snap = Input::IsKeyPressed(GL_KEY_LEFT_CONTROL);
+			float snapVal = (m_GizmoType == 1) ? 45.0f : 0.5f;
+			float snapValues[3] = { snapVal, snapVal, snapVal };
+
+			ImGuizmo::OPERATION op = (m_GizmoType == 1) ? ImGuizmo::ROTATE
+			                         : (m_GizmoType == 2) ? ImGuizmo::SCALE
+			                         : ImGuizmo::TRANSLATE;
 
 			ImGuizmo::Manipulate(
 				glm::value_ptr(view), glm::value_ptr(proj),
-				ops[m_GizmoType], ImGuizmo::MODE::LOCAL,
-				glm::value_ptr(transform));
+				op, ImGuizmo::LOCAL,
+				glm::value_ptr(transform),
+				nullptr, snap ? snapValues : nullptr);
 
 			if (ImGuizmo::IsUsing())
 			{
-				glm::vec3 skew;
-				glm::vec4 perspective;
-				glm::quat rotation;
-				glm::decompose(transform, tc.Scale, rotation, tc.Translation, skew, perspective);
-				tc.Rotation = glm::degrees(glm::eulerAngles(rotation));
+				float t[3], r[3], s[3];
+				ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(transform), t, r, s);
+
+				tc.Translation = { t[0], t[1], t[2] };
+				tc.Rotation += glm::vec3(r[0], r[1], r[2]) - tc.Rotation;
+				tc.Scale = { s[0], s[1], s[2] };
 			}
 		}
 

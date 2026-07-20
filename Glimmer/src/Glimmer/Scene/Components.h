@@ -1,9 +1,13 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <string>
 #include "SceneCamera.h"
 #include "ScriptableEntity.h"
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/quaternion.hpp>
 
 namespace gl {
 
@@ -28,9 +32,11 @@ namespace gl {
 
 		glm::mat4 GetTransform() const
 		{
-			glm::mat4 rotation = glm::rotate(glm::mat4(1.0f), Rotation.x, { 1, 0, 0 })
-				* glm::rotate(glm::mat4(1.0f), Rotation.y, { 0, 1, 0 })
-				* glm::rotate(glm::mat4(1.0f), Rotation.z, { 0, 0, 1 });
+			// 四元数构阵：欧拉角 → 四元数 → 矩阵，避免万向节锁
+			glm::quat q = glm::angleAxis(glm::radians(Rotation.z), glm::vec3(0, 0, 1))
+				* glm::angleAxis(glm::radians(Rotation.y), glm::vec3(0, 1, 0))
+				* glm::angleAxis(glm::radians(Rotation.x), glm::vec3(1, 0, 0));
+			glm::mat4 rotation = glm::toMat4(q);
 
 			return glm::translate(glm::mat4(1.0f), Translation)
 				* rotation

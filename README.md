@@ -7796,6 +7796,184 @@ if (!path.empty()) {
 
 ![[README.assets/Pasted image 20260717163457.png]]
 
+
+## 视口 Gizmos (ImGuizmo 集成)
+
+### 设计目标
+
+在场景视口中实现变换手柄，选中实体后可直接拖拽平移、旋转、缩放。操作方式与 Unity 一致：快捷键切换模式，Ctrl 吸附，手柄跟随实体位置。
+
+### 依赖引入：ImGuizmo
+
+ImGuizmo 是 Dear ImGui 的即时模式 Gizmo 库，通过 `ImGuizmo::Manipulate()` 在视口内绘制变换手柄并处理鼠标交互。
+
+```
+Glimmer/vendor/ImGuizmo/        ← git submodule
+  ├── src/ImGuizmo.cpp/.h       ← 核心：Manipulate / DecomposeMatrixToComponents
+  ├── src/ImCurveEdit.cpp       ← 可选模块
+  └── premake5.lua
+```
+
+**premake 集成**
+
+```lua
+-- 根 premake5.lua
+IncludeDir["ImGuizmo"] = "Glimmer/vendor/ImGuizmo/src"
+include "Glimmer/vendor/ImGuizmo"
+
+-- Glimmer 链接
+includedirs { "vendor/ImGuizmo/src" }
+links { "ImGuizmo" }
+```
+
+### 帧初始化：BeginFrame
+
+ImGuizmo 必须在每帧 `ImGui::NewFrame()` 之后调用 `BeginFrame()` 初始化内部状态，否则手柄完全不渲染。这是排查"看不见 Gizmo"的第一个检查点。
+
+```cpp
+// ImGuiLayer::Begin()
+ImGui::NewFrame();
+ImGuizmo::BeginFrame();     // ← 必须！重置内部矩阵状态
+ImGuizmo::Enable(true);     // 显式启用
+```
+
+### 渲染流程
+
+Gizmo 绘制发生在 Viewport 窗口中，位于 `ImGui::Image()`（场景画面）之后，通过 `ImGui::GetWindowDrawList()` 在同一个 ImGui 窗口内叠加绘制：
+
+```
+Viewport 窗口
+  ├─ ImGui::Image(sceneTexture)     ← 底层：渲染的场景画面
+  └─ ImGuizmo::Manipulate(...)      ← 上层：变换手柄叠加
+```
+
+**完整调用链**
+
+```cpp
+// 1. 设置投影类型
+ImGuizmo::SetOrthographic(false);  // 透视投影
+
+// 2. 绑定当前窗口的 ImDrawList
+ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+
+// 3. 定义 Gizmo 操作区域（视口矩形）
+ImGuizmo::SetRect(bounds.x, bounds.y, width, height);
+
+// 4. 调用 Manipulate 绘制手柄并处理交互
+ImGuizmo::Manipulate(view, proj, operation, mode, &matrix, delta, snap);
+```
+
+### 相机矩阵选取
+
+场景中存在两套独立的相机：
+
+| 相机 | 用途 | 控制 |
+|------|------|------|
+| `m_CameraController` (OrthographicCamera) | 编辑器自由视角（WASD） | 保留但当前未用于渲染 |
+| ECS "Main Camera" 实体 (SceneCamera) | 场景实体渲染 | 唯一渲染相机，Gizmo 使用它 |
+
+Gizmo 必须使用 ECS 主相机的 view/projection 矩阵，因为它与实际渲染的实体处在同一坐标系：
+
+```cpp
+Entity camEntity = m_ActiveScene->GetPrimaryCameraEntity();
+auto& ct = camEntity.GetComponent<TransformComponent>();
+auto& cc = camEntity.GetComponent<CameraComponent>();
+glm::mat4 view = glm::inverse(ct.GetTransform());   // 实体变换矩阵求逆
+glm::mat4 proj = cc.Camera.GetProjection();          // 透视投影矩阵
+```
+
+### 操作模式与快捷键
+
+| 按键 | 模式 | Gizmo 操作 |
+|------|------|-----------|
+| `1` | Translate | 平移手柄，拖拽箭头移动 |
+| `2` | Rotate | 旋转手柄，拖拽圆环旋转 |
+| `3` | Scale | 缩放手柄，拖拽方块缩放 |
+
+**Ctrl 吸附**
+
+```cpp
+bool snap = Input::IsKeyPressed(GL_KEY_LEFT_CONTROL);
+float snapVal = (m_GizmoType == 1) ? 45.0f : 0.5f;  // 旋转45°，移动/缩放0.5
+float snapValues[3] = { snapVal, snapVal, snapVal };
+ImGuizmo::Manipulate(..., snap ? snapValues : nullptr);
+```
+
+按住 Ctrl 拖拽时，平移和缩放以 0.5 单位步进，旋转以 45° 步进。
+
+### 矩阵分解与抖动修复
+
+这是整个集成中最关键的细节。ImGuizmo 的 `Manipulate()` 返回修改后的完整 4x4 矩阵，需要分解回 TransformComponent 的独立 T/R/S 值。
+
+**失败方案 1：GLM 实验性分解**
+
+```cpp
+glm::vec3 skew; glm::vec4 persp; glm::quat rot;
+glm::decompose(transform, scale, rot, translation, skew, persp);
+tc.Rotation = glm::degrees(glm::eulerAngles(rot));
+```
+
+问题：需要 `GLM_ENABLE_EXPERIMENTAL`，且四元数 → 欧拉角转换不稳定。
+
+**失败方案 2：自定义 Math::DecomposeTransform**
+
+使用 YXZ 顺序从矩阵提取欧拉角，但 `GetTransform()` 构建矩阵用的是 XYZ 顺序。构建和提取的欧拉顺序不一致，导致拖拽时旋转值发生不可预测的大跳。
+
+**最终方案：ImGuizmo 内置 + Delta 增量 + 四元数构阵**
+
+```cpp
+// Components.h — 四元数构阵（根源性修复）
+glm::mat4 GetTransform() const
+{
+    // 欧拉角 → 四元数 → 矩阵：避免万向节锁
+    glm::quat q = glm::angleAxis(glm::radians(Rotation.z), glm::vec3(0,0,1))
+                * glm::angleAxis(glm::radians(Rotation.y), glm::vec3(0,1,0))
+                * glm::angleAxis(glm::radians(Rotation.x), glm::vec3(1,0,0));
+    glm::mat4 rotation = glm::toMat4(q);
+
+    return glm::translate(glm::mat4(1.0f), Translation)
+         * rotation
+         * glm::scale(glm::mat4(1.0f), Scale);
+}
+```
+
+```cpp
+// EditorLayer.cpp — 单次分解 + 增量叠加
+ImGuizmo::Manipulate(...);
+
+if (ImGuizmo::IsUsing())
+{
+    float t[3], r[3], s[3];
+    ImGuizmo::DecomposeMatrixToComponents(value_ptr(transform), t, r, s);
+
+    tc.Translation = { t[0], t[1], t[2] };
+    tc.Rotation += glm::vec3(r[0], r[1], r[2]) - tc.Rotation;  // delta
+    tc.Scale = { s[0], s[1], s[2] };
+}
+```
+
+三要素配合：
+
+| 要素 | 作用 |
+|------|------|
+| 四元数构阵 | 欧拉角只存不用，矩阵本身不会退化或万向节锁 |
+| 同源分解 | `DecomposeMatrixToComponents` 始终唯一，不再混用不同算法 |
+| Delta 叠加 | `+= new - old` 语义上等价于绝对赋值，但形式明确表达"变化量" |
+
+### 常见问题排查
+
+| 现象 | 原因 | 检查点 |
+|------|------|--------|
+| Gizmo 完全不出现 | 未调用 `BeginFrame()` | `ImGuiLayer::Begin()` 中是否调用 |
+| 选中实体后无 Gizmo | 实体无 `TransformComponent` | 层级面板选择后日志确认 |
+| 拖拽时物体疯狂旋转 | 矩阵分解不一致 | `GetTransform()` 是否使用四元数 |
+| Gizmo 位置偏移 | 相机矩阵不匹配 | 是否使用 `GetPrimaryCameraEntity()` |
+| 透视下 Gizmo 消失 | 近平面裁剪 | 实体 Z 是否在 near/far 之间 |
+| 指针为 null 崩溃 | `DecomposeMatrixToComponents` 不接受空指针 | 所有三个参数必须提供有效数组 |
+
+最后通过Gizmos手搓正方体
+![[README.assets/Pasted image 20260720104837.png]]
+
 ## KB
 
 ### 为什么不用动态库？
