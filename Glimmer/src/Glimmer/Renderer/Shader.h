@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 #include <glm/glm.hpp>
 
 namespace gl {
@@ -26,6 +27,7 @@ namespace gl {
 
 		static Ref<Shader> Create(const std::string& filepath);
 		static Ref<Shader> Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc);
+		static Ref<Shader> CreateFromBinary(const std::string& name, const std::vector<uint32_t>& vertSPV, const std::vector<uint32_t>& fragSPV);
     };
 
 	class ShaderLibrary {

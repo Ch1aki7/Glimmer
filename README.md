@@ -8556,6 +8556,87 @@ void Renderer2D::StartBatch()
   assets/shaders/Texture.glsl          ← layout(std140, binding=0)
 ```
 
+
+## Vulkan / SPIR-V 接口预埋
+
+### 背景
+
+Vulkan 后端实现是长期目标。当前 OpenGL 渲染层通过抽象接口隔离，切换后端只需实现一套 `Platform/Vulkan/` 类并在工厂中注册。在动手实现之前，先把接口层的缺口补上，避免后续重构时全项目联动修改。
+
+### 已完成的预埋
+
+**1. 后端枚举**
+
+```cpp
+// RendererAPI.h
+enum class API { None = 0, OpenGL = 1, Vulkan = 2 };
+inline static void SetAPI(API api) { s_API = api; }  // 运行时切换
+```
+
+**2. 所有工厂占位 Vulkan 分支**
+
+```cpp
+// FrameBuffer.cpp / UniformBuffer.cpp / Shader.cpp
+case RendererAPI::API::Vulkan:
+    GL_CORE_ASSERT(false, "Vulkan backend not yet implemented!");
+    return nullptr;
+```
+
+编译通过，运行时若误切到 Vulkan 会明确断言提示。后续实现 `Platform/Vulkan/OpenGLFramebuffer.cpp` 等文件后，替换这些 `case` 为 `CreateRef<VulkanFramebuffer>(spec)` 即可。
+
+**3. SPIR-V Shader 加载入口**
+
+```cpp
+// Shader.h — 接受 SPIR-V 二进制的工厂方法
+static Ref<Shader> CreateFromBinary(
+    const std::string& name,
+    const std::vector<uint32_t>& vertSPV,
+    const std::vector<uint32_t>& fragSPV);
+```
+
+OpenGL 实现直接断言不支持——因为 GL 端计划保持 GLSL 源码编译模式。Vulkan 实现中此方法调用 `vkCreateShaderModule` + `vkCreateGraphicsPipeline`。
+
+**4. premake 双路径 Vulkan 包含**
+
+```lua
+-- 优先 Vulkan SDK 系统安装，回退 git submodule
+local vulkanSDK = os.getenv("VULKAN_SDK")
+if vulkanSDK then
+    IncludeDir["VulkanSDK"] = vulkanSDK .. "/Include"   -- vulkan.h
+    libdirs { vulkanSDK .. "/Lib" }                     -- vulkan-1.lib
+else
+    IncludeDir["Vulkan-Headers"] = "Glimmer/vendor/Vulkan-Headers/include"
+end
+```
+
+**5. git submodule 依赖**
+
+| 子模块 | 用途 | 编译方式 |
+|--------|------|---------|
+| `Vulkan-Headers` | `vulkan.h` + 平台扩展头 | 纯头文件，无编译 |
+| `SPIRV-Cross` | SPIR-V 反射/反编译（Shader 调试、Pipeline 自动生成） | StaticLib |
+
+SPIRV-Cross 的 premake 配置排除了 `main.cpp`（CLI 工具），定义 `SPIRV_CROSS_STATIC` 强制静态链接规避 Windows DLL 符号导入。
+
+### SPIR-V 在当前阶段不启用
+
+OpenGL 后端通过 `GL_ARB_gl_spirv` 扩展可以加载 SPIR-V 二进制，但收益微乎其微——15 个 shader 总编译时间 < 50ms，引入 glslc 离线编译步骤反而增加构建复杂度和调试成本。SPIR-V 启用时机对齐 Vulkan 后端实现，届时 GL 保持 GLSL 源码模式不变。
+
+### 后续 Vulkan 实现路径
+
+```
+P0: VulkanContext    ← Instance / Device / Surface / SwapChain
+P1: ShaderModule     ← SPIR-V 加载 (vkCreateShaderModule)
+    Pipeline         ← PSO (vkCreateGraphicsPipeline)
+    RenderPass       ← 附件描述
+P2: CommandBuffer    ← 录制模式替代即时 GL 调用
+    DescriptorSet    ← 替代当前 uniform 上传
+P3: Buffer/Texture   ← VkBuffer/VkImage 适配
+P4: Renderer2D       ← 应用层适配新渲染流程
+```
+
+所有接口已预埋——`RendererAPI::Vulkan` 枚举 + `SetAPI` + 工厂 `case Vulkan` + `CreateFromBinary` + premake 包含路径。实际 Vulkan 后端实现时只需在 `Platform/Vulkan/` 下新增对应类文件。
+
 ## KB
 
 ### 为什么不用动态库？

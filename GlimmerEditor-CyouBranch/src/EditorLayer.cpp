@@ -89,6 +89,21 @@ namespace gl {
 			if (e && e.HasComponent<TagComponent>())
 				GL_CORE_TRACE("Hierarchy deleted: {0}", e.GetComponent<TagComponent>().Tag);
 		};
+
+		// --- 内容浏览器 ---
+		m_ContentBrowser.OnFileDoubleClicked = [&](const std::string& path) {
+			auto ext = std::filesystem::path(path).extension().string();
+			if (ext == ".glimmer") {
+				auto newScene = CreateRef<Scene>();
+				SceneSerializer serializer(newScene);
+				if (serializer.Deserialize(path)) {
+					m_ActiveScene = newScene;
+					m_HierarchyPanel.SetContext(m_ActiveScene);
+					m_HierarchyPanel.SetSelectedEntity({});
+					GL_CORE_INFO("Loaded scene: {0}", path);
+				}
+			}
+		};
 	}
 
 	void EditorLayer::OnDetach() {
@@ -249,6 +264,9 @@ namespace gl {
 		// --- Scene Hierarchy ---
 		m_HierarchyPanel.OnImGuiRender();
 
+		// --- Content Browser ---
+		m_ContentBrowser.OnImGuiRender();
+
 		// Stats
 		ImGui::Begin("Stats");
 		auto stats = Renderer2D::GetStats();
@@ -299,6 +317,29 @@ namespace gl {
 
 		ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
 		m_ViewportSize = { viewportPanelSize.x, viewportPanelSize.y };
+
+		// 接收拖拽到视口的场景文件
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+			{
+				std::string path((const char*)payload->Data, payload->DataSize - 1);
+				auto ext = std::filesystem::path(path).extension().string();
+				if (ext == ".glimmer")
+				{
+					auto newScene = CreateRef<Scene>();
+					SceneSerializer serializer(newScene);
+					if (serializer.Deserialize(path))
+					{
+						m_ActiveScene = newScene;
+						m_HierarchyPanel.SetContext(m_ActiveScene);
+						m_HierarchyPanel.SetSelectedEntity({});
+						GL_CORE_INFO("Dropped scene: {0}", path);
+					}
+				}
+			}
+			ImGui::EndDragDropTarget();
+		}
 
 		auto& spec = m_Framebuffer->GetSpecification();
 		if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&

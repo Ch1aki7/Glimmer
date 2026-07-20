@@ -36,7 +36,6 @@ IncludeDir["tinyobjloader"] = "Glimmer/vendor/tinyobjloader"
 IncludeDir["entt"] = "Glimmer/vendor/entt/src"
 IncludeDir["yaml-cpp"] = "Glimmer/vendor/yaml-cpp/include"
 IncludeDir["ImGuizmo"] = "Glimmer/vendor/ImGuizmo/src"
-IncludeDir["SPIRV-Cross"] = "Glimmer/vendor/SPIRV-Cross"
 
 -- Vulkan SDK (系统安装) + Vulkan-Headers (git submodule)
 local vulkanSDK = os.getenv("VULKAN_SDK")
@@ -53,7 +52,6 @@ include "Glimmer/vendor/Glad"
 include "Glimmer/vendor/imgui"
 include "Glimmer/vendor/yaml-cpp"
 include "Glimmer/vendor/ImGuizmo"
-include "Glimmer/vendor/SPIRV-Cross"
 group ""
 
 include "Glimmer"

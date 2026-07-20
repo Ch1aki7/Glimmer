@@ -1,5 +1,6 @@
 #include "glpch.h"
 #include "Shader.h"
+#include "Renderer.h"
 #include "Platform/OpenGL/OpenGLShader.h"
 
 namespace gl {
@@ -11,7 +12,21 @@ namespace gl {
 	Ref<Shader> Shader::Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc)
 	{
 		return CreateRef<OpenGLShader>(name, vertexSrc, fragmentSrc);
-    }
+	}
+
+	Ref<Shader> Shader::CreateFromBinary(const std::string& name, const std::vector<uint32_t>& vertSPV, const std::vector<uint32_t>& fragSPV)
+	{
+		switch (Renderer::GetAPI())
+		{
+		case RendererAPI::API::OpenGL:
+			GL_CORE_ASSERT(false, "OpenGL backend does not support SPIR-V. Use Vulkan.");
+			return nullptr;
+		case RendererAPI::API::Vulkan:
+			GL_CORE_ASSERT(false, "Vulkan backend not yet implemented.");
+			return nullptr;
+		}
+		return nullptr;
+	}
 
 	// --- ShaderLibrary 实现 ---
 

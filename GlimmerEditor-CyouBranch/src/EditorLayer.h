@@ -1,6 +1,7 @@
 #pragma once
 #include "Glimmer.h"
-#include "SceneHierarchyPanel.h"
+#include "Panels/SceneHierarchyPanel.h"
+#include "Panels/ContentBrowserPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
 
 namespace gl {
@@ -43,6 +44,7 @@ namespace gl {
 		// 场景 & 层级面板
 		Ref<Scene> m_ActiveScene;
 		SceneHierarchyPanel m_HierarchyPanel;
+		ContentBrowserPanel m_ContentBrowser;
 
 		// 视口
 		glm::vec2 m_ViewportSize = { 0.0f, 0.0f };

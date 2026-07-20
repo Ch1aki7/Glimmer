@@ -35,6 +35,14 @@ namespace gl {
 		//io.Fonts->AddFontFromFileTTF("assets/fonts/Caveat/static/Caveat-Regular.ttf", 20.0f);
 		io.Fonts->AddFontFromFileTTF("assets/fonts/Open_Sans/static/OpenSans_SemiCondensed-Italic.ttf", 20.0f);
 
+		// Font Awesome 6 图标字体（合并模式）
+		static const ImWchar faRanges[] = { 0xf000, 0xf2ff, 0 }; // FA 图标码点范围
+		ImFontConfig faConfig;
+		faConfig.MergeMode = true;
+		faConfig.GlyphMinAdvanceX = 16.0f;
+		faConfig.GlyphOffset = ImVec2(0, 2);
+		io.Fonts->AddFontFromFileTTF("assets/fonts/FontAwesome/fa-solid-900.otf", 16.0f, &faConfig, faRanges);
+
 		// 多窗口模式下的样式微调
 		ImGuiStyle& style = ImGui::GetStyle();
 		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {

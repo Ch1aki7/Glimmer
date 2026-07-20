@@ -12,6 +12,7 @@ namespace gl {
 		{
 		case RendererAPI::API::None:   GL_CORE_ASSERT(false, "RendererAPI::None not supported!"); return nullptr;
 		case RendererAPI::API::OpenGL: return CreateRef<OpenGLUniformBuffer>(size, binding);
+		case RendererAPI::API::Vulkan: GL_CORE_ASSERT(false, "Vulkan backend not yet implemented!"); return nullptr;
 		}
 
 		GL_CORE_ASSERT(false, "Unknown RendererAPI!");
