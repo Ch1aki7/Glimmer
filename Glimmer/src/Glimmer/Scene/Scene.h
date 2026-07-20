@@ -18,6 +18,7 @@ namespace gl {
 		void DestroyEntity(Entity entity);
 
 		Entity GetPrimaryCameraEntity();
+		Entity GetEntityByID(uint32_t id);              // entt entity ID 反向查找
 
 		void OnUpdateRuntime(Timestep ts);
 		void OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection);

@@ -19,6 +19,8 @@ namespace gl {
 		static void EndScene();
 		static void Flush();
 
+		static void SetEntityID(int id);
+
 		// --- 基础绘图接口 (Quads) ---
 
 		// 纯色方块 (Vector2 & Vector3 坐标支持)

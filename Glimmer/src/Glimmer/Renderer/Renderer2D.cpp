@@ -20,6 +20,7 @@ namespace gl {
 		glm::vec2 TexCoord;
 		float TexIndex;
 		float TilingFactor;
+		int   EntityID;
 	};
 
 	struct Renderer2DData
@@ -40,6 +41,7 @@ namespace gl {
 		QuadVertex* QuadVertexBufferBase = nullptr;
 		QuadVertex* QuadVertexBufferPtr = nullptr;
 		float SceneTime = 0.0f;
+		int   CurrentEntityID = 0;
 
 		std::array<Ref<Texture2D>, MaxTextureSlots> TextureSlots;
 		uint32_t TextureSlotIndex = 1; // 0号位永远留给白贴图
@@ -62,8 +64,9 @@ namespace gl {
 			{ ShaderDataType::Float3, "a_Position" },
 			{ ShaderDataType::Float4, "a_Color" },
 			{ ShaderDataType::Float2, "a_TexCoord" },
-			{ ShaderDataType::Float, "a_TexIndex" },
-			{ ShaderDataType::Float, "a_TilingFactor" }
+			{ ShaderDataType::Float,  "a_TexIndex" },
+			{ ShaderDataType::Float,  "a_TilingFactor" },
+			{ ShaderDataType::Int,    "a_EntityID" }
 			});
 		s_Data.QuadVertexArray->AddVertexBuffer(s_Data.QuadVertexBuffer);
 
@@ -215,6 +218,11 @@ namespace gl {
 		s_Data.TextureSlotIndex = 1;
 	}
 
+		void Renderer2D::SetEntityID(int id)
+		{
+			s_Data.CurrentEntityID = id;
+		}
+
 	// --- 绘图函数重载实现 ---
 
 	void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, const glm::vec4& color)
@@ -267,6 +275,7 @@ namespace gl {
 			s_Data.QuadVertexBufferPtr->TexCoord = { (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
 			s_Data.QuadVertexBufferPtr->TexIndex = textureIndex;
 			s_Data.QuadVertexBufferPtr->TilingFactor = tilingFactor;
+			s_Data.QuadVertexBufferPtr->EntityID = s_Data.CurrentEntityID;
 			s_Data.QuadVertexBufferPtr++;
 		}
 
@@ -312,6 +321,7 @@ namespace gl {
 			s_Data.QuadVertexBufferPtr->TexCoord = textureCoords[i];
 			s_Data.QuadVertexBufferPtr->TexIndex = textureIndex;
 			s_Data.QuadVertexBufferPtr->TilingFactor = tilingFactor;
+			s_Data.QuadVertexBufferPtr->EntityID = s_Data.CurrentEntityID;
 			s_Data.QuadVertexBufferPtr++;
 		}
 
@@ -345,6 +355,7 @@ namespace gl {
 			s_Data.QuadVertexBufferPtr->TexCoord = { (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
 			s_Data.QuadVertexBufferPtr->TexIndex = textureIndex;
 			s_Data.QuadVertexBufferPtr->TilingFactor = tilingFactor;
+			s_Data.QuadVertexBufferPtr->EntityID = s_Data.CurrentEntityID;
 			s_Data.QuadVertexBufferPtr++;
 		}
 
@@ -390,6 +401,7 @@ namespace gl {
 			s_Data.QuadVertexBufferPtr->TexCoord = { (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
 			s_Data.QuadVertexBufferPtr->TexIndex = textureIndex;
 			s_Data.QuadVertexBufferPtr->TilingFactor = tilingFactor;
+			s_Data.QuadVertexBufferPtr->EntityID = s_Data.CurrentEntityID;
 			s_Data.QuadVertexBufferPtr++;
 		}
 

@@ -16,6 +16,9 @@ namespace gl {
 
 		virtual uint32_t GetColorAttachmentRendererID(uint32_t index = 0) const override;
 		virtual uint32_t GetDepthAttachmentRendererID() const override { return m_DepthAttachment.RendererID; }
+		virtual uint32_t GetRendererID() const override { return m_RendererID; }
+		virtual int ReadPixel(uint32_t attachmentIndex, int x, int y) const override;
+		virtual void ClearAttachment(uint32_t attachmentIndex, int value) override;
 
 		virtual const FramebufferSpecification& GetSpecification() const override { return m_Specification; }
 

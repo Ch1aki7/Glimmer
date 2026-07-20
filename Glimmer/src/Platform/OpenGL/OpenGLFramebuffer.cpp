@@ -307,4 +307,21 @@ namespace gl {
 		return 0;
 	}
 
+	int OpenGLFramebuffer::ReadPixel(uint32_t attachmentIndex, int x, int y) const
+	{
+		if (attachmentIndex >= m_ColorAttachments.size()) return -1;
+
+		int pixel = -1;
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_RendererID);
+		glReadBuffer(GL_COLOR_ATTACHMENT0 + attachmentIndex);
+		glReadPixels(x, y, 1, 1, GL_RED_INTEGER, GL_INT, &pixel);
+		return pixel;
+	}
+
+	void OpenGLFramebuffer::ClearAttachment(uint32_t attachmentIndex, int value)
+	{
+		if (attachmentIndex >= m_ColorAttachments.size()) return;
+		glClearBufferiv(GL_COLOR, (GLint)attachmentIndex, &value);
+	}
+
 }

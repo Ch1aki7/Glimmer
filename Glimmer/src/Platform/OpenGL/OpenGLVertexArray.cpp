@@ -23,28 +23,32 @@ namespace gl {
 		return 0;
 	}
 
+	static bool IsIntType(ShaderDataType type)
+	{
+		return type == ShaderDataType::Int
+		    || type == ShaderDataType::Int2
+		    || type == ShaderDataType::Int3
+		    || type == ShaderDataType::Int4;
+	}
+
 	OpenGLVertexArray::OpenGLVertexArray()
 	{
 		GL_PROFILE_FUNCTION();
-
 		glGenVertexArrays(1, &m_RendererID);
 	}
 
 	OpenGLVertexArray::~OpenGLVertexArray()
 	{
 		GL_PROFILE_FUNCTION();
-
 		glDeleteVertexArrays(1, &m_RendererID);
 	}
 
 	void OpenGLVertexArray::Bind() const {
 		GL_PROFILE_FUNCTION();
-
 		glBindVertexArray(m_RendererID);
 	}
 	void OpenGLVertexArray::Unbind() const {
 		GL_PROFILE_FUNCTION();
-
 		glBindVertexArray(0);
 	}
 
@@ -62,12 +66,19 @@ namespace gl {
 		for (const auto& element : layout)
 		{
 			glEnableVertexAttribArray(index);
-			glVertexAttribPointer(index,
-				element.GetComponentCount(),
-				ShaderDataTypeToOpenGLBaseType(element.Type),
-				element.Normalized ? GL_TRUE : GL_FALSE,
-				layout.GetStride(),
-				(const void*)element.Offset);
+			if (IsIntType(element.Type))
+				glVertexAttribIPointer(index,
+					element.GetComponentCount(),
+					ShaderDataTypeToOpenGLBaseType(element.Type),
+					layout.GetStride(),
+					(const void*)element.Offset);
+			else
+				glVertexAttribPointer(index,
+					element.GetComponentCount(),
+					ShaderDataTypeToOpenGLBaseType(element.Type),
+					element.Normalized ? GL_TRUE : GL_FALSE,
+					layout.GetStride(),
+					(const void*)element.Offset);
 			index++;
 		}
 

@@ -53,6 +53,12 @@ namespace gl {
 		// 获取附件的渲染 ID（用于 ImGui::Image 等）
 		virtual uint32_t GetColorAttachmentRendererID(uint32_t index = 0) const = 0;
 		virtual uint32_t GetDepthAttachmentRendererID() const = 0;
+		virtual uint32_t GetRendererID() const = 0;
+
+		// 读取指定附件的像素值（用于鼠标拾取等场景）
+		virtual int ReadPixel(uint32_t attachmentIndex, int x, int y) const = 0;
+		// 清除指定附件为某个值（整数附件用 glClearBufferiv）
+		virtual void ClearAttachment(uint32_t attachmentIndex, int value) = 0;
 
 		virtual const FramebufferSpecification& GetSpecification() const = 0;
 

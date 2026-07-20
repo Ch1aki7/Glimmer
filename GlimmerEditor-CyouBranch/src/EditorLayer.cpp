@@ -48,6 +48,10 @@ namespace gl {
 		FramebufferSpecification fbSpec;
 		fbSpec.Width = 1280;
 		fbSpec.Height = 720;
+		fbSpec.Attachments = {
+			{ FramebufferTextureFormat::RGBA8 },
+			{ FramebufferTextureFormat::RED_INTEGER }  // 鼠标拾取
+		};
 		m_Framebuffer = Framebuffer::Create(fbSpec);
 		m_PostProcessFB = Framebuffer::Create(fbSpec);
 
@@ -102,6 +106,7 @@ namespace gl {
 			m_Framebuffer->Bind();
 			RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
 			RenderCommand::Clear();
+			m_Framebuffer->ClearAttachment(1, -1); // 拾取附件清为 -1（0 是合法实体 ID）
 		}
 
 		// Viewport resize 同步
@@ -347,6 +352,27 @@ namespace gl {
 				tc.Scale = { s[0], s[1], s[2] };
 			}
 		}
+
+			// --- 鼠标拾取（左键点击实体选择） ---
+			static constexpr uint32_t kPickAttachment = 1;
+			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+			    && !ImGuizmo::IsOver()
+			    && m_ViewportHovered)
+			{
+				auto [mx, my] = ImGui::GetMousePos();
+				auto& spec = m_Framebuffer->GetSpecification();
+				int fbX = (int)((mx - m_ViewportBounds[0].x) / (m_ViewportBounds[1].x - m_ViewportBounds[0].x) * spec.Width);
+				int fbY = (int)((1.0f - (my - m_ViewportBounds[0].y) / (m_ViewportBounds[1].y - m_ViewportBounds[0].y)) * spec.Height);
+
+				if (fbX >= 0 && fbY >= 0)
+				{
+					int id = m_Framebuffer->ReadPixel(kPickAttachment, fbX, fbY);
+					if (id >= 0)
+						m_HierarchyPanel.SetSelectedEntity(m_ActiveScene->GetEntityByID((uint32_t)id));
+					else
+						m_HierarchyPanel.SetSelectedEntity({}); // 点击空白=取消选中
+				}
+			}
 
 		ImGui::End();
 		ImGui::PopStyleVar();

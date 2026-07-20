@@ -8252,6 +8252,166 @@ Glimmer/src/Glimmer/Renderer/
 Debug验证
 ![[README.assets/Pasted image 20260720133559.png]]
 
+
+## 鼠标拾取 (Mouse Picking)
+
+### 设计目标
+
+点击视口中的实体即选中，点击空白取消选中——对齐 Unity/Unreal/Blender 的通用交互模式。基于 GPU 的像素级拾取，不依赖射线检测。
+
+### 原理
+
+利用 FBO 多附件（上一步重构的成果），在正常渲染的同时向第二个附件写入每个实体的唯一 ID：
+
+```
+渲染阶段：
+  附件 0 (RGBA8)     ← 正常颜色输出（显示用）
+  附件 1 (RED_INTEGER) ← 实体 ID 输出（拾取用，不可见）
+
+拾取阶段：
+  左键点击视口 → 坐标转换 → glReadPixels(附件1) → 得到实体 ID → 选中
+```
+
+### 数据流
+
+```
+Scene::OnUpdateEditor:
+  for each entity:
+    Renderer2D::SetEntityID((int)handle)  ← 当前实体 ID
+    Renderer2D::DrawQuad(...)              ← 顶点 EntityID 字段 = handle
+
+        ↓ GPU
+
+Texture.glsl (vertex):
+  flat out int v_EntityID = a_EntityID;   ← 每个 Quad 四个顶点 ID 相同，flat 插值
+
+Texture.glsl (fragment):
+  layout(location = 1) out int entityID;  ← 附件 1 输出
+  entityID = v_EntityID;
+
+        ↓ 每帧最后
+
+EditorLayer::OnImGuiRender:
+  左键点击且非 Gizmo 操作:
+    m_Framebuffer->ReadPixel(1, fbX, fbY)  ← 封装 GL 调用
+    m_ActiveScene->GetEntityByID(id)        ← 反向查找
+    m_HierarchyPanel.SetSelectedEntity(...)  ← 层级面板联动
+```
+
+### 关键改动点
+
+**1. QuadVertex 新增 EntityID 字段**
+
+```cpp
+struct QuadVertex {
+    glm::vec3 Position;
+    glm::vec4 Color;
+    glm::vec2 TexCoord;
+    float TexIndex;
+    float TilingFactor;
+    int   EntityID;      // ← 新增
+};
+```
+
+顶点布局中对应 `{ ShaderDataType::Int, "a_EntityID" }`。
+
+**2. VAO 整数属性修复**
+
+GLSL 中 `in int` 类型的顶点属性必须用 `glVertexAttribIPointer`（注意中间的 `I`），不能用 `glVertexAttribPointer`。后者将整数数据当作浮点解释，导致拾取 ID 错乱：
+
+```cpp
+// OpenGLVertexArray::AddVertexBuffer
+if (IsIntType(element.Type))
+    glVertexAttribIPointer(index, ...);  // ← 整数类型专用
+else
+    glVertexAttribPointer(index, ...);   // ← 浮点类型
+```
+
+这是实现 GPU 拾取时最常见但最隐蔽的坑——shader 语法正确、FBO 配置正确，唯独顶点属性传错了类型。
+
+**3. FBO 拾取附件清理**
+
+`glClear(GL_COLOR_BUFFER_BIT)` 对整数格式附件行为是实现相关的，不可靠。且 `0` 是合法的 entt entity ID（第一个创建的实体），不能作为"无实体"标记值：
+
+```cpp
+// 每帧渲染前
+m_Framebuffer->ClearAttachment(1, -1);  // glClearBufferiv → 拾取附件 = -1
+```
+
+```cpp
+// 点击时，-1 = 无实体 → 取消选中
+int id = m_Framebuffer->ReadPixel(1, fbX, fbY);
+if (id >= 0)
+    m_HierarchyPanel.SetSelectedEntity(m_ActiveScene->GetEntityByID((uint32_t)id));
+else
+    m_HierarchyPanel.SetSelectedEntity({});  // 点击空白取消选中
+```
+
+**4. Scene::GetEntityByID — 反向查找**
+
+```cpp
+Entity Scene::GetEntityByID(uint32_t id) {
+    entt::entity handle = (entt::entity)id;
+    if (m_Registry.valid(handle))       // entt 校验实体存在
+        return Entity{ handle, this };
+    return {};
+}
+```
+
+封装了 `entt::entity` 的内部表示，EditorLayer 不直接操作 entt 类型。
+
+**5. Framebuffer::ReadPixel — GL 调用封装**
+
+```cpp
+int OpenGLFramebuffer::ReadPixel(uint32_t attachmentIndex, int x, int y) const {
+    int pixel = -1;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_RendererID);
+    glReadBuffer(GL_COLOR_ATTACHMENT0 + attachmentIndex);
+    glReadPixels(x, y, 1, 1, GL_RED_INTEGER, GL_INT, &pixel);
+    return pixel;
+}
+```
+
+EditorLayer 只调用 `m_Framebuffer->ReadPixel(1, fbX, fbY)`——一行代码，零 GL 裸调用。
+
+### 坐标转换
+
+ImGui 鼠标坐标为屏幕空间（左上角原点），FBO 坐标为纹理空间（左下角原点），需翻转 Y 轴：
+
+```cpp
+int fbX = (int)((mx - vpBounds[0].x) / vpWidth  * fboWidth);
+int fbY = (int)((1.0f - (my - vpBounds[0].y) / vpHeight) * fboHeight);
+```
+
+### 交互行为
+
+| 操作 | 结果 |
+|------|------|
+| 左键点击实体 | 层级面板选中该实体，Gizmo 显示 |
+| 左键点击空白 | 取消选中，Gizmo 隐藏 |
+| Gizmo 拖拽中点击 | 不触发拾取（`!ImGuizmo::IsOver()` 保护） |
+
+### 文件改动总览
+
+```
+引擎层:
+  FrameBuffer.h          ← 新增 ReadPixel / ClearAttachment 接口
+  OpenGLFramebuffer.h/cpp ← 实现
+  OpenGLVertexArray.cpp   ← 整数属性用 glVertexAttribIPointer
+  Renderer2D.h/cpp        ← QuadVertex 加 EntityID + SetEntityID
+  Scene.h/cpp             ← GetEntityByID + OnUpdateEditor 传 EntityID
+
+Shader:
+  Texture.glsl            ← layout(location=5) in int a_EntityID
+                          ← layout(location=1) out int entityID
+
+编辑器:
+  EditorLayer.cpp         ← FBO 双附件 + ClearAttachment(-1) + 拾取逻辑
+```
+
+利用picking高效制作cube
+![[README.assets/Pasted image 20260720151128.png]]
+
 ## KB
 
 ### 为什么不用动态库？
