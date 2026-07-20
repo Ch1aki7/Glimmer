@@ -96,6 +96,22 @@ namespace gl {
 		}
 	}
 
+	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection)
+	{
+		// 使用外部传入的 VP 矩阵渲染所有 Sprite 实体
+		// （不依赖场景内相机实体，供编辑器自由相机使用）
+		Renderer2D::BeginScene(viewProjection);
+
+		auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
+		for (auto entity : group)
+		{
+			auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entity);
+			Renderer2D::DrawQuad(transform.GetTransform(), sprite.Color);
+		}
+
+		Renderer2D::EndScene();
+	}
+
 	void Scene::OnViewportResize(uint32_t width, uint32_t height)
 	{
 		m_ViewportWidth = width;

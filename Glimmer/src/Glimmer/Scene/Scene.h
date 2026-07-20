@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glm/glm.hpp>
 #include "entt/entt.hpp"
 #include "Glimmer/Core/Timestep.h"
 
@@ -19,6 +20,7 @@ namespace gl {
 		Entity GetPrimaryCameraEntity();
 
 		void OnUpdateRuntime(Timestep ts);
+		void OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection);
 		void OnViewportResize(uint32_t width, uint32_t height);
 
 	private:

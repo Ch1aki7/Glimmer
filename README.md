@@ -7974,6 +7974,123 @@ if (ImGuizmo::IsUsing())
 最后通过Gizmos手搓正方体
 ![[README.assets/Pasted image 20260720104837.png]]
 
+
+## EditorCamera 编辑器自由相机
+
+### 设计动机
+
+之前编辑器使用两套独立相机混合作业：
+
+| 相机 | 角色 | 问题 |
+|------|------|------|
+| `m_CameraController` (OrthographicCamera) | WASD 平移、滚轮缩放 | 仅控制正交相机，不影响实际渲染 |
+| ECS "Main Camera" 实体 (SceneCamera) | 场景实体渲染、Gizmo 投影 | 静止不动，无法交互操作 |
+
+两套 camera 的 view/projection 不一致，导致 Gizmo 位置偏移。且 ECS 相机实体需手动创建/管理，与编辑器操作逻辑无关。
+
+### 设计目标
+
+将相机控制、渲染投影、Gizmo 投影统一为一个独立类，不依赖 ECS 实体系统，作为引擎核心基础组件放在 `Renderer` 目录下。
+
+### 球形坐标模型
+
+```
+相机位置 = 焦点 + 球面偏移
+
+       m_Position = m_FocalPoint
+                  + (orientation * (0,0,1)) * m_Distance
+
+       其中 orientation = rotateY(yaw) * rotateX(pitch)
+```
+
+```
+              m_Position (球面上)
+                 ╲
+                  ╲ m_Distance
+                   ╲
+                    ● m_FocalPoint (旋转中心)
+```
+
+三个自由度：
+- **m_Distance** — 相机到焦点的距离（滚轮 Dolly）
+- **m_Yaw** — 水平旋转角（右键左右拖拽）
+- **m_Pitch** — 垂直俯仰角（右键上下拖拽，限制 -89°~89° 防止翻转）
+
+### 核心接口
+
+```cpp
+class EditorCamera {
+public:
+    EditorCamera(float fov, float aspectRatio, float nearClip, float farClip);
+
+    void OnUpdate(Timestep ts);       // 每帧检查鼠标按键状态
+    void OnEvent(Event& e);           // 滚轮事件
+
+    const glm::mat4& GetViewMatrix() const;       // 给 Gizmo / 渲染
+    const glm::mat4& GetProjectionMatrix() const;
+
+    void SetViewportSize(float w, float h);       // 窗口 resize 时更新比例
+};
+```
+
+### 操作映射
+
+| 操作 | 方法 | 实现 |
+|------|------|------|
+| **右键拖拽** | Orbit 旋转 | `delta = (mouse - m_InitialRightMouse) * speed`，累加 yaw/pitch → `UpdateView()` |
+| **中键拖拽** | Pan 平移 | `delta = (mouse - m_InitialMiddleMouse) * speed * distance`，移动焦点 → `UpdateView()` |
+| **滚轮** | Dolly 缩放 | `m_Distance -= offset * distance * 0.1`，clamp(0.5, 500) → `UpdateView()` |
+
+每次操作后调用 `UpdateView()`：
+```cpp
+void EditorCamera::UpdateView()
+{
+    m_Position = CalculatePosition();                    // 球坐标 → 世界位置
+    m_ViewMatrix = glm::lookAt(m_Position, m_FocalPoint, GetUpDirection());
+}
+```
+
+### 中键追踪踩踏修复
+
+初版中右键和中键共用一个 `m_InitialMousePosition`。当右键未按下时，`else` 分支每帧重置该变量。中键按下后计算 delta 时，起点已被右键 `else` 覆盖为当前帧位置，delta 始终为零。
+
+修复：拆分为 `m_InitialRightMouse` 和 `m_InitialMiddleMouse`，各自独立追踪。这种两个操作共享同一状态变量导致的交互干扰是输入系统中常见的踩踏 Bug。
+
+### 编辑器集成
+
+```cpp
+// EditorLayer — 单一相机，统一驱动
+
+// OnUpdate: 更新相机状态
+m_EditorCamera.OnUpdate(ts);
+
+// 场景渲染：直接用 EditorCamera 的 VP
+glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
+m_ActiveScene->OnUpdateEditor(ts, vp);  // 新增的重载，接受外部 VP
+
+// Gizmo：直接用 EditorCamera 的 view/projection
+const glm::mat4& view = m_EditorCamera.GetViewMatrix();
+const glm::mat4& proj = m_EditorCamera.GetProjectionMatrix();
+ImGuizmo::Manipulate(value_ptr(view), value_ptr(proj), ...);
+```
+
+ECS 相机实体不再需要——`Scene::OnUpdateEditor` 直接接收外部 VP 矩阵渲染所有 Sprite，绕过了场景内主相机搜索。
+
+### 文件位置
+
+```
+Glimmer/src/Glimmer/Renderer/
+  ├── Camera.h              ← 抽象基类
+  ├── OrthographicCamera.h  ← 正交相机
+  ├── EditorCamera.h/cpp    ← 编辑器自由相机（新增）
+  ├── Renderer.h
+  └── Renderer2D.h
+```
+
+作为引擎核心组件与 `Camera`、`Renderer` 同级，任何应用（Sandbox、GlimmerEditor、CyoutBranch）都可以直接使用。
+
+![[README.assets/Pasted image 20260720114008.png]]
+
 ## KB
 
 ### 为什么不用动态库？

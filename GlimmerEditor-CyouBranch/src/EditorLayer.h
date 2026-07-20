@@ -1,6 +1,7 @@
 #pragma once
 #include "Glimmer.h"
 #include "SceneHierarchyPanel.h"
+#include "Glimmer/Renderer/EditorCamera.h"
 
 namespace gl {
 
@@ -22,8 +23,8 @@ namespace gl {
 		Ref<Texture2D> m_Texture;
 		Ref<Texture2D> m_STSTexture;
 		Ref<Texture2D> m_HenryTexture;
-		Ref<Texture2D> m_WhiteTexture; // 修复 DrawIndexed 解绑 slot 0 导致无贴图模型全黑
-		OrthographicCameraController m_CameraController;
+		Ref<Texture2D> m_WhiteTexture;
+		EditorCamera m_EditorCamera;
 
 		Ref<Shader> m_3DShader;
 		int m_SelectedShaderIndex = 0;
