@@ -1,6 +1,7 @@
 #include "glpch.h"
 #include "Renderer2D.h"
 
+#include "Glimmer/Renderer/UniformBuffer.h"
 #include "Glimmer/Renderer/VertexArray.h"
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/RenderCommand.h"
@@ -30,17 +31,27 @@ namespace gl {
 		static const uint32_t MaxIndices = MaxQuads * 6;
 		static const uint32_t MaxTextureSlots = 32;
 
+		// Camera UBO (std140) — 所有 shader 共享
+		struct CameraData {
+			glm::mat4 ViewProjection;
+			float Time;
+			float _pad[3]; // std140 对齐
+		};
+		static_assert(sizeof(CameraData) == 80, "CameraData std140 size");
+
 		Ref<VertexArray> QuadVertexArray;
 		Ref<VertexBuffer> QuadVertexBuffer;
 		Ref<Shader> TextureShader;
 		Ref<Texture2D> WhiteTexture;
 
-		Ref<VertexArray> FullscreenVertexArray; // 用于全屏shader
+		Ref<VertexArray> FullscreenVertexArray;
+
+		Ref<UniformBuffer> CameraUniformBuffer;
+		CameraData CameraBuffer;
 
 		uint32_t QuadIndexCount = 0;
 		QuadVertex* QuadVertexBufferBase = nullptr;
 		QuadVertex* QuadVertexBufferPtr = nullptr;
-		float SceneTime = 0.0f;
 		int   CurrentEntityID = 0;
 
 		std::array<Ref<Texture2D>, MaxTextureSlots> TextureSlots;
@@ -56,6 +67,8 @@ namespace gl {
 	void Renderer2D::Init()
 	{
 		GL_PROFILE_FUNCTION();
+
+		s_Data.CameraUniformBuffer = UniformBuffer::Create(sizeof(Renderer2DData::CameraData), 0);
 
 		s_Data.QuadVertexArray = VertexArray::Create();
 
@@ -134,56 +147,46 @@ namespace gl {
 	void Renderer2D::Shutdown()
 	{
 		GL_PROFILE_FUNCTION();
+		s_Data.CameraUniformBuffer.reset();
 	}
 
 	void Renderer2D::BeginScene(const OrthographicCamera& camera)
 	{
 		GL_PROFILE_FUNCTION();
 
-		s_Data.SceneTime = gl::Application::Get().GetTime();
+		s_Data.CameraBuffer.ViewProjection = camera.GetViewProjectionMatrix();
+		s_Data.CameraBuffer.Time = gl::Application::Get().GetTime();
+		s_Data.CameraUniformBuffer->SetData(&s_Data.CameraBuffer, sizeof(Renderer2DData::CameraData));
 
 		s_Data.TextureShader->Bind();
-		s_Data.TextureShader->UploadUniformFloat("u_Time", s_Data.SceneTime);
-		s_Data.TextureShader->UploadUniformMat4("u_ViewProjection", camera.GetViewProjectionMatrix());
 
-		// 重置：将指针指向内存池的开头，索引计数归零
-		s_Data.QuadIndexCount = 0;
-		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
-
-		s_Data.TextureSlotIndex = 1;
+		StartBatch();
 	}
 
 	void Renderer2D::BeginScene(const Camera& camera, const glm::mat4& transform)
 	{
 		GL_PROFILE_FUNCTION();
 
-		s_Data.SceneTime = gl::Application::Get().GetTime();
-		glm::mat4 viewProj = camera.GetProjection() * glm::inverse(transform);
+		s_Data.CameraBuffer.ViewProjection = camera.GetProjection() * glm::inverse(transform);
+		s_Data.CameraBuffer.Time = gl::Application::Get().GetTime();
+		s_Data.CameraUniformBuffer->SetData(&s_Data.CameraBuffer, sizeof(Renderer2DData::CameraData));
 
 		s_Data.TextureShader->Bind();
-		s_Data.TextureShader->UploadUniformFloat("u_Time", s_Data.SceneTime);
-		s_Data.TextureShader->UploadUniformMat4("u_ViewProjection", viewProj);
 
-		s_Data.QuadIndexCount = 0;
-		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
-
-		s_Data.TextureSlotIndex = 1;
+		StartBatch();
 	}
 
 	void Renderer2D::BeginScene(const glm::mat4& viewProjection)
 	{
 		GL_PROFILE_FUNCTION();
 
-		s_Data.SceneTime = gl::Application::Get().GetTime();
+		s_Data.CameraBuffer.ViewProjection = viewProjection;
+		s_Data.CameraBuffer.Time = gl::Application::Get().GetTime();
+		s_Data.CameraUniformBuffer->SetData(&s_Data.CameraBuffer, sizeof(Renderer2DData::CameraData));
 
 		s_Data.TextureShader->Bind();
-		s_Data.TextureShader->UploadUniformFloat("u_Time", s_Data.SceneTime);
-		s_Data.TextureShader->UploadUniformMat4("u_ViewProjection", viewProjection);
 
-		s_Data.QuadIndexCount = 0;
-		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
-
-		s_Data.TextureSlotIndex = 1;
+		StartBatch();
 	}
 
 	void Renderer2D::EndScene()
@@ -199,7 +202,6 @@ namespace gl {
 
 	void Renderer2D::Flush()
 	{
-		// Bind textures
 		for (uint32_t i = 0; i < s_Data.TextureSlotIndex; i++)
 			s_Data.TextureSlots[i]->Bind(i);
 
@@ -207,15 +209,17 @@ namespace gl {
 		s_Data.Stats.DrawCalls++;
 	}
 
+	void Renderer2D::StartBatch()
+	{
+		s_Data.QuadIndexCount = 0;
+		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
+		s_Data.TextureSlotIndex = 1;
+	}
 
 	void Renderer2D::FlushAndReset()
 	{
 		EndScene();
-
-		s_Data.QuadIndexCount = 0;
-		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
-
-		s_Data.TextureSlotIndex = 1;
+		StartBatch();
 	}
 
 		void Renderer2D::SetEntityID(int id)
@@ -429,7 +433,7 @@ namespace gl {
 		shader->UploadUniformMat4("u_Transform", transform);
 
 		// 自动上传时间、分辨率等基础参数 (保持不变)
-		shader->UploadUniformFloat("u_Time", s_Data.SceneTime);
+		shader->UploadUniformFloat("u_Time", s_Data.CameraBuffer.Time);
 		auto& window = gl::Application::Get().GetWindow();
 		shader->UploadUniformFloat2("u_Resolution", { (float)window.GetWidth(), (float)window.GetHeight() });
 

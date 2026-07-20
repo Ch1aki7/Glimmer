@@ -18,6 +18,7 @@ namespace gl {
 		static void BeginScene(const glm::mat4& viewProjection);
 		static void EndScene();
 		static void Flush();
+		static void StartBatch();
 
 		static void SetEntityID(int id);
 

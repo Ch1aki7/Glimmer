@@ -25,7 +25,6 @@ namespace gl {
 		auto shaderSources = PreProcess(source);
 		Compile(shaderSources);
 
-		// Extract name from filepath
 		auto lastSlash = filepath.find_last_of("/\\");
 		lastSlash = lastSlash == std::string::npos ? 0 : lastSlash + 1;
 		auto lastDot = filepath.rfind('.');
@@ -47,8 +46,18 @@ namespace gl {
 	OpenGLShader::~OpenGLShader()
 	{
 		GL_PROFILE_FUNCTION();
-
 		glDeleteProgram(m_RendererID);
+	}
+
+	GLint OpenGLShader::GetUniformLocation(const std::string& name) const
+	{
+		auto it = m_UniformCache.find(name);
+		if (it != m_UniformCache.end())
+			return it->second;
+
+		GLint loc = glGetUniformLocation(m_RendererID, name.c_str());
+		m_UniformCache[name] = loc;
+		return loc;
 	}
 
 	std::string OpenGLShader::ReadFile(const std::string& filepath)
@@ -64,13 +73,11 @@ namespace gl {
 			in.seekg(0, std::ios::beg);
 			in.read(&result[0], result.size());
 			in.close();
-			;
 		}
 		else
 		{
 			GL_CORE_ERROR("Could not open file '{0}'", filepath);
 		}
-
 		return result;
 	}
 
@@ -111,10 +118,8 @@ namespace gl {
 			const std::string& source = kv.second;
 
 			GLuint shader = glCreateShader(type);
-
 			const GLchar* sourceCStr = source.c_str();
 			glShaderSource(shader, 1, &sourceCStr, 0);
-
 			glCompileShader(shader);
 
 			GLint isCompiled = 0;
@@ -123,12 +128,9 @@ namespace gl {
 			{
 				GLint maxLength = 0;
 				glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &maxLength);
-
 				std::vector<GLchar> infoLog(maxLength);
 				glGetShaderInfoLog(shader, maxLength, &maxLength, &infoLog[0]);
-
 				glDeleteShader(shader);
-
 				GL_CORE_ERROR("{0}", infoLog.data());
 				GL_CORE_ASSERT(false, "Shader compilation failure!");
 				break;
@@ -139,28 +141,19 @@ namespace gl {
 		}
 
 		m_RendererID = program;
-
-		// Link our program
 		glLinkProgram(program);
 
-		// Note the different functions here: glGetProgram* instead of glGetShader*.
 		GLint isLinked = 0;
 		glGetProgramiv(program, GL_LINK_STATUS, (int*)&isLinked);
 		if (isLinked == GL_FALSE)
 		{
 			GLint maxLength = 0;
 			glGetProgramiv(program, GL_INFO_LOG_LENGTH, &maxLength);
-
-			// The maxLength includes the NULL character
 			std::vector<GLchar> infoLog(maxLength);
 			glGetProgramInfoLog(program, maxLength, &maxLength, &infoLog[0]);
-
-			// We don't need the program anymore.
 			glDeleteProgram(program);
-
 			for (auto id : glShaderIDs)
 				glDeleteShader(id);
-
 			GL_CORE_ERROR("{0}", infoLog.data());
 			GL_CORE_ASSERT(false, "Shader link failure!");
 			return;
@@ -173,74 +166,56 @@ namespace gl {
 	void OpenGLShader::Bind() const
 	{
 		GL_PROFILE_FUNCTION();
-
 		glUseProgram(m_RendererID);
 	}
 
 	void OpenGLShader::Unbind() const
 	{
 		GL_PROFILE_FUNCTION();
-
 		glUseProgram(0);
 	}
 
 	void OpenGLShader::UploadUniformInt(const std::string& name, int value) {
 		GL_PROFILE_FUNCTION();
-
-		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-		glUniform1i(location, value);
+		glUniform1i(GetUniformLocation(name), value);
 	}
 
 	void OpenGLShader::UploadUniformIntArray(const std::string& name, int* values, uint32_t count) {
 		GL_PROFILE_FUNCTION();
-
-
-		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-		glUniform1iv(location, count, values);
+		glUniform1iv(GetUniformLocation(name), count, values);
 	}
 
 	void OpenGLShader::UploadUniformFloat(const std::string& name, float value) {
 		GL_PROFILE_FUNCTION();
-
-		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-		glUniform1f(location, value);
+		glUniform1f(GetUniformLocation(name), value);
 	}
 
 	void OpenGLShader::UploadUniformFloat2(const std::string& name, const glm::vec2& value) {
 		GL_PROFILE_FUNCTION();
-
-		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-		glUniform2f(location, value.x, value.y);
+		GLint loc = GetUniformLocation(name);
+		glUniform2f(loc, value.x, value.y);
 	}
 
 	void OpenGLShader::UploadUniformFloat3(const std::string& name, const glm::vec3& value) {
 		GL_PROFILE_FUNCTION();
-
-		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-		glUniform3f(location, value.x, value.y, value.z);
+		GLint loc = GetUniformLocation(name);
+		glUniform3f(loc, value.x, value.y, value.z);
 	}
 
 	void OpenGLShader::UploadUniformFloat4(const std::string& name, const glm::vec4& value) {
 		GL_PROFILE_FUNCTION();
-
-		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-		glUniform4f(location, value.x, value.y, value.z, value.w);
+		GLint loc = GetUniformLocation(name);
+		glUniform4f(loc, value.x, value.y, value.z, value.w);
 	}
 
 	void OpenGLShader::UploadUniformMat4(const std::string& name, const glm::mat4& matrix) {
 		GL_PROFILE_FUNCTION();
-
-		GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-		// 参数：位置, 数量, 是否转置(GLM默认列优先，填FALSE), 数据指针
-		glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(matrix));
+		glUniformMatrix4fv(GetUniformLocation(name), 1, GL_FALSE, glm::value_ptr(matrix));
 	}
 
 	void OpenGLShader::BindTexture(const std::string& name, uint32_t slot, uint32_t textureID)
 	{
-		// 1. 设置这个插槽应该对应的采样器 ID
 		UploadUniformInt(name, slot);
-
-		// 2. 将真实的纹理 ID 绑定到那个物理插槽上
 		glActiveTexture(GL_TEXTURE0 + slot);
 		glBindTexture(GL_TEXTURE_2D, textureID);
 	}

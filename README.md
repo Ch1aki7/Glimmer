@@ -8412,6 +8412,150 @@ Shader:
 利用picking高效制作cube
 ![[README.assets/Pasted image 20260720151128.png]]
 
+
+## 着色器系统优化：Uniform 缓存与 UBO
+
+### 重构前的问题
+
+**1. 每帧每次 Uniform 上传都做 `glGetUniformLocation`**
+
+```cpp
+void OpenGLShader::UploadUniformMat4(const std::string& name, const glm::mat4& matrix) {
+    GLint location = glGetUniformLocation(m_RendererID, name.c_str()); // ← 每次！
+    glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(matrix));
+}
+```
+
+每个 `BeginScene` 调用都重新查 `u_ViewProjection` 和 `u_Time` 的 location。`glGetUniformLocation` 涉及 GL 驱动的字符串哈希和遍历，虽然单次开销极小但逐帧累积无意义——shader 链接后 location 不变。
+
+**2. 每个 Shader 独立上传 Camera 数据**
+
+Renderer2D 的三个 `BeginScene` 重载各自调用 `UploadUniformMat4 + UploadUniformFloat`。后续若新增 shader，每个都需要重复上传相同的 camera VP 和时间。
+
+**3. 批处理重置代码重复**
+
+`QuadIndexCount / QuadVertexBufferPtr / TextureSlotIndex` 初始化在 4 处硬编码复制。
+
+### Uniform Location 缓存
+
+**原理**：`glGetUniformLocation` 在 Shader 链接后结果恒定。首次调用存入 `unordered_map`，后续 O(1) 查表。
+
+```cpp
+// OpenGLShader 新增
+mutable std::unordered_map<std::string, GLint> m_UniformCache;
+
+GLint OpenGLShader::GetUniformLocation(const std::string& name) const
+{
+    auto it = m_UniformCache.find(name);
+    if (it != m_UniformCache.end())
+        return it->second;                           // 命中：O(1)
+
+    GLint loc = glGetUniformLocation(m_RendererID, name.c_str());  // 未命中：一次 GL
+    m_UniformCache[name] = loc;
+    return loc;
+}
+```
+
+所有 8 个 `UploadUniform*` 方法中的 `glGetUniformLocation` 替换为 `GetUniformLocation`。
+
+`m_UniformCache` 声明为 `mutable`：即使通过 `const Bind()` 调用也能写缓存（逻辑上缓存不影响 Shader 对象的"语义常量性"）。
+
+### Uniform Buffer Object (UBO)
+
+**动机**：Camera 数据（VP 矩阵 + 时间）是全局共享的——所有 Shader 都需要但不是每个 Shader 独有的。传统 uniform 上传需要每个 Shader 绑定后逐一 `UploadUniformMat4`，UBO 将其改为一次写入、所有 Shader 自动可见。
+
+**UniformBuffer 抽象**
+
+```
+Renderer/UniformBuffer.h          ← 平台无关接口
+Platform/OpenGL/OpenGLUniformBuffer.h/cpp ← GL 实现
+```
+
+```cpp
+class UniformBuffer {
+public:
+    virtual void Bind() const = 0;
+    virtual void Unbind() const = 0;
+    virtual void SetData(const void* data, uint32_t size, uint32_t offset = 0) = 0;
+
+    static Ref<UniformBuffer> Create(uint32_t size, uint32_t binding);
+};
+```
+
+**GL 实现**：`glCreateBuffers` + `glNamedBufferData`（DSA 分配）+ `glBindBufferBase`（绑定到 binding point）+ `glNamedBufferSubData`（增量更新）。
+
+**Renderer2D 中的 CameraData**
+
+```cpp
+struct CameraData {
+    glm::mat4 ViewProjection;  // offset 0,  size 64
+    float     Time;            // offset 64, size 4
+    float     _pad[3];         // offset 68, size 12（std140 对齐到 16B 边界）
+};
+static_assert(sizeof(CameraData) == 80, "std140");
+
+Ref<UniformBuffer> CameraUniformBuffer;  // Init 时创建，binding point 0
+CameraData CameraBuffer;                 // 每帧更新
+```
+
+**std140 布局规则**：`mat4` 在 UBO 中被当作 4 个 `vec4`（每行 16 字节对齐），`float` 后需 padding 到下一个 `vec4` 边界。`static_assert` 在编译期验证结构体大小，防止对齐错误。
+
+**数据流变化**
+
+```
+之前:
+  BeginScene → Bind(TextureShader) → UploadUniformMat4("u_ViewProjection", vp) → UploadUniformFloat("u_Time", t)
+  问题：每次绑 Shader 都重新上传，多个 Shader 需重复
+
+之后:
+  s_Data.CameraBuffer.ViewProjection = vp;
+  s_Data.CameraBuffer.Time = GetTime();
+  s_Data.CameraUniformBuffer->SetData(&s_Data.CameraBuffer, 80);  // 一次 glBufferSubData
+  Bind(TextureShader)  // Shader 通过 layout(std140, binding=0) 自动读取
+  效果：所有 Shader 共享，只传一次
+```
+
+**Shader 端适配**
+
+```glsl
+#version 330 core
+#extension GL_ARB_shading_language_420pack : enable  // binding 需要 420 或此扩展
+
+layout(std140, binding = 0) uniform CameraBlock {
+    mat4  u_ViewProjection;  // 变量名不变
+    float u_Time;
+};
+// Shader 主体代码一行未改——uniform 名相同，访问方式不变
+```
+
+`binding = 0` 对应 C++ 端 `UniformBuffer::Create(size, 0)` 的第二个参数。`std140` 保证 CPU/GPU 内存布局一致。
+
+### StartBatch 重构
+
+消除 `BeginScene × 3 + FlushAndReset` 中的重复批处理重置：
+
+```cpp
+void Renderer2D::StartBatch()
+{
+    s_Data.QuadIndexCount = 0;
+    s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
+    s_Data.TextureSlotIndex = 1;
+}
+```
+
+### 文件清单
+
+```
+新增:
+  Renderer/UniformBuffer.h/cpp         ← 抽象 + 工厂
+  Platform/OpenGL/OpenGLUniformBuffer.h/cpp ← GL 实现
+
+修改:
+  Platform/OpenGL/OpenGLShader.h/cpp   ← Uniform 缓存
+  Renderer/Renderer2D.h/cpp            ← CameraUBO + StartBatch
+  assets/shaders/Texture.glsl          ← layout(std140, binding=0)
+```
+
 ## KB
 
 ### 为什么不用动态库？
