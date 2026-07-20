@@ -8091,6 +8091,167 @@ Glimmer/src/Glimmer/Renderer/
 
 ![[README.assets/Pasted image 20260720114008.png]]
 
+
+## Framebuffer 重构：多附件与优化
+
+### 重构前的问题
+
+| 问题 | 详情 |
+|------|------|
+| 单颜色附件 | 硬编码 1 个 `GL_RGBA8` 颜色附件，无法支持 MRT（多渲染目标） |
+| Resize 暴力重建 | `Resize()` = `glDeleteTextures` × 2 + `Invalidate()`，每次 resize 都销毁 GPU 资源再创建 |
+| MSAA 无效 | `Samples` 字段存在但 `Invalidate()` 中无任何多重采样逻辑 |
+| 纹理格式硬编码 | 颜色附件固定 `GL_RGBA8`，深度固定 `GL_DEPTH24_STENCIL8`，无法选择 HDR / 整数格式 |
+| 深度不可读 | 深度附件绑定后完全无法对外暴露，调试或后处理无法使用深度信息 |
+| 仅 OpenGL | `FramebufferSpecification` 中 `SwapChainTarget` 字段预留但未实现 |
+
+### 新接口设计
+
+**纹理格式枚举**
+
+```cpp
+enum class FramebufferTextureFormat {
+    None = 0,
+    RGBA8,              // 标准 8-bit 颜色
+    RED_INTEGER,        // 实体 ID 拾取（整数像素）
+    RGBA16F,            // HDR 半精度浮点
+    Depth24Stencil8,    // 深度/模板
+};
+```
+
+**附件规格**
+
+```cpp
+struct FramebufferAttachmentSpecification {
+    FramebufferTextureFormat Format = FramebufferTextureFormat::RGBA8;
+};
+
+struct FramebufferSpecification {
+    uint32_t Width = 1280, Height = 720;
+    std::vector<FramebufferAttachmentSpecification> Attachments;  // 任意数量
+    uint32_t Samples = 1;         // MSAA 采样数（1=关闭）
+    bool SwapChainTarget = false;
+
+    FramebufferSpecification() = default;
+    FramebufferSpecification(uint32_t w, uint32_t h) : Width(w), Height(h) {}
+};
+```
+
+**Framebuffer 抽象接口**
+
+```cpp
+class Framebuffer {
+public:
+    virtual void Bind() = 0;
+    virtual void Unbind() = 0;
+    virtual void Resize(uint32_t width, uint32_t height) = 0;
+
+    virtual uint32_t GetColorAttachmentRendererID(uint32_t index = 0) const = 0;
+    virtual uint32_t GetDepthAttachmentRendererID() const = 0;          // 新增
+
+    virtual const FramebufferSpecification& GetSpecification() const = 0;
+
+    static Ref<Framebuffer> Create(const FramebufferSpecification& spec);
+};
+```
+
+### 向后兼容
+
+旧代码无需任何改动，规约中未指定 `Attachments` 时自动补默认值：
+
+```cpp
+// 旧用法——完全兼容
+FramebufferSpecification fbSpec;
+fbSpec.Width  = 1280;
+fbSpec.Height = 720;
+auto fb = Framebuffer::Create(fbSpec);
+// 自动等价于: Attachments = { { RGBA8 } } + 默认 Depth24Stencil8
+```
+
+### Resize 优化
+
+之前 `Resize()` 先 `glDeleteTextures` 销毁旧纹理再 `Invalidate()` 重新创建。频繁拖拽视口边缘时，每帧都有 GPU 资源的分配/销毁开销。
+
+```cpp
+// 重构后：ResizeAttachments() 原地更新
+void OpenGLFramebuffer::ResizeAttachments()
+{
+    for (auto& att : m_ColorAttachments) {
+        glBindTexture(GL_TEXTURE_2D, att.RendererID);
+        glTexImage2D(GL_TEXTURE_2D, 0, InternalFormat, w, h, 0, ...);
+        // 纹理 ID 不变，ImGui::Image 引用不失效
+    }
+    // 深度附件：texStorage 不可原地更新，需重建（但仅此一个）
+}
+```
+
+颜色附件使用 `glTexImage2D` 原地重新分配存储（纹理 ID 不变），ImGui 引用的 `uintptr_t` 全程有效。仅深度附件因使用不可变存储 `glTexStorage2D` 仍需重建，但这是 GL 限制而非设计缺陷。
+
+### 多附件支持
+
+**GL 层面的关键步骤**
+
+多附件 FBO 必须显式设置 `glDrawBuffers`，OpenGL 默认只向 `GL_COLOR_ATTACHMENT0` 写入片段：
+
+```cpp
+// Invalidate() 末尾
+std::vector<GLenum> drawBuffers;
+for (size_t i = 0; i < m_ColorAttachments.size(); i++)
+    if (!IsDepthFormat(m_ColorAttachments[i].Format))
+        drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + i);
+glNamedFramebufferDrawBuffers(m_RendererID, drawBuffers.size(), drawBuffers.data());
+```
+
+**使用示例**
+
+```cpp
+// 颜色 + 实体 ID 拾取
+FramebufferSpecification pickSpec(1280, 720);
+pickSpec.Attachments = {
+    { FramebufferTextureFormat::RGBA8 },
+    { FramebufferTextureFormat::RED_INTEGER }
+};
+auto pickFB = Framebuffer::Create(pickSpec);
+
+// Shader 端
+layout(location = 0) out vec4 color;      // → 附件 0
+layout(location = 1) out int  entityID;   // → 附件 1
+```
+
+**缺少 `glDrawBuffers` 的排查**
+
+这是实现多附件时最常见的踩坑点。如果 Fragment Shader 有 `layout(location = 1)` 输出但对应附件没有数据显示：
+1. 检查 FBO 是否有对应附件绑定
+2. 检查 `glDrawBuffers` 是否包含了 `GL_COLOR_ATTACHMENT1`
+3. 检查 FBO 完整性状态 `glCheckFramebufferStatus`
+
+### MSAA 支持
+
+当 `Samples > 1` 时，颜色附件使用 `glRenderbufferStorageMultisample` 创建多重采样渲染缓冲，解析到纹理需要在另一个 FBO 上 `glBlitFramebuffer`（当前框架已预留结构，后续可补解析逻辑）。
+
+### 纹理参数规范
+
+| 附件类型 | Min/Mag 过滤 | Wrap |
+|---------|-------------|------|
+| 颜色 (RGBA8, RGBA16F) | LINEAR | CLAMP_TO_EDGE |
+| 整数 (RED_INTEGER) | NEAREST | CLAMP_TO_EDGE |
+| 深度 (Depth24Stencil8) | NEAREST | CLAMP_TO_EDGE |
+
+### 文件结构
+
+```
+Glimmer/src/Glimmer/Renderer/
+  └── FrameBuffer.h          ← 抽象接口 + 规格定义
+      │
+      └── Platform/OpenGL/
+           └── OpenGLFramebuffer.h/cpp  ← OpenGL 实现
+```
+
+`FrameBuffer.h` 中定义了全部平台无关的枚举、规格 struct 和抽象接口。`OpenGLFramebuffer` 实现所有 GL 逻辑，包括格式映射层、DrawBuffers 管理、Resize 优化。
+
+Debug验证
+![[README.assets/Pasted image 20260720133559.png]]
+
 ## KB
 
 ### 为什么不用动态库？
