@@ -318,7 +318,19 @@ namespace gl {
 		ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
 		m_ViewportSize = { viewportPanelSize.x, viewportPanelSize.y };
 
-		// 接收拖拽到视口的场景文件
+
+		auto& spec = m_Framebuffer->GetSpecification();
+		if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&
+			(spec.Width != viewportPanelSize.x || spec.Height != viewportPanelSize.y))
+		{
+			m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
+			m_PostProcessFB->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
+			m_EditorCamera.SetViewportSize(viewportPanelSize.x, viewportPanelSize.y);
+		}
+
+		uint32_t textureID = m_FinalSceneTexture;
+		ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
+
 		if (ImGui::BeginDragDropTarget())
 		{
 			if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
@@ -340,18 +352,6 @@ namespace gl {
 			}
 			ImGui::EndDragDropTarget();
 		}
-
-		auto& spec = m_Framebuffer->GetSpecification();
-		if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&
-			(spec.Width != viewportPanelSize.x || spec.Height != viewportPanelSize.y))
-		{
-			m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
-			m_PostProcessFB->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
-			m_EditorCamera.SetViewportSize(viewportPanelSize.x, viewportPanelSize.y);
-		}
-
-		uint32_t textureID = m_FinalSceneTexture;
-		ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
 
 		// --- Gizmos ---
 		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
