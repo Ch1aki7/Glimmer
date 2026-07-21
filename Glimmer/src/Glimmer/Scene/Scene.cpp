@@ -112,8 +112,7 @@ namespace gl {
 		for (auto entityHandle : group)
 		{
 			auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entityHandle);
-			Renderer2D::SetEntityID((int)(uint32_t)entityHandle);
-			Renderer2D::DrawQuad(transform.GetTransform(), sprite.Color);
+			Renderer2D::DrawSprite(transform.GetTransform(), sprite, (int)(uint32_t)entityHandle);
 		}
 
 		Renderer2D::EndScene();

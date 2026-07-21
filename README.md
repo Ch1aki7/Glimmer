@@ -8903,6 +8903,80 @@ for (auto& sub : directory_iterator(path))
 ![[README.assets/Pasted image 20260721105118.png]]
 
 
+
+## SpriteRenderer 贴图支持
+
+### 组件扩展
+
+```cpp
+struct SpriteRendererComponent {
+    glm::vec4 Color{ 1.0f, 1.0f, 1.0f, 1.0f };
+    Ref<Texture2D> Texture;        // ← 新增：可选贴图
+    float TilingFactor = 1.0f;    // ← 新增：贴图重复倍数
+};
+```
+
+贴图为 `nullptr` 时退化为纯色渲染，行为与之前完全一致。
+
+### DrawSprite 便捷方法
+
+```cpp
+// Renderer2D::DrawSprite — 根据组件内容自动选择渲染路径
+void DrawSprite(const glm::mat4& transform, SpriteRendererComponent& src, int entityID)
+{
+    if (src.Texture)
+        DrawQuad(transform, src.Texture, src.TilingFactor, src.Color, entityID);
+    else
+        DrawQuad(transform, src.Color, entityID);
+}
+```
+
+调用方（`Scene::OnUpdateEditor`）无需区分纯色/贴图，统一一行 `DrawSprite`。
+
+### 创建贴图实体
+
+```cpp
+auto entity = m_ActiveScene->CreateEntity("Balatro Card");
+auto& sr = entity.AddComponent<SpriteRendererComponent>(color);
+sr.Texture = m_Texture;  // 指定贴图
+entity.GetComponent<TransformComponent>().Translation = { 2.0f, 1.0f, -3.0f };
+```
+
+贴图实体和纯色实体在 ECS 中统一管理，渲染时 `DrawSprite` 自动分流。
+
+### 层级面板拖放贴图
+
+选中实体的 Sprite Renderer 组件面板新增：
+
+- **Tiling 拖拽条** — 调整贴图重复倍数
+- **纹理状态** — 显示 "Loaded" 或 "None (drag here)"
+- **清除按钮** — 移除贴图，回退到纯色渲染
+- **Drop Target** — 从 Content Browser 拖 `.png`/`.jpg` 到面板即赋值 `Texture`
+
+```cpp
+if (ImGui::BeginDragDropTarget()) {
+    if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE")) {
+        auto ext = path.extension().string();
+        if (ext == ".png" || ext == ".jpg")
+            src.Texture = Texture2D::Create(path);
+    }
+    ImGui::EndDragDropTarget();
+}
+```
+
+### 文件清单
+
+```
+修改:
+  Scene/Components.h          ← SpriteRendererComponent 加 Texture + TilingFactor
+  Renderer/Renderer2D.h/cpp    ← DrawSprite + 带 entityID 的 DrawQuad 重载
+  Scene/Scene.cpp              ← OnUpdateEditor 改用 DrawSprite
+  Panels/SceneHierarchyPanel.cpp ← Texture 属性显示 + 拖放
+  EditorLayer.cpp              ← 贴图实体创建
+```
+
+![[README.assets/Pasted image 20260721144641.png]]
+
 ## KB
 
 ### 为什么不用动态库？

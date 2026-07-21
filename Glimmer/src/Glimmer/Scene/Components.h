@@ -3,6 +3,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <string>
+#include "Glimmer/Renderer/Texture.h"
 #include "SceneCamera.h"
 #include "ScriptableEntity.h"
 
@@ -32,7 +33,6 @@ namespace gl {
 
 		glm::mat4 GetTransform() const
 		{
-			// 四元数构阵：欧拉角 → 四元数 → 矩阵，避免万向节锁
 			glm::quat q = glm::angleAxis(glm::radians(Rotation.z), glm::vec3(0, 0, 1))
 				* glm::angleAxis(glm::radians(Rotation.y), glm::vec3(0, 1, 0))
 				* glm::angleAxis(glm::radians(Rotation.x), glm::vec3(1, 0, 0));
@@ -47,6 +47,8 @@ namespace gl {
 	struct SpriteRendererComponent
 	{
 		glm::vec4 Color{ 1.0f, 1.0f, 1.0f, 1.0f };
+		Ref<Texture2D> Texture;
+		float TilingFactor = 1.0f;
 
 		SpriteRendererComponent() = default;
 		SpriteRendererComponent(const SpriteRendererComponent&) = default;
@@ -56,8 +58,8 @@ namespace gl {
 	struct CameraComponent
 	{
 		gl::SceneCamera Camera;
-		bool Primary = true; // 是否为当前主相机
-		bool FixedAspectRatio = false; // 是否固定纵横比
+		bool Primary = true;
+		bool FixedAspectRatio = false;
 
 		CameraComponent() = default;
 		CameraComponent(const CameraComponent&) = default;
@@ -67,11 +69,9 @@ namespace gl {
 	{
 		ScriptableEntity* Instance = nullptr;
 
-		// 函数指针，用于实例化和销毁脚本对象
 		ScriptableEntity* (*InstantiateScript)();
 		void (*DestroyScript)(NativeScriptComponent*);
 
-		// 模板绑定函数
 		template<typename T>
 		void Bind()
 		{

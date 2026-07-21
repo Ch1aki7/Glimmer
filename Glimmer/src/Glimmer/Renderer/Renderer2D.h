@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/Camera.h"
 
+#include "Glimmer/Scene/Components.h"
 namespace gl {
 
 	class Renderer2D
@@ -35,6 +36,13 @@ namespace gl {
 		// transform
 		static void DrawQuad(const glm::mat4& transform, const glm::vec4& color);
 		static void DrawQuad(const glm::mat4& transform, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
+
+		// 带实体 ID 的 DrawQuad（用于鼠标拾取）
+		static void DrawQuad(const glm::mat4& transform, const glm::vec4& color, int entityID);
+		static void DrawQuad(const glm::mat4& transform, const Ref<Texture2D>& texture, float tilingFactor, const glm::vec4& tintColor, int entityID);
+
+		// 便捷方法：根据 SpriteRendererComponent 自动选纯色/纹理
+		static void DrawSprite(const glm::mat4& transform, SpriteRendererComponent& src, int entityID);
 
 		// 旋转 DrawQuad (纯色)
 		static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color);

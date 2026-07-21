@@ -414,6 +414,28 @@ namespace gl {
 		s_Data.Stats.QuadCount++;
 	}
 
+
+	// --- 带 EntityID 的 DrawQuad（委托已有方法） ---
+
+	void Renderer2D::DrawQuad(const glm::mat4& transform, const glm::vec4& color, int entityID)
+	{
+		SetEntityID(entityID);
+		DrawQuad(transform, color);
+	}
+
+	void Renderer2D::DrawQuad(const glm::mat4& transform, const Ref<Texture2D>& texture, float tilingFactor, const glm::vec4& tintColor, int entityID)
+	{
+		SetEntityID(entityID);
+		DrawQuad(transform, texture, tilingFactor, tintColor);
+	}
+
+	void Renderer2D::DrawSprite(const glm::mat4& transform, SpriteRendererComponent& src, int entityID)
+	{
+		if (src.Texture)
+			DrawQuad(transform, src.Texture, src.TilingFactor, src.Color, entityID);
+		else
+			DrawQuad(transform, src.Color, entityID);
+	}
 	void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
 	{
 		GL_PROFILE_FUNCTION();

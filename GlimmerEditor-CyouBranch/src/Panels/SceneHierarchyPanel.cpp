@@ -1,5 +1,6 @@
 #include "SceneHierarchyPanel.h"
 #include <glm/gtc/type_ptr.hpp>
+#include <filesystem>
 
 namespace gl {
 
@@ -12,7 +13,6 @@ namespace gl {
 
 		ImGui::Begin("Scene Hierarchy");
 
-		// --- 顶部工具栏 ---
 		if (ImGui::Button("+ Create Entity"))
 		{
 			auto entity = m_Context->CreateEntity();
@@ -22,7 +22,6 @@ namespace gl {
 
 		ImGui::Separator();
 
-		// --- 实体列表 ---
 		uint32_t idCounter = 0;
 		m_Context->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
 			Entity entity{ handle, m_Context.get() };
@@ -31,14 +30,12 @@ namespace gl {
 			}
 		});
 
-		// --- 选中实体的组件检查器 ---
 		ImGui::Separator();
 		if (m_SelectionContext && m_SelectionContext.HasComponent<TagComponent>())
 		{
 			DrawComponents(m_SelectionContext);
 		}
 
-		// --- 右键删除弹窗 ---
 		if (m_ShowDeletePopup) {
 			ImGui::OpenPopup("Delete Entity?");
 			m_ShowDeletePopup = false;
@@ -77,14 +74,12 @@ namespace gl {
 	{
 		auto& tag = entity.GetComponent<TagComponent>().Tag;
 
-		std::string label;
-		label += tag.empty() ? "Unnamed" : tag;
+		std::string label = tag.empty() ? "Unnamed" : tag;
 
 		std::string badges;
 		if (entity.HasComponent<CameraComponent>())          badges += " [Cam]";
 		if (entity.HasComponent<SpriteRendererComponent>())  badges += " [Spr]";
 		if (entity.HasComponent<NativeScriptComponent>())    badges += " [Scr]";
-
 		label += badges;
 
 		ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf
@@ -212,6 +207,27 @@ namespace gl {
 			{
 				auto& src = entity.GetComponent<SpriteRendererComponent>();
 				ImGui::ColorEdit4("Color", glm::value_ptr(src.Color));
+				ImGui::DragFloat("Tiling", &src.TilingFactor, 0.1f, 0.1f, 10.0f);
+
+				// 纹理状态 + 预览
+				ImGui::Text("Texture: %s", src.Texture ? "Loaded" : "None (drag here)");
+				ImGui::SameLine();
+				if (src.Texture && ImGui::SmallButton("X"))
+					src.Texture = nullptr;
+
+				// 接收从 Content Browser 拖来的贴图文件
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+					{
+						std::string path((const char*)payload->Data, payload->DataSize - 1);
+						auto ext = std::filesystem::path(path).extension().string();
+						if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")
+							src.Texture = Texture2D::Create(path);
+					}
+					ImGui::EndDragDropTarget();
+				}
+
 				ImGui::TreePop();
 			}
 		}
