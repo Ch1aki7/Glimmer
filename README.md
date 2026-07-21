@@ -8637,6 +8637,272 @@ P4: Renderer2D       ← 应用层适配新渲染流程
 
 所有接口已预埋——`RendererAPI::Vulkan` 枚举 + `SetAPI` + 工厂 `case Vulkan` + `CreateFromBinary` + premake 包含路径。实际 Vulkan 后端实现时只需在 `Platform/Vulkan/` 下新增对应类文件。
 
+
+## 内容浏览器 (Content Browser Panel)
+
+### 设计目标
+
+在编辑器内提供文件系统浏览能力，支持导航 assets 目录、按类型区分文件图标、双击加载场景、拖拽 `.glimmer` 到视口即打开。
+
+### 架构
+
+```
+Panels/ContentBrowserPanel.h/cpp  ← 应用层面板，低耦合
+
+依赖：
+  std::filesystem       ← C++17 文件系统遍历
+  ImGui                 ← UI 渲染
+  OnFileDoubleClicked   ← 回调通知 EditorLayer
+```
+
+和 `SceneHierarchyPanel` 一样放在 `Panels/` 目录下——属于编辑器上层建筑而非引擎核心。
+
+### 启动优化：延迟初始化
+
+初版在构造函数中调用 `std::filesystem::absolute()` + `directory_iterator` 遍历整个 assets 目录并缓存。这导致 EditorLayer 构造时同步触发磁盘 I/O，出现可感知的启动卡顿。
+
+```cpp
+// 之前：构造函数中同步 I/O
+ContentBrowserPanel() {
+    m_BaseDir = std::filesystem::absolute("assets");  // 磁盘 I/O
+    RefreshFiles();  // directory_iterator 遍历
+}
+
+// 之后：延迟到首个 OnImGuiRender
+ContentBrowserPanel() = default;
+
+void OnImGuiRender() {
+    LazyInit(m_BaseDir, m_CurrentDir);  // 仅首次执行路径解析
+    // 文件遍历改为每帧即时 directory_iterator（无预缓存）
+}
+```
+
+移除了 `m_Files` 缓存 vector，改为每帧即时遍历——assets 下不到 50 个文件，OS 文件系统缓存使遍历几乎零开销。
+
+### Font Awesome 图标集成
+
+**字体加载（ImGuiLayer::OnAttach）**
+
+```cpp
+// 合并模式：在已有字体上附加图标 glyph
+ImFontConfig faConfig;
+faConfig.MergeMode = true;
+faConfig.GlyphMinAdvanceX = 16.0f;
+static const ImWchar faRanges[] = { 0xf000, 0xf2ff, 0 };
+io.Fonts->AddFontFromFileTTF("assets/fonts/FontAwesome/fa-solid-900.otf", 16.0f, &faConfig, faRanges);
+```
+
+`MergeMode = true` 是关键——不替换已有字体，而是在同一个字体 atlas 中追加图标 glyph。渲染时可以用同一个 `ImGui::Text()` 同时显示文字和图标。
+
+**图标码点**
+
+```cpp
+#define ICON_FA_FOLDER  "\xef\x81\xbb"  // 
+#define ICON_FA_CODE    "\xef\x87\x89"  // 
+#define ICON_FA_CUBE    "\xef\x86\xb2"  // 
+#define ICON_FA_IMAGE   "\xef\x80\xbe"  // 
+#define ICON_FA_GLOBE   "\xef\x82\xac"  // 
+#define ICON_FA_FILE    "\xef\x85\x9b"  // 
+```
+
+| 文件类型 | 图标 | 说明 |
+|---------|------|------|
+| 文件夹 |  | `std::filesystem::is_directory()` |
+| .glsl |  | Shader 着色器 |
+| .obj |  | 3D 模型 |
+| .png/.jpg |  | 贴图 |
+| .glimmer |  | 场景文件 |
+| 其他 |  | 通用文件 |
+
+### 文件网格布局
+
+```cpp
+float cellSize = 80.0f;
+int columns = max(1, (int)(panelWidth / cellSize));
+ImGui::Columns(columns);
+
+for (auto& entry : directory_iterator(m_CurrentDir)) {
+    ImGui::Selectable(icon + " " + name, &selected, AllowDoubleClick, {80, 80});
+    ImGui::NextColumn();
+}
+ImGui::Columns(1);
+```
+
+`ImGui::Columns` 实现自适应列数网格——面板宽时列数多，窄时列数少。
+
+### 目录导航与保护
+
+```cpp
+// 回退按钮：仅在非根目录时生效
+if (ImGui::Button("  ..") && m_CurrentDir != m_BaseDir)
+    m_CurrentDir = m_CurrentDir.parent_path();
+
+// 路径显示：相对于 assets 根目录
+auto relative = std::filesystem::relative(m_CurrentDir, m_BaseDir);
+ImGui::TextDisabled("assets/%s", relative.string().c_str());
+```
+
+`m_BaseDir` 作为不可逾越的根——回退到 `assets/` 之后按钮不再有作用，防止浏览到项目外。
+
+### 目录切换时的迭代器保护
+
+双击文件夹进入时，`m_CurrentDir` 被更新，但当前帧的 `for (auto& entry : directory_iterator(...))` 循环仍在运行。虽然后续迭代不会引发 UB（`directory_iterator` 不依赖外部容器），但提前退出可以避免一帧内既渲染旧目录又准备新目录的状态不一致：
+
+```cpp
+if (isDir) {
+    m_CurrentDir = path;
+    ImGui::PopID();
+    ImGui::Columns(1);
+    ImGui::End();
+    return;  // 提前结束当前帧，下帧渲染新目录
+}
+```
+
+### 拖拽打开场景
+
+**拖拽源（ContentBrowserPanel）**
+
+```cpp
+if (!isDir && ImGui::BeginDragDropSource()) {
+    ImGui::SetDragDropPayload("SCENE_FILE", path, size);
+    ImGui::Text("Open %s", name);  // 光标跟随提示
+    ImGui::EndDragDropSource();
+}
+```
+
+**拖拽目标（EditorLayer Viewport）**
+
+```cpp
+if (ImGui::BeginDragDropTarget()) {
+    if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE")) {
+        SceneSerializer serializer(newScene);
+        serializer.Deserialize(payload->Data);
+    }
+    ImGui::EndDragDropTarget();
+}
+```
+
+Drop Target 必须放在 `ImGui::Image()` 之后——ImGui 的拖拽目标区域基于当前 item 位置决定。放在 Image 之前只覆盖标题栏区域，放在之后覆盖整个渲染画面。
+
+### 交互操作总览
+
+| 操作 | 效果 |
+|------|------|
+| 双击文件夹 | 进入该文件夹 |
+| 双击 .glimmer | 加载场景 |
+| 拖拽文件到视口 | 加载场景（同双击，操作更直觉） |
+| `<` 按钮 | 返回上级目录 |
+| 单击文件 | 选中高亮 |
+
+### 文件位置
+
+```
+GlimmerEditor-CyouBranch/src/Panels/
+  ├── ContentBrowserPanel.h
+  ├── ContentBrowserPanel.cpp
+  ├── SceneHierarchyPanel.h
+  └── SceneHierarchyPanel.cpp
+```
+
+### 目录树 + 可拖分隔线
+
+在原来的纯文件网格基础上增加了左侧目录树面板：
+
+```
+┌─ Content Browser ───────────────────────────────┐
+│   ..   assets/shaders                         │
+├────────────┬────────────────────────────────────┤
+│ 目录树     │ ←拖→│  文件网格                      │
+│   assets  │      │   BalatroVortex               │
+│    models │      │   Phong                       │
+│    shaders│      │  ...                          │
+│    textures     │                              │
+└────────────┴──────┴──────────────────────────────┘
+```
+
+**目录树实现**
+
+```cpp
+void DrawDirectoryTree(const std::filesystem::path& dir)
+{
+    for (auto& entry : directory_iterator(dir))
+    {
+        if (!entry.is_directory()) continue;
+
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
+                                  | ImGuiTreeNodeFlags_SpanAvailWidth;
+        if (!hasSubDirs)
+            flags |= ImGuiTreeNodeFlags_Leaf;  // 无子目录 → 无箭头
+
+        bool opened = ImGui::TreeNodeEx(name, flags);
+
+        // 单击目录名（非箭头）切换右侧视图
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+            m_CurrentDir = path;
+
+        if (hasSubDirs && opened)
+        {
+            DrawDirectoryTree(path);  // 递归
+            ImGui::TreePop();
+        }
+    }
+}
+```
+
+关键设计：
+- 不设 `DefaultOpen`——每级初始折叠，只有用户点击箭头才展开，避免一次性展开所有子目录
+- `IsItemToggledOpen()` 判断点击的是箭头还是名称：点击箭头 → 展开/折叠，点击名称 → 切换右侧视图
+- 递归 `DrawDirectoryTree` 实现任意深度目录树
+
+**可拖动分隔线**
+
+```cpp
+// 分隔线按钮（4px 宽）
+ImGui::Button("##Splitter", ImVec2(4.0f, -1.0f));
+
+if (ImGui::IsItemHovered())
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);  // ↔ 光标
+
+if (ImGui::IsItemActive())
+    m_SplitPos += ImGui::GetIO().MouseDelta.x;          // 拖拽调整
+
+m_SplitPos = clamp(m_SplitPos, 120.0f, 500.0f);        // 范围限制
+```
+
+分隔线本身是一个 `ImGui::Button`。`IsItemActive()` 在按住拖拽时为 true，`MouseDelta.x` 提供每帧水平位移。累加到 `m_SplitPos` 后 clamp 在 120~500px 区间。
+
+**左右面板布局**
+
+```cpp
+ImGui::BeginChild("TreePanel",  ImVec2(m_SplitPos, 0), true);  // 左：固定宽度
+// ... 树渲染 ...
+ImGui::EndChild();
+
+ImGui::SameLine();
+// ... 分隔线 ...
+ImGui::SameLine();
+
+ImGui::BeginChild("FilePanel",  ImVec2(0, 0), true);           // 右：填充剩余
+// ... 网格渲染 ...
+ImGui::EndChild();
+```
+
+`BeginChild` 将两个面板隔离为独立滚动区域。树的滚动和网格的滚动互不干扰。
+
+**子目录检测优化**
+
+```cpp
+// 检查是否有子目录（决定是否显示箭头）
+bool hasSubDirs = false;
+for (auto& sub : directory_iterator(path))
+    if (sub.is_directory()) { hasSubDirs = true; break; }
+```
+
+相比直接设置 Leaf 或 DefaultOpen，每级做一次轻量扫描来决定 TreeNode 形态——无子目录的节点不显示展开箭头。
+
+![[README.assets/Pasted image 20260721105118.png]]
+
+
 ## KB
 
 ### 为什么不用动态库？

@@ -22,6 +22,9 @@ filter "configurations:Dist"
     defines "GL_DIST"
     optimize "On"
 
+filter "system:windows"
+    buildoptions { "/utf-8", "/wd4828" }  -- UTF-8 源文件 + 抑制 spdlog Unicode 字符警告
+
 filter {}
 
 IncludeDir = {}

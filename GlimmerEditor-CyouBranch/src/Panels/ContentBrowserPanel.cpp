@@ -1,12 +1,12 @@
 #include "ContentBrowserPanel.h"
 #include <imgui.h>
 
-#define ICON_FA_FOLDER   "\xef\x81\xbb" // 
-#define ICON_FA_CODE     "\xef\x87\x89" // 
-#define ICON_FA_CUBE     "\xef\x86\xb2" // 
-#define ICON_FA_IMAGE    "\xef\x80\xbe" // 
-#define ICON_FA_GLOBE    "\xef\x82\xac" // 
-#define ICON_FA_FILE     "\xef\x85\x9b" // 
+#define ICON_FA_FOLDER  "\xef\x81\xbb"
+#define ICON_FA_CODE    "\xef\x87\x89"
+#define ICON_FA_CUBE    "\xef\x86\xb2"
+#define ICON_FA_IMAGE   "\xef\x80\xbe"
+#define ICON_FA_GLOBE   "\xef\x82\xac"
+#define ICON_FA_FILE    "\xef\x85\x9b"
 
 namespace gl {
 
@@ -17,7 +17,7 @@ namespace gl {
 		if (base.empty())
 		{
 			base = std::filesystem::absolute("assets");
-			cur = base;
+			cur  = base;
 		}
 	}
 
@@ -32,12 +32,60 @@ namespace gl {
 		return ICON_FA_FILE;
 	}
 
+	// ============================================================
+	// 目录树 — 左侧面板
+	// ============================================================
+
+	void ContentBrowserPanel::DrawDirectoryTree(const std::filesystem::path& dir)
+	{
+		for (auto& entry : std::filesystem::directory_iterator(dir))
+		{
+			if (!entry.is_directory()) continue;
+
+			const auto& path = entry.path();
+			std::string name = path.filename().string();
+			bool isCurrent = (m_CurrentDir == path);
+
+			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
+			                         | ImGuiTreeNodeFlags_SpanAvailWidth;
+			if (isCurrent) flags |= ImGuiTreeNodeFlags_Selected;
+
+			// 检查是否有子目录（决定是否可展开）
+			bool hasSubDirs = false;
+			for (auto& sub : std::filesystem::directory_iterator(path))
+				if (sub.is_directory()) { hasSubDirs = true; break; }
+
+			if (!hasSubDirs)
+				flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+			std::string label = ICON_FA_FOLDER " " + name;
+			bool opened = ImGui::TreeNodeEx(label.c_str(), flags);
+
+			// 单击选中 → 右侧切换到该目录
+			if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+			{
+				m_CurrentDir = path;
+			}
+
+			if (hasSubDirs && opened)
+			{
+				DrawDirectoryTree(path);
+				ImGui::TreePop();
+			}
+		}
+	}
+
+	// ============================================================
+	// 主渲染
+	// ============================================================
+
 	void ContentBrowserPanel::OnImGuiRender()
 	{
 		LazyInit(m_BaseDir, m_CurrentDir);
 
 		ImGui::Begin("Content Browser");
 
+		// --- 导航栏 ---
 		if (ImGui::Button(" " ICON_FA_FOLDER " ..") && m_CurrentDir != m_BaseDir)
 			m_CurrentDir = m_CurrentDir.parent_path();
 
@@ -47,61 +95,104 @@ namespace gl {
 
 		ImGui::Separator();
 
-		float cellSize = 80.0f;
-		float panelWidth = ImGui::GetContentRegionAvail().x;
-		int columns = std::max(1, (int)(panelWidth / cellSize));
-		ImGui::Columns(columns, nullptr, false);
-
-		for (auto& entry : std::filesystem::directory_iterator(m_CurrentDir))
+		// --- 左栏：目录树 + 可拖分隔线 ---
+		ImGui::BeginChild("TreePanel", ImVec2(m_SplitPos, 0), true);
 		{
-			const auto& path = entry.path();
-			std::string name = path.filename().string();
-			bool isDir = entry.is_directory();
+			// assets 根节点
+			ImGuiTreeNodeFlags rootFlags = ImGuiTreeNodeFlags_OpenOnArrow
+			                             | ImGuiTreeNodeFlags_SpanAvailWidth
+			                             | ImGuiTreeNodeFlags_DefaultOpen;
+			if (m_CurrentDir == m_BaseDir)
+				rootFlags |= ImGuiTreeNodeFlags_Selected;
 
-			// 截断过长文件名
-			std::string label = name;
-			if (label.size() > 10) label = label.substr(0, 9) + "...";
+			bool rootOpen = ImGui::TreeNodeEx(ICON_FA_GLOBE " assets", rootFlags);
 
-			const char* icon = GetIcon(path);
-			std::string display = std::string(icon) + " " + label;
+			if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+				m_CurrentDir = m_BaseDir;
 
-			bool isSelected = (m_SelectedFile == path.string());
-			ImGui::PushID(name.c_str());
-
-			if (ImGui::Selectable(display.c_str(), &isSelected, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(cellSize, cellSize)))
+			if (rootOpen)
 			{
-				m_SelectedFile = path.string();
-				if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+				DrawDirectoryTree(m_BaseDir);
+				ImGui::TreePop();
+			}
+		}
+		ImGui::EndChild();
+
+		// 可拖动分隔线
+		ImGui::SameLine();
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+		ImGui::Button("##Splitter", ImVec2(4.0f, -1.0f));
+		ImGui::PopStyleColor(2);
+
+		if (ImGui::IsItemHovered())
+			ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+		if (ImGui::IsItemActive())
+			m_SplitPos += ImGui::GetIO().MouseDelta.x;
+
+		m_SplitPos = glm::clamp(m_SplitPos, 120.0f, 500.0f);
+
+		// --- 右栏：文件网格 ---
+		ImGui::SameLine();
+		ImGui::BeginChild("FilePanel", ImVec2(0, 0), true);
+		{
+			float cellSize = 80.0f;
+			float panelWidth = ImGui::GetContentRegionAvail().x;
+			int columns = std::max(1, (int)(panelWidth / cellSize));
+			ImGui::Columns(columns, nullptr, false);
+
+			for (auto& entry : std::filesystem::directory_iterator(m_CurrentDir))
+			{
+				const auto& path = entry.path();
+				std::string name = path.filename().string();
+				bool isDir = entry.is_directory();
+
+				std::string label = name;
+				if (label.size() > 10) label = label.substr(0, 9) + "...";
+
+				const char* icon = GetIcon(path);
+				std::string display = std::string(icon) + " " + label;
+
+				bool isSelected = (m_SelectedFile == path.string());
+				ImGui::PushID(name.c_str());
+
+				if (ImGui::Selectable(display.c_str(), &isSelected, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(cellSize, cellSize)))
 				{
-					if (isDir)
+					m_SelectedFile = path.string();
+					if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					{
-						m_CurrentDir = path;
-						ImGui::PopID();
-						ImGui::Columns(1);
-						ImGui::End();
-						return;
-					}
-					else if (OnFileDoubleClicked)
-					{
-						OnFileDoubleClicked(path.string());
+						if (isDir)
+						{
+							m_CurrentDir = path;
+							ImGui::PopID();
+							ImGui::Columns(1);
+							ImGui::EndChild();
+							ImGui::End();
+							return;
+						}
+						else if (OnFileDoubleClicked)
+						{
+							OnFileDoubleClicked(path.string());
+						}
 					}
 				}
-			}
 
-			// 文件可拖拽到视口打开
-			if (!isDir && ImGui::BeginDragDropSource())
-			{
-				std::string absPath = path.string();
-				ImGui::SetDragDropPayload("SCENE_FILE", absPath.c_str(), absPath.size() + 1);
-				ImGui::Text("Open %s", name.c_str());
-				ImGui::EndDragDropSource();
-			}
+				if (!isDir && ImGui::BeginDragDropSource())
+				{
+					std::string absPath = path.string();
+					ImGui::SetDragDropPayload("SCENE_FILE", absPath.c_str(), absPath.size() + 1);
+					ImGui::Text("Open %s", name.c_str());
+					ImGui::EndDragDropSource();
+				}
 
-			ImGui::PopID();
-			ImGui::NextColumn();
+				ImGui::PopID();
+				ImGui::NextColumn();
+			}
+			ImGui::Columns(1);
 		}
+		ImGui::EndChild();
 
-		ImGui::Columns(1);
 		ImGui::End();
 	}
 
