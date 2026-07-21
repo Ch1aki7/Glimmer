@@ -64,6 +64,14 @@ namespace gl {
 		// --- 场景 ---
 		m_ActiveScene = CreateRef<Scene>();
 
+		// Play 模式需要的 ECS 主相机（带可视化标记 + Gizmo 交互）
+		auto camEntity = m_ActiveScene->CreateEntity("Main Camera");
+		auto& cc = camEntity.AddComponent<CameraComponent>();
+		cc.Camera.SetPerspective(glm::radians(45.0f), 0.1f, 1000.0f);
+		cc.Camera.SetViewportSize(1280, 720);
+		camEntity.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.8f, 0.8f, 0.2f, 0.6f }); // 半透明黄色标记
+		camEntity.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 0.0f };
+
 		// 测试实体
 		auto redSquare = m_ActiveScene->CreateEntity("Red Square");
 		redSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 1.0f, 0.2f, 0.2f, 1.0f });
@@ -113,7 +121,9 @@ namespace gl {
 	void EditorLayer::OnUpdate(Timestep ts) {
 		GL_PROFILE_FUNCTION();
 
-		m_EditorCamera.OnUpdate(ts);
+		// --- 编辑器相机（仅编辑模式） ---
+		if (m_SceneState == SceneState::Edit)
+			m_EditorCamera.OnUpdate(ts);
 
 		Renderer2D::ResetStats();
 		{
@@ -121,10 +131,9 @@ namespace gl {
 			m_Framebuffer->Bind();
 			RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
 			RenderCommand::Clear();
-			m_Framebuffer->ClearAttachment(1, -1); // 拾取附件清为 -1（0 是合法实体 ID）
+			m_Framebuffer->ClearAttachment(1, -1);
 		}
 
-		// Viewport resize 同步
 		if (FramebufferSpecification spec = m_Framebuffer->GetSpecification();
 			m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
 		{
@@ -134,9 +143,18 @@ namespace gl {
 		{
 			GL_PROFILE_SCOPE("Renderer Draw");
 
-			// --- ECS 场景渲染（使用 EditorCamera 的 VP） ---
-			glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
-			m_ActiveScene->OnUpdateEditor(ts, vp);
+			if (m_SceneState == SceneState::Edit)
+			{
+				// 编辑模式：EditorCamera VP + Editor 渲染路径
+				glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
+				m_ActiveScene->OnUpdateEditor(ts, vp);
+			}
+			else
+			{
+				// 播放模式：ECS 主相机 + Runtime 渲染路径（脚本更新 + 相机查找）
+				m_ActiveScene->OnUpdateRuntime(ts);
+				m_ActiveScene->OnViewportResize((uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
+			}
 
 			m_Framebuffer->Unbind();
 
@@ -258,7 +276,25 @@ namespace gl {
 				if (ImGui::MenuItem("Exit")) Application::Get().Close();
 				ImGui::EndMenu();
 			}
-			ImGui::EndMenuBar();
+			// 播放/停止按钮（菜单栏右侧）
+		bool isPlaying = (m_SceneState == SceneState::Play);
+		ImGui::SameLine(ImGui::GetWindowWidth() - 60);
+		if (isPlaying)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+			if (ImGui::Button("\xef\x81\x8d Stop")) // 
+				m_SceneState = SceneState::Edit;
+			ImGui::PopStyleColor();
+		}
+		else
+		{
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+			if (ImGui::Button("\xef\x81\x8b Play")) // 
+				m_SceneState = SceneState::Play;
+			ImGui::PopStyleColor();
+		}
+
+		ImGui::EndMenuBar();
 		}
 
 		// --- Scene Hierarchy ---
@@ -353,12 +389,47 @@ namespace gl {
 			ImGui::EndDragDropTarget();
 		}
 
-		// --- Gizmos ---
+
+		// --- Gizmos (仅编辑模式) ---
+		if (m_SceneState == SceneState::Edit)
+		{
 		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
 		if (selectedEntity && selectedEntity.HasComponent<TransformComponent>())
 		{
 			const glm::mat4& view = m_EditorCamera.GetViewMatrix();
 			const glm::mat4& proj = m_EditorCamera.GetProjectionMatrix();
+
+			// --- 相机可视范围 ---
+			if (selectedEntity.HasComponent<CameraComponent>())
+			{
+				auto& cc = selectedEntity.GetComponent<CameraComponent>();
+				auto& ct = selectedEntity.GetComponent<TransformComponent>();
+				glm::mat4 camView = glm::inverse(ct.GetTransform());
+				glm::mat4 camProj = cc.Camera.GetProjection();
+				glm::mat4 invVP = glm::inverse(camProj * camView);
+				glm::vec4 corners[8] = {
+					{-1,-1,-1,1}, { 1,-1,-1,1}, { 1, 1,-1,1}, {-1, 1,-1,1},
+					{-1,-1, 1,1}, { 1,-1, 1,1}, { 1, 1, 1,1}, {-1, 1, 1,1},
+				};
+				glm::vec3 world[8];
+				for (int i = 0; i < 8; i++) { glm::vec4 w = invVP * corners[i]; world[i] = glm::vec3(w) / w.w; }
+				float vpW = m_ViewportBounds[1].x - m_ViewportBounds[0].x;
+				float vpH = m_ViewportBounds[1].y - m_ViewportBounds[0].y;
+				glm::mat4 vp = proj * view;
+				ImVec2 screen[8];
+				for (int i = 0; i < 8; i++) {
+					glm::vec4 c = vp * glm::vec4(world[i], 1.0f);
+					if (c.w != 0) c /= c.w;
+					screen[i] = ImVec2((c.x*0.5f+0.5f)*vpW + m_ViewportBounds[0].x, ((1.0f-c.y)*0.5f)*vpH + m_ViewportBounds[0].y);
+				}
+				auto* dl = ImGui::GetWindowDrawList();
+				ImU32 col = IM_COL32(255, 255, 100, 80);
+				for (int i = 0; i < 4; i++) {
+					dl->AddLine(screen[i], screen[(i+1)%4], col);
+					dl->AddLine(screen[i+4], screen[(i+1)%4+4], col);
+					dl->AddLine(screen[i], screen[i+4], col);
+				}
+			}
 
 			ImGuizmo::SetOrthographic(false);
 			ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
@@ -411,9 +482,10 @@ namespace gl {
 					if (id >= 0)
 						m_HierarchyPanel.SetSelectedEntity(m_ActiveScene->GetEntityByID((uint32_t)id));
 					else
-						m_HierarchyPanel.SetSelectedEntity({}); // 点击空白=取消选中
+						m_HierarchyPanel.SetSelectedEntity({});
 				}
 			}
+		} // SceneState::Edit
 
 		ImGui::End();
 		ImGui::PopStyleVar();
@@ -431,7 +503,8 @@ namespace gl {
 			if (!m_ViewportHovered) return;
 		}
 
-		m_EditorCamera.OnEvent(event);
+		if (m_SceneState == SceneState::Edit)
+			m_EditorCamera.OnEvent(event);
 	}
 
 }

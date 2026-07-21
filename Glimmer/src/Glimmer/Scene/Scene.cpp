@@ -97,7 +97,7 @@ namespace gl {
 				auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entity);
 
 				// 提交渲染，直接使用组件里的 Transform 矩阵
-				Renderer2D::DrawQuad(transform.GetTransform(), sprite.Color);
+				Renderer2D::DrawSprite(transform.GetTransform(), sprite, (int)(uint32_t)entity);
 			}
 
 			Renderer2D::EndScene();

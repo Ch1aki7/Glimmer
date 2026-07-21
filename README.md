@@ -8977,6 +8977,86 @@ if (ImGui::BeginDragDropTarget()) {
 
 ![[README.assets/Pasted image 20260721144641.png]]
 
+
+## 编辑/播放模式 (Edit/Play Mode)
+
+### 设计目标
+
+实现类似 Unity 的 Edit/Play 模式切换：编辑时自由操作场景和 Gizmo，播放时运行业务逻辑且禁止编辑器干预。
+
+### 状态枚举
+
+```cpp
+enum class SceneState { Edit = 0, Play = 1 };
+SceneState m_SceneState = SceneState::Edit;
+```
+
+### UI 按钮
+
+菜单栏右侧，绿色 ▶ Play / 红色 ■ Stop：
+
+```cpp
+if (isPlaying) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+    if (ImGui::Button("Stop"))  m_SceneState = SceneState::Edit;
+} else {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
+    if (ImGui::Button("Play"))  m_SceneState = SceneState::Play;
+}
+```
+
+### OnUpdate 分流
+
+```cpp
+if (m_SceneState == SceneState::Edit)
+{
+    m_EditorCamera.OnUpdate(ts);                            // 自由相机：右键/中键/WASD
+    glm::mat4 vp = EditorCamera.GetProjection() * EditorCamera.GetViewMatrix();
+    m_ActiveScene->OnUpdateEditor(ts, vp);                  // 用 EditorCamera VP 渲染
+}
+else // Play
+{
+    m_ActiveScene->OnUpdateRuntime(ts);                     // 脚本更新 + ECS 主相机渲染
+    m_ActiveScene->OnViewportResize(...);                   // 主相机投影更新
+}
+```
+
+两个渲染路径：
+
+| 路径 | 相机来源 | 渲染方式 | 使用场景 |
+|------|---------|---------|---------|
+| `OnUpdateEditor` | EditorCamera（编辑器自由相机） | 外部传入 VP 矩阵 | Edit 模式 |
+| `OnUpdateRuntime` | ECS `GetPrimaryCameraEntity()` | 脚本驱动 + 实体相机 | Play 模式 |
+
+两者都通过 `DrawSprite` 渲染——贴图和纯色统一处理。
+
+### 模式差异
+
+| 维度 | Edit | Play |
+|------|------|------|
+| 相机控制 | EditorCamera (右键轨道/中键平移/滚轮缩放) | ECS 主相机实体（可被脚本驱动） |
+| Gizmo | ✅ 可拖拽移动/旋转/缩放 | ❌ 隐藏 |
+| 鼠标拾取 | ✅ 点击选实体 | ❌ 禁用 |
+| 相机可视范围 | ✅ 选中相机实体显示锥体线框 | ❌ 不显示 |
+| EditorCamera 事件 | ✅ 接收鼠标/键盘 | ❌ 忽略 |
+
+### OnUpdateRuntime 渲染修复
+
+Play 模式最初使用旧的 `DrawQuad(transform, color)` 渲染，完全忽略 `SpriteRendererComponent::Texture`。编辑模式下拖放贴图后切换到 Play 模式看不到变化——原因是两个渲染路径不一致。统一改用 `DrawSprite` 后，贴图实体在两个模式下行为一致。
+
+### 相机实体可视化
+
+ECS 主相机实体挂有 `SpriteRendererComponent`（半透明黄色）作为场景中可见标记，同时支持 Gizmo 交互。选中后视口中绘制相机锥体线框：
+
+```
+逆投影 8 个 NDC 角点 → 世界空间 → EditorCamera VP 投影 → ImDrawList 画线
+```
+
+编辑模式
+![[README.assets/Pasted image 20260721155626.png]]
+播放模式
+![[README.assets/Pasted image 20260721155635.png]]
+
 ## KB
 
 ### 为什么不用动态库？
