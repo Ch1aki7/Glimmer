@@ -2,7 +2,7 @@
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Utils/FileDialog.h"
 #include "Glimmer/Core/Input.h"
-#include "Glimmer/Renderer/ComputeShader.h"
+#include "Glimmer/Renderer/RenderPass.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <ImGuizmo.h>
 
@@ -36,7 +36,7 @@ namespace gl {
 				auto count = (lastDot == std::string::npos) ? path.size() - start : lastDot - start;
 				m_ModelNames.push_back(path.substr(start, count));
 			}
-		};
+			};
 
 		loadModel("assets/models/bunny.obj");
 		loadModel("assets/models/dragon.obj");
@@ -57,6 +57,7 @@ namespace gl {
 		m_PostProcessFB = Framebuffer::Create(fbSpec);
 
 		m_ShaderLib.Load("assets/shaders/PostProcess.glsl");
+		m_ShaderLib.Load("assets/shaders/Overlay.glsl");
 		m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
 		m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
 		m_ShaderLib.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
@@ -93,11 +94,11 @@ namespace gl {
 		m_HierarchyPanel.OnEntitySelected = [&](Entity e) {
 			if (e && e.HasComponent<TagComponent>())
 				GL_CORE_TRACE("Hierarchy selected: {0}", e.GetComponent<TagComponent>().Tag);
-		};
+			};
 		m_HierarchyPanel.OnEntityDeleted = [&](Entity e) {
 			if (e && e.HasComponent<TagComponent>())
 				GL_CORE_TRACE("Hierarchy deleted: {0}", e.GetComponent<TagComponent>().Tag);
-		};
+			};
 
 		// --- 内容浏览器 ---
 		m_ContentBrowser.OnFileDoubleClicked = [&](const std::string& path) {
@@ -112,22 +113,10 @@ namespace gl {
 					GL_CORE_INFO("Loaded scene: {0}", path);
 				}
 			}
-		};
+			};
 
 
-		// --- Compute Shader 验证 ---
-		{
-			auto cs = ComputeShader::Create("assets/shaders/TestCompute.glsl");
-			cs->Bind();
-			m_ComputeTestTexture = Texture2D::Create(256, 256);
-		auto& tex = m_ComputeTestTexture;
-			cs->BindImageTexture(0, tex->GetRendererID(), 0, ImageAccess::Write, ImageFormat::RGBA8);
-			cs->Dispatch(256 / 16, 256 / 16, 1);
-			ComputeShader::Barrier();
-			GL_CORE_INFO("Compute Shader dispatched successfully");
-		}
 	}
-
 	void EditorLayer::OnDetach() {
 		GL_PROFILE_FUNCTION();
 	}
@@ -140,13 +129,6 @@ namespace gl {
 			m_EditorCamera.OnUpdate(ts);
 
 		Renderer2D::ResetStats();
-		{
-			GL_PROFILE_SCOPE("Renderer Prep");
-			m_Framebuffer->Bind();
-			RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
-			RenderCommand::Clear();
-			m_Framebuffer->ClearAttachment(1, -1);
-		}
 
 		if (FramebufferSpecification spec = m_Framebuffer->GetSpecification();
 			m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
@@ -154,37 +136,53 @@ namespace gl {
 			m_EditorCamera.SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
 		}
 
-		{
-			GL_PROFILE_SCOPE("Renderer Draw");
+		RenderPassSpecification scenePass;
+		scenePass.Target = m_Framebuffer;
+		scenePass.ClearColorValue = { 0.1f, 0.1f, 0.1f, 1 };
+		RenderPass::Begin(scenePass);
+		m_Framebuffer->ClearAttachment(1, -1);
 
+		{
+			GL_PROFILE_SCOPE("Scene Draw");
 			if (m_SceneState == SceneState::Edit)
 			{
-				// 编辑模式：EditorCamera VP + Editor 渲染路径
 				glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
 				m_ActiveScene->OnUpdateEditor(ts, vp);
 			}
 			else
 			{
-				// 播放模式：ECS 主相机 + Runtime 渲染路径（脚本更新 + 相机查找）
 				m_ActiveScene->OnUpdateRuntime(ts);
 				m_ActiveScene->OnViewportResize((uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
 			}
+		}
 
-			m_Framebuffer->Unbind();
+		RenderPass::End();
 
-			if (m_PostProcessEnabled)
-			{
-				m_PostProcessFB->Bind();
-				RenderCommand::Clear();
-				auto grayscaleShader = m_ShaderLib.Get("PostProcess");
-				Renderer2D::DrawPostProcess(grayscaleShader, m_Framebuffer->GetColorAttachmentRendererID());
-				m_PostProcessFB->Unbind();
-				m_FinalSceneTexture = m_PostProcessFB->GetColorAttachmentRendererID();
-			}
-			else
-			{
-				m_FinalSceneTexture = m_Framebuffer->GetColorAttachmentRendererID();
-			}
+		// --- Pass 2: Overlay ---
+		{
+			RenderPassSpecification overlayPass;
+			overlayPass.Target = m_Framebuffer;
+			overlayPass.ClearColor = false;
+			overlayPass.ClearDepth = false;
+			RenderPass::Begin(overlayPass);
+			auto overlay = m_ShaderLib.Get("Overlay");
+			Renderer2D::DrawFullscreenQuad(overlay, 0.0f);
+			RenderPass::End();
+		}
+
+		if (m_PostProcessEnabled)
+		{
+			RenderPassSpecification ppPass;
+			ppPass.Target = m_PostProcessFB;
+			RenderPass::Begin(ppPass);
+			auto grayscaleShader = m_ShaderLib.Get("PostProcess");
+			Renderer2D::DrawPostProcess(grayscaleShader, m_Framebuffer->GetColorAttachmentRendererID());
+			RenderPass::End();
+			m_FinalSceneTexture = m_PostProcessFB->GetColorAttachmentRendererID();
+		}
+		else
+		{
+			m_FinalSceneTexture = m_Framebuffer->GetColorAttachmentRendererID();
 		}
 	}
 
@@ -324,15 +322,6 @@ namespace gl {
 		ImGui::Text("Draw Calls: %d", stats.DrawCalls);
 		ImGui::Text("Quads: %d", stats.QuadCount);
 		ImGui::End();
-
-		// Compute Shader 输出预览
-		if (m_ComputeTestTexture)
-		{
-			ImGui::Begin("Compute Output");
-			ImGui::Text("TestCompute.glsl output (256x256)");
-			ImGui::Image((void*)(uintptr_t)m_ComputeTestTexture->GetRendererID(), ImVec2(256, 256), { 0, 1 }, { 1, 0 });
-			ImGui::End();
-		}
 
 		// 3D Settings
 		ImGui::Begin("3D Settings");

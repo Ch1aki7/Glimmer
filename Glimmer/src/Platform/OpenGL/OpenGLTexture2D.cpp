@@ -95,13 +95,22 @@ namespace gl {
 		glTextureSubImage2D(m_RendererID, 0, 0, 0, m_Width, m_Height, m_DataFormat, GL_UNSIGNED_BYTE, data);
 	}
 
+	void OpenGLTexture2D::GetImageData(void* buffer, uint32_t size) const
+	{
+		GL_PROFILE_FUNCTION();
+
+		GLenum format = (m_InternalFormat == GL_RGBA8) ? GL_RGBA : GL_RGB;
+		GLenum type   = GL_UNSIGNED_BYTE;
+		uint32_t bpp  = (m_InternalFormat == GL_RGBA8) ? 4 : 3;
+		GL_CORE_ASSERT(size >= m_Width * m_Height * bpp, "Buffer too small for texture readback!");
+		glGetTextureImage(m_RendererID, 0, format, type, size, buffer);
+	}
+
 	void OpenGLTexture2D::Bind(uint32_t slot) const
 	{
 		GL_PROFILE_FUNCTION();
 
-		// 先激活 Slot（GL_TEXTURE0, GL_TEXTURE1 ...）
 		glActiveTexture(GL_TEXTURE0 + slot);
-		// 再把 ID 绑定上去
 		glBindTexture(GL_TEXTURE_2D, m_RendererID);
 	}
 

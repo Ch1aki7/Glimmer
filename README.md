@@ -9160,6 +9160,162 @@ ComputeShader::Barrier();
 
 ![[README.assets/Pasted image 20260722150427.png]]
 
+
+## GPU 数据读回 (GPU Readback)
+
+### 设计目标
+
+Compute Shader 输出存储在 GPU 纹理中，需要读回 CPU 才能更新顶点缓冲、地形网格、或做 ImGui 预览。提供同步/异步两种方式。
+
+### 同步读回 (`Texture::GetImageData`)
+
+```cpp
+virtual void GetImageData(void* buffer, uint32_t size) const = 0;
+```
+
+GL 实现：`glGetTextureImage(rendererID, 0, format, type, size, buffer)`。阻塞 GPU 管线直到 DMA 完成。适合少量像素（如鼠标拾取的单像素读取）或初始化阶段的一次性读回。
+
+### 异步读回 (`PixelBuffer` — 双缓冲 PBO)
+
+```cpp
+class PixelBuffer {
+public:
+    virtual void BeginRead(uint32_t textureID) = 0;  // 发起异步 DMA
+    virtual const void* Map() = 0;                    // 上一帧数据就绪，零拷贝
+    virtual void Unmap() = 0;
+    virtual bool IsReady() const = 0;
+
+    static Ref<PixelBuffer> Create(uint32_t width, uint32_t height, uint32_t channels);
+};
+```
+
+**双缓冲原理**
+
+```
+Frame 0: BeginRead → glGetTextureImage → PBO[0] DMA 开始（不阻塞）
+Frame 1: PBO[0] Ready → Map PBO[0] 可用 | BeginRead → PBO[1]
+Frame 2: PBO[1] Ready → Map PBO[1] 可用 | BeginRead → PBO[0]
+```
+
+每次 `BeginRead` 将 `glGetTextureImage` 的目标设为当前 PBO，GPU 异步 DMA 到 PBO。同时上一帧的 PBO 已经完成传输，`Map` 直接返回 CPU 可读指针（零拷贝，无需 `memcpy`）。
+
+**使用示例**
+
+```cpp
+auto pbo = PixelBuffer::Create(1024, 1024, 4);
+
+// 每帧
+pbo->BeginRead(tex->GetRendererID());   // 发起异步
+if (pbo->IsReady()) {
+    const void* data = pbo->Map();       // 零拷贝
+    // 更新地形顶点 / 处理数据...
+    pbo->Unmap();
+}
+```
+
+### 与已有拾取系统的关系
+
+`Framebuffer::ReadPixel` 使用的是同步 `glReadPixels`（单像素），适合鼠标拾取等低频场景。`PixelBuffer::BeginRead` 使用的是 `glGetTextureImage` + PBO，适合全纹理异步读回的高频场景（每帧地形更新）。两者底层都是 GL 像素传输，共享内存屏障语义。
+
+### 文件清单
+
+```
+新增:
+  Renderer/PixelBuffer.h/cpp              ← 异步 PBO 接口 + 工厂
+  Platform/OpenGL/OpenGLPixelBuffer.h/cpp  ← GL 双缓冲实现
+
+修改:
+  Renderer/Texture.h                      ← GetImageData()
+  Platform/OpenGL/OpenGLTexture2D.h/.cpp   ← 实现
+```
+
+
+## 多 Pass 渲染管线
+
+### 设计目标
+
+将散落在 `OnUpdate` 中的 `Bind→Clear→Draw→Unbind` 调用形式化为声明式 Pass，为后续地形→水面→植被→后处理的多阶段渲染提供可扩展的结构。每个 Pass 是一个独立的渲染步骤，有自己的目标 FBO、清屏配置。
+
+### RenderPass 抽象
+
+```cpp
+struct RenderPassSpecification {
+    Ref<Framebuffer> Target;             // 渲染目标
+    bool ClearColor = true;              // 是否清颜色
+    bool ClearDepth = true;              // 是否清深度
+    glm::vec4 ClearColorValue = { 0.1f, 0.1f, 0.1f, 1 };
+};
+
+class RenderPass {
+public:
+    static void Begin(const RenderPassSpecification& spec);  // Bind + Clear
+    static void End();                                        // Unbind
+    static const RenderPassSpecification& GetCurrent();
+};
+```
+
+`Begin` 绑定目标 FBO 并根据配置清屏，`End` 解绑。全局活跃 Pass 通过 `GetCurrent()` 可查询。
+
+### 使用示例
+
+```cpp
+// Pass 1: 场景渲染
+RenderPassSpecification scenePass;
+scenePass.Target = m_Framebuffer;
+scenePass.ClearColorValue = { 0.1f, 0.1f, 0.1f, 1 };
+RenderPass::Begin(scenePass);
+  m_ActiveScene->OnUpdateEditor(ts, vp);
+RenderPass::End();
+
+// Pass 2: 后处理（不清屏，叠加绘制到同一 FBO）
+RenderPass::End();
+
+// Pass 3: 后处理
+RenderPassSpecification ppPass;
+ppPass.Target = m_PostProcessFB;
+RenderPass::Begin(ppPass);
+  Renderer2D::DrawPostProcess(shader, m_Framebuffer->GetColorAttachmentRendererID());
+RenderPass::End();
+```
+
+
+
+### Pass 间数据传递
+
+Pass N 的输出（FBO 颜色附件）可以作为 Pass N+1 的输入纹理：
+
+```cpp
+// Pass 1 输出 → m_Framebuffer 的颜色附件
+// Pass 2 读取: m_Framebuffer->GetColorAttachmentRendererID()
+DrawPostProcess(shader, m_Framebuffer->GetColorAttachmentRendererID());
+```
+
+这是下 Stage 地形→水面→后处理链的基础通信模式。
+
+### 与之前对比
+
+| 维度 | 之前 | 之后 |
+|------|------|------|
+| 渲染步骤表达 | 散落的 `Bind/Clear/Unbind` 调用 | `RenderPass::Begin/End` 声明式 |
+| 新增 Pass | 需要手动写 Bind/Clear/Unbind 三段 | 一行 `Begin(spec)` + `End()` |
+| Pass 状态 | 无查询 | `GetCurrent()` 可读当前 Target |
+
+### 文件清单
+
+```
+新增:
+  Renderer/RenderPass.h/cpp         ← Pass 抽象
+
+修改:
+  EditorLayer.cpp                    ← OnUpdate 用 RenderPass 重构
+```
+
+新增纯色pass
+![[README.assets/Pasted image 20260722160621.png]]
+
+应用之前的全屏动态shader+后处理pass
+![[README.assets/Pasted image 20260722162113.png]]
+
 ## KB
 
 ### 为什么不用动态库？

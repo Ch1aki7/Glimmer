@@ -14,6 +14,9 @@ namespace gl {
 
 		virtual void SetData(void* data, uint32_t size) = 0;
 
+		// GPU → CPU 数据读回（同步，用于少量数据传输）
+		virtual void GetImageData(void* buffer, uint32_t size) const = 0;
+
 		// slot 代表纹理单元（0-31），显卡可以同时绑定多个纹理
 		virtual void Bind(uint32_t slot = 0) const = 0;
 
