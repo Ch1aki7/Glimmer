@@ -46,6 +46,14 @@ namespace gl {
 
 		GL_CORE_INFO("Loaded {0} models", m_Models.size());
 
+
+		// --- 地形系统 ---
+		m_TerrainShader = Shader::Create("assets/shaders/Terrain.glsl");
+		
+		// 加载预设高度图
+		m_HeightMapTexture = Texture2D::Create("assets/textures/heightmap-example.png");
+		
+		m_TerrainMesh = CreateRef<TerrainMesh>(256, 40.0f);
 		FramebufferSpecification fbSpec;
 		fbSpec.Width = 1280;
 		fbSpec.Height = 720;
@@ -158,17 +166,40 @@ namespace gl {
 
 		RenderPass::End();
 
-		// --- Pass 2: Overlay ---
+		// --- Pass 2: Terrain ---
 		{
-			RenderPassSpecification overlayPass;
-			overlayPass.Target = m_Framebuffer;
-			overlayPass.ClearColor = false;
-			overlayPass.ClearDepth = false;
-			RenderPass::Begin(overlayPass);
-			auto overlay = m_ShaderLib.Get("Overlay");
-			Renderer2D::DrawFullscreenQuad(overlay, 0.0f);
+			RenderPassSpecification terrainPass;
+			terrainPass.Target = m_Framebuffer;
+			terrainPass.ClearColor = false;
+			terrainPass.ClearDepth = true;
+			RenderPass::Begin(terrainPass);
+			
+			glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
+			m_TerrainShader->Bind();
+			m_TerrainShader->UploadUniformMat4("u_ViewProjection", vp);
+			m_TerrainShader->UploadUniformFloat("u_MaxHeight", 40.0f);
+			m_TerrainShader->UploadUniformFloat("u_UVScale", 1.0f);
+			m_HeightMapTexture->Bind(0);
+			m_TerrainShader->UploadUniformInt("u_HeightMap", 0);
+			m_TerrainShader->UploadUniformFloat2("u_TexelSize", { 1.0f / m_HeightMapTexture->GetWidth(), 1.0f / m_HeightMapTexture->GetHeight() });
+			m_TerrainShader->UploadUniformFloat3("u_CameraPos", m_EditorCamera.GetPosition());
+			m_TerrainMesh->Bind();
+			RenderCommand::DrawIndexed(m_TerrainMesh->GetVertexArray(), m_TerrainMesh->GetIndexCount());
+			
 			RenderPass::End();
 		}
+
+		// --- Pass 3: Overlay ---
+		//{
+		//	RenderPassSpecification overlayPass;
+		//	overlayPass.Target = m_Framebuffer;
+		//	overlayPass.ClearColor = false;
+		//	overlayPass.ClearDepth = false;
+		//	RenderPass::Begin(overlayPass);
+		//	auto overlay = m_ShaderLib.Get("Overlay");
+		//	Renderer2D::DrawFullscreenQuad(overlay, 0.0f);
+		//	RenderPass::End();
+		//}
 
 		if (m_PostProcessEnabled)
 		{

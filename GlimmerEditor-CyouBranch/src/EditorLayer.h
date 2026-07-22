@@ -3,6 +3,7 @@
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
+#include "Glimmer/Renderer/TerrainMesh.h"
 
 namespace gl {
 
@@ -50,6 +51,11 @@ namespace gl {
 		glm::vec2 m_ViewportSize = { 0.0f, 0.0f };
 		glm::vec2 m_ViewportBounds[2];
 		bool m_ViewportFocused = false, m_ViewportHovered = false;
+
+		// Terrain
+		Ref<TerrainMesh> m_TerrainMesh;
+		Ref<Texture2D> m_HeightMapTexture;
+		Ref<Shader> m_TerrainShader;
 
 		// Gizmos
 		int m_GizmoType = 0; // 0=Translate, 1=Rotate, 2=Scale

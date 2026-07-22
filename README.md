@@ -9316,6 +9316,84 @@ DrawPostProcess(shader, m_Framebuffer->GetColorAttachmentRendererID());
 应用之前的全屏动态shader+后处理pass
 ![[README.assets/Pasted image 20260722162113.png]]
 
+
+## 高度图地形系统
+
+### 设计目标
+
+用 GPU 高度图驱动地形渲染——顶点着色器采样高度贴图位移 Y 坐标，根据高度梯度计算法线，片段着色器按海拔混合多层材质（草地/岩石/雪线）。这是后续侵蚀模拟的可视化载体。
+
+### TerrainMesh 网格生成
+
+```cpp
+TerrainMesh(gridSize, maxHeight)
+  → 生成 (gridSize+1)² 顶点 (x, y=0, z) + uv
+  → 生成 gridSize² × 6 索引（Quad 三角化）
+  → 构建 VertexArray + IndexBuffer
+```
+
+高度在顶点着色器中通过采样 `u_HeightMap` 位移，网格本身是平面，不存储高度数据。
+
+### 地形 Shader (Terrain.glsl)
+
+**顶点着色器**：中心差分计算法线
+
+```glsl
+float h = texture(u_HeightMap, uv).r;
+float hL = texture(u_HeightMap, uv - vec2(texelSize.x, 0)).r;
+float hR = texture(u_HeightMap, uv + vec2(texelSize.x, 0)).r;
+float hD = texture(u_HeightMap, uv - vec2(0, texelSize.y)).r;
+float hU = texture(u_HeightMap, uv + vec2(0, texelSize.y)).r;
+
+vec3 normal = normalize(vec3(
+    (hL - hR) * MaxHeight / (2 * gridSpacing),
+    1.0,
+    (hD - hU) * MaxHeight / (2 * gridSpacing)
+));
+```
+
+**片段着色器**：Phong 光照 + 三态材质混合
+
+```glsl
+float t1 = smoothstep(0.05, 0.35, height);  // 草地→岩石
+float t2 = smoothstep(0.55, 0.80, height);  // 岩石→雪线
+vec3 color = mix(grass, rock, t1);
+color = mix(color, snow, t2);
+// + ambient + diffuse + specular (Phong)
+```
+
+### 踩坑：法线计算错误
+
+初版用 `normalize(v_WorldPos)` 当法线——把世界坐标当作表面法向量。结果整个地形光照均匀，看起来是平面。改用中心差分从高度图梯度推导法线后，山脉的立体感立即呈现。
+
+### 高度图来源
+
+支持两种方式：
+
+```cpp
+// 1. 加载预置 PNG
+m_HeightMapTexture = Texture2D::Create("assets/textures/heightmap-example.png");
+
+// 2. Compute Shader 动态生成（后续）
+auto cs = ComputeShader::Create("NoiseGen.glsl");
+cs->BindImageTexture(0, tex->GetRendererID(), 0, Write, RGBA8);
+cs->Dispatch(wgX, wgY, 1);
+```
+
+### 文件清单
+
+```
+新增:
+  Scene/TerrainComponent.h      ← ECS 组件
+  Renderer/TerrainMesh.h/.cpp    ← 平面网格生成
+  assets/shaders/Terrain.glsl    ← 高度图采样 + 法线 + Phong
+
+修改:
+  EditorLayer.h/.cpp             ← 地形 Pass + 高度图加载
+```
+
+![[README.assets/Pasted image 20260722175227.png]]
+
 ## KB
 
 ### 为什么不用动态库？
