@@ -2,6 +2,7 @@
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Utils/FileDialog.h"
 #include "Glimmer/Core/Input.h"
+#include "Glimmer/Renderer/ComputeShader.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <ImGuizmo.h>
 
@@ -112,6 +113,19 @@ namespace gl {
 				}
 			}
 		};
+
+
+		// --- Compute Shader 验证 ---
+		{
+			auto cs = ComputeShader::Create("assets/shaders/TestCompute.glsl");
+			cs->Bind();
+			m_ComputeTestTexture = Texture2D::Create(256, 256);
+		auto& tex = m_ComputeTestTexture;
+			cs->BindImageTexture(0, tex->GetRendererID(), 0, ImageAccess::Write, ImageFormat::RGBA8);
+			cs->Dispatch(256 / 16, 256 / 16, 1);
+			ComputeShader::Barrier();
+			GL_CORE_INFO("Compute Shader dispatched successfully");
+		}
 	}
 
 	void EditorLayer::OnDetach() {
@@ -310,6 +324,15 @@ namespace gl {
 		ImGui::Text("Draw Calls: %d", stats.DrawCalls);
 		ImGui::Text("Quads: %d", stats.QuadCount);
 		ImGui::End();
+
+		// Compute Shader 输出预览
+		if (m_ComputeTestTexture)
+		{
+			ImGui::Begin("Compute Output");
+			ImGui::Text("TestCompute.glsl output (256x256)");
+			ImGui::Image((void*)(uintptr_t)m_ComputeTestTexture->GetRendererID(), ImVec2(256, 256), { 0, 1 }, { 1, 0 });
+			ImGui::End();
+		}
 
 		// 3D Settings
 		ImGui::Begin("3D Settings");

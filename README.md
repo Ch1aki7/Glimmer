@@ -9057,6 +9057,109 @@ ECS 主相机实体挂有 `SpriteRendererComponent`（半透明黄色）作为�
 播放模式
 ![[README.assets/Pasted image 20260721155635.png]]
 
+
+## Compute Shader 基础设施
+
+### 设计目标
+
+为 GPU 并行计算提供平台无关的 Compute Shader 支持。Compute Shader 是后续所有 GPU 驱动模拟（水流、蒸发、侵蚀、粒子）的地基——CPU 无法实时计算百万像素的物理迭代。
+
+### 抽象接口
+
+```cpp
+enum class ImageAccess { Read = 0, Write = 1, ReadWrite = 2 };
+enum class ImageFormat { RGBA8 = 0, RGBA16F = 1, RGBA32F = 2, R32F = 3 };
+
+class ComputeShader {
+public:
+    virtual void Bind() const = 0;
+    virtual void Dispatch(uint32_t x, uint32_t y, uint32_t z) const = 0;
+
+    // 绑定输出纹理为 image2D（for imageStore / imageLoad）
+    virtual void BindImageTexture(uint32_t binding, uint32_t textureID,
+                                  uint32_t level, ImageAccess access,
+                                  ImageFormat format) = 0;
+
+    // GPU 内存屏障：确保 Compute 写入对后续渲染/读取可见
+    static void Barrier();
+
+    static Ref<ComputeShader> Create(const std::string& filepath);
+};
+```
+
+`ImageAccess` 和 `ImageFormat` 枚举隔离 GL 常量——EditorLayer 完全不接触 `GL_WRITE_ONLY` 等裸值。
+
+### OpenGL 实现
+
+```
+ComputeShader::Create(filepath)
+  → glCreateShader(GL_COMPUTE_SHADER)
+  → glShaderSource + glCompileShader
+  → glCreateProgram + glAttachShader + glLinkProgram
+  → glDetachShader + glDeleteShader  (shader object 可释放)
+
+Bind()             → glUseProgram
+Dispatch(x, y, z)  → glDispatchCompute
+BindImageTexture() → glBindImageTexture
+Barrier()          → glMemoryBarrier
+```
+
+编译流程与 Vertex/Fragment Shader 一致——共享 `ReadFile` + 错误日志风格的实现。
+
+### 计算 Shader 示例
+
+```glsl
+#version 450 core
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(rgba8, binding = 0) uniform image2D u_Output;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    vec4 color = vec4(float(pixel.x)/256.0, float(pixel.y)/256.0, 0.5, 1.0);
+    imageStore(u_Output, pixel, color);
+}
+```
+
+### 调用流程
+
+```cpp
+auto cs = ComputeShader::Create("assets/shaders/TestCompute.glsl");
+
+auto tex = Texture2D::Create(256, 256);
+cs->Bind();
+cs->BindImageTexture(0, tex->GetRendererID(), 0,
+                     ImageAccess::Write, ImageFormat::RGBA8);
+cs->Dispatch(256/16, 256/16, 1);
+ComputeShader::Barrier();
+
+// tex 现在包含 Compute Shader 输出结果
+// 可直接用 ImGui::Image((void*)(uintptr_t)tex->GetRendererID(), ...) 显示
+```
+
+### 纹理 GPU ID 暴露
+
+为支持 `BindImageTexture` 传递纹理 ID，`Texture` 基类新增 `GetRendererID()` 方法。`OpenGLTexture2D` 返回 `m_RendererID`（`glCreateTextures` 生成的 GL uint）。
+
+### 验证方式
+
+编辑器启动后在 "Compute Output" 面板中看到 256×256 的红→绿渐变图像，即确认 Compute Shader 基础设施工作正常。
+
+### 文件清单
+
+```
+新增:
+  Renderer/ComputeShader.h/cpp              ← 抽象接口 + 工厂
+  Platform/OpenGL/OpenGLComputeShader.h/cpp  ← GL 实现
+  assets/shaders/TestCompute.glsl            ← 验证 Shader
+
+修改:
+  Renderer/Texture.h                         ← GetRendererID()
+  Platform/OpenGL/OpenGLTexture2D.h          ← 实现 GetRendererID()
+  EditorLayer.h/cpp                          ← 验证测试 + 预览窗口
+```
+
+![[README.assets/Pasted image 20260722150427.png]]
+
 ## KB
 
 ### 为什么不用动态库？
