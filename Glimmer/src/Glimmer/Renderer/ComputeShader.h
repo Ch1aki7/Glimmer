@@ -3,6 +3,7 @@
 #include "Glimmer/Renderer/ShaderReload.h"
 
 #include <filesystem>
+#include <glm/glm.hpp>
 #include <string>
 
 namespace gl {
@@ -16,6 +17,9 @@ namespace gl {
 
 		virtual void Bind() const = 0;
 		virtual void Dispatch(uint32_t x, uint32_t y, uint32_t z) const = 0;
+		virtual void UploadUniformInt(const std::string& name, int value) = 0;
+		virtual void UploadUniformFloat(const std::string& name, float value) = 0;
+		virtual void UploadUniformFloat2(const std::string& name, const glm::vec2& value) = 0;
 		virtual void BindImageTexture(
 			uint32_t binding,
 			uint32_t textureID,

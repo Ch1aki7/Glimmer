@@ -1,34 +1,43 @@
 #pragma once
 #include "Glimmer/Renderer/Texture.h"
+
 #include <glad/glad.h>
+
 namespace gl {
 
-	class OpenGLTexture2D : public Texture2D
-	{
+	class OpenGLTexture2D : public Texture2D {
 	public:
-		OpenGLTexture2D(const std::string& path);
-		OpenGLTexture2D(uint32_t width, uint32_t height);
-		virtual ~OpenGLTexture2D();
+		explicit OpenGLTexture2D(const std::string& path);
+		explicit OpenGLTexture2D(const TextureSpecification& specification);
+		~OpenGLTexture2D() override;
 
-		virtual uint32_t GetWidth() const override { return m_Width; }
-		virtual uint32_t GetHeight() const override { return m_Height; }
+		const TextureSpecification& GetSpecification() const override { return m_Specification; }
+		uint32_t GetWidth() const override { return m_Specification.Width; }
+		uint32_t GetHeight() const override { return m_Specification.Height; }
+		TextureFormat GetFormat() const override { return m_Specification.Format; }
 
-		virtual void SetData(void* data, uint32_t size) override;
-			virtual void GetImageData(void* buffer, uint32_t size) const override;
+		void SetData(const void* data, uint32_t size) override;
+		void GetImageData(void* buffer, uint32_t size) const override;
+		void Clear(const glm::vec4& value) override;
+		void Bind(uint32_t slot = 0) const override;
 
-		virtual void Bind(uint32_t slot = 0) const override;
-
-		virtual bool operator==(const Texture& other) const override
+		bool operator==(const Texture& other) const override
 		{
-			return m_RendererID == ((OpenGLTexture2D&)other).m_RendererID;
+			return m_RendererID == other.GetRendererID();
 		}
 
-		virtual uint32_t GetRendererID() const override { return m_RendererID; }
+		uint32_t GetRendererID() const override { return m_RendererID; }
+
 	private:
+		void CreateStorage();
+		uint32_t GetTransferSize() const;
+
+		TextureSpecification m_Specification;
 		std::string m_Path;
-		uint32_t m_Width, m_Height;
-		uint32_t m_RendererID; // GPU 端的资源 ID
-		GLenum m_InternalFormat, m_DataFormat;
+		uint32_t m_RendererID = 0;
+		GLenum m_InternalFormat = GL_NONE;
+		GLenum m_DataFormat = GL_NONE;
+		GLenum m_DataType = GL_NONE;
 	};
 
 }

@@ -3,6 +3,7 @@
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/ShaderPanel.h"
+#include "Panels/TerrainPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
 #include "Glimmer/Renderer/TerrainMesh.h"
 
@@ -24,6 +25,7 @@ namespace gl {
 	private:
 		ShaderLibrary m_ShaderLib;
 		ShaderPanel m_ShaderPanel;
+		TerrainPanel m_TerrainPanel;
 
 		Ref<Texture2D> m_Texture;
 		Ref<Texture2D> m_STSTexture;
@@ -58,7 +60,7 @@ namespace gl {
 		// Terrain
 		Ref<TerrainMesh> m_TerrainMesh;
 		Ref<Texture2D> m_HeightMapTexture;
-		Ref<Texture2D> m_ProceduralHeightMapTexture;
+		Scope<TerrainGenerator> m_TerrainGenerator;
 		Ref<Shader> m_TerrainShader;
 		bool m_UseProceduralTerrain = true;
 		float m_TerrainMaxHeight = 24.0f;

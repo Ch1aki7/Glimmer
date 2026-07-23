@@ -13,6 +13,9 @@ namespace gl {
 
 		void Bind() const override;
 		void Dispatch(uint32_t x, uint32_t y, uint32_t z) const override;
+		void UploadUniformInt(const std::string& name, int value) override;
+		void UploadUniformFloat(const std::string& name, float value) override;
+		void UploadUniformFloat2(const std::string& name, const glm::vec2& value) override;
 		void BindImageTexture(
 			uint32_t binding,
 			uint32_t textureID,
@@ -30,6 +33,7 @@ namespace gl {
 		static void Barrier();
 
 	private:
+		int GetUniformLocation(const std::string& name) const;
 		bool ReadFile(std::string& source, std::string& error) const;
 		bool BuildProgram(const std::string& source, uint32_t& program, std::string& error) const;
 
@@ -39,6 +43,7 @@ namespace gl {
 		std::unique_ptr<FileWatcher> m_FileWatcher;
 		uint64_t m_Version = 0;
 		ShaderReloadResult m_LastReloadResult;
+		mutable std::unordered_map<std::string, int> m_UniformCache;
 	};
 
 }

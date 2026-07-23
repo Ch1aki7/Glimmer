@@ -9358,31 +9358,18 @@ m_HeightMapTexture =
 
 当前示例图片尺寸为 `2017 × 2017`，用于验证 PNG 解码、纹理创建、采样和地形位移。
 
-#### CPU 程序化高度图
+#### GPU 程序化高度图
 
-编辑器启动时生成一张 `256 × 256` RGBA8 灰度纹理。高度由主山峰、侧峰和正弦山脊组合产生：
+编辑器启动时创建 `TerrainGenerator` 与 R32F `SimulationGrid`。高度图不再由 CPU 生成并上传，而是由 `GenerateFBM.comp` 写入 GPU 纹理，再作为 Terrain Pass 的高度输入。
 
-```cpp
-float mainHill = exp(-(nx * nx + ny * ny) * 3.0f);
-float sideHill = 0.55f * exp(-sideDistance * 14.0f);
-float ridges = 0.10f * sin(nx * 13.0f)
-             * cos(ny * 11.0f)
-             * max(mainHill, 0.2f);
-
-float height = clamp(
-    0.08f + 0.72f * mainHill + sideHill + ridges,
-    0.0f,
-    1.0f);
-```
-
-灰度值写入 RGBA 四通道后通过 `Texture2D::SetData()` 上传。该模式不依赖外部图片，可用于隔离网格、纹理绑定、Shader 位移和法线计算问题。
+生成器由低频大陆轮廓、丘陵、受掩码限制的 Ridged fBm 山脉、沟谷侵蚀近似和高频细节组合而成。具体算法、参数与验证流程见 README 末尾的“拟真程序化地形生成”章节。
 
 Settings 面板提供：
 
-- `Use Procedural Height Map`：在程序化高度图和 PNG 高度图之间切换；
+- `Use Procedural Height Map`：在 Compute 生成高度图和 PNG 高度图之间切换；
 - `Terrain Max Height`：实时调整最大高度，默认值为 `24.0`。
 
-程序化高度图默认启用。测试画面应包含一座连续主峰、一座侧峰和轻微山脊起伏。
+`Terrain` 面板提供 Seed、噪声参数、侵蚀近似参数和 256/512/1024 分辨率控制；参数变更或 Compute Shader 热重载后会自动重新生成。
 
 ### Terrain Pass
 
@@ -9514,7 +9501,7 @@ GlimmerEditor-CyouBranch/
 3. 地形只有一个固定尺寸网格，没有 Chunk、LOD、视锥裁剪和地形流送；
 4. 高度图修改后没有局部更新、法线缓存或碰撞体同步；
 5. 材质仍是颜色混合，没有 Splat Map、纹理数组和 PBR 参数；
-6. 程序化高度目前在 CPU 生成，后续可迁移至 Compute Shader；
+6. 程序化高度已迁移至 Compute Shader；后续可在此基础上加入多 Pass 水力侵蚀、降雨和泥沙模拟；
 7. `RenderPassSpecification::ClearDepth` 仍需完善为真正独立的深度清除控制。
 
 推荐后续顺序：
@@ -9522,7 +9509,7 @@ GlimmerEditor-CyouBranch/
 ```text
 TerrainComponent 接入 Scene
     → 地形材质与资源序列化
-    → Compute Shader 生成高度图
+    → 多 Pass 水力侵蚀与环境模拟
     → Chunk + LOD
     → GPU 水流/侵蚀模拟
     → 植被分布与生态系统
@@ -9822,6 +9809,129 @@ GLSL #include 预处理
 ```
 
 这些扩展不是当前程序化地形开发的阻塞项。现阶段已经可以直接用于 fBm Compute Shader、Terrain Shader 和后续 PBR Shader 的快速迭代。
+## 拟真程序化地形生成
+
+在已有的高度图 Terrain Pass、Compute Shader 与 Shader 热重载之上，程序化高度图改为由 GPU 直接生成。目标不是只得到随机起伏，而是构建具有“大尺度陆地—丘陵—山脉—沟谷—细节”层次的稳定地貌，同时让全部参数可在编辑器中实时调整。
+
+### 设计目标
+
+旧版生成器将同一组 Value Noise 同时用于基础高度、山脊和大陆掩码。各层彼此高度相关，因此容易出现均匀、重复的噪声丘陵。
+
+新版使用独立频段和不同随机偏移生成以下层级：
+
+```text
+低频大陆轮廓
+    → 缓坡平原与丘陵
+        → 受掩码约束的山脉脊线
+            → 沟谷侵蚀近似与高频细节
+```
+
+这使高山主要分布于特定区域，而不是在整张地图上等概率出现；低海拔区域保持更大、更连贯的平原空间。
+
+### 噪声与地貌组成
+
+`GenerateFBM.comp` 使用梯度噪声（Gradient Noise）替代 Value Noise。梯度噪声在格点处使用随机方向向量进行插值，配合五次 Fade 曲线，能得到更自然的连续坡面。
+
+每个 fBm octave 还会旋转并偏移输入坐标：
+
+```glsl
+position = mat2(0.80, -0.60, 0.60, 0.80) * position
+    + vec2(13.17, 7.31);
+```
+
+这能削弱常见的横纵轴条带和格子感。
+
+地形高度由五类信号组成：
+
+| 信号 | 用途 | 特征 |
+| --- | --- | --- |
+| `continentNoise` | 大陆与陆地范围 | 极低频，决定广阔陆块与平原分布 |
+| `rollingHills` | 丘陵底形 | 中低频，为陆地提供缓慢起伏 |
+| `RidgedFBM` | 山脉脊线 | 将噪声折叠为连续高脊，避免圆润噪声丘 |
+| `mountainMask` | 山区掩码 | 约束山脉只在特定大陆区域形成 |
+| `channels` | 沟谷近似 | 高次窄化噪声，从高地局部扣除高度 |
+
+域扭曲（Domain Warp）先扰动采样坐标，再生成丘陵、山脉和沟谷，可打破过于平行或规则的地形边界。
+
+最终高度计算保留低地，并对结果施加平滑幂曲线：
+
+```glsl
+height = 0.04 + broadLand * 0.20
+    + continental * foothills
+    + mountains * 0.42;
+height -= channels * u_ErosionStrength * continental;
+height = pow(clamp(height, 0.0, 1.0), 1.18);
+```
+
+这一步不是完整侵蚀模拟，而是视觉层面的沟谷近似：它不会模拟水量、流向、泥沙沉积或质量守恒。
+
+### 参数与编辑器控制
+
+`TerrainNoiseSettings` 是引擎侧的纯数据结构，`TerrainPanel` 只负责展示、编辑和触发重新生成，避免 UI 与 Compute 实现耦合。
+
+| 参数 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `Seed` | `1` | 决定可复现的随机地貌 |
+| `Octaves` | `7` | 噪声层数；过高会增加细碎感与计算量 |
+| `Frequency` | `2.2` | 整体地貌尺度；越小则单个大陆/山系越大 |
+| `Lacunarity` | `2.0` | 每层频率倍率 |
+| `Persistence` | `0.48` | 高频层幅度衰减 |
+| `Domain Warp` | `0.65` | 地貌边界的扭曲程度 |
+| `Ridge Strength` | `0.58` | 山脊高度权重 |
+| `Continent Scale` | `0.32` | 大陆轮廓频率 |
+| `Erosion Strength` | `0.18` | 沟谷扣除强度 |
+| `Detail Strength` | `0.07` | 地表细节强度 |
+| `Offset` | `(0, 0)` | 在同一无限噪声场中平移采样位置 |
+
+Terrain 面板提供 `256×256`、`512×512`、`1024×1024` 三档分辨率。切换时 `SimulationGrid` 会重建内部的 R32F 双缓冲纹理，并在下次生成时写入新的尺寸；地形渲染会从高度图尺寸自动计算采样 texel 和网格间距。
+
+### GPU 生成链路
+
+```text
+TerrainPanel 参数变更 / Compute Shader 热重载
+    → TerrainGenerator::Generate(settings)
+        → UploadUniform(...)
+        → BindImageTexture(WriteTexture)
+        → Dispatch(ceil(width / 8), ceil(height / 8), 1)
+        → ComputeShader::Barrier()
+        → SimulationGrid::Swap()
+        → Terrain Pass 从 ReadTexture 采样并顶点位移
+```
+
+`SimulationGrid` 维护两个同规格纹理。Compute 写入 `WriteTexture()`，内存屏障后交换读写索引；Terrain Pass 始终读取完成写入的 `ReadTexture()`。这样可避免读取正在写入的纹理，并为未来水流、湿度、泥沙等多轮迭代模拟复用同一套 Ping-Pong 结构。
+
+### 文件职责
+
+```text
+Glimmer/src/Glimmer/
+  Simulation/SimulationGrid.h/.cpp             ← 通用 GPU 双缓冲标量场
+  Terrain/TerrainGenerator.h/.cpp               ← 地形参数上传、Dispatch 与高度图所有权
+
+GlimmerEditor-CyouBranch/
+  assets/shaders/Terrain/GenerateFBM.comp       ← 梯度噪声、多尺度地貌与沟谷近似
+  src/Panels/TerrainPanel.h/.cpp                ← 编辑器参数、预览与重生成控制
+  assets/shaders/Terrain.glsl                    ← 高度图顶点位移、法线重建与基础地形着色
+```
+
+### 验证方式
+
+1. 运行编辑器并打开 `Terrain` 面板；
+2. 保持 `Use Procedural Terrain` 启用；
+3. 调整 `Seed` 或任一地貌参数，确认高度图预览和场景地形随之更新；
+4. 修改并保存 `GenerateFBM.comp`，确认日志出现 `Compute shader reloaded: GenerateFBM`，且地形自动重新生成；
+5. 切换 256/512/1024 分辨率，确认预览和 Terrain Pass 均继续稳定渲染。
+
+### 当前边界与后续方向
+
+当前系统在一张固定尺寸的高度图上生成静态地貌，适合编辑器验证、参数探索和后续模拟的初始地形。它尚不包含：
+
+1. 真实水力侵蚀：降雨、水量、流速、沉积与蒸发；
+2. Chunk、LOD、无缝分块与大世界流送；
+3. 按坡度、高度、湿度驱动的 PBR 地形材质；
+4. 地形参数、生成结果和材质的场景序列化；
+5. GPU 统计/直方图，用于自动归一化不同 Seed 的高度范围。
+
+下一阶段若实现环境模拟，应优先在 `SimulationGrid` 上增加显式的多字段 Simulation Set（高度、水量、沉积、湿度）和固定时间步调度器，再接入水力侵蚀 Compute Pass，避免把模拟状态继续堆叠到 `EditorLayer`。
 ## KB
 
 ### 为什么不用动态库？

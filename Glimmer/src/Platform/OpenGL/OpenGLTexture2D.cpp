@@ -2,116 +2,209 @@
 #include "OpenGLTexture2D.h"
 
 #include "stb_image.h"
-#include <glad/glad.h>
+
+#include <algorithm>
+#include <array>
 
 namespace gl {
+
+	namespace {
+
+		GLenum ToInternalFormat(TextureFormat format)
+		{
+			switch (format)
+			{
+			case TextureFormat::R8: return GL_R8;
+			case TextureFormat::RGB8: return GL_RGB8;
+			case TextureFormat::RGBA8: return GL_RGBA8;
+			case TextureFormat::R16F: return GL_R16F;
+			case TextureFormat::RG16F: return GL_RG16F;
+			case TextureFormat::RGBA16F: return GL_RGBA16F;
+			case TextureFormat::R32F: return GL_R32F;
+			default: return GL_NONE;
+			}
+		}
+
+		GLenum ToDataFormat(TextureFormat format)
+		{
+			switch (format)
+			{
+			case TextureFormat::R8:
+			case TextureFormat::R16F:
+			case TextureFormat::R32F: return GL_RED;
+			case TextureFormat::RG16F: return GL_RG;
+			case TextureFormat::RGB8: return GL_RGB;
+			case TextureFormat::RGBA8:
+			case TextureFormat::RGBA16F: return GL_RGBA;
+			default: return GL_NONE;
+			}
+		}
+
+		GLenum ToDataType(TextureFormat format)
+		{
+			switch (format)
+			{
+			case TextureFormat::R8:
+			case TextureFormat::RGB8:
+			case TextureFormat::RGBA8: return GL_UNSIGNED_BYTE;
+			case TextureFormat::R16F:
+			case TextureFormat::RG16F:
+			case TextureFormat::RGBA16F:
+			case TextureFormat::R32F: return GL_FLOAT;
+			default: return GL_NONE;
+			}
+		}
+
+		uint32_t ChannelCount(TextureFormat format)
+		{
+			switch (format)
+			{
+			case TextureFormat::R8:
+			case TextureFormat::R16F:
+			case TextureFormat::R32F: return 1;
+			case TextureFormat::RG16F: return 2;
+			case TextureFormat::RGB8: return 3;
+			case TextureFormat::RGBA8:
+			case TextureFormat::RGBA16F: return 4;
+			default: return 0;
+			}
+		}
+
+		GLenum ToFilter(TextureFilter filter)
+		{
+			return filter == TextureFilter::Linear ? GL_LINEAR : GL_NEAREST;
+		}
+
+		GLenum ToWrap(TextureWrap wrap)
+		{
+			switch (wrap)
+			{
+			case TextureWrap::Repeat: return GL_REPEAT;
+			case TextureWrap::ClampToEdge: return GL_CLAMP_TO_EDGE;
+			case TextureWrap::MirroredRepeat: return GL_MIRRORED_REPEAT;
+			}
+			return GL_REPEAT;
+		}
+
+	}
 
 	OpenGLTexture2D::OpenGLTexture2D(const std::string& path)
 		: m_Path(path)
 	{
 		GL_PROFILE_FUNCTION();
 
-		int width, height, channels;
-
-		// 关键点 1：垂直翻转图片。
-		// 图片原点在左上，OpenGL 原点在左下。如果不翻转，贴图是倒过来的。
 		stbi_set_flip_vertically_on_load(1);
+		int width = 0;
+		int height = 0;
+		int channels = 0;
+		stbi_uc* data = stbi_load(path.c_str(), &width, &height, &channels, 0);
+		GL_CORE_ASSERT(data, "Failed to load texture: {0}", path);
 
-		// 从硬盘加载字节数据
-		stbi_uc* data = nullptr;
-		{
-			GL_PROFILE_SCOPE("stbi_load - OpenGLTexture2D::OpenGLTexture2D(const std:string&)");
-			data = stbi_load(path.c_str(), &width, &height, &channels, 0);
-		}
-		GL_CORE_ASSERT(data, "Failed to load image!");
+		m_Specification.Width = static_cast<uint32_t>(width);
+		m_Specification.Height = static_cast<uint32_t>(height);
+		m_Specification.Format = channels == 4
+			? TextureFormat::RGBA8
+			: channels == 3 ? TextureFormat::RGB8
+			: channels == 1 ? TextureFormat::R8
+			: TextureFormat::None;
+		GL_CORE_ASSERT(m_Specification.Format != TextureFormat::None,
+			"Unsupported texture channel count: {0}", channels);
 
-		m_Width = width;
-		m_Height = height;
-
-		// 根据图片的通道数自动选择 OpenGL 格式
-		GLenum internalFormat = 0, dataFormat = 0;
-		if (channels == 4) {
-			internalFormat = GL_RGBA8;
-			dataFormat = GL_RGBA;
-		}
-		else if (channels == 3) {
-			internalFormat = GL_RGB8;
-			dataFormat = GL_RGB;
-		}
-
-		m_InternalFormat = internalFormat;
-		m_DataFormat = dataFormat;
-
-		GL_CORE_ASSERT(internalFormat & dataFormat, "Format not supported!");
-
-		// 关键点 2：在显存开辟空间
-		glGenTextures(1, &m_RendererID);
-		glBindTexture(GL_TEXTURE_2D, m_RendererID);
-
-		// 关键点 3：配置过滤 (Filtering)
-		// 放大时使用线性过滤（平滑），缩小时使用邻近过滤（颗粒感，看你需求）
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-		// 关键点 4：上传数据
-		glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, m_Width, m_Height, 0, dataFormat, GL_UNSIGNED_BYTE, data);
-
-		// 释放 CPU 端的内存（因为已经传到 GPU 了）
+		CreateStorage();
+		SetData(data, GetTransferSize());
 		stbi_image_free(data);
 	}
 
-	// 增加一个新的构造函数用于创建空白贴图
-	OpenGLTexture2D::OpenGLTexture2D(uint32_t width, uint32_t height)
-		: m_Width(width), m_Height(height)
+	OpenGLTexture2D::OpenGLTexture2D(const TextureSpecification& specification)
+		: m_Specification(specification)
 	{
 		GL_PROFILE_FUNCTION();
-
-		m_InternalFormat = GL_RGBA8;
-		m_DataFormat = GL_RGBA;
-
-		glCreateTextures(GL_TEXTURE_2D, 1, &m_RendererID);
-		glTextureStorage2D(m_RendererID, 1, m_InternalFormat, m_Width, m_Height);
-
-		glTextureParameteri(m_RendererID, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-		glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_S, GL_REPEAT);
-		glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_T, GL_REPEAT);
+		GL_CORE_ASSERT(m_Specification.Width > 0 && m_Specification.Height > 0,
+			"Texture dimensions must be greater than zero.");
+		GL_CORE_ASSERT(m_Specification.Format != TextureFormat::None,
+			"Texture format must be specified.");
+		CreateStorage();
 	}
 
 	OpenGLTexture2D::~OpenGLTexture2D()
 	{
-		GL_PROFILE_FUNCTION();
-
-		glDeleteTextures(1, &m_RendererID);
+		if (m_RendererID != 0)
+			glDeleteTextures(1, &m_RendererID);
 	}
 
-	void OpenGLTexture2D::SetData(void* data, uint32_t size)
+	void OpenGLTexture2D::CreateStorage()
 	{
-		GL_PROFILE_FUNCTION();
+		m_InternalFormat = ToInternalFormat(m_Specification.Format);
+		m_DataFormat = ToDataFormat(m_Specification.Format);
+		m_DataType = ToDataType(m_Specification.Format);
+		GL_CORE_ASSERT(m_InternalFormat != GL_NONE && m_DataFormat != GL_NONE && m_DataType != GL_NONE,
+			"Unsupported texture format.");
 
-		uint32_t bpp = m_DataFormat == GL_RGBA ? 4 : 3;
-		GL_CORE_ASSERT(size == m_Width * m_Height * bpp, "Data must be entire texture!");
-		glTextureSubImage2D(m_RendererID, 0, 0, 0, m_Width, m_Height, m_DataFormat, GL_UNSIGNED_BYTE, data);
+		glCreateTextures(GL_TEXTURE_2D, 1, &m_RendererID);
+		glTextureStorage2D(
+			m_RendererID,
+			1,
+			m_InternalFormat,
+			static_cast<GLsizei>(m_Specification.Width),
+			static_cast<GLsizei>(m_Specification.Height));
+		glTextureParameteri(m_RendererID, GL_TEXTURE_MIN_FILTER, ToFilter(m_Specification.MinFilter));
+		glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, ToFilter(m_Specification.MagFilter));
+		glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_S, ToWrap(m_Specification.WrapS));
+		glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_T, ToWrap(m_Specification.WrapT));
+	}
+
+	uint32_t OpenGLTexture2D::GetTransferSize() const
+	{
+		const uint32_t componentSize = m_DataType == GL_FLOAT ? sizeof(float) : sizeof(uint8_t);
+		return m_Specification.Width * m_Specification.Height
+			* ChannelCount(m_Specification.Format) * componentSize;
+	}
+
+	void OpenGLTexture2D::SetData(const void* data, uint32_t size)
+	{
+		GL_CORE_ASSERT(data, "Texture data cannot be null.");
+		GL_CORE_ASSERT(size == GetTransferSize(), "Texture upload size does not match specification.");
+		glTextureSubImage2D(
+			m_RendererID,
+			0,
+			0,
+			0,
+			static_cast<GLsizei>(m_Specification.Width),
+			static_cast<GLsizei>(m_Specification.Height),
+			m_DataFormat,
+			m_DataType,
+			data);
 	}
 
 	void OpenGLTexture2D::GetImageData(void* buffer, uint32_t size) const
 	{
-		GL_PROFILE_FUNCTION();
+		GL_CORE_ASSERT(buffer, "Texture readback buffer cannot be null.");
+		GL_CORE_ASSERT(size >= GetTransferSize(), "Texture readback buffer is too small.");
+		glGetTextureImage(m_RendererID, 0, m_DataFormat, m_DataType, size, buffer);
+	}
 
-		GLenum format = (m_InternalFormat == GL_RGBA8) ? GL_RGBA : GL_RGB;
-		GLenum type   = GL_UNSIGNED_BYTE;
-		uint32_t bpp  = (m_InternalFormat == GL_RGBA8) ? 4 : 3;
-		GL_CORE_ASSERT(size >= m_Width * m_Height * bpp, "Buffer too small for texture readback!");
-		glGetTextureImage(m_RendererID, 0, format, type, size, buffer);
+	void OpenGLTexture2D::Clear(const glm::vec4& value)
+	{
+		if (m_DataType == GL_FLOAT)
+		{
+			const std::array<float, 4> clearValue = { value.r, value.g, value.b, value.a };
+			glClearTexImage(m_RendererID, 0, m_DataFormat, GL_FLOAT, clearValue.data());
+		}
+		else
+		{
+			const std::array<uint8_t, 4> clearValue = {
+				static_cast<uint8_t>(std::clamp(value.r, 0.0f, 1.0f) * 255.0f),
+				static_cast<uint8_t>(std::clamp(value.g, 0.0f, 1.0f) * 255.0f),
+				static_cast<uint8_t>(std::clamp(value.b, 0.0f, 1.0f) * 255.0f),
+				static_cast<uint8_t>(std::clamp(value.a, 0.0f, 1.0f) * 255.0f)
+			};
+			glClearTexImage(m_RendererID, 0, m_DataFormat, GL_UNSIGNED_BYTE, clearValue.data());
+		}
 	}
 
 	void OpenGLTexture2D::Bind(uint32_t slot) const
 	{
-		GL_PROFILE_FUNCTION();
-
-		glActiveTexture(GL_TEXTURE0 + slot);
-		glBindTexture(GL_TEXTURE_2D, m_RendererID);
+		glBindTextureUnit(slot, m_RendererID);
 	}
 
 }

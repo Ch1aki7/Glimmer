@@ -1,35 +1,74 @@
 #pragma once
-#include <string>
+
 #include "Glimmer/Core/Core.h"
+
+#include <glm/glm.hpp>
+#include <string>
 
 namespace gl {
 
-	class Texture
+	enum class TextureFormat {
+		None = 0,
+		R8,
+		RGB8,
+		RGBA8,
+		R16F,
+		RG16F,
+		RGBA16F,
+		R32F
+	};
+
+	enum class TextureFilter { Nearest = 0, Linear };
+	enum class TextureWrap { Repeat = 0, ClampToEdge, MirroredRepeat };
+
+	enum class TextureUsage : uint32_t {
+		None = 0,
+		Sampled = BIT(0),
+		Storage = BIT(1),
+		RenderTarget = BIT(2),
+		Readback = BIT(3)
+	};
+
+	inline TextureUsage operator|(TextureUsage left, TextureUsage right)
 	{
+		return static_cast<TextureUsage>(
+			static_cast<uint32_t>(left) | static_cast<uint32_t>(right));
+	}
+
+	struct TextureSpecification {
+		uint32_t Width = 1;
+		uint32_t Height = 1;
+		TextureFormat Format = TextureFormat::RGBA8;
+		TextureFilter MinFilter = TextureFilter::Linear;
+		TextureFilter MagFilter = TextureFilter::Nearest;
+		TextureWrap WrapS = TextureWrap::Repeat;
+		TextureWrap WrapT = TextureWrap::Repeat;
+		TextureUsage Usage = TextureUsage::Sampled;
+	};
+
+	class Texture {
 	public:
 		virtual ~Texture() = default;
 
+		virtual const TextureSpecification& GetSpecification() const = 0;
 		virtual uint32_t GetWidth() const = 0;
 		virtual uint32_t GetHeight() const = 0;
+		virtual TextureFormat GetFormat() const = 0;
 
-		virtual void SetData(void* data, uint32_t size) = 0;
-
-		// GPU → CPU 数据读回（同步，用于少量数据传输）
+		virtual void SetData(const void* data, uint32_t size) = 0;
 		virtual void GetImageData(void* buffer, uint32_t size) const = 0;
-
-		// slot 代表纹理单元（0-31），显卡可以同时绑定多个纹理
+		virtual void Clear(const glm::vec4& value) = 0;
 		virtual void Bind(uint32_t slot = 0) const = 0;
 
 		virtual bool operator==(const Texture& other) const = 0;
-
 		virtual uint32_t GetRendererID() const = 0;
 	};
 
-	class Texture2D : public Texture
-	{
+	class Texture2D : public Texture {
 	public:
 		static Ref<Texture2D> Create(const std::string& path);
 		static Ref<Texture2D> Create(uint32_t width, uint32_t height);
+		static Ref<Texture2D> Create(const TextureSpecification& specification);
 	};
 
 }

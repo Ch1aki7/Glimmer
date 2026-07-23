@@ -52,6 +52,7 @@ namespace gl {
 
 		const uint32_t oldProgram = m_RendererID;
 		m_RendererID = newProgram;
+		m_UniformCache.clear();
 		++m_Version;
 		if (oldProgram != 0)
 			glDeleteProgram(oldProgram);
@@ -148,6 +149,30 @@ namespace gl {
 		glDispatchCompute(x, y, z);
 	}
 
+	int OpenGLComputeShader::GetUniformLocation(const std::string& name) const
+	{
+		const auto cached = m_UniformCache.find(name);
+		if (cached != m_UniformCache.end())
+			return cached->second;
+		const int location = glGetUniformLocation(m_RendererID, name.c_str());
+		m_UniformCache[name] = location;
+		return location;
+	}
+
+	void OpenGLComputeShader::UploadUniformInt(const std::string& name, int value)
+	{
+		glUniform1i(GetUniformLocation(name), value);
+	}
+
+	void OpenGLComputeShader::UploadUniformFloat(const std::string& name, float value)
+	{
+		glUniform1f(GetUniformLocation(name), value);
+	}
+
+	void OpenGLComputeShader::UploadUniformFloat2(const std::string& name, const glm::vec2& value)
+	{
+		glUniform2f(GetUniformLocation(name), value.x, value.y);
+	}
 	void OpenGLComputeShader::BindImageTexture(
 		uint32_t binding,
 		uint32_t textureID,
