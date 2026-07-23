@@ -1,90 +1,141 @@
 #include "glpch.h"
 #include "OpenGLComputeShader.h"
 
+#include <algorithm>
 #include <fstream>
+#include <vector>
 #include <glad/glad.h>
 
 namespace gl {
 
 	OpenGLComputeShader::OpenGLComputeShader(const std::string& filepath)
+		: m_Name(std::filesystem::path(filepath).stem().string()),
+		  m_FilePath(filepath),
+		  m_FileWatcher(std::make_unique<FileWatcher>(m_FilePath))
 	{
-		std::string source = ReadFile(filepath);
-		Compile(source);
-
-		auto lastSlash = filepath.find_last_of("/\\");
-		lastSlash = lastSlash == std::string::npos ? 0 : lastSlash + 1;
-		auto lastDot = filepath.rfind('.');
-		auto count = lastDot == std::string::npos ? filepath.size() - lastSlash : lastDot - lastSlash;
-		m_Name = filepath.substr(lastSlash, count);
+		const ShaderReloadResult result = Reload();
+		GL_CORE_ASSERT(result.Success, "Initial compute shader compilation failed: {0}", result.Message);
 	}
 
 	OpenGLComputeShader::~OpenGLComputeShader()
 	{
-		glDeleteProgram(m_RendererID);
+		if (m_RendererID != 0)
+			glDeleteProgram(m_RendererID);
 	}
 
-	std::string OpenGLComputeShader::ReadFile(const std::string& filepath)
+	ShaderReloadResult OpenGLComputeShader::ReloadIfChanged()
 	{
-		std::string result;
-		std::ifstream in(filepath, std::ios::in | std::ios::binary);
-		if (in)
+		if (!m_FileWatcher || !m_FileWatcher->Poll())
+			return {};
+		return Reload();
+	}
+
+	ShaderReloadResult OpenGLComputeShader::Reload()
+	{
+		ShaderReloadResult result;
+		result.Attempted = true;
+
+		std::string source;
+		if (!ReadFile(source, result.Message))
 		{
-			in.seekg(0, std::ios::end);
-			result.resize(in.tellg());
-			in.seekg(0, std::ios::beg);
-			in.read(&result[0], result.size());
-			in.close();
+			m_LastReloadResult = result;
+			return result;
 		}
-		else
+
+		uint32_t newProgram = 0;
+		if (!BuildProgram(source, newProgram, result.Message))
 		{
-			GL_CORE_ERROR("Could not open file '{0}'", filepath);
+			m_LastReloadResult = result;
+			GL_CORE_ERROR("Compute shader reload failed [{0}]: {1}", m_Name, result.Message);
+			return result;
 		}
+
+		const uint32_t oldProgram = m_RendererID;
+		m_RendererID = newProgram;
+		++m_Version;
+		if (oldProgram != 0)
+			glDeleteProgram(oldProgram);
+
+		result.Success = true;
+		result.Message = "Reloaded successfully.";
+		m_LastReloadResult = result;
+		GL_CORE_INFO("Compute shader reloaded: {0} (version {1})", m_Name, m_Version);
 		return result;
 	}
 
-	void OpenGLComputeShader::Compile(const std::string& source)
+	bool OpenGLComputeShader::ReadFile(std::string& source, std::string& error) const
 	{
-		GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
-		const GLchar* src = source.c_str();
-		glShaderSource(shader, 1, &src, nullptr);
+		std::ifstream input(m_FilePath, std::ios::in | std::ios::binary);
+		if (!input)
+		{
+			error = "Could not open file: " + m_FilePath.string();
+			return false;
+		}
+
+		input.seekg(0, std::ios::end);
+		const std::streampos size = input.tellg();
+		if (size <= 0)
+		{
+			error = "Compute shader file is empty: " + m_FilePath.string();
+			return false;
+		}
+
+		source.resize(static_cast<size_t>(size));
+		input.seekg(0, std::ios::beg);
+		input.read(source.data(), size);
+		if (!input)
+		{
+			error = "Could not read file: " + m_FilePath.string();
+			return false;
+		}
+		return true;
+	}
+
+	bool OpenGLComputeShader::BuildProgram(
+		const std::string& source,
+		uint32_t& program,
+		std::string& error) const
+	{
+		const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+		const GLchar* sourceData = source.c_str();
+		glShaderSource(shader, 1, &sourceData, nullptr);
 		glCompileShader(shader);
 
-		GLint compiled = 0;
+		GLint compiled = GL_FALSE;
 		glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
 		if (compiled == GL_FALSE)
 		{
-			GLint maxLen = 0;
-			glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &maxLen);
-			std::vector<GLchar> log(maxLen);
-			glGetShaderInfoLog(shader, maxLen, &maxLen, log.data());
+			GLint logLength = 0;
+			glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
+			std::vector<GLchar> log(static_cast<size_t>(std::max(logLength, 1)));
+			glGetShaderInfoLog(shader, logLength, nullptr, log.data());
+			error = std::string("compute compile error:\n") + log.data();
 			glDeleteShader(shader);
-			GL_CORE_ERROR("{0}", log.data());
-			GL_CORE_ASSERT(false, "Compute shader compilation failure!");
-			return;
+			return false;
 		}
 
-		GLuint program = glCreateProgram();
-		glAttachShader(program, shader);
-		glLinkProgram(program);
+		const GLuint newProgram = glCreateProgram();
+		glAttachShader(newProgram, shader);
+		glLinkProgram(newProgram);
 
-		GLint linked = 0;
-		glGetProgramiv(program, GL_LINK_STATUS, &linked);
+		GLint linked = GL_FALSE;
+		glGetProgramiv(newProgram, GL_LINK_STATUS, &linked);
 		if (linked == GL_FALSE)
 		{
-			GLint maxLen = 0;
-			glGetProgramiv(program, GL_INFO_LOG_LENGTH, &maxLen);
-			std::vector<GLchar> log(maxLen);
-			glGetProgramInfoLog(program, maxLen, &maxLen, log.data());
-			glDeleteProgram(program);
+			GLint logLength = 0;
+			glGetProgramiv(newProgram, GL_INFO_LOG_LENGTH, &logLength);
+			std::vector<GLchar> log(static_cast<size_t>(std::max(logLength, 1)));
+			glGetProgramInfoLog(newProgram, logLength, nullptr, log.data());
+			error = std::string("compute program link error:\n") + log.data();
 			glDeleteShader(shader);
-			GL_CORE_ERROR("{0}", log.data());
-			GL_CORE_ASSERT(false, "Compute shader link failure!");
-			return;
+			glDeleteProgram(newProgram);
+			return false;
 		}
 
-		glDetachShader(program, shader);
+		glDetachShader(newProgram, shader);
 		glDeleteShader(shader);
-		m_RendererID = program;
+		program = newProgram;
+		return true;
 	}
 
 	void OpenGLComputeShader::Bind() const
@@ -97,21 +148,32 @@ namespace gl {
 		glDispatchCompute(x, y, z);
 	}
 
-	void OpenGLComputeShader::BindImageTexture(uint32_t binding, uint32_t textureID, uint32_t level, ImageAccess access, ImageFormat format)
+	void OpenGLComputeShader::BindImageTexture(
+		uint32_t binding,
+		uint32_t textureID,
+		uint32_t level,
+		ImageAccess access,
+		ImageFormat format)
 	{
-		static GLenum glAccess[] = { GL_READ_ONLY, GL_WRITE_ONLY, GL_READ_WRITE };
-		static GLenum glFormat[] = { GL_RGBA8, GL_RGBA16F, GL_RGBA32F, GL_R32F };
+		static constexpr GLenum glAccess[] = { GL_READ_ONLY, GL_WRITE_ONLY, GL_READ_WRITE };
+		static constexpr GLenum glFormat[] = { GL_RGBA8, GL_RGBA16F, GL_RGBA32F, GL_R32F };
 
-		glBindImageTexture(binding, textureID, level, GL_FALSE, 0,
-		                   glAccess[(int)access],
-		                   glFormat[(int)format]);
+		glBindImageTexture(
+			binding,
+			textureID,
+			static_cast<GLint>(level),
+			GL_FALSE,
+			0,
+			glAccess[static_cast<size_t>(access)],
+			glFormat[static_cast<size_t>(format)]);
 	}
 
 	void OpenGLComputeShader::Barrier()
 	{
-		glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT
-		              | GL_SHADER_STORAGE_BARRIER_BIT
-		              | GL_TEXTURE_FETCH_BARRIER_BIT);
+		glMemoryBarrier(
+			GL_SHADER_IMAGE_ACCESS_BARRIER_BIT |
+			GL_SHADER_STORAGE_BARRIER_BIT |
+			GL_TEXTURE_FETCH_BARRIER_BIT);
 	}
 
 }

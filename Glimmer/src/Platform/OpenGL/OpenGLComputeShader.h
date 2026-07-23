@@ -1,27 +1,44 @@
 #pragma once
+#include "Glimmer/Core/FileWatcher.h"
 #include "Glimmer/Renderer/ComputeShader.h"
-#include <glad/glad.h>
+
+#include <memory>
 
 namespace gl {
 
 	class OpenGLComputeShader : public ComputeShader {
 	public:
-		OpenGLComputeShader(const std::string& filepath);
-		virtual ~OpenGLComputeShader();
+		explicit OpenGLComputeShader(const std::string& filepath);
+		~OpenGLComputeShader() override;
 
-		virtual void Bind() const override;
-		virtual void Dispatch(uint32_t x, uint32_t y, uint32_t z) const override;
-		virtual const std::string& GetName() const override { return m_Name; }
-		virtual void BindImageTexture(uint32_t binding, uint32_t textureID, uint32_t level, ImageAccess access, ImageFormat format) override;
+		void Bind() const override;
+		void Dispatch(uint32_t x, uint32_t y, uint32_t z) const override;
+		void BindImageTexture(
+			uint32_t binding,
+			uint32_t textureID,
+			uint32_t level,
+			ImageAccess access,
+			ImageFormat format) override;
+
+		const std::string& GetName() const override { return m_Name; }
+		const std::filesystem::path& GetFilePath() const override { return m_FilePath; }
+		uint64_t GetVersion() const override { return m_Version; }
+		const ShaderReloadResult& GetLastReloadResult() const override { return m_LastReloadResult; }
+		ShaderReloadResult Reload() override;
+		ShaderReloadResult ReloadIfChanged() override;
 
 		static void Barrier();
 
 	private:
-		std::string ReadFile(const std::string& filepath);
-		void Compile(const std::string& source);
+		bool ReadFile(std::string& source, std::string& error) const;
+		bool BuildProgram(const std::string& source, uint32_t& program, std::string& error) const;
 
 		uint32_t m_RendererID = 0;
 		std::string m_Name;
+		std::filesystem::path m_FilePath;
+		std::unique_ptr<FileWatcher> m_FileWatcher;
+		uint64_t m_Version = 0;
+		ShaderReloadResult m_LastReloadResult;
 	};
 
 }

@@ -2,6 +2,7 @@
 #include "Glimmer.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ContentBrowserPanel.h"
+#include "Panels/ShaderPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
 #include "Glimmer/Renderer/TerrainMesh.h"
 
@@ -22,6 +23,7 @@ namespace gl {
 
 	private:
 		ShaderLibrary m_ShaderLib;
+		ShaderPanel m_ShaderPanel;
 
 		Ref<Texture2D> m_Texture;
 		Ref<Texture2D> m_STSTexture;

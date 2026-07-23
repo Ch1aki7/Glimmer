@@ -9531,6 +9531,297 @@ TerrainComponent 接入 Scene
 ![[README.assets/Pasted image 20260722175227.png]]
 ![[README.assets/Pasted image 20260723134803.png]]
 
+## Shader 实时热重载
+
+### 设计目标
+
+Shader 热重载允许开发者保存 `.glsl` 文件后直接观察新的渲染结果，不需要重新编译 C++、重新生成解决方案或重启编辑器。
+
+系统必须同时满足：
+
+- 文件修改后自动检测；
+- Shader 编译和链接发生在拥有 OpenGL Context 的渲染线程；
+- 新 Program 成功前继续使用旧 Program；
+- 编译失败不触发断言、不退出编辑器、不产生黑屏；
+- 修复 Shader 后能够再次自动恢复；
+- Graphics Shader 和 Compute Shader 使用一致的状态接口。
+
+### 整体流程
+
+```text
+保存 .glsl 文件
+    → FileWatcher 检测 LastWriteTime
+    → 等待 200 ms 防抖
+    → ShaderLibrary::ReloadChanged()
+    → 读取并预处理 Shader 源码
+    → 编译临时 Shader Stage
+    → 链接临时 Program
+        ├─ 失败：删除临时对象，保留旧 Program，记录错误
+        └─ 成功：替换 Renderer ID，清除 Uniform 缓存，删除旧 Program
+    → Shader Version + 1
+```
+
+文件监控只检测磁盘变化，不创建线程调用 OpenGL。实际编译由编辑器更新循环触发，因此不会在错误线程访问图形上下文。
+
+### FileWatcher
+
+通用文件监控位于核心库：
+
+```text
+Glimmer/src/Glimmer/Core/FileWatcher.h
+Glimmer/src/Glimmer/Core/FileWatcher.cpp
+```
+
+核心接口：
+
+```cpp
+class FileWatcher
+{
+public:
+    explicit FileWatcher(
+        const std::filesystem::path& path,
+        std::chrono::milliseconds debounce =
+            std::chrono::milliseconds(200));
+
+    bool Poll();
+    void Reset();
+};
+```
+
+`Poll()` 对比 `std::filesystem::last_write_time()`。发现时间变化后不会立即触发，而是等待文件时间稳定 200 ms，避免文本编辑器执行临时写入、重命名或连续保存时反复编译不完整文件。
+
+### 统一重载结果
+
+Graphics Shader 和 Compute Shader 共用：
+
+```cpp
+struct ShaderReloadResult
+{
+    bool Attempted = false;
+    bool Success = false;
+    std::string Message;
+};
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `Attempted` | 本帧是否真正执行了重载 |
+| `Success` | 编译和链接是否全部成功 |
+| `Message` | 成功信息或完整编译错误 |
+
+Shader 同时提供：
+
+```cpp
+Reload();
+ReloadIfChanged();
+GetFilePath();
+GetVersion();
+GetLastReloadResult();
+IsFileBacked();
+```
+
+由内存字符串创建的 Shader 没有源文件路径，因此不能自动热重载。
+
+### 事务式 OpenGL Program 替换
+
+旧实现直接把新 Program 写入 `m_RendererID`，编译失败还会触发断言，不适合编辑期热重载。
+
+当前流程先构建独立 Program：
+
+```cpp
+uint32_t newProgram = 0;
+if (!BuildProgram(shaderSources, newProgram, error))
+{
+    // m_RendererID 保持不变
+    return failedResult;
+}
+
+uint32_t oldProgram = m_RendererID;
+m_RendererID = newProgram;
+m_UniformCache.clear();
+++m_Version;
+glDeleteProgram(oldProgram);
+```
+
+只有全部 Stage 编译成功且 Program 链接成功后才交换 ID。失败路径会清理本次创建的 Shader 和 Program，不影响正在渲染的旧版本。
+
+热重载成功后必须清空 Uniform Location 缓存，因为重新链接后的 Uniform Location 可能发生变化。
+
+### ShaderLibrary
+
+`ShaderLibrary` 新增：
+
+```cpp
+ReloadChanged();
+ReloadAll();
+GetAll();
+```
+
+编辑器中的以下 Shader 已统一交由 Library 管理：
+
+- BalatroVortex；
+- StarNest；
+- Model3D；
+- Terrain；
+- PostProcess；
+- Overlay；
+- Phong；
+- Toon；
+- Blinn-Phong；
+- Hologram。
+
+`ReloadChanged()` 只返回本帧真正尝试过重载的 Shader，避免每帧产生无意义状态和日志。
+
+### Renderer2D Shader
+
+Renderer2D 的 `Texture.glsl` 是核心渲染器内部持有的 Shader，不属于 EditorLayer 的 ShaderLibrary，因此由 Renderer2D 在 `BeginScene()` 时检测变化。
+
+Program 重新链接后，Sampler Uniform 会恢复为默认值。热重载成功时需要重新上传纹理槽数组：
+
+```cpp
+int32_t samplers[Renderer2DData::MaxTextureSlots];
+for (uint32_t i = 0; i < Renderer2DData::MaxTextureSlots; ++i)
+    samplers[i] = static_cast<int32_t>(i);
+
+textureShader->Bind();
+textureShader->UploadUniformIntArray(
+    "u_Textures",
+    samplers,
+    Renderer2DData::MaxTextureSlots);
+```
+
+否则可能出现所有实体使用错误纹理槽的问题。
+
+### Compute Shader
+
+Compute Shader 同样支持：
+
+- 文件变化检测；
+- 200 ms 防抖；
+- 临时 Program 编译；
+- 失败保留旧 Program；
+- 版本号和错误信息；
+- 修复后再次重载。
+
+Compute Shader 的拥有者需要在自己的更新阶段调用 `ReloadIfChanged()`。后续建立 Environment Simulation System 时，应由模拟系统统一管理 Compute Shader，而不是在 EditorLayer 中逐个轮询。
+
+### ShaderPanel
+
+编辑器新增独立面板：
+
+```text
+GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.h
+GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.cpp
+```
+
+功能包括：
+
+- `Auto Reload`：启用或暂停自动检测；
+- `Reload All`：手动重新编译全部文件 Shader；
+- 单个 Shader 的 `Reload`；
+- 显示 Library 名称；
+- 显示源文件路径；
+- 显示 Shader Version；
+- 显示最近一次成功或失败信息；
+- 成功状态使用绿色，失败状态使用红色。
+
+ShaderPanel 只调用核心接口，不包含 OpenGL API。
+
+### 使用方法
+
+1. 启动 `GlimmerEditor-CyouBranch`；
+2. 打开 `Shaders` 面板；
+3. 保持 `Auto Reload` 开启；
+4. 修改项目 `assets/shaders` 下已加载的 Shader；
+5. 保存文件；
+6. 文件稳定约 200 ms 后自动重载。
+
+如果写入语法错误：
+
+- Shaders 面板显示错误；
+- 控制台输出 Shader Stage 和编译器日志；
+- 视口继续显示上一个有效版本；
+- 修复并保存后自动恢复。
+
+### 新增源文件后的工程同步
+
+本机使用 Visual Studio 2026 时，应运行：
+
+```text
+scripts/Win-GenerateProject-vs2026.bat
+```
+
+该脚本调用：
+
+```bat
+vendor\bin\premake\premake5.exe vs2026
+```
+
+新增 `.h/.cpp` 后使用该脚本同步 Visual Studio 工程，不应运行 VS2022 脚本后再手动修改 PlatformToolset。
+
+### 文件清单
+
+```text
+新增:
+  Glimmer/src/Glimmer/Core/FileWatcher.h
+  Glimmer/src/Glimmer/Core/FileWatcher.cpp
+  Glimmer/src/Glimmer/Renderer/ShaderReload.h
+
+  GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.h
+  GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.cpp
+
+修改:
+  Glimmer/src/Glimmer/Renderer/Shader.h
+  Glimmer/src/Glimmer/Renderer/Shader.cpp
+  Glimmer/src/Glimmer/Renderer/ComputeShader.h
+  Glimmer/src/Glimmer/Renderer/Renderer2D.cpp
+
+  Glimmer/src/Platform/OpenGL/OpenGLShader.h
+  Glimmer/src/Platform/OpenGL/OpenGLShader.cpp
+  Glimmer/src/Platform/OpenGL/OpenGLComputeShader.h
+  Glimmer/src/Platform/OpenGL/OpenGLComputeShader.cpp
+
+  GlimmerEditor-CyouBranch/src/EditorLayer.h
+  GlimmerEditor-CyouBranch/src/EditorLayer.cpp
+```
+
+### 验证结果
+
+完成了真实运行测试：
+
+1. 启动编辑器并等待场景加载完成；
+2. 临时向 `Terrain.glsl` 写入非法 Token；
+3. FileWatcher 检测变化；
+4. Fragment Shader 编译失败；
+5. 编辑器保持运行，旧 Terrain Program 继续渲染；
+6. 恢复原 Shader 文件；
+7. Shader 自动重载成功；
+8. Terrain Shader Version 从 1 更新为 2；
+9. SHA-256 检查确认测试文件完整恢复。
+
+Debug x64 完整编译通过，生成：
+
+```text
+bin/Debug-windows-x86_64/
+  GlimmerEditor-CyouBranch/
+    GlimmerEditor-CyouBranch.exe
+```
+
+### 当前限制与下一步
+
+当前热重载监控的是 Shader 主文件，尚未建立 `#include` 依赖图。如果公共 GLSL Include 文件发生变化，依赖它的 Shader 不会自动全部标记为 Dirty。
+
+后续可按以下顺序扩展：
+
+```text
+GLSL #include 预处理
+    → Include 依赖图
+    → 公共文件变化后重载所有依赖 Shader
+    → UBO/Sampler Binding 反射
+    → Shader 变体与编译缓存
+```
+
+这些扩展不是当前程序化地形开发的阻塞项。现阶段已经可以直接用于 fBm Compute Shader、Terrain Shader 和后续 PBR Shader 的快速迭代。
 ## KB
 
 ### 为什么不用动态库？

@@ -64,6 +64,22 @@ namespace gl {
 
 	static Renderer2DData s_Data;
 
+	static void ReloadTextureShaderIfChanged()
+	{
+		const ShaderReloadResult result = s_Data.TextureShader->ReloadIfChanged();
+		if (!result.Attempted || !result.Success)
+			return;
+
+		int32_t samplers[Renderer2DData::MaxTextureSlots];
+		for (uint32_t i = 0; i < Renderer2DData::MaxTextureSlots; ++i)
+			samplers[i] = static_cast<int32_t>(i);
+
+		s_Data.TextureShader->Bind();
+		s_Data.TextureShader->UploadUniformIntArray(
+			"u_Textures",
+			samplers,
+			Renderer2DData::MaxTextureSlots);
+	}
 	void Renderer2D::Init()
 	{
 		GL_PROFILE_FUNCTION();
@@ -153,6 +169,7 @@ namespace gl {
 	void Renderer2D::BeginScene(const OrthographicCamera& camera)
 	{
 		GL_PROFILE_FUNCTION();
+		ReloadTextureShaderIfChanged();
 
 		s_Data.CameraBuffer.ViewProjection = camera.GetViewProjectionMatrix();
 		s_Data.CameraBuffer.Time = gl::Application::Get().GetTime();
@@ -166,6 +183,7 @@ namespace gl {
 	void Renderer2D::BeginScene(const Camera& camera, const glm::mat4& transform)
 	{
 		GL_PROFILE_FUNCTION();
+		ReloadTextureShaderIfChanged();
 
 		s_Data.CameraBuffer.ViewProjection = camera.GetProjection() * glm::inverse(transform);
 		s_Data.CameraBuffer.Time = gl::Application::Get().GetTime();
@@ -179,6 +197,7 @@ namespace gl {
 	void Renderer2D::BeginScene(const glm::mat4& viewProjection)
 	{
 		GL_PROFILE_FUNCTION();
+		ReloadTextureShaderIfChanged();
 
 		s_Data.CameraBuffer.ViewProjection = viewProjection;
 		s_Data.CameraBuffer.Time = gl::Application::Get().GetTime();

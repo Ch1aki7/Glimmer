@@ -4,6 +4,7 @@
 #include "Platform/OpenGL/OpenGLShader.h"
 
 namespace gl {
+
 	Ref<Shader> Shader::Create(const std::string& filepath)
 	{
 		return CreateRef<OpenGLShader>(filepath);
@@ -28,8 +29,6 @@ namespace gl {
 		return nullptr;
 	}
 
-	// --- ShaderLibrary 实现 ---
-
 	void ShaderLibrary::Add(const std::string& name, const Ref<Shader>& shader)
 	{
 		GL_CORE_ASSERT(!Exists(name), "Shader already exists!");
@@ -38,8 +37,7 @@ namespace gl {
 
 	void ShaderLibrary::Add(const Ref<Shader>& shader)
 	{
-		auto& name = shader->GetName();
-		Add(name, shader);
+		Add(shader->GetName(), shader);
 	}
 
 	Ref<Shader> ShaderLibrary::Load(const std::string& filepath)
@@ -72,4 +70,26 @@ namespace gl {
 		GL_CORE_ASSERT(Exists(name), "Shader not found for removal!");
 		m_Shaders.erase(name);
 	}
+
+	std::vector<std::pair<std::string, ShaderReloadResult>> ShaderLibrary::ReloadChanged()
+	{
+		std::vector<std::pair<std::string, ShaderReloadResult>> results;
+		for (auto& [name, shader] : m_Shaders)
+		{
+			ShaderReloadResult result = shader->ReloadIfChanged();
+			if (result.Attempted)
+				results.emplace_back(name, std::move(result));
+		}
+		return results;
+	}
+
+	std::vector<std::pair<std::string, ShaderReloadResult>> ShaderLibrary::ReloadAll()
+	{
+		std::vector<std::pair<std::string, ShaderReloadResult>> results;
+		results.reserve(m_Shaders.size());
+		for (auto& [name, shader] : m_Shaders)
+			results.emplace_back(name, shader->Reload());
+		return results;
+	}
+
 }

@@ -11,7 +11,10 @@
 #include <vector>
 namespace gl {
 
-	EditorLayer::EditorLayer() :Layer("EditorLayer"), m_EditorCamera(45.0f, 1280.0f / 720.0f) {
+	EditorLayer::EditorLayer()
+		: Layer("EditorLayer"),
+		  m_ShaderPanel(&m_ShaderLib),
+		  m_EditorCamera(45.0f, 1280.0f / 720.0f) {
 	}
 
 	void EditorLayer::OnAttach() {
@@ -27,7 +30,7 @@ namespace gl {
 		uint32_t whitePixel = 0xffffffff;
 		m_WhiteTexture->SetData(&whitePixel, sizeof(uint32_t));
 
-		m_3DShader = Shader::Create("assets/shaders/Model3D.glsl");
+		m_3DShader = m_ShaderLib.Load("Model3D", "assets/shaders/Model3D.glsl");
 
 		auto loadModel = [&](const std::string& path) {
 			auto model = CreateRef<Model>(path);
@@ -51,7 +54,7 @@ namespace gl {
 
 
 		// --- 地形系统 ---
-		m_TerrainShader = Shader::Create("assets/shaders/Terrain.glsl");
+		m_TerrainShader = m_ShaderLib.Load("Terrain", "assets/shaders/Terrain.glsl");
 		
 		// 加载预设高度图
 		
@@ -159,6 +162,7 @@ namespace gl {
 
 	void EditorLayer::OnUpdate(Timestep ts) {
 		GL_PROFILE_FUNCTION();
+		m_ShaderPanel.OnUpdate();
 
 		// --- 编辑器相机（仅编辑模式） ---
 		if (m_SceneState == SceneState::Edit)
@@ -381,6 +385,7 @@ namespace gl {
 
 		// --- Content Browser ---
 		m_ContentBrowser.OnImGuiRender();
+		m_ShaderPanel.OnImGuiRender();
 
 		// Stats
 		ImGui::Begin("Stats");
