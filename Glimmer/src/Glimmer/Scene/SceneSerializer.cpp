@@ -122,6 +122,7 @@ namespace gl {
 		YAML::Emitter out;
 		out << YAML::BeginMap;
 		out << YAML::Key << "Scene" << YAML::Value << "Untitled";
+		out << YAML::Key << "Version" << YAML::Value << 2;
 		out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
 
 		m_Scene->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
@@ -129,7 +130,8 @@ namespace gl {
 			if (!entity.HasComponent<TagComponent>()) return;
 
 			out << YAML::BeginMap;
-			out << YAML::Key << "Entity" << YAML::Value << (uint32_t)entity;
+			out << YAML::Key << "Entity" << YAML::Value
+				<< static_cast<uint64_t>(entity.GetUUID());
 			out << YAML::Key << "Components" << YAML::Value << YAML::BeginMap;
 
 			if (entity.HasComponent<TagComponent>())
@@ -157,7 +159,9 @@ namespace gl {
 		try
 		{
 			YAML::Node data = YAML::LoadFile(filepath);
-			if (!data["Entities"]) return false;
+			if (!data["Entities"] ) return false;
+
+			const uint32_t version = data["Version"] ? data["Version"].as<uint32_t>() : 1;
 
 			auto entities = data["Entities"];
 			for (auto entityNode : entities)
@@ -170,7 +174,15 @@ namespace gl {
 				if (comps["TagComponent"])
 					name = comps["TagComponent"].as<std::string>();
 
-				Entity entity = m_Scene->CreateEntity(name);
+				Entity entity;
+				if (version >= 2 && entityNode["Entity"])
+				{
+					UUID uuid(entityNode["Entity"].as<uint64_t>());
+					if (static_cast<uint64_t>(uuid) != 0)
+						entity = m_Scene->CreateEntityWithUUID(uuid, name);
+				}
+				if (!entity)
+					entity = m_Scene->CreateEntity(name);
 				auto& tagComp = entity.GetComponent<TagComponent>();
 				DeserializeComponent(comps["TagComponent"], tagComp);
 

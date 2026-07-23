@@ -3,6 +3,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <string>
+#include "Glimmer/Core/UUID.h"
 #include "Glimmer/Renderer/Texture.h"
 #include "SceneCamera.h"
 #include "ScriptableEntity.h"
@@ -11,6 +12,15 @@
 #include <glm/gtx/quaternion.hpp>
 
 namespace gl {
+
+	struct IDComponent
+	{
+		UUID ID;
+
+		IDComponent() = default;
+		IDComponent(const IDComponent&) = default;
+		explicit IDComponent(UUID id) : ID(id) {}
+	};
 
 	struct TagComponent
 	{

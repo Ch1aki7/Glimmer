@@ -7550,6 +7550,7 @@ void SceneSerializer::Serialize(const std::string& filepath)
     YAML::Emitter out;
     out << YAML::BeginMap;
     out << YAML::Key << "Scene" << YAML::Value << "Untitled";
+    out << YAML::Key << "Version" << YAML::Value << 2;
     out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
 
     // 遍历 registry 中所有实体
@@ -7558,7 +7559,8 @@ void SceneSerializer::Serialize(const std::string& filepath)
         if (!entity.HasComponent<TagComponent>()) return;  // 跳过无效实体
 
         out << YAML::BeginMap;
-        out << YAML::Key << "Entity" << YAML::Value << (uint32_t)entity;
+        out << YAML::Key << "Entity" << YAML::Value
+            << static_cast<uint64_t>(entity.GetUUID());
         out << YAML::Key << "Components" << YAML::Value << YAML::BeginMap;
 
         // 逐组件分发序列化
@@ -7591,6 +7593,7 @@ void SceneSerializer::Serialize(const std::string& filepath)
 bool SceneSerializer::Deserialize(const std::string& filepath)
 {
     YAML::Node data = YAML::LoadFile(filepath);
+    uint32_t version = data["Version"] ? data["Version"].as<uint32_t>() : 1;
 
     for (auto entityNode : data["Entities"])
     {
@@ -7598,7 +7601,12 @@ bool SceneSerializer::Deserialize(const std::string& filepath)
 
         // 1. 先读 TagComponent 获取实体名
         std::string name = comps["TagComponent"].as<std::string>();
-        Entity entity = m_Scene->CreateEntity(name);
+        Entity entity;
+        if (version >= 2)
+            entity = m_Scene->CreateEntityWithUUID(
+                UUID(entityNode["Entity"].as<uint64_t>()), name);
+        else
+            entity = m_Scene->CreateEntity(name);
 
         // 2. 恢复 Tag（覆盖 CreateEntity 的默认值）
         DeserializeComponent(comps["TagComponent"], entity.GetComponent<TagComponent>());
@@ -7641,8 +7649,9 @@ File → Open (Ctrl+O)  → SceneSerializer::Deserialize("assets/scenes/demo.gli
 
 ```yaml
 Scene: Untitled
+Version: 2
 Entities:
-  - Entity: 0
+  - Entity: 13784169322866849271
     Components:
       TagComponent: Main Camera
       TransformComponent:
@@ -7659,7 +7668,7 @@ Entities:
         PerspFOV: 0.785398
         PerspNear: 0.01
         PerspFar: 1000.0
-  - Entity: 1
+  - Entity: 8216397519218463350
     Components:
       TagComponent: Green Square
       TransformComponent:
@@ -7675,7 +7684,7 @@ Entities:
 | 限制 | 说明 |
 |------|------|
 | NativeScript 不可序列化 | 函数指针无法持久化，需要脚本工厂注册表 |
-| 实体 ID 不保持 | 反序列化后 `entt::entity` 值会变化，但组件数据完整保留 |
+| 运行时 Handle 不保持 | `entt::entity` 仍可能变化；实体身份通过 UUID 稳定恢复 |
 | 固定文件路径 | 未接入原生文件对话框，Save/Open 均使用 `assets/scenes/demo.glimmer` |
 | 无多场景支持 | 当前仅处理单个 Scene，未来可扩展为 Project 文件（引用多个 Scene） |
 
@@ -9932,6 +9941,48 @@ GlimmerEditor-CyouBranch/
 5. GPU 统计/直方图，用于自动归一化不同 Seed 的高度范围。
 
 下一阶段若实现环境模拟，应优先在 `SimulationGrid` 上增加显式的多字段 Simulation Set（高度、水量、沉积、湿度）和固定时间步调度器，再接入水力侵蚀 Compute Pass，避免把模拟状态继续堆叠到 `EditorLayer`。
+
+## UUID 与稳定实体标识
+
+为场景实体加入了独立于 `entt::entity` 的 64 位 UUID。`entt::entity` 只用于当前 Registry 内部索引，UUID 用于场景保存、加载、跨场景复制和未来实体引用。
+
+本次完成：
+
+- 新增线程安全的 `UUID` 类型，并排除无效值 `0`；
+- 新增 `IDComponent`，所有通过 `Scene` 创建的实体默认获得 UUID；
+- `Entity` 提供 `GetUUID()`；
+- `Scene` 提供 `CreateEntityWithUUID()` 和 `FindEntityByUUID()`；
+- Scene 内部通过 `unordered_map<UUID, entt::entity>` 进行快速查找；
+- 销毁实体时同步移除 UUID 映射；
+- YAML 场景格式升级为 `Version: 2`，保存并恢复 UUID；
+- 无 Version 的旧场景按 Version 1 加载，并为实体生成新 UUID。
+
+```text
+CreateEntity()
+    → 生成 UUID
+    → 添加 IDComponent
+    → 写入 UUID → entt::entity 映射
+
+Serialize()
+    → 保存 UUID
+
+Deserialize()
+    → CreateEntityWithUUID()
+    → 恢复稳定实体身份
+```
+
+相关文件：
+
+```text
+Glimmer/src/Glimmer/Core/UUID.h/.cpp
+Glimmer/src/Glimmer/Scene/Components.h
+Glimmer/src/Glimmer/Scene/Entity.h/.cpp
+Glimmer/src/Glimmer/Scene/Scene.h/.cpp
+Glimmer/src/Glimmer/Scene/SceneSerializer.cpp
+```
+
+UUID 是下一步实现 `Scene::Copy`、编辑/运行场景隔离、实体引用和组件运行资源缓存的基础。
+
 ## KB
 
 ### 为什么不用动态库？

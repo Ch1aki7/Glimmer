@@ -19,15 +19,27 @@ namespace gl {
 
 	Entity Scene::CreateEntity(const std::string& name)
 	{
+		return CreateEntityWithUUID(UUID(), name);
+	}
+
+	Entity Scene::CreateEntityWithUUID(UUID uuid, const std::string& name)
+	{
+		GL_CORE_ASSERT(static_cast<uint64_t>(uuid) != 0, "Entity UUID cannot be zero.");
+		GL_CORE_ASSERT(m_EntityMap.find(uuid) == m_EntityMap.end(), "Entity UUID already exists.");
+
 		Entity entity = { m_Registry.create(), this };
+		entity.AddComponent<IDComponent>(uuid);
 		entity.AddComponent<TransformComponent>();
 		auto& tag = entity.AddComponent<TagComponent>();
 		tag.Tag = name.empty() ? "Entity" : name;
+		m_EntityMap[uuid] = entity;
 		return entity;
 	}
 
 	void Scene::DestroyEntity(Entity entity)
 	{
+		if (entity.HasComponent<IDComponent>())
+			m_EntityMap.erase(entity.GetUUID());
 		m_Registry.destroy(entity);
 	}
 
@@ -51,6 +63,19 @@ namespace gl {
 		return {};
 	}
 
+
+	Entity Scene::FindEntityByUUID(UUID uuid)
+	{
+		auto iterator = m_EntityMap.find(uuid);
+		if (iterator == m_EntityMap.end())
+			return {};
+		if (!m_Registry.valid(iterator->second))
+		{
+			m_EntityMap.erase(iterator);
+			return {};
+		}
+		return Entity{ iterator->second, this };
+	}
 	void Scene::OnUpdateRuntime(Timestep ts)
 	{
 		Camera* mainCamera = nullptr;
@@ -138,6 +163,9 @@ namespace gl {
 	// 各个组件添加时的回调模板特化
 	template<typename T>
 	void Scene::OnComponentAdded(Entity entity, T& component) {}
+
+	template<>
+	void Scene::OnComponentAdded<IDComponent>(Entity entity, IDComponent& component) {}
 
 	template<>
 	void Scene::OnComponentAdded<TransformComponent>(Entity entity, TransformComponent& component) {}

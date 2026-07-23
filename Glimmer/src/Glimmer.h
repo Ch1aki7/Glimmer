@@ -6,6 +6,7 @@
 #include "Glimmer/Core/Layer.h"
 #include "Glimmer/Core/Log.h"
 #include "Glimmer/Core/Timestep.h"
+#include "Glimmer/Core/UUID.h"
 
 #include "Glimmer/Core/Input.h"
 #include "Glimmer/Core/KeyCodes.h"
