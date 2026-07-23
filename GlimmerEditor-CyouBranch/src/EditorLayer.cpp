@@ -16,6 +16,65 @@ namespace gl {
 		  m_EditorCamera(45.0f, 1280.0f / 720.0f) {
 	}
 
+	void EditorLayer::SetEditorScene(const Ref<Scene>& scene)
+	{
+		GL_CORE_ASSERT(scene, "Editor scene cannot be null.");
+		if (m_SceneState == SceneState::Play)
+			OnSceneStop();
+
+		m_EditorScene = scene;
+		m_ActiveScene = m_EditorScene;
+		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetSelectedEntity({});
+	}
+
+	void EditorLayer::OnScenePlay()
+	{
+		if (m_SceneState != SceneState::Edit || !m_EditorScene)
+			return;
+
+		UUID selectedUUID(0);
+		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
+		if (selectedEntity && selectedEntity.HasComponent<IDComponent>())
+			selectedUUID = selectedEntity.GetUUID();
+
+		m_RuntimeScene = Scene::Copy(m_EditorScene);
+		m_ActiveScene = m_RuntimeScene;
+		m_ActiveScene->OnRuntimeStart();
+		m_SceneState = SceneState::Play;
+		GL_CORE_INFO("Runtime scene started.");
+
+		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetSelectedEntity(
+			static_cast<uint64_t>(selectedUUID) != 0
+				? m_ActiveScene->FindEntityByUUID(selectedUUID)
+				: Entity{});
+	}
+
+	void EditorLayer::OnSceneStop()
+	{
+		if (m_SceneState != SceneState::Play)
+			return;
+
+		UUID selectedUUID(0);
+		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
+		if (selectedEntity && selectedEntity.HasComponent<IDComponent>())
+			selectedUUID = selectedEntity.GetUUID();
+
+		if (m_RuntimeScene)
+			m_RuntimeScene->OnRuntimeStop();
+
+		m_ActiveScene = m_EditorScene;
+		m_RuntimeScene.reset();
+		m_SceneState = SceneState::Edit;
+		GL_CORE_INFO("Runtime scene stopped; editor scene restored.");
+
+		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetSelectedEntity(
+			m_ActiveScene && static_cast<uint64_t>(selectedUUID) != 0
+				? m_ActiveScene->FindEntityByUUID(selectedUUID)
+				: Entity{});
+	}
 	void EditorLayer::OnAttach() {
 		GL_PROFILE_FUNCTION();
 
@@ -89,7 +148,7 @@ namespace gl {
 		m_ShaderLib.Load("Hologram", "assets/shaders/Hologram.glsl");
 
 		// --- 场景 ---
-		m_ActiveScene = CreateRef<Scene>();
+		SetEditorScene(CreateRef<Scene>());
 
 		// Play 模式需要的 ECS 主相机（带可视化标记 + Gizmo 交互）
 		auto camEntity = m_ActiveScene->CreateEntity("Main Camera");
@@ -132,9 +191,7 @@ namespace gl {
 				auto newScene = CreateRef<Scene>();
 				SceneSerializer serializer(newScene);
 				if (serializer.Deserialize(path)) {
-					m_ActiveScene = newScene;
-					m_HierarchyPanel.SetContext(m_ActiveScene);
-					m_HierarchyPanel.SetSelectedEntity({});
+					SetEditorScene(newScene);
 					GL_CORE_INFO("Loaded scene: {0}", path);
 				}
 			}
@@ -144,6 +201,8 @@ namespace gl {
 	}
 	void EditorLayer::OnDetach() {
 		GL_PROFILE_FUNCTION();
+		if (m_SceneState == SceneState::Play)
+			OnSceneStop();
 	}
 
 	void EditorLayer::OnUpdate(Timestep ts) {
@@ -161,6 +220,12 @@ namespace gl {
 			m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
 		{
 			m_EditorCamera.SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
+			if (m_ActiveScene)
+			{
+				m_ActiveScene->OnViewportResize(
+					static_cast<uint32_t>(m_ViewportSize.x),
+					static_cast<uint32_t>(m_ViewportSize.y));
+			}
 		}
 
 		RenderPassSpecification scenePass;
@@ -179,7 +244,6 @@ namespace gl {
 			else
 			{
 				m_ActiveScene->OnUpdateRuntime(ts);
-				m_ActiveScene->OnViewportResize((uint32_t)m_ViewportSize.x, (uint32_t)m_ViewportSize.y);
 			}
 		}
 
@@ -249,15 +313,19 @@ namespace gl {
 
 		// --- 全局快捷键 ---
 		auto& io = ImGui::GetIO();
+		if (ImGui::IsKeyChordPressed(ImGuiKey_P | ImGuiMod_Ctrl)) {
+			if (m_SceneState == SceneState::Play)
+				OnSceneStop();
+			else
+				OnScenePlay();
+		}
 		if (ImGui::IsKeyChordPressed(ImGuiKey_N | ImGuiMod_Ctrl)) {
-			m_ActiveScene = CreateRef<Scene>();
-			m_HierarchyPanel.SetContext(m_ActiveScene);
-			m_HierarchyPanel.SetSelectedEntity({});
+			SetEditorScene(CreateRef<Scene>());
 		}
 		if (ImGui::IsKeyChordPressed(ImGuiKey_S | ImGuiMod_Ctrl)) {
 			std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
 			if (!path.empty()) {
-				SceneSerializer serializer(m_ActiveScene);
+				SceneSerializer serializer(m_EditorScene);
 				serializer.Serialize(path);
 			}
 		}
@@ -267,9 +335,7 @@ namespace gl {
 				auto newScene = CreateRef<Scene>();
 				SceneSerializer serializer(newScene);
 				if (serializer.Deserialize(path)) {
-					m_ActiveScene = newScene;
-					m_HierarchyPanel.SetContext(m_ActiveScene);
-					m_HierarchyPanel.SetSelectedEntity({});
+					SetEditorScene(newScene);
 				}
 			}
 		}
@@ -317,15 +383,13 @@ namespace gl {
 			{
 				if (ImGui::MenuItem("New", "Ctrl+N"))
 				{
-					m_ActiveScene = CreateRef<Scene>();
-					m_HierarchyPanel.SetContext(m_ActiveScene);
-					m_HierarchyPanel.SetSelectedEntity({});
+					SetEditorScene(CreateRef<Scene>());
 				}
 				if (ImGui::MenuItem("Save As...", "Ctrl+S"))
 				{
 					std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
 					if (!path.empty()) {
-						SceneSerializer serializer(m_ActiveScene);
+						SceneSerializer serializer(m_EditorScene);
 						serializer.Serialize(path);
 					}
 				}
@@ -336,9 +400,7 @@ namespace gl {
 						auto newScene = CreateRef<Scene>();
 						SceneSerializer serializer(newScene);
 						if (serializer.Deserialize(path)) {
-							m_ActiveScene = newScene;
-							m_HierarchyPanel.SetContext(m_ActiveScene);
-							m_HierarchyPanel.SetSelectedEntity({});
+							SetEditorScene(newScene);
 						}
 					}
 				}
@@ -353,14 +415,14 @@ namespace gl {
 		{
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
 			if (ImGui::Button("\xef\x81\x8d Stop")) // 
-				m_SceneState = SceneState::Edit;
+				OnSceneStop();
 			ImGui::PopStyleColor();
 		}
 		else
 		{
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
 			if (ImGui::Button("\xef\x81\x8b Play")) // 
-				m_SceneState = SceneState::Play;
+				OnScenePlay();
 			ImGui::PopStyleColor();
 		}
 
@@ -454,9 +516,7 @@ namespace gl {
 					SceneSerializer serializer(newScene);
 					if (serializer.Deserialize(path))
 					{
-						m_ActiveScene = newScene;
-						m_HierarchyPanel.SetContext(m_ActiveScene);
-						m_HierarchyPanel.SetSelectedEntity({});
+						SetEditorScene(newScene);
 						GL_CORE_INFO("Dropped scene: {0}", path);
 					}
 				}

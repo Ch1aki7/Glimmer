@@ -23,6 +23,11 @@ namespace gl {
 
 
 	private:
+		void SetEditorScene(const Ref<Scene>& scene);
+		void OnScenePlay();
+		void OnSceneStop();
+
+	private:
 		ShaderLibrary m_ShaderLib;
 		ShaderPanel m_ShaderPanel;
 		TerrainPanel m_TerrainPanel;
@@ -48,6 +53,8 @@ namespace gl {
 		uint32_t m_FinalSceneTexture = 0;
 
 		// 场景 & 层级面板
+		Ref<Scene> m_EditorScene;
+		Ref<Scene> m_RuntimeScene;
 		Ref<Scene> m_ActiveScene;
 		SceneHierarchyPanel m_HierarchyPanel;
 		ContentBrowserPanel m_ContentBrowser;

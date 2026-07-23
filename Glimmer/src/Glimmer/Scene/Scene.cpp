@@ -9,14 +9,78 @@
 
 namespace gl {
 
+	template<typename... Component>
+	static void CopyComponents(
+		entt::registry& destination,
+		entt::registry& source,
+		const std::unordered_map<UUID, entt::entity>& entityMap)
+	{
+		([&]()
+		{
+			auto view = source.view<Component>();
+			for (auto sourceEntity : view)
+			{
+				UUID uuid = source.get<IDComponent>(sourceEntity).ID;
+				auto destinationEntity = entityMap.at(uuid);
+				destination.emplace_or_replace<Component>(
+					destinationEntity,
+					source.get<Component>(sourceEntity));
+			}
+		}(), ...);
+	}
+
 	Scene::Scene()
 	{
 	}
 
 	Scene::~Scene()
 	{
+		OnRuntimeStop();
 	}
 
+	Ref<Scene> Scene::Copy(const Ref<Scene>& source)
+	{
+		GL_CORE_ASSERT(source, "Cannot copy a null Scene.");
+
+		auto destination = CreateRef<Scene>();
+		destination->m_ViewportWidth = source->m_ViewportWidth;
+		destination->m_ViewportHeight = source->m_ViewportHeight;
+
+		std::unordered_map<UUID, entt::entity> entityMap;
+		auto idView = source->m_Registry.view<IDComponent>();
+		for (auto sourceEntity : idView)
+		{
+			UUID uuid = idView.get<IDComponent>(sourceEntity).ID;
+			std::string name = "Entity";
+			if (source->m_Registry.all_of<TagComponent>(sourceEntity))
+				name = source->m_Registry.get<TagComponent>(sourceEntity).Tag;
+
+			Entity destinationEntity = destination->CreateEntityWithUUID(uuid, name);
+			entityMap[uuid] = static_cast<entt::entity>(destinationEntity);
+		}
+
+		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, CameraComponent>(
+			destination->m_Registry,
+			source->m_Registry,
+			entityMap);
+
+		auto scriptView = source->m_Registry.view<NativeScriptComponent>();
+		for (auto sourceEntity : scriptView)
+		{
+			UUID uuid = source->m_Registry.get<IDComponent>(sourceEntity).ID;
+			const auto& sourceScript = scriptView.get<NativeScriptComponent>(sourceEntity);
+			auto& destinationScript = destination->m_Registry.emplace<NativeScriptComponent>(
+				entityMap.at(uuid));
+			destinationScript.InstantiateScript = sourceScript.InstantiateScript;
+			destinationScript.DestroyScript = sourceScript.DestroyScript;
+		}
+
+		if (destination->m_ViewportWidth > 0 && destination->m_ViewportHeight > 0)
+			destination->OnViewportResize(
+				destination->m_ViewportWidth,
+				destination->m_ViewportHeight);
+		return destination;
+	}
 	Entity Scene::CreateEntity(const std::string& name)
 	{
 		return CreateEntityWithUUID(UUID(), name);
@@ -38,6 +102,22 @@ namespace gl {
 
 	void Scene::DestroyEntity(Entity entity)
 	{
+		if (entity.HasComponent<NativeScriptComponent>())
+		{
+			auto& script = entity.GetComponent<NativeScriptComponent>();
+			if (script.Instance)
+			{
+				script.Instance->OnDestroy();
+				if (script.DestroyScript)
+					script.DestroyScript(&script);
+				else
+				{
+					delete script.Instance;
+					script.Instance = nullptr;
+				}
+			}
+		}
+
 		if (entity.HasComponent<IDComponent>())
 			m_EntityMap.erase(entity.GetUUID());
 		m_Registry.destroy(entity);
@@ -76,6 +156,31 @@ namespace gl {
 		}
 		return Entity{ iterator->second, this };
 	}
+
+	void Scene::OnRuntimeStart()
+	{
+	}
+
+	void Scene::OnRuntimeStop()
+	{
+		auto view = m_Registry.view<NativeScriptComponent>();
+		for (auto entity : view)
+		{
+			auto& script = view.get<NativeScriptComponent>(entity);
+			if (!script.Instance)
+				continue;
+
+			script.Instance->OnDestroy();
+			if (script.DestroyScript)
+				script.DestroyScript(&script);
+			else
+			{
+				delete script.Instance;
+				script.Instance = nullptr;
+			}
+		}
+	}
+
 	void Scene::OnUpdateRuntime(Timestep ts)
 	{
 		Camera* mainCamera = nullptr;
@@ -84,18 +189,23 @@ namespace gl {
 		{
 			// update scripts
 			{
-				m_Registry.view<NativeScriptComponent>().each([&](auto entity, auto& nsc)
+				m_Registry.view<NativeScriptComponent>().each([&](auto entity, auto& script)
+				{
+					if (!script.Instance)
 					{
-						// 如果脚本还没实例化，则在此处创建（延迟加载）
-						if (!nsc.Instance)
+						if (!script.InstantiateScript)
 						{
-							nsc.Instance = nsc.InstantiateScript();
-							nsc.Instance->m_Entity = Entity{ entity, this };
-							nsc.Instance->OnCreate();
+							GL_CORE_ERROR("NativeScriptComponent has no bound script.");
+							return;
 						}
 
-						nsc.Instance->OnUpdate(ts);
-					});
+						script.Instance = script.InstantiateScript();
+						script.Instance->m_Entity = Entity{ entity, this };
+						script.Instance->OnCreate();
+					}
+
+					script.Instance->OnUpdate(ts);
+				});
 			}
 
 			// 寻找主相机
