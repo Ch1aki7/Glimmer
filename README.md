@@ -9321,78 +9321,215 @@ DrawPostProcess(shader, m_Framebuffer->GetColorAttachmentRendererID());
 
 ### 设计目标
 
-用 GPU 高度图驱动地形渲染——顶点着色器采样高度贴图位移 Y 坐标，根据高度梯度计算法线，片段着色器按海拔混合多层材质（草地/岩石/雪线）。这是后续侵蚀模拟的可视化载体。
+高度图地形系统以规则平面网格作为几何载体，由顶点着色器采样高度纹理并改变顶点的 Y 坐标。Shader 根据高度梯度重建法线，再按海拔混合草地、岩石和积雪颜色。
+
+当前实现用于验证完整的 `高度数据 → Texture2D → Terrain Pass → 顶点位移 → 法线重建 → 地形着色` 链路，并作为程序化地形、Compute Shader 噪声生成、水流模拟和侵蚀可视化的基础。
 
 ### TerrainMesh 网格生成
 
 ```cpp
-TerrainMesh(gridSize, maxHeight)
+TerrainMesh(gridSize)
   → 生成 (gridSize+1)² 顶点 (x, y=0, z) + uv
   → 生成 gridSize² × 6 索引（Quad 三角化）
   → 构建 VertexArray + IndexBuffer
 ```
 
-高度在顶点着色器中通过采样 `u_HeightMap` 位移，网格本身是平面，不存储高度数据。
+`TerrainMesh` 只负责拓扑结构，不保存高度。最大高度由 Shader Uniform 控制，因此调整山体高度不需要重新创建网格。构造函数会检查 `gridSize > 0`，避免除零和无效网格。
 
-### 地形 Shader (Terrain.glsl)
+当前测试使用 `gridSize = 256`：
 
-**顶点着色器**：中心差分计算法线
+| 项目 | 数值 |
+| --- | ---: |
+| 网格单元 | 256 × 256 |
+| 顶点数量 | 66,049 |
+| 索引数量 | 393,216 |
+| 最大有效索引 | 66,048 |
+
+### 高度图输入
+
+系统提供两种可切换输入，两者使用完全相同的地形渲染路径。
+
+#### 文件高度图
+
+```cpp
+m_HeightMapTexture =
+    Texture2D::Create("assets/textures/heightmap-example.png");
+```
+
+当前示例图片尺寸为 `2017 × 2017`，用于验证 PNG 解码、纹理创建、采样和地形位移。
+
+#### CPU 程序化高度图
+
+编辑器启动时生成一张 `256 × 256` RGBA8 灰度纹理。高度由主山峰、侧峰和正弦山脊组合产生：
+
+```cpp
+float mainHill = exp(-(nx * nx + ny * ny) * 3.0f);
+float sideHill = 0.55f * exp(-sideDistance * 14.0f);
+float ridges = 0.10f * sin(nx * 13.0f)
+             * cos(ny * 11.0f)
+             * max(mainHill, 0.2f);
+
+float height = clamp(
+    0.08f + 0.72f * mainHill + sideHill + ridges,
+    0.0f,
+    1.0f);
+```
+
+灰度值写入 RGBA 四通道后通过 `Texture2D::SetData()` 上传。该模式不依赖外部图片，可用于隔离网格、纹理绑定、Shader 位移和法线计算问题。
+
+Settings 面板提供：
+
+- `Use Procedural Height Map`：在程序化高度图和 PNG 高度图之间切换；
+- `Terrain Max Height`：实时调整最大高度，默认值为 `24.0`。
+
+程序化高度图默认启用。测试画面应包含一座连续主峰、一座侧峰和轻微山脊起伏。
+
+### Terrain Pass
+
+地形在场景 Pass 之后绘制，并继续使用场景 Framebuffer：
+
+```cpp
+RenderPassSpecification terrainPass;
+terrainPass.Target = m_Framebuffer;
+terrainPass.ClearColor = false;
+terrainPass.ClearDepth = false;
+RenderPass::Begin(terrainPass);
+
+activeHeightMap->Bind(0);
+m_TerrainShader->UploadUniformInt("u_HeightMap", 0);
+RenderCommand::DrawIndexed(
+    m_TerrainMesh->GetVertexArray(),
+    m_TerrainMesh->GetIndexCount());
+
+RenderPass::End();
+```
+
+Terrain Pass 不清除场景颜色和深度，地形与场景实体可以通过同一深度缓冲区建立遮挡关系。
+
+### 地形 Shader（Terrain.glsl）
+
+#### 顶点位移与边缘采样
 
 ```glsl
-float h = texture(u_HeightMap, uv).r;
-float hL = texture(u_HeightMap, uv - vec2(texelSize.x, 0)).r;
-float hR = texture(u_HeightMap, uv + vec2(texelSize.x, 0)).r;
-float hD = texture(u_HeightMap, uv - vec2(0, texelSize.y)).r;
-float hU = texture(u_HeightMap, uv + vec2(0, texelSize.y)).r;
+float SampleHeight(vec2 uv)
+{
+    vec2 sampleUV = clamp(
+        uv,
+        u_TexelSize * 0.5,
+        vec2(1.0) - u_TexelSize * 0.5);
+
+    return texture(u_HeightMap, sampleUV).r;
+}
+
+float h = SampleHeight(uv);
+vec3 worldPos = a_Position;
+worldPos.y = h * u_MaxHeight;
+```
+
+采样位置限制在首尾半个 Texel 内，避免纹理使用重复寻址时从高度图另一侧取值并产生边缘接缝。
+
+#### 中心差分法线
+
+```glsl
+float hL = SampleHeight(uv - vec2(u_TexelSize.x, 0.0));
+float hR = SampleHeight(uv + vec2(u_TexelSize.x, 0.0));
+float hD = SampleHeight(uv - vec2(0.0, u_TexelSize.y));
+float hU = SampleHeight(uv + vec2(0.0, u_TexelSize.y));
 
 vec3 normal = normalize(vec3(
-    (hL - hR) * MaxHeight / (2 * gridSpacing),
+    (hL - hR) * u_MaxHeight / (2.0 * u_SampleSpacing),
     1.0,
-    (hD - hU) * MaxHeight / (2 * gridSpacing)
+    (hD - hU) * u_MaxHeight / (2.0 * u_SampleSpacing)
 ));
 ```
 
-**片段着色器**：Phong 光照 + 三态材质混合
+`u_SampleSpacing = terrainGridSize / (heightMapWidth - 1)`，表示相邻高度采样点在地形世界空间中的距离：
+
+| 高度图 | 世界空间采样间距 |
+| --- | ---: |
+| 256×256 程序化高度图 | 约 1.003922 |
+| 2017×2017 PNG 高度图 | 约 0.126984 |
+
+不能将该间距固定为 `1.0`，否则高分辨率高度图的法线坡度会失真。
+
+#### 高度材质和光照
+
+片段着色器按照归一化高度混合草地、岩石和积雪颜色，并叠加环境光、漫反射和高光：
 
 ```glsl
-float t1 = smoothstep(0.05, 0.35, height);  // 草地→岩石
-float t2 = smoothstep(0.55, 0.80, height);  // 岩石→雪线
-vec3 color = mix(grass, rock, t1);
-color = mix(color, snow, t2);
-// + ambient + diffuse + specular (Phong)
+float t1 = smoothstep(0.05, 0.35, v_Height);
+float t2 = smoothstep(0.55, 0.80, v_Height);
+
+vec3 baseColor = mix(grass, rock, t1);
+baseColor = mix(baseColor, snow, t2);
 ```
 
-### 踩坑：法线计算错误
+当前颜色用于确认高度层级和光照是否正确，还不是完整的 PBR 地形材质。
 
-初版用 `normalize(v_WorldPos)` 当法线——把世界坐标当作表面法向量。结果整个地形光照均匀，看起来是平面。改用中心差分从高度图梯度推导法线后，山脉的立体感立即呈现。
+### 数值模拟与编译验证
 
-### 高度图来源
+CPU 端使用和编辑器相同的高度函数进行了数值检查：
 
-支持两种方式：
+| 测试项 | 结果 |
+| --- | ---: |
+| 归一化最低高度 | 0.06860 |
+| 归一化最高高度 | 0.91418 |
+| 平均高度 | 0.29238 |
+| `MaxHeight = 24` 时最高点 | 约 21.94 |
+| 顶点与索引范围 | 正常 |
+| Debug x64 编译 | 通过 |
 
-```cpp
-// 1. 加载预置 PNG
-m_HeightMapTexture = Texture2D::Create("assets/textures/heightmap-example.png");
+如果程序化模式正常而 PNG 模式异常，问题通常位于图片加载或纹理格式；如果两种模式都异常，应检查 Terrain Pass、纹理槽位、Uniform 和相机矩阵。
 
-// 2. Compute Shader 动态生成（后续）
-auto cs = ComputeShader::Create("NoiseGen.glsl");
-cs->BindImageTexture(0, tex->GetRendererID(), 0, Write, RGBA8);
-cs->Dispatch(wgX, wgY, 1);
-```
+### 已解决问题
+
+- `maxHeight` 传入 `TerrainMesh` 后没有被使用；
+- 高度图加载语句曾被乱码注释吞掉；
+- 固定法线采样间距无法适配 2017×2017 高度图；
+- 纹理重复寻址导致地形边缘接缝；
+- Terrain Pass 清除深度后会破坏场景遮挡；
+- 只有文件高度图时难以区分资源错误与渲染错误。
 
 ### 文件清单
 
-```
-新增:
-  Scene/TerrainComponent.h      ← ECS 组件
-  Renderer/TerrainMesh.h/.cpp    ← 平面网格生成
-  assets/shaders/Terrain.glsl    ← 高度图采样 + 法线 + Phong
+```text
+Glimmer/src/Glimmer/
+  Scene/TerrainComponent.h
+  Renderer/TerrainMesh.h
+  Renderer/TerrainMesh.cpp
 
-修改:
-  EditorLayer.h/.cpp             ← 地形 Pass + 高度图加载
+GlimmerEditor-CyouBranch/
+  src/EditorLayer.h
+  src/EditorLayer.cpp
+  assets/shaders/Terrain.glsl
+  assets/textures/heightmap-example.png
+```
+
+### 当前限制与下一步
+
+当前系统已经能显示和验证高度图地形，但仍属于编辑器级原型：
+
+1. `TerrainComponent` 尚未完全接入 Scene 的实体渲染流程，地形资源仍由 `EditorLayer` 持有；
+2. Terrain Pass 还没有独立的地形材质和 RenderPass 资源对象；
+3. 地形只有一个固定尺寸网格，没有 Chunk、LOD、视锥裁剪和地形流送；
+4. 高度图修改后没有局部更新、法线缓存或碰撞体同步；
+5. 材质仍是颜色混合，没有 Splat Map、纹理数组和 PBR 参数；
+6. 程序化高度目前在 CPU 生成，后续可迁移至 Compute Shader；
+7. `RenderPassSpecification::ClearDepth` 仍需完善为真正独立的深度清除控制。
+
+推荐后续顺序：
+
+```text
+TerrainComponent 接入 Scene
+    → 地形材质与资源序列化
+    → Compute Shader 生成高度图
+    → Chunk + LOD
+    → GPU 水流/侵蚀模拟
+    → 植被分布与生态系统
 ```
 
 ![[README.assets/Pasted image 20260722175227.png]]
+![[README.assets/Pasted image 20260723134803.png]]
 
 ## KB
 

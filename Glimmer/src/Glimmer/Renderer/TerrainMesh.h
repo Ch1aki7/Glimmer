@@ -8,9 +8,10 @@ namespace gl {
 	// 地形网格 —— 平面 Grid，高度在 VS 中采样 HeightMap 位移
 	class TerrainMesh {
 	public:
-		TerrainMesh(uint32_t gridSize, float maxHeight);
+		explicit TerrainMesh(uint32_t gridSize);
 
 		void Bind() const { m_VertexArray->Bind(); }
+		uint32_t GetGridSize() const { return m_GridSize; }
 		uint32_t GetIndexCount() const { return m_IndexCount; }
 		const Ref<VertexArray>& GetVertexArray() const { return m_VertexArray; }
 

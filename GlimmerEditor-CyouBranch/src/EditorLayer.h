@@ -19,6 +19,7 @@ namespace gl {
 		virtual void OnImGuiRender() override;
 		virtual void OnEvent(Event& event) override;
 
+
 	private:
 		ShaderLibrary m_ShaderLib;
 
@@ -55,7 +56,10 @@ namespace gl {
 		// Terrain
 		Ref<TerrainMesh> m_TerrainMesh;
 		Ref<Texture2D> m_HeightMapTexture;
+		Ref<Texture2D> m_ProceduralHeightMapTexture;
 		Ref<Shader> m_TerrainShader;
+		bool m_UseProceduralTerrain = true;
+		float m_TerrainMaxHeight = 24.0f;
 
 		// Gizmos
 		int m_GizmoType = 0; // 0=Translate, 1=Rotate, 2=Scale

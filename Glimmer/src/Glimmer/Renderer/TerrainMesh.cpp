@@ -4,9 +4,10 @@
 
 namespace gl {
 
-	TerrainMesh::TerrainMesh(uint32_t gridSize, float maxHeight)
+	TerrainMesh::TerrainMesh(uint32_t gridSize)
 		: m_GridSize(gridSize)
 	{
+		GL_CORE_ASSERT(gridSize > 0, "Terrain grid size must be greater than zero");
 		// 顶点：每个格子一个顶点，存 (x, 0, z) + uv
 		uint32_t vertCount = (gridSize + 1) * (gridSize + 1);
 		float* vertices = new float[vertCount * 5]; // pos(3) + uv(2)

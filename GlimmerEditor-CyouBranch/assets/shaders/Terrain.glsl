@@ -9,21 +9,28 @@ uniform sampler2D u_HeightMap;
 uniform float u_MaxHeight;
 uniform float u_UVScale;
 uniform vec2 u_TexelSize;  // 1.0 / heightmap width, 1.0 / heightmap height
+uniform float u_SampleSpacing;
 
 out vec3 v_WorldPos;
 out vec3 v_Normal;
 out float v_Height;
 
+float SampleHeight(vec2 uv)
+{
+	vec2 sampleUV = clamp(uv, u_TexelSize * 0.5, vec2(1.0) - u_TexelSize * 0.5);
+	return texture(u_HeightMap, sampleUV).r;
+}
+
 void main()
 {
 	vec2 uv = a_TexCoord * u_UVScale;
-	float h = texture(u_HeightMap, uv).r;
+	float h = SampleHeight(uv);
 
 	// 采样邻居高度 → 计算梯度 → 推导法线
-	float hL = texture(u_HeightMap, uv - vec2(u_TexelSize.x, 0.0)).r;
-	float hR = texture(u_HeightMap, uv + vec2(u_TexelSize.x, 0.0)).r;
-	float hD = texture(u_HeightMap, uv - vec2(0.0, u_TexelSize.y)).r;
-	float hU = texture(u_HeightMap, uv + vec2(0.0, u_TexelSize.y)).r;
+	float hL = SampleHeight(uv - vec2(u_TexelSize.x, 0.0));
+	float hR = SampleHeight(uv + vec2(u_TexelSize.x, 0.0));
+	float hD = SampleHeight(uv - vec2(0.0, u_TexelSize.y));
+	float hU = SampleHeight(uv + vec2(0.0, u_TexelSize.y));
 
 	vec3 worldPos = a_Position;
 	worldPos.y = h * u_MaxHeight;
@@ -31,9 +38,9 @@ void main()
 	// 梯度（世界空间）：dx = 两邻居间距 1 格，dy = 高度差 * MaxHeight
 	float gridSpacing = 1.0;  // 顶点间距
 	vec3 normal = normalize(vec3(
-		(hL - hR) * u_MaxHeight / (2.0 * gridSpacing),
+		(hL - hR) * u_MaxHeight / (2.0 * max(u_SampleSpacing, 0.0001)),
 		1.0,
-		(hD - hU) * u_MaxHeight / (2.0 * gridSpacing)
+		(hD - hU) * u_MaxHeight / (2.0 * max(u_SampleSpacing, 0.0001))
 	));
 
 	v_WorldPos = worldPos;

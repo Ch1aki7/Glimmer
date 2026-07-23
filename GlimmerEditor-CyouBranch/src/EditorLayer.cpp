@@ -6,6 +6,9 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <ImGuizmo.h>
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
 namespace gl {
 
 	EditorLayer::EditorLayer() :Layer("EditorLayer"), m_EditorCamera(45.0f, 1280.0f / 720.0f) {
@@ -51,9 +54,34 @@ namespace gl {
 		m_TerrainShader = Shader::Create("assets/shaders/Terrain.glsl");
 		
 		// 加载预设高度图
-		m_HeightMapTexture = Texture2D::Create("assets/textures/heightmap-example.png");
 		
-		m_TerrainMesh = CreateRef<TerrainMesh>(256, 40.0f);
+		m_HeightMapTexture = Texture2D::Create("assets/textures/heightmap-example.png");
+
+		constexpr uint32_t terrainTestSize = 256;
+		std::vector<uint32_t> terrainPixels(terrainTestSize * terrainTestSize);
+		for (uint32_t y = 0; y < terrainTestSize; ++y)
+		{
+			for (uint32_t x = 0; x < terrainTestSize; ++x)
+			{
+				const float nx = (2.0f * static_cast<float>(x) / (terrainTestSize - 1)) - 1.0f;
+				const float ny = (2.0f * static_cast<float>(y) / (terrainTestSize - 1)) - 1.0f;
+				const float mainHill = std::exp(-(nx * nx + ny * ny) * 3.0f);
+				const float sideHill = 0.55f * std::exp(-((nx + 0.48f) * (nx + 0.48f)
+					+ (ny - 0.30f) * (ny - 0.30f)) * 14.0f);
+				const float ridges = 0.10f * std::sin(nx * 13.0f) * std::cos(ny * 11.0f)
+					* std::max(mainHill, 0.2f);
+				const float height = std::clamp(0.08f + 0.72f * mainHill + sideHill + ridges, 0.0f, 1.0f);
+				const uint32_t value = static_cast<uint32_t>(height * 255.0f + 0.5f);
+				terrainPixels[y * terrainTestSize + x] =
+					0xff000000u | (value << 16) | (value << 8) | value;
+			}
+		}
+		m_ProceduralHeightMapTexture = Texture2D::Create(terrainTestSize, terrainTestSize);
+		m_ProceduralHeightMapTexture->SetData(
+			terrainPixels.data(),
+			static_cast<uint32_t>(terrainPixels.size() * sizeof(uint32_t)));
+
+		m_TerrainMesh = CreateRef<TerrainMesh>(256);
 		FramebufferSpecification fbSpec;
 		fbSpec.Width = 1280;
 		fbSpec.Height = 720;
@@ -171,17 +199,25 @@ namespace gl {
 			RenderPassSpecification terrainPass;
 			terrainPass.Target = m_Framebuffer;
 			terrainPass.ClearColor = false;
-			terrainPass.ClearDepth = true;
+			terrainPass.ClearDepth = false;
 			RenderPass::Begin(terrainPass);
 			
 			glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
+			const Ref<Texture2D>& activeHeightMap =
+				m_UseProceduralTerrain ? m_ProceduralHeightMapTexture : m_HeightMapTexture;
 			m_TerrainShader->Bind();
 			m_TerrainShader->UploadUniformMat4("u_ViewProjection", vp);
-			m_TerrainShader->UploadUniformFloat("u_MaxHeight", 40.0f);
+			m_TerrainShader->UploadUniformFloat("u_MaxHeight", m_TerrainMaxHeight);
 			m_TerrainShader->UploadUniformFloat("u_UVScale", 1.0f);
-			m_HeightMapTexture->Bind(0);
+			activeHeightMap->Bind(0);
 			m_TerrainShader->UploadUniformInt("u_HeightMap", 0);
-			m_TerrainShader->UploadUniformFloat2("u_TexelSize", { 1.0f / m_HeightMapTexture->GetWidth(), 1.0f / m_HeightMapTexture->GetHeight() });
+			m_TerrainShader->UploadUniformFloat2("u_TexelSize", {
+				1.0f / static_cast<float>(activeHeightMap->GetWidth()),
+				1.0f / static_cast<float>(activeHeightMap->GetHeight())
+			});
+			m_TerrainShader->UploadUniformFloat("u_SampleSpacing",
+				static_cast<float>(m_TerrainMesh->GetGridSize()) /
+				static_cast<float>(std::max(activeHeightMap->GetWidth() - 1, 1u)));
 			m_TerrainShader->UploadUniformFloat3("u_CameraPos", m_EditorCamera.GetPosition());
 			m_TerrainMesh->Bind();
 			RenderCommand::DrawIndexed(m_TerrainMesh->GetVertexArray(), m_TerrainMesh->GetIndexCount());
@@ -377,6 +413,9 @@ namespace gl {
 		// Settings
 		ImGui::Begin("Settings");
 		ImGui::Checkbox("Enable Post-Processing", &m_PostProcessEnabled);
+		ImGui::SeparatorText("Terrain Test");
+		ImGui::Checkbox("Use Procedural Height Map", &m_UseProceduralTerrain);
+		ImGui::DragFloat("Terrain Max Height", &m_TerrainMaxHeight, 0.1f, 0.0f, 100.0f);
 		ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 		ImGui::End();
