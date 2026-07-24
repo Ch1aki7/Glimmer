@@ -65,6 +65,14 @@ namespace gl {
 		SpriteRendererComponent(const glm::vec4& color) : Color(color) {}
 	};
 
+	struct MaterialComponent
+	{
+		AssetHandle MaterialHandle{ 0 };
+
+		MaterialComponent() = default;
+		MaterialComponent(const MaterialComponent&) = default;
+		explicit MaterialComponent(AssetHandle handle) : MaterialHandle(handle) {}
+	};
 	struct CameraComponent
 	{
 		gl::SceneCamera Camera;

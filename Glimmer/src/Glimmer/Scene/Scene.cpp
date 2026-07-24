@@ -59,7 +59,7 @@ namespace gl {
 			entityMap[uuid] = static_cast<entt::entity>(destinationEntity);
 		}
 
-		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, CameraComponent>(
+		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, MaterialComponent, CameraComponent>(
 			destination->m_Registry,
 			source->m_Registry,
 			entityMap);
@@ -232,7 +232,10 @@ namespace gl {
 				auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entity);
 
 				// 提交渲染，直接使用组件里的 Transform 矩阵
-				Renderer2D::DrawSprite(transform.GetTransform(), sprite, (int)(uint32_t)entity);
+				const auto* material = m_Registry.try_get<MaterialComponent>(entity);
+				Renderer2D::DrawSprite(
+					transform.GetTransform(), sprite, (int)(uint32_t)entity,
+					material ? material->MaterialHandle : AssetHandle(0));
 			}
 
 			Renderer2D::EndScene();
@@ -247,7 +250,10 @@ namespace gl {
 		for (auto entityHandle : group)
 		{
 			auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entityHandle);
-			Renderer2D::DrawSprite(transform.GetTransform(), sprite, (int)(uint32_t)entityHandle);
+			const auto* material = m_Registry.try_get<MaterialComponent>(entityHandle);
+			Renderer2D::DrawSprite(
+				transform.GetTransform(), sprite, (int)(uint32_t)entityHandle,
+				material ? material->MaterialHandle : AssetHandle(0));
 		}
 
 		Renderer2D::EndScene();
@@ -283,6 +289,8 @@ namespace gl {
 	template<>
 	void Scene::OnComponentAdded<SpriteRendererComponent>(Entity entity, SpriteRendererComponent& component) {}
 
+	template<>
+	void Scene::OnComponentAdded<MaterialComponent>(Entity entity, MaterialComponent& component) {}
 	template<>
 	void Scene::OnComponentAdded<TagComponent>(Entity entity, TagComponent& component) {}
 

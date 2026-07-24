@@ -2,6 +2,7 @@
 #include "Renderer2D.h"
 
 #include "Glimmer/Asset/AssetManager.h"
+#include "Glimmer/Renderer/Material.h"
 
 #include "Glimmer/Renderer/UniformBuffer.h"
 #include "Glimmer/Renderer/VertexArray.h"
@@ -450,13 +451,26 @@ namespace gl {
 		DrawQuad(transform, texture, tilingFactor, tintColor);
 	}
 
-	void Renderer2D::DrawSprite(const glm::mat4& transform, SpriteRendererComponent& src, int entityID)
+	void Renderer2D::DrawSprite(const glm::mat4& transform, const SpriteRendererComponent& src,
+		int entityID, AssetHandle materialHandle)
 	{
-		Ref<Texture2D> texture = AssetManager::GetTexture2D(src.TextureHandle);
+		glm::vec4 color = src.Color;
+		AssetHandle textureHandle = src.TextureHandle;
+		float tilingFactor = src.TilingFactor;
+
+		if (Ref<Material> material = AssetManager::GetMaterial(materialHandle))
+		{
+			const auto& properties = material->GetProperties();
+			color = properties.BaseColor;
+			textureHandle = properties.BaseColorTexture;
+			tilingFactor = properties.TilingFactor;
+		}
+
+		Ref<Texture2D> texture = AssetManager::GetTexture2D(textureHandle);
 		if (texture)
-			DrawQuad(transform, texture, src.TilingFactor, src.Color, entityID);
+			DrawQuad(transform, texture, tilingFactor, color, entityID);
 		else
-			DrawQuad(transform, src.Color, entityID);
+			DrawQuad(transform, color, entityID);
 	}
 	void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
 	{

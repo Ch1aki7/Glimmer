@@ -2,6 +2,7 @@
 #include "AssetManager.h"
 
 #include "Glimmer/Renderer/Texture.h"
+#include "Glimmer/Renderer/Material.h"
 
 #include <yaml-cpp/yaml.h>
 #include <fstream>
@@ -18,6 +19,7 @@ namespace gl {
 			std::unordered_map<AssetHandle, AssetMetadata> Registry;
 			std::unordered_map<std::string, AssetHandle> PathToHandle;
 			std::unordered_map<AssetHandle, Ref<Texture2D>> TextureCache;
+			std::unordered_map<AssetHandle, Ref<Material>> MaterialCache;
 			std::mutex Mutex;
 			bool Initialized = false;
 		};
@@ -82,6 +84,7 @@ namespace gl {
 	{
 		std::scoped_lock lock(s_Data.Mutex);
 		s_Data.TextureCache.clear();
+		s_Data.MaterialCache.clear();
 		s_Data.PathToHandle.clear();
 		s_Data.Registry.clear();
 		s_Data.AssetDirectory.clear();
@@ -189,6 +192,26 @@ namespace gl {
 		return texture;
 	}
 
+	Ref<Material> AssetManager::GetMaterial(AssetHandle handle)
+	{
+		std::scoped_lock lock(s_Data.Mutex);
+		if (static_cast<uint64_t>(handle) == 0)
+			return nullptr;
+
+		auto cached = s_Data.MaterialCache.find(handle);
+		if (cached != s_Data.MaterialCache.end())
+			return cached->second;
+
+		auto metadata = s_Data.Registry.find(handle);
+		if (metadata == s_Data.Registry.end() || metadata->second.Type != AssetType::Material)
+			return nullptr;
+
+		const auto path = s_Data.AssetDirectory / metadata->second.FilePath;
+		Ref<Material> material = Material::Create(path);
+		if (material)
+			s_Data.MaterialCache.emplace(handle, material);
+		return material;
+	}
 	AssetType AssetManager::GetAssetTypeFromExtension(const std::filesystem::path& path)
 	{
 		std::string extension = path.extension().string();

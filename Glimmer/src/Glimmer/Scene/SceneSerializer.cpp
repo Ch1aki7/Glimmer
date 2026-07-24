@@ -90,6 +90,19 @@ namespace gl {
 			comp.TilingFactor = node["TilingFactor"].as<float>();
 	}
 
+	static void SerializeComponent(YAML::Emitter& out, const MaterialComponent& comp)
+	{
+		out << YAML::Key << "MaterialComponent" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Material" << YAML::Value
+			<< static_cast<uint64_t>(comp.MaterialHandle);
+		out << YAML::EndMap;
+	}
+
+	static void DeserializeComponent(const YAML::Node& node, MaterialComponent& comp)
+	{
+		if (node["Material"])
+			comp.MaterialHandle = AssetHandle(node["Material"].as<uint64_t>());
+	}
 	static void SerializeComponent(YAML::Emitter& out, const CameraComponent& comp)
 	{
 		out << YAML::Key << "CameraComponent" << YAML::Value << YAML::BeginMap;
@@ -129,7 +142,7 @@ namespace gl {
 		YAML::Emitter out;
 		out << YAML::BeginMap;
 		out << YAML::Key << "Scene" << YAML::Value << "Untitled";
-		out << YAML::Key << "Version" << YAML::Value << 2;
+		out << YAML::Key << "Version" << YAML::Value << 3;
 		out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
 
 		m_Scene->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
@@ -147,6 +160,8 @@ namespace gl {
 				SerializeComponent(out, entity.GetComponent<TransformComponent>());
 			if (entity.HasComponent<SpriteRendererComponent>())
 				SerializeComponent(out, entity.GetComponent<SpriteRendererComponent>());
+			if (entity.HasComponent<MaterialComponent>())
+				SerializeComponent(out, entity.GetComponent<MaterialComponent>());
 			if (entity.HasComponent<CameraComponent>())
 				SerializeComponent(out, entity.GetComponent<CameraComponent>());
 
@@ -202,6 +217,11 @@ namespace gl {
 				{
 					auto& sc = entity.AddComponent<SpriteRendererComponent>();
 					DeserializeComponent(comps["SpriteRendererComponent"], sc);
+				}
+				if (comps["MaterialComponent"])
+				{
+					auto& mc = entity.AddComponent<MaterialComponent>();
+					DeserializeComponent(comps["MaterialComponent"], mc);
 				}
 				if (comps["CameraComponent"])
 				{

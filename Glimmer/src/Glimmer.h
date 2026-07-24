@@ -26,6 +26,7 @@
 #include "Glimmer/Renderer/OrthographicCameraController.h"
 #include "Glimmer/Renderer/PerspectiveCamera.h"
 #include "Glimmer/Renderer/Texture.h"
+#include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/Model.h"
 #include "Glimmer/Renderer/Mesh.h"
 #include "Glimmer/Renderer/FrameBuffer.h"

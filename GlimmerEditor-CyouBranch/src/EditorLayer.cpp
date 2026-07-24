@@ -87,6 +87,9 @@ namespace gl {
 			AssetManager::ImportAsset("assets/textures/STS.png"));
 		m_HenryTexture = AssetManager::GetTexture2D(
 			AssetManager::ImportAsset("assets/textures/Henry.jpg"));
+		const AssetHandle defaultMaterialHandle =
+			AssetManager::ImportAsset("assets/materials/DefaultSprite.glmat");
+		AssetManager::GetMaterial(defaultMaterialHandle);
 
 		m_WhiteTexture = Texture2D::Create(1, 1);
 		uint32_t whitePixel = 0xffffffff;
@@ -165,6 +168,7 @@ namespace gl {
 		// 测试实体
 		auto redSquare = m_ActiveScene->CreateEntity("Red Square");
 		redSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 1.0f, 0.2f, 0.2f, 1.0f });
+		redSquare.AddComponent<MaterialComponent>(defaultMaterialHandle);
 		redSquare.GetComponent<TransformComponent>().Translation = { -2.0f, 1.0f, -3.0f };
 
 		auto greenSquare = m_ActiveScene->CreateEntity("Green Square");

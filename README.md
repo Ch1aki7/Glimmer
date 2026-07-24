@@ -10165,7 +10165,7 @@ GlimmerEditor-CyouBranch/assets/
 4. 资源依赖图、卸载和缺失资产修复；
 5. Model、Shader、Material 的完整加载器。
 
-下一阶段应实现 `MaterialAsset` 与 `MaterialComponent`。实体只引用材质句柄，材质资产再引用 Shader 和纹理句柄：
+基于该资产系统，下一步已经实现 `Material` 与 `MaterialComponent`。实体只引用材质句柄，材质资产再引用 Shader 和纹理句柄：
 
 ```text
 Entity
@@ -10176,6 +10176,231 @@ Entity
         → Albedo/Normal/Roughness 等 Texture AssetHandle
         → 可序列化材质参数
 ```
+
+## Material 资产与实体材质组件
+
+在 AssetHandle 基础设施完成后，材质不再是散落在 `EditorLayer` 或 Shader 调用附近的一组临时参数，而是成为可保存、可复用、可被实体稳定引用的项目资产。
+
+本阶段建立以下数据链：
+
+```text
+Entity
+    → MaterialComponent::MaterialHandle
+    → AssetManager::GetMaterial()
+    → Material（.glmat）
+        → Shader AssetHandle
+        → BaseColor Texture AssetHandle
+        → BaseColor / Tiling / Metallic / Roughness
+    → Renderer2D::DrawSprite()
+```
+
+### 设计目标与职责边界
+
+材质系统需要同时处理两类数据：实体当前使用哪个材质，以及多个实体共享的材质参数。两者不应混在一个组件中，因此采用“轻组件、重资产”的结构：
+
+```cpp
+struct MaterialComponent
+{
+    AssetHandle MaterialHandle{ 0 };
+};
+```
+
+`MaterialComponent` 只保存材质句柄。真正的颜色、纹理和表面参数保存在 `.glmat` 文件及运行期 `Material` 对象中。同一材质可以被多个实体引用，避免 Scene YAML 重复保存参数，也避免组件直接持有 Shader、Texture 或 OpenGL 对象。
+
+### Material 核心结构
+
+材质核心实现位于引擎 Renderer 模块：
+
+```cpp
+struct MaterialProperties
+{
+    glm::vec4 BaseColor{ 1.0f };
+    AssetHandle BaseColorTexture{ 0 };
+    float TilingFactor = 1.0f;
+    float Metallic = 0.0f;
+    float Roughness = 0.5f;
+};
+
+class Material
+{
+public:
+    static Ref<Material> Create(const std::filesystem::path& path);
+
+    bool Reload();
+    bool Save() const;
+
+    AssetHandle GetShaderHandle() const;
+    MaterialProperties& GetProperties();
+};
+```
+
+| 字段 | 作用 | 当前渲染状态 |
+|---|---|---|
+| `ShaderHandle` | 预留材质使用的 Shader 资产 | 尚未驱动渲染管线选择 |
+| `BaseColor` | 基础颜色或纹理 Tint | Renderer2D 已使用 |
+| `BaseColorTexture` | 基础颜色纹理句柄 | Renderer2D 已使用 |
+| `TilingFactor` | UV 平铺倍率 | Renderer2D 已使用 |
+| `Metallic` | 金属度 | 已保存，尚未参与 2D Shader |
+| `Roughness` | 粗糙度 | 已保存，尚未参与 2D Shader |
+
+Metallic 和 Roughness 目前是为后续 PBR 准备的数据结构，不代表 PBR 已完成。它们需要在后续 3D 材质 Shader、光源、HDR 和颜色空间流程中真正参与计算。
+
+### `.glmat` 材质文件
+
+材质使用 YAML 保存，扩展名为 `.glmat`：
+
+```yaml
+Material:
+  Shader: 0
+  BaseColor: [1.0, 0.2, 0.2, 1.0]
+  BaseColorTexture: 0
+  TilingFactor: 1.0
+  Metallic: 0.0
+  Roughness: 0.5
+```
+
+Shader 和纹理字段保存 AssetHandle，而不是绝对路径或运行期指针。具体路径继续由 `AssetRegistry.yaml` 管理。
+
+加载流程：
+
+```text
+AssetManager::GetMaterial(handle)
+    → 验证 Metadata 类型为 Material
+    → 查询 MaterialCache
+        → 已加载：复用缓存
+        → 未加载：Material::Create(path)
+    → 解析 .glmat
+    → 校正参数范围
+    → 放入 MaterialCache
+```
+
+加载时执行基础约束：
+
+- `TilingFactor >= 0.01`；
+- `Metallic` 限制到 `[0, 1]`；
+- `Roughness` 限制到 `[0.04, 1]`。
+
+解析失败时返回空材质，并且不会把无效对象放入缓存。
+
+### AssetManager 材质缓存
+
+AssetManager 新增独立的 Material 缓存：
+
+```text
+AssetHandle
+    → AssetMetadata
+    → .glmat 文件
+    → Ref<Material>
+```
+
+Material 缓存保存材质参数，Texture 缓存保存运行期 Texture2D。Material 的纹理字段仍然只是 Texture AssetHandle，Renderer 使用材质时再解析纹理，因此 Material 不依赖 OpenGL 等具体图形 API。
+
+### Renderer2D 兼容接入
+
+为了不破坏已有 Sprite 场景，Renderer2D 使用兼容式覆盖：
+
+```text
+没有有效 Material
+    → 使用 SpriteRendererComponent 的 Color、TextureHandle、TilingFactor
+
+存在有效 Material
+    → 使用 MaterialProperties 的 BaseColor、BaseColorTexture、TilingFactor
+```
+
+最终仍通过已有批处理 `DrawQuad` 提交。无效材质时保留 Sprite 数据，纹理无效时回退为纯色 Quad。
+
+Metallic 和 Roughness 没有强行加入 Texture Shader，因为当前 Renderer2D 没有光照模型。后续应在 3D Material Pass 中通过 Material UBO 或其他跨 API 参数接口上传。
+
+### Properties 面板工作流
+
+选中带有 SpriteRendererComponent 的实体后，可以：
+
+1. 点击 `+ Add Material` 添加 MaterialComponent；
+2. 从 Content Browser 拖入 `.glmat`；
+3. 查看当前材质文件名；
+4. 编辑 Base Color、Tiling、Metallic 和 Roughness；
+5. 将图片拖到 Base Color Texture；
+6. 使用 `X` 清除材质或材质纹理。
+
+材质属性变化时通过 `Material::Save()` 写回 `.glmat`。Properties 面板只操作材质对象和 AssetHandle，不调用 OpenGL API。层级面板使用 `[Mat]` 标记拥有 MaterialComponent 的实体。
+
+### 场景复制与序列化
+
+`Scene::Copy()` 已将 MaterialComponent 纳入组件复制列表。进入播放模式时，Runtime Scene 会保留实体 UUID 和 Material AssetHandle：
+
+```text
+Editor Scene
+    → Scene::Copy()
+    → Runtime Scene
+    → 保留 UUID
+    → 保留 MaterialHandle
+```
+
+场景 YAML 升级为 `Version: 3`：
+
+```yaml
+MaterialComponent:
+  Material: 13777784352782102236
+```
+
+场景只保存材质句柄，不重复保存 `.glmat` 参数。MaterialComponent 是可选组件，没有该字段的旧场景仍能加载。
+
+### 默认验证材质
+
+项目新增：
+
+```text
+GlimmerEditor-CyouBranch/assets/materials/DefaultSprite.glmat
+```
+
+该材质使用与 Red Square 原始颜色一致的红色，并默认挂载到 Red Square。这样能够验证材质解析、场景组件和 Renderer2D 覆盖路径，同时保持原测试场景的视觉预期。
+
+### 文件职责
+
+```text
+Glimmer/src/Glimmer/Renderer/
+  Material.h/.cpp                  材质数据、YAML 加载、保存与重载
+  Renderer2D.h/.cpp                材质参数解析与 Sprite 兼容绘制
+
+Glimmer/src/Glimmer/Asset/
+  AssetManager.h/.cpp              Material 缓存和句柄解析
+
+Glimmer/src/Glimmer/Scene/
+  Components.h                     MaterialComponent
+  Scene.cpp                        组件复制和编辑/运行渲染传递
+  SceneSerializer.cpp              MaterialComponent YAML 序列化
+
+GlimmerEditor-CyouBranch/src/
+  EditorLayer.cpp                  默认材质导入和测试实体挂载
+  Panels/SceneHierarchyPanel.cpp   材质组件与参数编辑 UI
+
+GlimmerEditor-CyouBranch/assets/
+  materials/DefaultSprite.glmat    默认测试材质
+  AssetRegistry.yaml               材质 AssetHandle 注册信息
+```
+
+### 验证结果
+
+1. 从 `scripts` 目录运行 `Win-GenerateProject-vs2026.bat`，工程生成成功；
+2. VS2026 `Debug | x64` 完整编译成功；
+3. Material 源文件已进入核心静态库；
+4. 编辑器运行期间未在材质解析或渲染路径提前退出；
+5. `.glmat` 成功导入 AssetRegistry；
+6. 重复启动后 AssetRegistry SHA256 保持一致；
+7. `git diff --check` 通过。
+
+### 当前边界与后续方向
+
+当前完成的是材质资产和 ECS 引用基础，不是完整 PBR：
+
+1. `ShaderHandle` 尚未驱动 Shader 或 RenderPipeline 选择；
+2. Metallic、Roughness 尚未参与实际光照；
+3. 尚未支持 Normal、AO、Emissive 等纹理；
+4. 外部修改 `.glmat` 后还没有自动文件监视；
+5. Material 与 Shader 的参数布局尚未通过反射校验；
+6. 尚未区分共享 Material 与实体级 MaterialInstance 覆盖参数。
+
+下一阶段建议先建立统一光源数据和 3D Material Pass，再实现基础 PBR Shader。若直接继续向 Material 增加参数，而没有渲染管线、光源和颜色空间基础，材质系统会变成“可以编辑但无法正确渲染”的参数容器。
 
 ## KB
 

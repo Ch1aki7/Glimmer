@@ -1,5 +1,6 @@
 #include "SceneHierarchyPanel.h"
 #include "Glimmer/Asset/AssetManager.h"
+#include "Glimmer/Renderer/Material.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <filesystem>
 #include <algorithm>
@@ -82,6 +83,7 @@ namespace gl {
 		std::string badges;
 		if (entity.HasComponent<CameraComponent>())          badges += " [Cam]";
 		if (entity.HasComponent<SpriteRendererComponent>())  badges += " [Spr]";
+		if (entity.HasComponent<MaterialComponent>())        badges += " [Mat]";
 		if (entity.HasComponent<NativeScriptComponent>())    badges += " [Scr]";
 		label += badges;
 
@@ -126,6 +128,12 @@ namespace gl {
 			}
 		}
 
+		if (entity.HasComponent<SpriteRendererComponent>()
+			&& !entity.HasComponent<MaterialComponent>())
+		{
+			if (ImGui::Button("+ Add Material"))
+				entity.AddComponent<MaterialComponent>();
+		}
 		// --- Transform ---
 		if (entity.HasComponent<TransformComponent>())
 		{
@@ -237,6 +245,87 @@ namespace gl {
 							src.TextureHandle = AssetManager::ImportAsset(path);
 					}
 					ImGui::EndDragDropTarget();
+				}
+
+				ImGui::TreePop();
+			}
+		}
+		// --- Material ---
+		if (entity.HasComponent<MaterialComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(MaterialComponent).hash_code(),
+				ImGuiTreeNodeFlags_DefaultOpen, "Material"))
+			{
+				auto& component = entity.GetComponent<MaterialComponent>();
+				AssetMetadata metadata = AssetManager::GetMetadata(component.MaterialHandle);
+				const bool hasMaterial = metadata.IsValid()
+					&& metadata.Type == AssetType::Material;
+
+				const std::string materialName = hasMaterial
+					? metadata.FilePath.filename().string()
+					: "None (drag .glmat here)";
+				ImGui::Text("Asset: %s", materialName.c_str());
+				ImGui::SameLine();
+				if (hasMaterial && ImGui::SmallButton("X##Material"))
+					component.MaterialHandle = AssetHandle(0);
+
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+					{
+						std::string path((const char*)payload->Data, payload->DataSize - 1);
+						std::string extension = std::filesystem::path(path).extension().string();
+						std::transform(extension.begin(), extension.end(), extension.begin(),
+							[](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+						if (extension == ".glmat")
+							component.MaterialHandle = AssetManager::ImportAsset(path);
+					}
+					ImGui::EndDragDropTarget();
+				}
+
+				if (Ref<Material> material = AssetManager::GetMaterial(component.MaterialHandle))
+				{
+					auto& properties = material->GetProperties();
+					bool changed = false;
+					changed |= ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor));
+					changed |= ImGui::DragFloat("Material Tiling", &properties.TilingFactor,
+						0.05f, 0.01f, 100.0f);
+					changed |= ImGui::SliderFloat("Metallic", &properties.Metallic, 0.0f, 1.0f);
+					changed |= ImGui::SliderFloat("Roughness", &properties.Roughness, 0.04f, 1.0f);
+
+					AssetMetadata textureMetadata =
+						AssetManager::GetMetadata(properties.BaseColorTexture);
+					const bool hasBaseColorTexture = textureMetadata.IsValid()
+						&& textureMetadata.Type == AssetType::Texture2D;
+					const std::string textureName = hasBaseColorTexture
+						? textureMetadata.FilePath.filename().string()
+						: "None (drag image here)";
+					ImGui::Text("Base Color Texture: %s", textureName.c_str());
+					ImGui::SameLine();
+					if (hasBaseColorTexture && ImGui::SmallButton("X##MaterialTexture"))
+					{
+						properties.BaseColorTexture = AssetHandle(0);
+						changed = true;
+					}
+
+					if (ImGui::BeginDragDropTarget())
+					{
+						if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+						{
+							std::string path((const char*)payload->Data, payload->DataSize - 1);
+							AssetHandle textureHandle = AssetManager::ImportAsset(path);
+							AssetMetadata droppedMetadata = AssetManager::GetMetadata(textureHandle);
+							if (droppedMetadata.Type == AssetType::Texture2D)
+							{
+								properties.BaseColorTexture = textureHandle;
+								changed = true;
+							}
+						}
+						ImGui::EndDragDropTarget();
+					}
+
+					if (changed && !material->Save())
+						GL_CORE_ERROR("Failed to save material: {0}", material->GetPath().string());
 				}
 
 				ImGui::TreePop();
