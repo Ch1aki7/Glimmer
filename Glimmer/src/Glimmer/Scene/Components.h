@@ -3,8 +3,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <string>
+#include "Glimmer/Asset/Asset.h"
 #include "Glimmer/Core/UUID.h"
-#include "Glimmer/Renderer/Texture.h"
 #include "SceneCamera.h"
 #include "ScriptableEntity.h"
 
@@ -57,7 +57,7 @@ namespace gl {
 	struct SpriteRendererComponent
 	{
 		glm::vec4 Color{ 1.0f, 1.0f, 1.0f, 1.0f };
-		Ref<Texture2D> Texture;
+		AssetHandle TextureHandle{ 0 };
 		float TilingFactor = 1.0f;
 
 		SpriteRendererComponent() = default;

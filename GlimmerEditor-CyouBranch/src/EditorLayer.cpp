@@ -77,12 +77,16 @@ namespace gl {
 	}
 	void EditorLayer::OnAttach() {
 		GL_PROFILE_FUNCTION();
+		AssetManager::Initialize("assets");
 
 		m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
 		m_ShaderLib.Load("assets/shaders/StarNest.glsl");
-		m_Texture = Texture2D::Create("assets/textures/Balatro.png");
-		m_STSTexture = Texture2D::Create("assets/textures/STS.png");
-		m_HenryTexture = Texture2D::Create("assets/textures/Henry.jpg");
+		m_Texture = AssetManager::GetTexture2D(
+			AssetManager::ImportAsset("assets/textures/Balatro.png"));
+		m_STSTexture = AssetManager::GetTexture2D(
+			AssetManager::ImportAsset("assets/textures/STS.png"));
+		m_HenryTexture = AssetManager::GetTexture2D(
+			AssetManager::ImportAsset("assets/textures/Henry.jpg"));
 
 		m_WhiteTexture = Texture2D::Create(1, 1);
 		uint32_t whitePixel = 0xffffffff;
@@ -203,6 +207,7 @@ namespace gl {
 		GL_PROFILE_FUNCTION();
 		if (m_SceneState == SceneState::Play)
 			OnSceneStop();
+		AssetManager::Shutdown();
 	}
 
 	void EditorLayer::OnUpdate(Timestep ts) {

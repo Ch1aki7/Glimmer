@@ -75,12 +75,19 @@ namespace gl {
 	{
 		out << YAML::Key << "SpriteRendererComponent" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "Color" << YAML::Value; SerializeVec4(out, comp.Color);
+		out << YAML::Key << "Texture" << YAML::Value
+			<< static_cast<uint64_t>(comp.TextureHandle);
+		out << YAML::Key << "TilingFactor" << YAML::Value << comp.TilingFactor;
 		out << YAML::EndMap;
 	}
 
 	static void DeserializeComponent(const YAML::Node& node, SpriteRendererComponent& comp)
 	{
 		if (node["Color"]) DeserializeVec4(node["Color"], comp.Color);
+		if (node["Texture"])
+			comp.TextureHandle = AssetHandle(node["Texture"].as<uint64_t>());
+		if (node["TilingFactor"])
+			comp.TilingFactor = node["TilingFactor"].as<float>();
 	}
 
 	static void SerializeComponent(YAML::Emitter& out, const CameraComponent& comp)

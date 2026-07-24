@@ -9983,6 +9983,200 @@ Glimmer/src/Glimmer/Scene/SceneSerializer.cpp
 
 UUID 是下一步实现 `Scene::Copy`、编辑/运行场景隔离、实体引用和组件运行资源缓存的基础。
 
+## AssetHandle 与基础资产管理系统
+
+在实体拥有稳定 UUID 后，下一步是让场景组件不再直接保存运行期资源指针。此前 `SpriteRendererComponent` 保存 `Ref<Texture2D>`，它只在当前进程中有效，无法稳定写入场景，也让组件承担了纹理加载和 GPU 生命周期职责。
+
+本阶段加入轻量级资产管理基础设施，使用稳定的 `AssetHandle` 连接场景数据与运行期资源：
+
+```text
+assets 中的资源文件
+    → AssetManager::ImportAsset()
+    → 生成或复用 AssetHandle
+    → 写入 AssetRegistry.yaml
+    → 组件只保存 AssetHandle
+    → 渲染时由 AssetManager 解析并缓存 Texture2D
+```
+
+### 必要性
+
+直接在组件中保存 `Ref<Texture2D>` 存在以下问题：
+
+1. 智能指针不能持久化到 YAML；
+2. 场景复制后容易共享不应共享的运行期状态；
+3. 同一路径可能被重复加载，浪费内存和显存；
+4. 文件移动后，硬编码路径容易失效；
+5. Material、Model、Shader 难以使用统一方式管理。
+
+`AssetHandle` 基于 64 位 UUID。场景只记录稳定句柄，资源路径、类型和加载状态由资产系统管理，从而分离“场景引用什么”和“资源当前如何加载”。
+
+### 核心结构
+
+```cpp
+using AssetHandle = UUID;
+
+enum class AssetType
+{
+    None = 0,
+    Texture2D,
+    Model,
+    Shader,
+    Material
+};
+
+struct AssetMetadata
+{
+    AssetHandle Handle{ 0 };
+    AssetType Type = AssetType::None;
+    std::filesystem::path FilePath;
+};
+```
+
+- `AssetHandle`：资源的稳定身份；
+- `AssetType`：统一的资源分类；
+- `AssetMetadata`：记录句柄、类型和相对路径，不持有 GPU 对象；
+- `AssetManager`：维护注册表、路径索引和运行期纹理缓存。
+
+### 导入与注册表流程
+
+编辑器启动时以项目 `assets` 目录初始化 `AssetManager`，并读取 `assets/AssetRegistry.yaml`：
+
+```text
+ImportAsset(path)
+    → 规范化绝对路径
+    → 检查文件存在且位于 assets 内
+    → 根据扩展名推断 AssetType
+    → 查询路径是否已有句柄
+        → 已存在：复用句柄
+        → 不存在：生成新 AssetHandle
+    → 更新内存注册表
+    → 按稳定顺序写入 AssetRegistry.yaml
+```
+
+注册表采用 YAML，并只保存相对 assets 的路径：
+
+```yaml
+AssetRegistry:
+  - Handle: 9195328290163695800
+    Type: Texture2D
+    FilePath: textures/balatro.png
+```
+
+这样不会把开发机器的绝对路径写入项目。重复启动和重复导入同一资源时会复用原句柄，稳定排序也能减少无意义的版本控制差异。
+
+### SpriteRendererComponent 迁移
+
+组件由直接保存纹理对象：
+
+```cpp
+Ref<Texture2D> Texture;
+```
+
+改为保存资产句柄：
+
+```cpp
+AssetHandle TextureHandle{ 0 };
+```
+
+Renderer2D 在 `DrawSprite` 中按需解析：
+
+```text
+SpriteRendererComponent::TextureHandle
+    → AssetManager::GetTexture2D(handle)
+    → 查询运行期缓存
+        → 命中：复用 Texture2D
+        → 未命中：根据 Metadata 加载并缓存
+    → DrawQuad()
+```
+
+句柄无效、注册表中不存在或纹理加载失败时，渲染器回退为纯色 Quad，避免资源缺失导致场景崩溃。
+
+### Properties 面板拖放
+
+Sprite Renderer 属性现在支持：
+
+- 显示当前纹理文件名；
+- 使用 `X` 清除纹理句柄；
+- 接收 Content Browser 文件拖放；
+- 支持 PNG、JPG、JPEG、TGA 和 BMP，扩展名不区分大小写；
+- 拖放后先导入资产，再把返回句柄写入组件。
+
+属性面板只编辑 `TextureHandle`，不直接创建 OpenGL 纹理，从而保持编辑器 UI、资产管理和渲染后端低耦合。
+
+### 场景序列化
+
+`SpriteRendererComponent` 的 YAML 数据新增：
+
+```yaml
+SpriteRendererComponent:
+  Color: [1.0, 1.0, 1.0, 1.0]
+  Texture: 9195328290163695800
+  TilingFactor: 1.0
+```
+
+保存时写入纹理句柄和 `TilingFactor`；加载时仅在字段存在时恢复，因此没有纹理字段的旧场景仍可加载。
+
+| 数据位置 | 职责 |
+|---|---|
+| Scene YAML | 保存实体引用的 AssetHandle |
+| AssetRegistry.yaml | 保存句柄到资源路径和类型的映射 |
+| AssetManager 运行期缓存 | 保存已加载的 `Ref<Texture2D>` |
+
+### 文件职责
+
+```text
+Glimmer/src/Glimmer/Asset/
+  Asset.h                         资产句柄、类型与元数据
+  AssetManager.h/.cpp             注册表、导入、查询和纹理缓存
+
+Glimmer/src/Glimmer/Scene/
+  Components.h                    SpriteRendererComponent 保存 TextureHandle
+  SceneSerializer.cpp             纹理句柄与 TilingFactor 序列化
+
+Glimmer/src/Glimmer/Renderer/
+  Renderer2D.cpp                  绘制时解析纹理资产
+
+GlimmerEditor-CyouBranch/src/
+  EditorLayer.cpp                 初始化与关闭 AssetManager
+  Panels/SceneHierarchyPanel.cpp  Sprite 纹理属性和拖放赋值
+
+GlimmerEditor-CyouBranch/assets/
+  AssetRegistry.yaml              项目资产注册表
+```
+
+资产系统属于引擎核心，因此放在 `Glimmer/src/Glimmer/Asset`；具体项目的注册表和资源文件属于项目数据，因此放在 `GlimmerEditor-CyouBranch/assets`。
+
+### 验证结果
+
+1. 使用 VS2026 重新生成工程；
+2. `Debug | x64` 完整编译成功；
+3. 连续启动后 `AssetRegistry.yaml` 内容及哈希保持不变；
+4. 同一路径重复导入时复用原句柄；
+5. `git diff --check` 通过；
+6. 无效纹理句柄安全回退为纯色绘制。
+
+### 当前边界与下一步
+
+当前阶段已解决稳定引用、注册表和纹理缓存，但尚未包含：
+
+1. 资源文件新增、删除、移动和重命名监视；
+2. `.meta` 文件和资源导入配置；
+3. 异步加载、后台导入和主线程 GPU 上传队列；
+4. 资源依赖图、卸载和缺失资产修复；
+5. Model、Shader、Material 的完整加载器。
+
+下一阶段应实现 `MaterialAsset` 与 `MaterialComponent`。实体只引用材质句柄，材质资产再引用 Shader 和纹理句柄：
+
+```text
+Entity
+    → MaterialComponent
+    → Material AssetHandle
+    → MaterialAsset
+        → Shader AssetHandle
+        → Albedo/Normal/Roughness 等 Texture AssetHandle
+        → 可序列化材质参数
+```
+
 ## KB
 
 ### 为什么不用动态库？

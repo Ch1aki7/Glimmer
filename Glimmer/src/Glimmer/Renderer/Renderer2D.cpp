@@ -1,6 +1,8 @@
 #include "glpch.h"
 #include "Renderer2D.h"
 
+#include "Glimmer/Asset/AssetManager.h"
+
 #include "Glimmer/Renderer/UniformBuffer.h"
 #include "Glimmer/Renderer/VertexArray.h"
 #include "Glimmer/Renderer/Shader.h"
@@ -450,8 +452,9 @@ namespace gl {
 
 	void Renderer2D::DrawSprite(const glm::mat4& transform, SpriteRendererComponent& src, int entityID)
 	{
-		if (src.Texture)
-			DrawQuad(transform, src.Texture, src.TilingFactor, src.Color, entityID);
+		Ref<Texture2D> texture = AssetManager::GetTexture2D(src.TextureHandle);
+		if (texture)
+			DrawQuad(transform, texture, src.TilingFactor, src.Color, entityID);
 		else
 			DrawQuad(transform, src.Color, entityID);
 	}

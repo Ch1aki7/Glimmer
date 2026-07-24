@@ -1,6 +1,9 @@
 #include "SceneHierarchyPanel.h"
+#include "Glimmer/Asset/AssetManager.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <filesystem>
+#include <algorithm>
+#include <cctype>
 
 namespace gl {
 
@@ -210,10 +213,15 @@ namespace gl {
 				ImGui::DragFloat("Tiling", &src.TilingFactor, 0.1f, 0.1f, 10.0f);
 
 				// 纹理状态 + 预览
-				ImGui::Text("Texture: %s", src.Texture ? "Loaded" : "None (drag here)");
+				const bool hasTexture = AssetManager::IsAssetHandleValid(src.TextureHandle);
+				const AssetMetadata textureMetadata = AssetManager::GetMetadata(src.TextureHandle);
+				const std::string textureName = hasTexture
+					? textureMetadata.FilePath.filename().string()
+					: "None (drag here)";
+				ImGui::Text("Texture: %s", textureName.c_str());
 				ImGui::SameLine();
-				if (src.Texture && ImGui::SmallButton("X"))
-					src.Texture = nullptr;
+				if (hasTexture && ImGui::SmallButton("X"))
+					src.TextureHandle = AssetHandle(0);
 
 				// 接收从 Content Browser 拖来的贴图文件
 				if (ImGui::BeginDragDropTarget())
@@ -221,9 +229,12 @@ namespace gl {
 					if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
 					{
 						std::string path((const char*)payload->Data, payload->DataSize - 1);
-						auto ext = std::filesystem::path(path).extension().string();
-						if (ext == ".png" || ext == ".jpg" || ext == ".jpeg")
-							src.Texture = Texture2D::Create(path);
+						std::string ext = std::filesystem::path(path).extension().string();
+						std::transform(ext.begin(), ext.end(), ext.begin(),
+							[](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+						if (ext == ".png" || ext == ".jpg" || ext == ".jpeg"
+							|| ext == ".tga" || ext == ".bmp")
+							src.TextureHandle = AssetManager::ImportAsset(path);
 					}
 					ImGui::EndDragDropTarget();
 				}

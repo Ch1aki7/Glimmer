@@ -1,0 +1,10 @@
+AssetRegistry:
+  - Handle: 9195328290163695800
+    Type: Texture2D
+    FilePath: textures/balatro.png
+  - Handle: 10096056566838588892
+    Type: Texture2D
+    FilePath: textures/STS.png
+  - Handle: 18204455804917931031
+    Type: Texture2D
+    FilePath: textures/Henry.jpg

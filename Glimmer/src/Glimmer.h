@@ -12,6 +12,9 @@
 #include "Glimmer/Core/KeyCodes.h"
 #include "Glimmer/Core/MouseButtonCodes.h"
 
+#include "Glimmer/Asset/Asset.h"
+#include "Glimmer/Asset/AssetManager.h"
+
 // --- 渲染器部分 ---
 #include "Glimmer/Renderer/Renderer.h"
 #include "Glimmer/Renderer/Renderer2D.h"
