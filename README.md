@@ -10336,7 +10336,7 @@ Editor Scene
     → 保留 MaterialHandle
 ```
 
-场景 YAML 升级为 `Version: 3`：
+Material 阶段曾将场景 YAML 升级为 `Version: 3`。后续加入光源组件后，当前场景格式已经升级为 `Version: 4`：
 
 ```yaml
 MaterialComponent:
@@ -10400,7 +10400,493 @@ GlimmerEditor-CyouBranch/assets/
 5. Material 与 Shader 的参数布局尚未通过反射校验；
 6. 尚未区分共享 Material 与实体级 MaterialInstance 覆盖参数。
 
-下一阶段建议先建立统一光源数据和 3D Material Pass，再实现基础 PBR Shader。若直接继续向 Material 增加参数，而没有渲染管线、光源和颜色空间基础，材质系统会变成“可以编辑但无法正确渲染”的参数容器。
+统一光源数据已经在下一章节完成。后续应在此基础上建立 3D Material Pass，再实现基础 PBR Shader。若直接继续向 Material 增加参数，而没有渲染管线和颜色空间基础，材质系统会变成“可以编辑但无法正确渲染”的参数容器。
+
+## 统一光源组件与 Light UBO
+
+在 Material 资产和 ECS 引用完成后，下一项基础建设是统一光源数据。此前 `EditorLayer` 使用 `m_LightPos` 保存测试灯光位置，它不属于场景实体，无法序列化、无法随播放场景复制，也迫使每个 Shader 单独上传灯光 Uniform。
+
+本阶段建立以下数据流：
+
+```text
+Scene Entity + Transform
+    → DirectionalLightComponent / PointLightComponent
+    → Scene::UploadLightEnvironment()
+    → LightEnvironment
+    → Renderer::UploadLightEnvironment()
+    → binding 1 Light UBO
+    → Terrain Shader
+```
+
+### 建设目标
+
+统一光源系统需要满足：
+
+1. 光源属于 Scene，而不是 EditorLayer 临时变量；
+2. 光源能够保存、加载并复制到 Runtime Scene；
+3. Shader 共享同一份光源数据，不逐个散传 Uniform；
+4. 核心接口不暴露 OpenGL 调用；
+5. CPU 与 GLSL 的 std140 数据布局可验证；
+6. 为后续 Vulkan Descriptor Set 和 PBR 光照保留稳定结构。
+
+### ECS 光源组件
+
+新增两个场景组件：
+
+```cpp
+struct DirectionalLightComponent
+{
+    glm::vec3 Color{ 1.0f };
+    float Intensity = 1.0f;
+    float AmbientIntensity = 0.05f;
+    bool Enabled = true;
+};
+
+struct PointLightComponent
+{
+    glm::vec3 Color{ 1.0f };
+    float Intensity = 10.0f;
+    float Range = 10.0f;
+    bool Enabled = true;
+};
+```
+
+光源空间属性继续由通用 `TransformComponent` 管理：
+
+- 点光源位置来自 Translation；
+- 方向光方向来自 Rotation；
+- 方向光使用实体局部 `-Z` 轴作为前向方向；
+- Scale 不作为灯光强度或范围参数。
+
+这样 Gizmos 可以直接调整点光源位置和方向光朝向，无需重复实现变换系统。
+
+### LightEnvironment
+
+Renderer 模块新增与图形 API 无关的场景光照描述：
+
+```cpp
+struct DirectionalLight
+{
+    glm::vec3 Direction;
+    glm::vec3 Color;
+    float Intensity;
+    float AmbientIntensity;
+    bool Enabled;
+};
+
+struct PointLight
+{
+    glm::vec3 Position;
+    glm::vec3 Color;
+    float Intensity;
+    float Range;
+};
+
+struct LightEnvironment
+{
+    static constexpr uint32_t MaxPointLights = 16;
+
+    DirectionalLight Directional;
+    std::vector<PointLight> PointLights;
+};
+```
+
+当前支持一个有效方向光和最多 16 个有效点光源。Scene 每帧遍历组件，将 ECS 数据转换为 LightEnvironment，再交给 Renderer。
+
+### Scene 收集流程
+
+编辑模式和播放模式执行同一套收集逻辑：
+
+```text
+Scene::OnUpdateEditor() / Scene::OnUpdateRuntime()
+    → UploadLightEnvironment()
+    → 查找第一个 Enabled DirectionalLightComponent
+    → 从 Transform 计算世界方向
+    → 遍历 Enabled PointLightComponent
+    → 限制到 MaxPointLights
+    → Renderer::UploadLightEnvironment()
+```
+
+Scene 只负责把实体组件转换为通用光源数据，不创建 UBO，也不调用 OpenGL。
+
+### std140 GPU 数据布局
+
+Renderer 将 LightEnvironment 打包为固定尺寸 GPU 数据：
+
+```cpp
+struct alignas(16) GPUPointLight
+{
+    glm::vec4 PositionRange;
+    glm::vec4 ColorIntensity;
+};
+
+struct alignas(16) GPULightEnvironment
+{
+    glm::vec4 DirectionIntensity;
+    glm::vec4 DirectionalColor;
+    glm::vec4 AmbientColorIntensity;
+    glm::uvec4 LightCounts;
+    GPUPointLight PointLights[16];
+};
+```
+
+使用 vec4 打包可以避免 `vec3` 在 std140 中产生容易误判的填充：
+
+| GPU 字段 | 内容 |
+|---|---|
+| `DirectionIntensity.xyz` | 方向光照射方向 |
+| `DirectionIntensity.w` | 方向光强度 |
+| `DirectionalColor.rgb` | 方向光颜色 |
+| `AmbientColorIntensity.rgb` | 环境光颜色 |
+| `AmbientColorIntensity.w` | 环境光强度 |
+| `LightCounts.x` | 有效点光源数量 |
+| `PositionRange.xyz` | 点光源世界位置 |
+| `PositionRange.w` | 点光源范围 |
+| `ColorIntensity.rgb` | 点光源颜色 |
+| `ColorIntensity.w` | 点光源强度 |
+
+CPU 端通过静态断言验证布局：
+
+```cpp
+static_assert(sizeof(GPUPointLight) == 32);
+static_assert(sizeof(GPULightEnvironment) == 576);
+```
+
+### UniformBuffer 上传
+
+Renderer 初始化时创建 binding 1 的 UniformBuffer：
+
+```text
+Renderer::Init()
+    → UniformBuffer::Create(sizeof(GPULightEnvironment), 1)
+
+每帧：
+Renderer::UploadLightEnvironment()
+    → 清零并打包 GPU 数据
+    → 限制强度和范围的最小值
+    → UniformBuffer::SetData()
+```
+
+binding 0 已由 Renderer2D Camera UBO 使用，因此 Light UBO 使用 binding 1。OpenGL 创建和上传细节仍封装在 `OpenGLUniformBuffer` 中。
+
+如果场景没有有效方向光，系统保留强度为 `0.03` 的低环境光，避免旧场景完全黑屏，同时不会伪造直接光源。
+
+### Terrain Shader 可视接入
+
+当前帧流程中真正参与 3D 绘制的是 Terrain Pass，因此第一轮验证选择 Terrain Shader：
+
+```glsl
+layout(std140, binding = 1) uniform LightEnvironment
+{
+    vec4 u_DirectionalDirectionIntensity;
+    vec4 u_DirectionalColor;
+    vec4 u_AmbientColorIntensity;
+    uvec4 u_LightCounts;
+    PointLightData u_PointLights[16];
+};
+```
+
+Terrain Shader 目前计算：
+
+- 环境光；
+- 方向光漫反射；
+- Blinn-Phong 高光；
+- 最多 16 个点光源；
+- 点光源距离衰减；
+- 点光源范围平滑衰减。
+
+点光源衰减同时考虑距离平方和范围边界，超过 Range 的片元不再计算该光源。
+
+### Properties 与默认场景
+
+Properties 面板新增：
+
+- `+ Directional Light`；
+- `+ Point Light`；
+- Enabled；
+- Color；
+- Intensity；
+- Directional Ambient；
+- Point Light Range。
+
+层级面板使用 `[Sun]` 和 `[Point]` 标记光源实体。
+
+默认场景新增两个验证实体：
+
+```text
+Sun
+    Rotation = (-50, 30, 0)
+    DirectionalLightComponent
+
+Point Light
+    Position = (0, 12, 0)
+    Intensity = 80
+    Range = 40
+```
+
+旧的 `EditorLayer::m_LightPos` 和 Settings 中独立的 Light Position 控件已删除，避免两套灯光数据来源。
+
+### 场景复制与序列化
+
+光源组件已加入 `Scene::Copy()`，进入播放模式时会保留灯光参数和 Transform。
+
+当前场景格式升级为 `Version: 4`：
+
+```yaml
+DirectionalLightComponent:
+  Color: [1.0, 1.0, 1.0]
+  Intensity: 1.0
+  AmbientIntensity: 0.05
+  Enabled: true
+
+PointLightComponent:
+  Color: [1.0, 1.0, 1.0]
+  Intensity: 80.0
+  Range: 40.0
+  Enabled: true
+```
+
+光源组件是可选字段，Version 1～3 场景仍可按原有兼容流程加载。
+
+### 文件职责
+
+```text
+Glimmer/src/Glimmer/Renderer/
+  LightEnvironment.h               跨 API 的方向光、点光源和场景光照数据
+  Renderer.h/.cpp                  std140 打包、Light UBO 创建与上传
+  UniformBuffer.h/.cpp             跨 API UniformBuffer 接口
+
+Glimmer/src/Glimmer/Scene/
+  Components.h                     ECS 光源组件
+  Scene.h/.cpp                     光源收集、变换转换和 Runtime 复制
+  SceneSerializer.cpp              Version 4 光源组件序列化
+
+GlimmerEditor-CyouBranch/src/
+  EditorLayer.cpp                  默认 Sun 和 Point Light 测试实体
+  Panels/SceneHierarchyPanel.cpp   光源组件创建与属性编辑
+
+GlimmerEditor-CyouBranch/assets/shaders/
+  Terrain.glsl                     binding 1 Light UBO 可视验证
+```
+
+### 验证结果
+
+1. 从 `scripts` 目录运行 VS2026 工程生成脚本成功；
+2. `Debug | x64` 完整编译成功；
+3. CPU 端 std140 尺寸断言通过；
+4. Terrain Shader GLSL 450 编译成功；
+5. binding 1 Light UBO 未触发版本或链接错误；
+6. 编辑器运行 25 秒，Terrain、Compute、后处理及模型 Shader 均完成加载；
+7. 没有 Shader assertion、访问异常或 OpenGL 错误；
+8. `git diff --check` 通过。
+
+### 当前边界与下一步
+
+当前完成的是场景光源基础和 Terrain 可视验证，仍有以下边界：
+
+1. 只选择第一个 Enabled 方向光；
+2. 点光源固定上限为 16，尚未实现光源剔除或 Tiled/Clustered Lighting；
+3. Phong、Toon、Blinn-Phong、Hologram Shader 尚未迁移到 Light UBO；
+4. 当前帧流程没有实际调用 `Model::Draw()`；
+5. 尚未实现 Spot Light、阴影、IBL 和环境贴图；
+6. 尚未将 Camera 数据统一到 3D UBO；
+7. 光源 Gizmos 目前复用 Transform 操作，尚无专用范围或方向图标。
+
+下一步应建立真正的 3D Material Pass：恢复并规范模型提交路径，让 Material 的 ShaderHandle、BaseColor、Metallic、Roughness 与 LightEnvironment 在同一渲染流程中生效，再开始基础 PBR。
+
+![[README.assets/Pasted image 20260727101225.png]]
+![[README.assets/Pasted image 20260727101324.png]]
+
+## 3D Material Pass 与基础 PBR
+
+在统一光源组件和 Light UBO 完成后，本阶段将模型、材质、Shader 与场景实体接入同一条 3D 渲染流程，使 `Material` 中的 `BaseColor`、`Metallic` 和 `Roughness` 真正参与模型表面光照。
+
+### 建设目标与数据流
+
+旧流程由 `EditorLayer` 保存模型数组和全局 Shader 选择，模型无法稳定序列化，材质句柄也没有决定实际渲染管线。本阶段建立以下数据链：
+
+```text
+Scene Entity
+    → TransformComponent
+    → ModelRendererComponent::ModelHandle
+    → MaterialComponent::MaterialHandle
+    → AssetManager
+        → Model
+        → Material
+            → ShaderHandle
+            → BaseColorTexture
+            → BaseColor / Metallic / Roughness
+    → Renderer3D
+    → LightEnvironment UBO
+    → PBRModel.glsl
+```
+
+`ModelRendererComponent` 只保存 `AssetHandle`，不持有 Model、Mesh 或 OpenGL 对象。它已接入 `Scene::Copy()`、场景序列化、Properties 拖放、Hierarchy 标记以及 Editor/Runtime 更新路径。场景格式升级为 `Version: 5`：
+
+```yaml
+ModelRendererComponent:
+  Model: 8553044135784550654
+```
+
+### Renderer3D
+
+新增的 `Renderer3D` 位于引擎核心 `Glimmer/Renderer`：
+
+```cpp
+Renderer3D::BeginScene(viewProjection, cameraPosition);
+Renderer3D::DrawModel(transform, modelHandle, materialHandle, entityID);
+```
+
+模型提交流程为：
+
+```text
+ModelHandle → AssetManager::GetModel()
+MaterialHandle → AssetManager::GetMaterial()
+ShaderHandle → AssetManager::GetShader()
+    → Shader 热重载检查
+    → 上传相机、Transform 和材质参数
+    → 绑定材质纹理、Mesh 纹理或白纹理
+    → 遍历 Mesh
+    → RenderCommand::DrawIndexed()
+```
+
+`Model` 现在只负责导入和持有 Mesh，不再直接上传 Shader 参数或发出绘制命令，从而分离资源解析与渲染提交职责。
+
+### 基础 Cook–Torrance PBR
+
+新增 `assets/shaders/PBRModel.glsl`，支持：
+
+- GGX 法线分布；
+- Schlick-GGX 几何遮蔽；
+- Schlick Fresnel；
+- Lambert 漫反射；
+- Metallic、Roughness 和 BaseColor；
+- BaseColor 纹理与 TilingFactor；
+- 一个方向光和最多 16 个点光源；
+- 点光源距离及 Range 衰减；
+- 简单 Reinhard Tone Mapping 和 Gamma 编码。
+
+Shader 还会向整数颜色附件输出实体 ID，保证 3D 模型可参与 Mouse Picking：
+
+```glsl
+layout(location = 0) out vec4 o_Color;
+layout(location = 1) out int o_EntityID;
+```
+
+### 默认验证资产
+
+新增项目测试资源：
+
+```text
+assets/shaders/PBRModel.glsl
+assets/materials/DefaultPBR.glmat
+assets/models/suzanne.obj
+```
+
+编辑器启动时导入这三类资产，把稳定句柄写入 `AssetRegistry.yaml`，并创建默认 `PBR Suzanne` 实体：
+
+```text
+PBR Suzanne
+    TransformComponent
+    ModelRendererComponent → suzanne.obj
+    MaterialComponent      → DefaultPBR.glmat
+```
+
+如果默认材质尚未绑定 PBR Shader，初始化流程会设置 ShaderHandle 并写回 `.glmat`。
+
+### EditorLayer 清理
+
+以下旧状态和入口已删除：
+
+- `m_3DShader`；
+- `m_Models`、`m_ModelNames` 和模型索引；
+- 全局模型与 Shader 下拉框；
+- 启动时重复构造五个 Model 对象的逻辑。
+
+现在模型、材质和 Shader 均由实体组件与 Properties 面板驱动，编辑器层不再拥有第二套 3D 资源管理路径。
+
+### 地形位置的当前处理
+
+当前程序化地形仍由 `EditorLayer` 持有 TerrainMesh、HeightMap 和 Terrain Shader，尚未完整进入 Scene ECS，因此没有独立的 `TransformComponent`，不能直接在 Properties 面板调整位置。
+
+短期测试可以为 Terrain Shader 增加 `u_Transform`：
+
+```cpp
+glm::mat4 terrainTransform =
+    glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, -5.0f, 20.0f));
+m_TerrainShader->UploadUniformMat4("u_Transform", terrainTransform);
+```
+
+顶点 Shader 应先在局部空间应用高度，再转换到世界空间：
+
+```glsl
+vec3 localPosition = a_Position;
+localPosition.y = height * u_MaxHeight;
+vec4 worldPosition = u_Transform * vec4(localPosition, 1.0);
+v_WorldPos = worldPosition.xyz;
+gl_Position = u_ViewProjection * worldPosition;
+```
+
+正式方案应建立：
+
+```text
+Terrain Entity
+    → TransformComponent
+    → TerrainComponent
+        → HeightMapHandle
+        → Generation Parameters
+        → MaterialHandle
+    → TerrainRenderer
+```
+
+届时 Transform 将统一控制地形位置、旋转、X/Z 覆盖范围和 Y 高度倍率。非均匀缩放后，法线必须通过逆转置矩阵变换，否则光照会失真。
+
+### 文件职责
+
+```text
+Glimmer/src/Glimmer/Asset/
+  AssetManager.h/.cpp              Model、Shader 缓存与句柄解析
+Glimmer/src/Glimmer/Renderer/
+  Renderer3D.h/.cpp                3D 场景状态、材质解析与模型提交
+  Model.h/.cpp                     模型导入和 Mesh 集合
+  Material.h/.cpp                  可序列化材质资产
+  LightEnvironment.h               跨 API 场景灯光数据
+Glimmer/src/Glimmer/Scene/
+  Components.h                     ModelRendererComponent
+  Scene.cpp                        Editor/Runtime 3D 实体提交
+  SceneSerializer.cpp              Version 5 模型组件序列化
+GlimmerEditor-CyouBranch/assets/
+  shaders/PBRModel.glsl            基础 Cook–Torrance PBR
+  materials/DefaultPBR.glmat       默认 PBR 材质
+  AssetRegistry.yaml               Model、Material、Shader 稳定句柄
+```
+
+### 验证结果
+
+1. VS2026 Premake 工程生成成功；
+2. `Debug | x64` 核心库编译成功；
+3. `Debug | x64` 编辑器编译和链接成功；
+4. PBR Shader、材质和 Suzanne 模型成功导入并持久化句柄；
+5. `DefaultPBR.glmat` 成功保存 PBR ShaderHandle；
+6. 编辑器完成运行初始化；
+7. `git diff --check` 通过。
+
+### 当前边界与下一步
+
+当前完成的是基础 Forward PBR 验证链，仍有以下边界：
+
+1. 主颜色附件仍是 RGBA8，并非 HDR Render Target；
+2. Tone Mapping 暂时位于模型 Shader 内；
+3. Texture2D 尚未区分 sRGB 颜色纹理与线性数据纹理；
+4. 尚未支持 Normal、Metallic、Roughness、AO 纹理；
+5. 尚未实现 IBL、环境贴图、阴影和反射探针；
+6. Renderer3D 仍为逐 Mesh 即时提交；
+7. Terrain 尚未进入统一的实体化 3D Material Pass。
+
+下一步应优先建立 HDR Framebuffer 与明确的颜色空间规则，将 Tone Mapping 移入独立后处理 Pass，然后再扩展 PBR 纹理集与 IBL。
+
+![[README.assets/Pasted image 20260727111039.png]]
+![[README.assets/Pasted image 20260727111113.png]]
 
 ## KB
 

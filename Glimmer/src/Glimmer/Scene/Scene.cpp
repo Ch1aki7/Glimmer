@@ -2,7 +2,9 @@
 #include "Scene.h"
 
 #include "Components.h"
+#include "Glimmer/Renderer/Renderer.h"
 #include "Glimmer/Renderer/Renderer2D.h"
+#include "Glimmer/Renderer/Renderer3D.h"
 #include "Entity.h"
 
 #include <glm/glm.hpp>
@@ -59,7 +61,7 @@ namespace gl {
 			entityMap[uuid] = static_cast<entt::entity>(destinationEntity);
 		}
 
-		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, MaterialComponent, CameraComponent>(
+		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, ModelRendererComponent, MaterialComponent, DirectionalLightComponent, PointLightComponent, CameraComponent>(
 			destination->m_Registry,
 			source->m_Registry,
 			entityMap);
@@ -183,6 +185,7 @@ namespace gl {
 
 	void Scene::OnUpdateRuntime(Timestep ts)
 	{
+		UploadLightEnvironment();
 		Camera* mainCamera = nullptr;
 		glm::mat4 cameraTransform;
 
@@ -222,9 +225,22 @@ namespace gl {
 		// 执行渲染
 		if (mainCamera)
 		{
-			// 视图矩阵是相机变换矩阵的逆矩阵
-			// 在 2D 中，相机往右移，世界看起来往左移
-			Renderer2D::BeginScene(mainCamera->GetProjection(), glm::inverse(cameraTransform));
+			const glm::mat4 viewProjection = mainCamera->GetProjection() * glm::inverse(cameraTransform);
+			const glm::vec3 cameraPosition = glm::vec3(cameraTransform[3]);
+			Renderer3D::BeginScene(viewProjection, cameraPosition);
+			auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
+			for (auto entity : modelView)
+			{
+				const auto& transform = modelView.get<TransformComponent>(entity);
+				const auto& model = modelView.get<ModelRendererComponent>(entity);
+				const auto* material = m_Registry.try_get<MaterialComponent>(entity);
+				Renderer3D::DrawModel(
+					transform.GetTransform(), model.ModelHandle,
+					material ? material->MaterialHandle : AssetHandle(0),
+					static_cast<int>(static_cast<uint32_t>(entity)));
+			}
+
+			Renderer2D::BeginScene(viewProjection);
 
 			auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
 			for (auto entity : group)
@@ -242,8 +258,22 @@ namespace gl {
 		}
 	}
 
-	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection)
+	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection, const glm::vec3& cameraPosition)
 	{
+		UploadLightEnvironment();
+		Renderer3D::BeginScene(viewProjection, cameraPosition);
+		auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
+		for (auto entity : modelView)
+		{
+			const auto& transform = modelView.get<TransformComponent>(entity);
+			const auto& model = modelView.get<ModelRendererComponent>(entity);
+			const auto* material = m_Registry.try_get<MaterialComponent>(entity);
+			Renderer3D::DrawModel(
+				transform.GetTransform(), model.ModelHandle,
+				material ? material->MaterialHandle : AssetHandle(0),
+				static_cast<int>(static_cast<uint32_t>(entity)));
+		}
+
 		Renderer2D::BeginScene(viewProjection);
 
 		auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
@@ -259,6 +289,52 @@ namespace gl {
 		Renderer2D::EndScene();
 	}
 
+	void Scene::UploadLightEnvironment()
+	{
+		LightEnvironment environment;
+
+		auto directionalView = m_Registry.view<TransformComponent, DirectionalLightComponent>();
+		for (auto entity : directionalView)
+		{
+			const auto& transform = directionalView.get<TransformComponent>(entity);
+			const auto& component = directionalView.get<DirectionalLightComponent>(entity);
+			if (!component.Enabled)
+				continue;
+
+			const glm::vec3 forward = glm::mat3(transform.GetTransform())
+				* glm::vec3(0.0f, 0.0f, -1.0f);
+			environment.Directional.Direction = glm::length(forward) > 0.0001f
+				? glm::normalize(forward)
+				: glm::vec3(0.0f, -1.0f, 0.0f);
+			environment.Directional.Color = component.Color;
+			environment.Directional.Intensity = component.Intensity;
+			environment.Directional.AmbientIntensity = component.AmbientIntensity;
+			environment.Directional.Enabled = true;
+			break;
+		}
+
+		auto pointView = m_Registry.view<TransformComponent, PointLightComponent>();
+		environment.PointLights.reserve(LightEnvironment::MaxPointLights);
+
+		for (auto entity : pointView)
+		{
+			const auto& component = pointView.get<PointLightComponent>(entity);
+			if (!component.Enabled)
+				continue;
+			if (environment.PointLights.size() >= LightEnvironment::MaxPointLights)
+				break;
+
+			const auto& transform = pointView.get<TransformComponent>(entity);
+			PointLight light;
+			light.Position = transform.Translation;
+			light.Color = component.Color;
+			light.Intensity = component.Intensity;
+			light.Range = component.Range;
+			environment.PointLights.push_back(light);
+		}
+
+		Renderer::UploadLightEnvironment(environment);
+	}
 	void Scene::OnViewportResize(uint32_t width, uint32_t height)
 	{
 		m_ViewportWidth = width;
@@ -290,7 +366,14 @@ namespace gl {
 	void Scene::OnComponentAdded<SpriteRendererComponent>(Entity entity, SpriteRendererComponent& component) {}
 
 	template<>
+	void Scene::OnComponentAdded<ModelRendererComponent>(Entity entity, ModelRendererComponent& component) {}
+	template<>
 	void Scene::OnComponentAdded<MaterialComponent>(Entity entity, MaterialComponent& component) {}
+	template<>
+	void Scene::OnComponentAdded<DirectionalLightComponent>(Entity entity, DirectionalLightComponent& component) {}
+
+	template<>
+	void Scene::OnComponentAdded<PointLightComponent>(Entity entity, PointLightComponent& component) {}
 	template<>
 	void Scene::OnComponentAdded<TagComponent>(Entity entity, TagComponent& component) {}
 

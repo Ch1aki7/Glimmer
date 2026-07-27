@@ -83,7 +83,10 @@ namespace gl {
 		std::string badges;
 		if (entity.HasComponent<CameraComponent>())          badges += " [Cam]";
 		if (entity.HasComponent<SpriteRendererComponent>())  badges += " [Spr]";
+		if (entity.HasComponent<ModelRendererComponent>())   badges += " [Model]";
 		if (entity.HasComponent<MaterialComponent>())        badges += " [Mat]";
+		if (entity.HasComponent<DirectionalLightComponent>()) badges += " [Sun]";
+		if (entity.HasComponent<PointLightComponent>())       badges += " [Point]";
 		if (entity.HasComponent<NativeScriptComponent>())    badges += " [Scr]";
 		label += badges;
 
@@ -128,11 +131,27 @@ namespace gl {
 			}
 		}
 
-		if (entity.HasComponent<SpriteRendererComponent>()
+		if ((entity.HasComponent<SpriteRendererComponent>()
+			|| entity.HasComponent<ModelRendererComponent>())
 			&& !entity.HasComponent<MaterialComponent>())
 		{
 			if (ImGui::Button("+ Add Material"))
 				entity.AddComponent<MaterialComponent>();
+		}
+		if (!entity.HasComponent<ModelRendererComponent>())
+		{
+			if (ImGui::Button("+ Model Renderer"))
+				entity.AddComponent<ModelRendererComponent>();
+		}
+		if (!entity.HasComponent<DirectionalLightComponent>())
+		{
+			if (ImGui::Button("+ Directional Light"))
+				entity.AddComponent<DirectionalLightComponent>();
+		}
+		if (!entity.HasComponent<PointLightComponent>())
+		{
+			if (ImGui::Button("+ Point Light"))
+				entity.AddComponent<PointLightComponent>();
 		}
 		// --- Transform ---
 		if (entity.HasComponent<TransformComponent>())
@@ -147,6 +166,40 @@ namespace gl {
 			}
 		}
 
+		// --- Directional Light ---
+		if (entity.HasComponent<DirectionalLightComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(DirectionalLightComponent).hash_code(),
+				ImGuiTreeNodeFlags_DefaultOpen, "Directional Light"))
+			{
+				auto& light = entity.GetComponent<DirectionalLightComponent>();
+				ImGui::Checkbox("Enabled##Directional", &light.Enabled);
+				ImGui::ColorEdit3("Color##Directional", glm::value_ptr(light.Color));
+				ImGui::DragFloat("Intensity##Directional", &light.Intensity,
+					0.05f, 0.0f, 100.0f);
+				ImGui::DragFloat("Ambient##Directional", &light.AmbientIntensity,
+					0.01f, 0.0f, 10.0f);
+				ImGui::TextDisabled("Direction follows Transform rotation.");
+				ImGui::TreePop();
+			}
+		}
+
+		// --- Point Light ---
+		if (entity.HasComponent<PointLightComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(PointLightComponent).hash_code(),
+				ImGuiTreeNodeFlags_DefaultOpen, "Point Light"))
+			{
+				auto& light = entity.GetComponent<PointLightComponent>();
+				ImGui::Checkbox("Enabled##Point", &light.Enabled);
+				ImGui::ColorEdit3("Color##Point", glm::value_ptr(light.Color));
+				ImGui::DragFloat("Intensity##Point", &light.Intensity,
+					0.1f, 0.0f, 1000.0f);
+				ImGui::DragFloat("Range##Point", &light.Range,
+					0.1f, 0.01f, 1000.0f);
+				ImGui::TreePop();
+			}
+		}
 		// --- Camera ---
 		if (entity.HasComponent<CameraComponent>())
 		{
@@ -211,6 +264,37 @@ namespace gl {
 			}
 		}
 
+		// --- Model Renderer ---
+		if (entity.HasComponent<ModelRendererComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(ModelRendererComponent).hash_code(),
+				ImGuiTreeNodeFlags_DefaultOpen, "Model Renderer"))
+			{
+				auto& component = entity.GetComponent<ModelRendererComponent>();
+				AssetMetadata metadata = AssetManager::GetMetadata(component.ModelHandle);
+				const bool hasModel = metadata.IsValid() && metadata.Type == AssetType::Model;
+				const std::string modelName = hasModel
+					? metadata.FilePath.filename().string()
+					: "None (drag .obj here)";
+				ImGui::Text("Model: %s", modelName.c_str());
+				ImGui::SameLine();
+				if (hasModel && ImGui::SmallButton("X##Model"))
+					component.ModelHandle = AssetHandle(0);
+
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+					{
+						std::string path((const char*)payload->Data, payload->DataSize - 1);
+						AssetHandle handle = AssetManager::ImportAsset(path);
+						if (AssetManager::GetMetadata(handle).Type == AssetType::Model)
+							component.ModelHandle = handle;
+					}
+					ImGui::EndDragDropTarget();
+				}
+				ImGui::TreePop();
+			}
+		}
 		// --- Sprite Renderer ---
 		if (entity.HasComponent<SpriteRendererComponent>())
 		{
@@ -287,6 +371,35 @@ namespace gl {
 				{
 					auto& properties = material->GetProperties();
 					bool changed = false;
+
+					AssetMetadata shaderMetadata =
+						AssetManager::GetMetadata(material->GetShaderHandle());
+					const bool hasShader = shaderMetadata.IsValid()
+						&& shaderMetadata.Type == AssetType::Shader;
+					const std::string shaderName = hasShader
+						? shaderMetadata.FilePath.filename().string()
+						: "None (drag .glsl here)";
+					ImGui::Text("Shader: %s", shaderName.c_str());
+					ImGui::SameLine();
+					if (hasShader && ImGui::SmallButton("X##MaterialShader"))
+					{
+						material->SetShaderHandle(AssetHandle(0));
+						changed = true;
+					}
+					if (ImGui::BeginDragDropTarget())
+					{
+						if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+						{
+							std::string path((const char*)payload->Data, payload->DataSize - 1);
+							AssetHandle handle = AssetManager::ImportAsset(path);
+							if (AssetManager::GetMetadata(handle).Type == AssetType::Shader)
+							{
+								material->SetShaderHandle(handle);
+								changed = true;
+							}
+						}
+						ImGui::EndDragDropTarget();
+					}
 					changed |= ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor));
 					changed |= ImGui::DragFloat("Material Tiling", &properties.TilingFactor,
 						0.05f, 0.01f, 100.0f);

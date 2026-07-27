@@ -65,6 +65,14 @@ namespace gl {
 		SpriteRendererComponent(const glm::vec4& color) : Color(color) {}
 	};
 
+	struct ModelRendererComponent
+	{
+		AssetHandle ModelHandle{ 0 };
+
+		ModelRendererComponent() = default;
+		ModelRendererComponent(const ModelRendererComponent&) = default;
+		explicit ModelRendererComponent(AssetHandle handle) : ModelHandle(handle) {}
+	};
 	struct MaterialComponent
 	{
 		AssetHandle MaterialHandle{ 0 };
@@ -72,6 +80,27 @@ namespace gl {
 		MaterialComponent() = default;
 		MaterialComponent(const MaterialComponent&) = default;
 		explicit MaterialComponent(AssetHandle handle) : MaterialHandle(handle) {}
+	};
+	struct DirectionalLightComponent
+	{
+		glm::vec3 Color{ 1.0f };
+		float Intensity = 1.0f;
+		float AmbientIntensity = 0.05f;
+		bool Enabled = true;
+
+		DirectionalLightComponent() = default;
+		DirectionalLightComponent(const DirectionalLightComponent&) = default;
+	};
+
+	struct PointLightComponent
+	{
+		glm::vec3 Color{ 1.0f };
+		float Intensity = 10.0f;
+		float Range = 10.0f;
+		bool Enabled = true;
+
+		PointLightComponent() = default;
+		PointLightComponent(const PointLightComponent&) = default;
 	};
 	struct CameraComponent
 	{

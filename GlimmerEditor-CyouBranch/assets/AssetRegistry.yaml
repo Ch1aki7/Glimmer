@@ -1,13 +1,31 @@
 AssetRegistry:
+  - Handle: 3818937180868702455
+    Type: Model
+    FilePath: models/dragon.obj
+  - Handle: 8553044135784550654
+    Type: Model
+    FilePath: models/suzanne.obj
   - Handle: 9195328290163695800
     Type: Texture2D
     FilePath: textures/balatro.png
+  - Handle: 9214643851391544329
+    Type: Model
+    FilePath: models/planet.obj
+  - Handle: 9710033314010145366
+    Type: Model
+    FilePath: models/bunny.obj
+  - Handle: 9736745633360246474
+    Type: Material
+    FilePath: materials/DefaultPBR.glmat
   - Handle: 10096056566838588892
     Type: Texture2D
     FilePath: textures/STS.png
   - Handle: 13777784352782102236
     Type: Material
     FilePath: materials/DefaultSprite.glmat
+  - Handle: 15365846500528399802
+    Type: Shader
+    FilePath: shaders/PBRModel.glsl
   - Handle: 18204455804917931031
     Type: Texture2D
     FilePath: textures/Henry.jpg

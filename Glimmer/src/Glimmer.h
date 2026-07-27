@@ -17,7 +17,9 @@
 
 // --- 渲染器部分 ---
 #include "Glimmer/Renderer/Renderer.h"
+#include "Glimmer/Renderer/LightEnvironment.h"
 #include "Glimmer/Renderer/Renderer2D.h"
+#include "Glimmer/Renderer/Renderer3D.h"
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Buffer.h"
 #include "Glimmer/Renderer/Shader.h"

@@ -2,6 +2,7 @@
 #include "RenderCommand.h"
 #include "Shader.h"
 #include "OrthographicCamera.h"
+#include "LightEnvironment.h"
 
 namespace gl {
 
@@ -14,6 +15,7 @@ namespace gl {
 		static void BeginScene(OrthographicCamera& camera);
 		static void BeginScene(const glm::mat4& viewProjection);
 		static void EndScene();
+		static void UploadLightEnvironment(const LightEnvironment& environment);
 
 		static inline glm::mat4 GetViewProjection() { return s_SceneData->ViewProjectionMatrix; }
 		static void Submit(const Ref<Shader>& shader,

@@ -1,5 +1,5 @@
 #type vertex
-#version 330 core
+#version 450 core
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec2 a_TexCoord;
@@ -8,7 +8,7 @@ uniform mat4 u_ViewProjection;
 uniform sampler2D u_HeightMap;
 uniform float u_MaxHeight;
 uniform float u_UVScale;
-uniform vec2 u_TexelSize;  // 1.0 / heightmap width, 1.0 / heightmap height
+uniform vec2 u_TexelSize;
 uniform float u_SampleSpacing;
 
 out vec3 v_WorldPos;
@@ -24,34 +24,29 @@ float SampleHeight(vec2 uv)
 void main()
 {
 	vec2 uv = a_TexCoord * u_UVScale;
-	float h = SampleHeight(uv);
+	float height = SampleHeight(uv);
+	float heightLeft = SampleHeight(uv - vec2(u_TexelSize.x, 0.0));
+	float heightRight = SampleHeight(uv + vec2(u_TexelSize.x, 0.0));
+	float heightDown = SampleHeight(uv - vec2(0.0, u_TexelSize.y));
+	float heightUp = SampleHeight(uv + vec2(0.0, u_TexelSize.y));
 
-	// 采样邻居高度 → 计算梯度 → 推导法线
-	float hL = SampleHeight(uv - vec2(u_TexelSize.x, 0.0));
-	float hR = SampleHeight(uv + vec2(u_TexelSize.x, 0.0));
-	float hD = SampleHeight(uv - vec2(0.0, u_TexelSize.y));
-	float hU = SampleHeight(uv + vec2(0.0, u_TexelSize.y));
+	vec3 worldPosition = a_Position;
+	worldPosition.y = height * u_MaxHeight;
 
-	vec3 worldPos = a_Position;
-	worldPos.y = h * u_MaxHeight;
-
-	// 梯度（世界空间）：dx = 两邻居间距 1 格，dy = 高度差 * MaxHeight
-	float gridSpacing = 1.0;  // 顶点间距
+	float sampleSpacing = max(u_SampleSpacing, 0.0001);
 	vec3 normal = normalize(vec3(
-		(hL - hR) * u_MaxHeight / (2.0 * max(u_SampleSpacing, 0.0001)),
+		(heightLeft - heightRight) * u_MaxHeight / (2.0 * sampleSpacing),
 		1.0,
-		(hD - hU) * u_MaxHeight / (2.0 * max(u_SampleSpacing, 0.0001))
-	));
+		(heightDown - heightUp) * u_MaxHeight / (2.0 * sampleSpacing)));
 
-	v_WorldPos = worldPos;
-	v_Normal   = normal;
-	v_Height   = h;
-
-	gl_Position = u_ViewProjection * vec4(worldPos, 1.0);
+	v_WorldPos = worldPosition;
+	v_Normal = normal;
+	v_Height = height;
+	gl_Position = u_ViewProjection * vec4(worldPosition, 1.0);
 }
 
 #type fragment
-#version 330 core
+#version 450 core
 
 layout(location = 0) out vec4 color;
 
@@ -59,31 +54,73 @@ in vec3 v_WorldPos;
 in vec3 v_Normal;
 in float v_Height;
 
-uniform vec3 u_LightDir = vec3(0.5, 1.0, 0.3);
-uniform vec3 u_CameraPos = vec3(0.0, 30.0, 0.0);
+uniform vec3 u_CameraPos;
+
+struct PointLightData
+{
+	vec4 PositionRange;
+	vec4 ColorIntensity;
+};
+
+layout(std140, binding = 1) uniform LightEnvironment
+{
+	vec4 u_DirectionalDirectionIntensity;
+	vec4 u_DirectionalColor;
+	vec4 u_AmbientColorIntensity;
+	uvec4 u_LightCounts;
+	PointLightData u_PointLights[16];
+};
+
+vec3 EvaluateLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
+	vec3 radiance, vec3 baseColor)
+{
+	float diffuse = max(dot(normal, lightDirection), 0.0);
+	vec3 halfwayDirection = normalize(lightDirection + viewDirection);
+	float specular = pow(max(dot(normal, halfwayDirection), 0.0), 32.0) * 0.15;
+	return baseColor * diffuse * radiance + specular * radiance;
+}
 
 void main()
 {
-	// 高度混合材质
-	vec3 grass  = vec3(0.15, 0.55, 0.15);
-	vec3 rock   = vec3(0.45, 0.40, 0.35);
-	vec3 snow   = vec3(0.92, 0.92, 0.96);
+	vec3 grass = vec3(0.15, 0.55, 0.15);
+	vec3 rock = vec3(0.45, 0.40, 0.35);
+	vec3 snow = vec3(0.92, 0.92, 0.96);
 
-	float t1 = smoothstep(0.05, 0.35, v_Height);
-	float t2 = smoothstep(0.55, 0.80, v_Height);
-	vec3 baseColor = mix(grass, rock, t1);
-	baseColor = mix(baseColor, snow, t2);
+	float rockBlend = smoothstep(0.05, 0.35, v_Height);
+	float snowBlend = smoothstep(0.55, 0.80, v_Height);
+	vec3 baseColor = mix(grass, rock, rockBlend);
+	baseColor = mix(baseColor, snow, snowBlend);
 
-	// Phong 光照
-	vec3 N = normalize(v_Normal);
-	vec3 L = normalize(u_LightDir);
-	vec3 V = normalize(u_CameraPos - v_WorldPos);
-	vec3 H = normalize(L + V);
+	vec3 normal = normalize(v_Normal);
+	vec3 viewDirection = normalize(u_CameraPos - v_WorldPos);
+	vec3 result = baseColor * u_AmbientColorIntensity.rgb * u_AmbientColorIntensity.a;
 
-	float ambient  = 0.25;
-	float diffuse  = max(dot(N, L), 0.0) * 0.6;
-	float specular = pow(max(dot(N, H), 0.0), 16.0) * 0.15;
+	float directionalIntensity = u_DirectionalDirectionIntensity.w;
+	if (directionalIntensity > 0.0)
+	{
+		vec3 lightDirection = normalize(-u_DirectionalDirectionIntensity.xyz);
+		vec3 radiance = u_DirectionalColor.rgb * directionalIntensity;
+		result += EvaluateLight(normal, viewDirection, lightDirection, radiance, baseColor);
+	}
 
-	vec3 lit = baseColor * (ambient + diffuse) + specular * vec3(1.0);
-	color = vec4(lit, 1.0);
+	uint pointLightCount = min(u_LightCounts.x, 16u);
+	for (uint index = 0u; index < pointLightCount; ++index)
+	{
+		vec3 toLight = u_PointLights[index].PositionRange.xyz - v_WorldPos;
+		float distanceToLight = length(toLight);
+		float range = max(u_PointLights[index].PositionRange.w, 0.01);
+		if (distanceToLight >= range)
+			continue;
+
+		vec3 lightDirection = toLight / max(distanceToLight, 0.0001);
+		float normalizedDistance = distanceToLight / range;
+		float rangeFalloff = max(1.0 - normalizedDistance * normalizedDistance, 0.0);
+		float attenuation = rangeFalloff * rangeFalloff
+			/ max(distanceToLight * distanceToLight, 1.0);
+		vec3 radiance = u_PointLights[index].ColorIntensity.rgb
+			* u_PointLights[index].ColorIntensity.w * attenuation;
+		result += EvaluateLight(normal, viewDirection, lightDirection, radiance, baseColor);
+	}
+
+	color = vec4(result, 1.0);
 }

@@ -7,6 +7,8 @@ namespace gl {
 
 	class Texture2D;
 	class Material;
+	class Model;
+	class Shader;
 
 	class AssetManager
 	{
@@ -23,6 +25,8 @@ namespace gl {
 
 		static Ref<Texture2D> GetTexture2D(AssetHandle handle);
 		static Ref<Material> GetMaterial(AssetHandle handle);
+		static Ref<Model> GetModel(AssetHandle handle);
+		static Ref<Shader> GetShader(AssetHandle handle);
 
 	private:
 		static AssetType GetAssetTypeFromExtension(const std::filesystem::path& path);

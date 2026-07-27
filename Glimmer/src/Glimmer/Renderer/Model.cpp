@@ -1,6 +1,5 @@
 #include "glpch.h"
 #include "Model.h"
-#include "Glimmer/Renderer/Renderer.h"
 #include "tiny_obj_loader.h"
 #include <unordered_map>
 #define GLM_ENABLE_EXPERIMENTAL
@@ -139,22 +138,4 @@ namespace gl {
 		}
 		GL_CORE_INFO("Model Loaded: {0}. Submeshes by material: {1}", path, m_Meshes.size());
 	}
-
-	void Model::Draw(const Ref<Shader>& shader, const glm::mat4& transform)
-	{
-		for (auto& mesh : m_Meshes)
-		{
-			shader->UploadUniformMat4("u_ViewProjection", Renderer::GetViewProjection());
-			shader->UploadUniformMat4("u_Transform", transform);
-
-			if (mesh->GetTexture()) {
-				mesh->GetTexture()->Bind(0);
-				shader->UploadUniformInt("u_Texture", 0);
-			}
-
-			mesh->Bind();
-			RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
-		}
-	}
-
 }

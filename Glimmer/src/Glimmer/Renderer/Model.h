@@ -11,7 +11,8 @@ namespace gl {
 		Model(const std::string& path);
 
 		// 渲染模型的所有子网格
-		void Draw(const Ref<Shader>& shader, const glm::mat4& transform);
+		const std::vector<Ref<Mesh>>& GetMeshes() const { return m_Meshes; }
+		bool IsValid() const { return !m_Meshes.empty(); }
 
 	private:
 		std::vector<Ref<Mesh>> m_Meshes;

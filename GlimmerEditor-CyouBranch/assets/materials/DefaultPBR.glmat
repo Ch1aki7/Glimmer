@@ -1,0 +1,7 @@
+Material:
+  Shader: 15365846500528399802
+  BaseColor: [0.9046154, 0.13686778, 0.091853276, 1]
+  BaseColorTexture: 0
+  TilingFactor: 1
+  Metallic: 0.15
+  Roughness: 0.42

@@ -30,10 +30,12 @@ namespace gl {
 		void OnRuntimeStart();
 		void OnRuntimeStop();
 		void OnUpdateRuntime(Timestep ts);
-		void OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection);
+		void OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection, const glm::vec3& cameraPosition);
 		void OnViewportResize(uint32_t width, uint32_t height);
 
 	private:
+		void UploadLightEnvironment();
+
 		template<typename T>
 		void OnComponentAdded(Entity entity, T& component);
 

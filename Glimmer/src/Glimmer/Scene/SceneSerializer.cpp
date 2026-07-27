@@ -90,6 +90,19 @@ namespace gl {
 			comp.TilingFactor = node["TilingFactor"].as<float>();
 	}
 
+	static void SerializeComponent(YAML::Emitter& out, const ModelRendererComponent& comp)
+	{
+		out << YAML::Key << "ModelRendererComponent" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Model" << YAML::Value
+			<< static_cast<uint64_t>(comp.ModelHandle);
+		out << YAML::EndMap;
+	}
+
+	static void DeserializeComponent(const YAML::Node& node, ModelRendererComponent& comp)
+	{
+		if (node["Model"])
+			comp.ModelHandle = AssetHandle(node["Model"].as<uint64_t>());
+	}
 	static void SerializeComponent(YAML::Emitter& out, const MaterialComponent& comp)
 	{
 		out << YAML::Key << "MaterialComponent" << YAML::Value << YAML::BeginMap;
@@ -102,6 +115,41 @@ namespace gl {
 	{
 		if (node["Material"])
 			comp.MaterialHandle = AssetHandle(node["Material"].as<uint64_t>());
+	}
+	static void SerializeComponent(YAML::Emitter& out, const DirectionalLightComponent& comp)
+	{
+		out << YAML::Key << "DirectionalLightComponent" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Color" << YAML::Value; SerializeVec3(out, comp.Color);
+		out << YAML::Key << "Intensity" << YAML::Value << comp.Intensity;
+		out << YAML::Key << "AmbientIntensity" << YAML::Value << comp.AmbientIntensity;
+		out << YAML::Key << "Enabled" << YAML::Value << comp.Enabled;
+		out << YAML::EndMap;
+	}
+
+	static void DeserializeComponent(const YAML::Node& node, DirectionalLightComponent& comp)
+	{
+		if (node["Color"]) DeserializeVec3(node["Color"], comp.Color);
+		if (node["Intensity"]) comp.Intensity = node["Intensity"].as<float>();
+		if (node["AmbientIntensity"]) comp.AmbientIntensity = node["AmbientIntensity"].as<float>();
+		if (node["Enabled"]) comp.Enabled = node["Enabled"].as<bool>();
+	}
+
+	static void SerializeComponent(YAML::Emitter& out, const PointLightComponent& comp)
+	{
+		out << YAML::Key << "PointLightComponent" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Color" << YAML::Value; SerializeVec3(out, comp.Color);
+		out << YAML::Key << "Intensity" << YAML::Value << comp.Intensity;
+		out << YAML::Key << "Range" << YAML::Value << comp.Range;
+		out << YAML::Key << "Enabled" << YAML::Value << comp.Enabled;
+		out << YAML::EndMap;
+	}
+
+	static void DeserializeComponent(const YAML::Node& node, PointLightComponent& comp)
+	{
+		if (node["Color"]) DeserializeVec3(node["Color"], comp.Color);
+		if (node["Intensity"]) comp.Intensity = node["Intensity"].as<float>();
+		if (node["Range"]) comp.Range = node["Range"].as<float>();
+		if (node["Enabled"]) comp.Enabled = node["Enabled"].as<bool>();
 	}
 	static void SerializeComponent(YAML::Emitter& out, const CameraComponent& comp)
 	{
@@ -142,7 +190,7 @@ namespace gl {
 		YAML::Emitter out;
 		out << YAML::BeginMap;
 		out << YAML::Key << "Scene" << YAML::Value << "Untitled";
-		out << YAML::Key << "Version" << YAML::Value << 3;
+		out << YAML::Key << "Version" << YAML::Value << 5;
 		out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
 
 		m_Scene->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
@@ -160,8 +208,14 @@ namespace gl {
 				SerializeComponent(out, entity.GetComponent<TransformComponent>());
 			if (entity.HasComponent<SpriteRendererComponent>())
 				SerializeComponent(out, entity.GetComponent<SpriteRendererComponent>());
+			if (entity.HasComponent<ModelRendererComponent>())
+				SerializeComponent(out, entity.GetComponent<ModelRendererComponent>());
 			if (entity.HasComponent<MaterialComponent>())
 				SerializeComponent(out, entity.GetComponent<MaterialComponent>());
+			if (entity.HasComponent<DirectionalLightComponent>())
+				SerializeComponent(out, entity.GetComponent<DirectionalLightComponent>());
+			if (entity.HasComponent<PointLightComponent>())
+				SerializeComponent(out, entity.GetComponent<PointLightComponent>());
 			if (entity.HasComponent<CameraComponent>())
 				SerializeComponent(out, entity.GetComponent<CameraComponent>());
 
@@ -218,10 +272,25 @@ namespace gl {
 					auto& sc = entity.AddComponent<SpriteRendererComponent>();
 					DeserializeComponent(comps["SpriteRendererComponent"], sc);
 				}
+				if (comps["ModelRendererComponent"])
+				{
+					auto& model = entity.AddComponent<ModelRendererComponent>();
+					DeserializeComponent(comps["ModelRendererComponent"], model);
+				}
 				if (comps["MaterialComponent"])
 				{
 					auto& mc = entity.AddComponent<MaterialComponent>();
 					DeserializeComponent(comps["MaterialComponent"], mc);
+				}
+				if (comps["DirectionalLightComponent"])
+				{
+					auto& light = entity.AddComponent<DirectionalLightComponent>();
+					DeserializeComponent(comps["DirectionalLightComponent"], light);
+				}
+				if (comps["PointLightComponent"])
+				{
+					auto& light = entity.AddComponent<PointLightComponent>();
+					DeserializeComponent(comps["PointLightComponent"], light);
 				}
 				if (comps["CameraComponent"])
 				{

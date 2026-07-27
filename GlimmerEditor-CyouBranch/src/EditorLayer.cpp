@@ -90,33 +90,25 @@ namespace gl {
 		const AssetHandle defaultMaterialHandle =
 			AssetManager::ImportAsset("assets/materials/DefaultSprite.glmat");
 		AssetManager::GetMaterial(defaultMaterialHandle);
+		const AssetHandle pbrShaderHandle =
+			AssetManager::ImportAsset("assets/shaders/PBRModel.glsl");
+		const AssetHandle defaultPBRMaterialHandle =
+			AssetManager::ImportAsset("assets/materials/DefaultPBR.glmat");
+		const AssetHandle suzanneModelHandle =
+			AssetManager::ImportAsset("assets/models/suzanne.obj");
+
+		if (Ref<Material> material = AssetManager::GetMaterial(defaultPBRMaterialHandle))
+		{
+			if (material->GetShaderHandle() != pbrShaderHandle)
+			{
+				material->SetShaderHandle(pbrShaderHandle);
+				material->Save();
+			}
+		}
 
 		m_WhiteTexture = Texture2D::Create(1, 1);
 		uint32_t whitePixel = 0xffffffff;
 		m_WhiteTexture->SetData(&whitePixel, sizeof(uint32_t));
-
-		m_3DShader = m_ShaderLib.Load("Model3D", "assets/shaders/Model3D.glsl");
-
-		auto loadModel = [&](const std::string& path) {
-			auto model = CreateRef<Model>(path);
-			if (model) {
-				m_Models.push_back(model);
-				auto lastSlash = path.find_last_of("/\\");
-				auto lastDot = path.rfind('.');
-				auto start = (lastSlash == std::string::npos) ? 0 : lastSlash + 1;
-				auto count = (lastDot == std::string::npos) ? path.size() - start : lastDot - start;
-				m_ModelNames.push_back(path.substr(start, count));
-			}
-			};
-
-		loadModel("assets/models/bunny.obj");
-		loadModel("assets/models/dragon.obj");
-		loadModel("assets/models/planet.obj");
-		loadModel("assets/models/spacecraft.obj");
-		loadModel("assets/models/suzanne.obj");
-
-		GL_CORE_INFO("Loaded {0} models", m_Models.size());
-
 
 		// --- 地形系统 ---
 		m_TerrainShader = m_ShaderLib.Load("Terrain", "assets/shaders/Terrain.glsl");
@@ -180,6 +172,20 @@ namespace gl {
 		blueSquare.GetComponent<TransformComponent>().Translation = { 2.0f, -1.0f, -3.1f };
 
 		auto logicNode = m_ActiveScene->CreateEntity("Logic Controller");
+
+		auto pbrModelEntity = m_ActiveScene->CreateEntity("PBR Suzanne");
+		pbrModelEntity.AddComponent<ModelRendererComponent>(suzanneModelHandle);
+		pbrModelEntity.AddComponent<MaterialComponent>(defaultPBRMaterialHandle);
+
+		auto sunEntity = m_ActiveScene->CreateEntity("Sun");
+		sunEntity.AddComponent<DirectionalLightComponent>();
+		sunEntity.GetComponent<TransformComponent>().Rotation = { -50.0f, 30.0f, 0.0f };
+
+		auto pointLightEntity = m_ActiveScene->CreateEntity("Point Light");
+		auto& pointLight = pointLightEntity.AddComponent<PointLightComponent>();
+		pointLight.Intensity = 80.0f;
+		pointLight.Range = 40.0f;
+		pointLightEntity.GetComponent<TransformComponent>().Translation = { 0.0f, 12.0f, 0.0f };
 
 		// --- 层级面板 ---
 		m_HierarchyPanel.SetContext(m_ActiveScene);
@@ -248,7 +254,7 @@ namespace gl {
 			if (m_SceneState == SceneState::Edit)
 			{
 				glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
-				m_ActiveScene->OnUpdateEditor(ts, vp);
+				m_ActiveScene->OnUpdateEditor(ts, vp, m_EditorCamera.GetPosition());
 			}
 			else
 			{
@@ -456,19 +462,9 @@ namespace gl {
 
 		// 3D Settings
 		ImGui::Begin("3D Settings");
-		ImGui::Text("Select Lighting Model:");
-		if (ImGui::Combo("Shader Type", &m_SelectedShaderIndex, m_ShaderNames, IM_ARRAYSIZE(m_ShaderNames)))
-			m_3DShader = m_ShaderLib.Get(m_ShaderNames[m_SelectedShaderIndex]);
-
-		if (!m_ModelNames.empty())
-		{
-			std::vector<const char*> modelNameCStrs;
-			for (auto& name : m_ModelNames)
-				modelNameCStrs.push_back(name.c_str());
-			ImGui::Text("Select Model:");
-			ImGui::Combo("##ModelSelect", &m_SelectedModelIndex, modelNameCStrs.data(), (int)modelNameCStrs.size());
-		}
-
+		ImGui::TextWrapped(
+			"3D rendering is entity-driven. Assign Model Renderer and Material "
+			"components in the Properties panel.");
 		ImGui::Separator();
 		const char* gizmoNames[] = { "Translate", "Rotate", "Scale" };
 		ImGui::Combo("Gizmo", &m_GizmoType, gizmoNames, 3);
@@ -480,7 +476,6 @@ namespace gl {
 		ImGui::SeparatorText("Terrain Test");
 		ImGui::Checkbox("Use Procedural Height Map", &m_UseProceduralTerrain);
 		ImGui::DragFloat("Terrain Max Height", &m_TerrainMaxHeight, 0.1f, 0.0f, 100.0f);
-		ImGui::DragFloat3("Light Position", glm::value_ptr(m_LightPos), 0.1f);
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 		ImGui::End();
 

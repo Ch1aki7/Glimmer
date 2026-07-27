@@ -3,6 +3,8 @@
 
 #include "Glimmer/Renderer/Texture.h"
 #include "Glimmer/Renderer/Material.h"
+#include "Glimmer/Renderer/Model.h"
+#include "Glimmer/Renderer/Shader.h"
 
 #include <yaml-cpp/yaml.h>
 #include <fstream>
@@ -20,6 +22,8 @@ namespace gl {
 			std::unordered_map<std::string, AssetHandle> PathToHandle;
 			std::unordered_map<AssetHandle, Ref<Texture2D>> TextureCache;
 			std::unordered_map<AssetHandle, Ref<Material>> MaterialCache;
+			std::unordered_map<AssetHandle, Ref<Model>> ModelCache;
+			std::unordered_map<AssetHandle, Ref<Shader>> ShaderCache;
 			std::mutex Mutex;
 			bool Initialized = false;
 		};
@@ -85,6 +89,8 @@ namespace gl {
 		std::scoped_lock lock(s_Data.Mutex);
 		s_Data.TextureCache.clear();
 		s_Data.MaterialCache.clear();
+		s_Data.ModelCache.clear();
+		s_Data.ShaderCache.clear();
 		s_Data.PathToHandle.clear();
 		s_Data.Registry.clear();
 		s_Data.AssetDirectory.clear();
@@ -211,6 +217,49 @@ namespace gl {
 		if (material)
 			s_Data.MaterialCache.emplace(handle, material);
 		return material;
+	}
+	Ref<Model> AssetManager::GetModel(AssetHandle handle)
+	{
+		std::scoped_lock lock(s_Data.Mutex);
+		if (static_cast<uint64_t>(handle) == 0)
+			return nullptr;
+
+		auto cached = s_Data.ModelCache.find(handle);
+		if (cached != s_Data.ModelCache.end())
+			return cached->second;
+
+		auto metadata = s_Data.Registry.find(handle);
+		if (metadata == s_Data.Registry.end() || metadata->second.Type != AssetType::Model)
+			return nullptr;
+
+		Ref<Model> model = CreateRef<Model>(
+			(s_Data.AssetDirectory / metadata->second.FilePath).string());
+		if (!model->IsValid())
+			return nullptr;
+
+		s_Data.ModelCache.emplace(handle, model);
+		return model;
+	}
+
+	Ref<Shader> AssetManager::GetShader(AssetHandle handle)
+	{
+		std::scoped_lock lock(s_Data.Mutex);
+		if (static_cast<uint64_t>(handle) == 0)
+			return nullptr;
+
+		auto cached = s_Data.ShaderCache.find(handle);
+		if (cached != s_Data.ShaderCache.end())
+			return cached->second;
+
+		auto metadata = s_Data.Registry.find(handle);
+		if (metadata == s_Data.Registry.end() || metadata->second.Type != AssetType::Shader)
+			return nullptr;
+
+		Ref<Shader> shader = Shader::Create(
+			(s_Data.AssetDirectory / metadata->second.FilePath).string());
+		if (shader)
+			s_Data.ShaderCache.emplace(handle, shader);
+		return shader;
 	}
 	AssetType AssetManager::GetAssetTypeFromExtension(const std::filesystem::path& path)
 	{
