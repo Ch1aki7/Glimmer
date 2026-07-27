@@ -23,6 +23,7 @@ namespace gl {
 		const glm::vec3& GetPosition()         const { return m_Position; }
 		float GetDistance()                    const { return m_Distance; }
 
+		void SetInputEnabled(bool enabled) { m_InputEnabled = enabled; }
 		void SetViewportSize(float width, float height);
 
 	private:
@@ -57,6 +58,8 @@ namespace gl {
 		float m_PanSpeed = 0.01f;
 		float m_RotationSpeed = 0.3f;
 		float m_ZoomSpeed = 0.1f;
+		float m_MoveSpeed = 8.0f;
+		bool m_InputEnabled = false;
 	};
 
 }

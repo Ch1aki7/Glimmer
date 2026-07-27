@@ -17,36 +17,63 @@ namespace gl {
 
 	void EditorCamera::OnUpdate(Timestep ts)
 	{
-		// 右键拖拽 → 旋转
+		auto [mouseX, mouseY] = Input::GetMousePosition();
+		const glm::vec2 mouse = { mouseX, mouseY };
+
+		if (!m_InputEnabled)
+		{
+			m_InitialRightMouse = mouse;
+			m_InitialMiddleMouse = mouse;
+			return;
+		}
+
 		if (Input::IsMouseButtonPressed(GL_MOUSE_BUTTON_RIGHT))
 		{
-			auto [x, y] = Input::GetMousePosition();
-			glm::vec2 mouse = { x, y };
-			glm::vec2 delta = (mouse - m_InitialRightMouse) * m_RotationSpeed;
-			m_Yaw   += delta.x;
-			m_Pitch -= delta.y;
-			m_Pitch = glm::clamp(m_Pitch, -89.0f, 89.0f); // 限制俯仰
+			const glm::vec2 delta =
+				(mouse - m_InitialRightMouse) * m_RotationSpeed;
+			m_Yaw += delta.x;
+			m_Pitch = glm::clamp(m_Pitch - delta.y, -89.0f, 89.0f);
 			m_InitialRightMouse = mouse;
 			UpdateView();
+
+			glm::vec3 moveDirection{ 0.0f };
+			if (Input::IsKeyPressed(GL_KEY_W))
+				moveDirection += GetForwardDirection();
+			if (Input::IsKeyPressed(GL_KEY_S))
+				moveDirection -= GetForwardDirection();
+			if (Input::IsKeyPressed(GL_KEY_D))
+				moveDirection += GetRightDirection();
+			if (Input::IsKeyPressed(GL_KEY_A))
+				moveDirection -= GetRightDirection();
+
+			if (glm::dot(moveDirection, moveDirection) > 0.0f)
+			{
+				const bool accelerated =
+					Input::IsKeyPressed(GL_KEY_LEFT_SHIFT)
+					|| Input::IsKeyPressed(GL_KEY_RIGHT_SHIFT);
+				const float speed = m_MoveSpeed * (accelerated ? 3.0f : 1.0f);
+				m_FocalPoint += glm::normalize(moveDirection)
+					* speed * static_cast<float>(ts);
+				UpdateView();
+			}
 		}
 		else
 		{
-			m_InitialRightMouse = { Input::GetMousePosition().first, Input::GetMousePosition().second };
+			m_InitialRightMouse = mouse;
 		}
 
-		// 中键拖拽 → 平移
 		if (Input::IsMouseButtonPressed(GL_MOUSE_BUTTON_MIDDLE))
 		{
-			auto [x, y] = Input::GetMousePosition();
-			glm::vec2 mouse = { x, y };
-			glm::vec2 delta = (mouse - m_InitialMiddleMouse) * m_PanSpeed * m_Distance;
-			m_FocalPoint += -GetRightDirection() * delta.x + GetUpDirection() * delta.y;
+			const glm::vec2 delta =
+				(mouse - m_InitialMiddleMouse) * m_PanSpeed * m_Distance;
+			m_FocalPoint += -GetRightDirection() * delta.x
+				+ GetUpDirection() * delta.y;
 			m_InitialMiddleMouse = mouse;
 			UpdateView();
 		}
 		else
 		{
-			m_InitialMiddleMouse = { Input::GetMousePosition().first, Input::GetMousePosition().second };
+			m_InitialMiddleMouse = mouse;
 		}
 	}
 

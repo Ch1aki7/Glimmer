@@ -249,6 +249,7 @@ namespace gl {
 		m_TerrainPanel.OnUpdate();
 
 		// --- 编辑器相机（仅编辑模式） ---
+		m_EditorCamera.SetInputEnabled(m_ViewportHovered);
 		if (m_SceneState == SceneState::Edit)
 			m_EditorCamera.OnUpdate(ts);
 
