@@ -11126,6 +11126,226 @@ Documents/
 
 下一步建议先加入 `TextureColorSpace` 和纹理用途元数据，再实现 `TextureCube` 与可见天空盒。完成 Cubemap 资源链后，再进入 Irradiance、Prefilter 和 BRDF LUT，建立完整 IBL。
 
+## 天空盒与 SkyLight 资产化
+
+### 实现结果
+
+天空盒已从 `EditorLayer` 内部测试纹理迁移为正式场景资产链：
+
+1. `TextureCube` 表示后端无关的 GPU 立方体纹理；
+2. `.glsky` 描述六个方向的图片；
+3. `Cubemap` 解析描述并创建 `TextureCube`；
+4. `AssetManager` 为 `.glsky` 分配 `AssetHandle` 并缓存资源；
+5. `SkyLightComponent` 将 Cubemap 挂载到场景实体；
+6. Sky Light 可随 `.glimmer` 保存、加载并复制到播放场景；
+7. `.glsky` 可拖到 Properties 或直接拖入 Viewport；
+8. 天空盒写入 HDR Scene Framebuffer，并统一经过 Tone Mapping。
+
+默认新场景只创建 `Sun`、`Point Light` 和 `Sky Light`。之前的彩色方块、Suzanne、逻辑节点与测试实体相机已经移除。
+
+### 文件与职责
+
+```text
+Glimmer/src/Glimmer/
+├─ Asset/AssetManager.*       .glsky 导入、句柄与 Cubemap 缓存
+├─ Renderer/TextureCube.*     通用立方体纹理接口
+├─ Renderer/Cubemap.*         .glsky 解析与六面图片导入
+├─ Renderer/SkyboxRenderer.*  天空盒绘制
+└─ Scene/
+   ├─ Components.h            SkyLightComponent
+   ├─ Scene.*                 Sky Light 查询与场景复制
+   └─ SceneSerializer.cpp     Sky Light 场景序列化
+
+Glimmer/src/Platform/OpenGL/OpenGLTextureCube.*
+GlimmerEditor-CyouBranch/assets/skyboxes/*.glsky
+GlimmerEditor-CyouBranch/assets/textures/skybox/<name>/*
+```
+
+核心库只保存通用资产、渲染和场景能力；示例资源、Shader 与编辑器拖放逻辑保留在编辑器项目。
+
+### `.glsky` 描述格式
+
+推荐目录：
+
+```text
+assets/
+├─ skyboxes/sunset.glsky
+└─ textures/skybox/sunset/
+   ├─ right.jpg
+   ├─ left.jpg
+   ├─ top.jpg
+   ├─ bottom.jpg
+   ├─ front.jpg
+   └─ back.jpg
+```
+
+标准描述：
+
+```yaml
+Cubemap:
+  ColorSpace: SRGB
+  Right: ../textures/skybox/sunset/right.jpg
+  Left: ../textures/skybox/sunset/left.jpg
+  Top: ../textures/skybox/sunset/top.jpg
+  Bottom: ../textures/skybox/sunset/bottom.jpg
+  Front: ../textures/skybox/sunset/front.jpg
+  Back: ../textures/skybox/sunset/back.jpg
+  MissingFaceColor: [20, 20, 20, 255]
+```
+
+图片路径相对于 `.glsky` 所在目录解析，不依赖可执行文件目录或本机绝对路径。普通 JPG/PNG 天空照片使用 `SRGB`，只有明确存储线性数据的图片才使用 `Linear`。
+
+六面映射：
+
+| 字段 | 方向 | OpenGL 面 |
+|---|---|---|
+| `Right` | +X | `GL_TEXTURE_CUBE_MAP_POSITIVE_X` |
+| `Left` | -X | `GL_TEXTURE_CUBE_MAP_NEGATIVE_X` |
+| `Top` | +Y | `GL_TEXTURE_CUBE_MAP_POSITIVE_Y` |
+| `Bottom` | -Y | `GL_TEXTURE_CUBE_MAP_NEGATIVE_Y` |
+| `Front` | +Z | `GL_TEXTURE_CUBE_MAP_POSITIVE_Z` |
+| `Back` | -Z | `GL_TEXTURE_CUBE_MAP_NEGATIVE_Z` |
+
+当前 `desert-evening` 示例只有五面，因此使用：
+
+```yaml
+Bottom: ""
+MissingFaceColor: [52, 38, 26, 255]
+```
+
+加载器会在运行时生成同分辨率的纯色底面，不修改原始图片。
+
+### 六面图片导入流程
+
+```text
+.glsky
+  → AssetManager::ImportAsset()
+  → AssetType::Cubemap + AssetHandle
+  → AssetManager::GetCubemap()
+  → Cubemap::Reload()
+  → 解析路径与颜色空间
+  → stb_image 解码为 RGBA
+  → 检查正方形和尺寸一致性
+  → TextureCube::Create() / SetFaceData()
+  → OpenGLTextureCube 上传六面
+```
+
+导入规则：
+
+- 至少存在一个有效图片面；
+- 每张有效图片必须为正方形；
+- 所有有效图片分辨率必须一致；
+- 空路径使用 `MissingFaceColor`；
+- 错误路径会停止创建并输出日志，不会静默回退；
+- 同一 `.glsky` 被多个实体引用时复用 AssetManager 缓存，不重复创建 GPU 纹理。
+
+### `SkyLightComponent`
+
+```cpp
+struct SkyLightComponent
+{
+    AssetHandle CubemapHandle{ 0 };
+    float Intensity = 1.0f;
+    bool Enabled = true;
+};
+```
+
+- `CubemapHandle` 指向 `AssetType::Cubemap`；
+- `Intensity` 在 HDR Tone Mapping 之前调节天空盒强度；
+- `Enabled` 控制组件是否参与天空盒查询与绘制。
+
+`Scene::GetSkyLightEntity()` 返回第一个启用的 Sky Light。当前场景建议只保留一个主 Sky Light，多环境混合尚未实现。`Scene::Copy()` 会复制组件，因此编辑场景与播放场景共享只读 Cubemap 资产，但组件状态相互独立。
+
+### 场景序列化
+
+场景格式已提升到 `Version: 6`：
+
+```yaml
+SkyLightComponent:
+  Cubemap: 14395647676425568118
+  Intensity: 1.0
+  Enabled: true
+```
+
+场景保存 Asset Handle，而不是绝对路径。实际文件由 `AssetRegistry.yaml` 解析：
+
+```yaml
+- Handle: 14395647676425568118
+  Type: Cubemap
+  FilePath: skyboxes/desert-evening.glsky
+```
+
+因此 `.glimmer`、`.glsky` 和 `AssetRegistry.yaml` 必须保持一致，不要随意修改已被场景引用的 Handle。
+
+### 编辑器操作
+
+Properties 工作流：
+
+1. 创建或选中实体；
+2. 点击 `+ Sky Light`；
+3. 从 Content Browser 将 `.glsky` 拖到 Cubemap 属性；
+4. 调整 `Enabled` 和 `Intensity`；
+5. 保存 `.glimmer`。
+
+也可以直接将 `.glsky` 拖入 Viewport：
+
+- 有选中实体：为其添加 Sky Light 或替换 Cubemap；
+- 无选中实体：自动创建 `Sky Light` 实体；
+- 完成后自动选中目标实体。
+
+Content Browser 继续使用统一的 `SCENE_FILE` payload 传递路径；接收端导入后，组件只保存 Asset Handle。
+
+### 渲染流程
+
+```text
+EditorCamera / Primary Camera
+  → Scene::GetSkyLightEntity()
+  → AssetManager::GetCubemap(handle)
+  → SkyboxRenderer::Draw()
+  → HDR Scene FBO (RGBA16F)
+  → ToneMapping.glsl
+  → Display FBO (RGBA8)
+  → ImGui Viewport
+```
+
+天空盒 View 矩阵移除平移，因此只随相机旋转；顶点输出使用 `xyww` 将深度放到远平面；绘制时深度函数临时切换为 `LessEqual`，结束后恢复 `Less`。天空盒进入 RGBA16F，与地形和模型统一经过曝光及 Tone Mapping。
+
+### 当前限制与下一步
+
+当前完成的是可见天空盒与场景资产链，完整 IBL 仍需：
+
+1. HDR/EXR 浮点 Cubemap 导入；
+2. Diffuse Irradiance Map；
+3. Specular Prefilter Map；
+4. BRDF LUT；
+5. PBR Shader 接入环境光与反射；
+6. 多 Sky Light 混合或空间环境探针；
+7. `.glsky` 资产热重载；
+8. 等距柱状图自动转换为 Cubemap。
+
+建议顺序：
+
+```text
+HDR Cubemap
+  → Irradiance Convolution
+  → Specular Prefilter
+  → BRDF LUT
+  → PBR IBL
+  → Sky Light 热重载与环境探针
+```
+
+### 验证结果
+
+- VS2026 Premake 工程生成成功；
+- `Debug | x64` 编译和链接成功；
+- `.glsky` 正确注册为 `AssetType::Cubemap`；
+- 五面图片加缺失面回退可创建完整 TextureCube；
+- 编辑器运行无 Shader、Framebuffer 或 Cubemap 断言；
+- 移除测试实体后编辑器仍正常启动；
+- `git diff --check` 通过。
+
+![[README.assets/Pasted image 20260727151210.png]]
+
 ## KB
 
 ### 为什么不用动态库？

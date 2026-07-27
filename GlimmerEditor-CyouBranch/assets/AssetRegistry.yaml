@@ -27,6 +27,9 @@ AssetRegistry:
   - Handle: 13777784352782102236
     Type: Material
     FilePath: materials/DefaultSprite.glmat
+  - Handle: 14395647676425568118
+    Type: Cubemap
+    FilePath: skyboxes/desert-evening.glsky
   - Handle: 15365846500528399802
     Type: Shader
     FilePath: shaders/PBRModel.glsl

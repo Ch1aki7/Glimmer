@@ -151,6 +151,25 @@ namespace gl {
 		if (node["Range"]) comp.Range = node["Range"].as<float>();
 		if (node["Enabled"]) comp.Enabled = node["Enabled"].as<bool>();
 	}
+	static void SerializeComponent(YAML::Emitter& out, const SkyLightComponent& comp)
+	{
+		out << YAML::Key << "SkyLightComponent" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Cubemap" << YAML::Value
+			<< static_cast<uint64_t>(comp.CubemapHandle);
+		out << YAML::Key << "Intensity" << YAML::Value << comp.Intensity;
+		out << YAML::Key << "Enabled" << YAML::Value << comp.Enabled;
+		out << YAML::EndMap;
+	}
+
+	static void DeserializeComponent(const YAML::Node& node, SkyLightComponent& comp)
+	{
+		if (node["Cubemap"])
+			comp.CubemapHandle = AssetHandle(node["Cubemap"].as<uint64_t>());
+		if (node["Intensity"])
+			comp.Intensity = glm::max(node["Intensity"].as<float>(), 0.0f);
+		if (node["Enabled"])
+			comp.Enabled = node["Enabled"].as<bool>();
+	}
 	static void SerializeComponent(YAML::Emitter& out, const CameraComponent& comp)
 	{
 		out << YAML::Key << "CameraComponent" << YAML::Value << YAML::BeginMap;
@@ -190,7 +209,7 @@ namespace gl {
 		YAML::Emitter out;
 		out << YAML::BeginMap;
 		out << YAML::Key << "Scene" << YAML::Value << "Untitled";
-		out << YAML::Key << "Version" << YAML::Value << 5;
+		out << YAML::Key << "Version" << YAML::Value << 6;
 		out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
 
 		m_Scene->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
@@ -216,6 +235,8 @@ namespace gl {
 				SerializeComponent(out, entity.GetComponent<DirectionalLightComponent>());
 			if (entity.HasComponent<PointLightComponent>())
 				SerializeComponent(out, entity.GetComponent<PointLightComponent>());
+			if (entity.HasComponent<SkyLightComponent>())
+				SerializeComponent(out, entity.GetComponent<SkyLightComponent>());
 			if (entity.HasComponent<CameraComponent>())
 				SerializeComponent(out, entity.GetComponent<CameraComponent>());
 
@@ -291,6 +312,11 @@ namespace gl {
 				{
 					auto& light = entity.AddComponent<PointLightComponent>();
 					DeserializeComponent(comps["PointLightComponent"], light);
+				}
+				if (comps["SkyLightComponent"])
+				{
+					auto& skyLight = entity.AddComponent<SkyLightComponent>();
+					DeserializeComponent(comps["SkyLightComponent"], skyLight);
 				}
 				if (comps["CameraComponent"])
 				{

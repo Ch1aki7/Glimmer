@@ -82,48 +82,8 @@ namespace gl {
 
 		m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
 		m_ShaderLib.Load("assets/shaders/StarNest.glsl");
-		m_Texture = AssetManager::GetTexture2D(
-			AssetManager::ImportAsset("assets/textures/Balatro.png"));
-		m_STSTexture = AssetManager::GetTexture2D(
-			AssetManager::ImportAsset("assets/textures/STS.png"));
-		m_HenryTexture = AssetManager::GetTexture2D(
-			AssetManager::ImportAsset("assets/textures/Henry.jpg"));
-		const AssetHandle defaultMaterialHandle =
-			AssetManager::ImportAsset("assets/materials/DefaultSprite.glmat");
-		AssetManager::GetMaterial(defaultMaterialHandle);
-		const AssetHandle pbrShaderHandle =
-			AssetManager::ImportAsset("assets/shaders/PBRModel.glsl");
-		const AssetHandle defaultPBRMaterialHandle =
-			AssetManager::ImportAsset("assets/materials/DefaultPBR.glmat");
-		const AssetHandle suzanneModelHandle =
-			AssetManager::ImportAsset("assets/models/suzanne.obj");
-
-		if (Ref<Material> material = AssetManager::GetMaterial(defaultPBRMaterialHandle))
-		{
-			if (material->GetShaderHandle() != pbrShaderHandle)
-			{
-				material->SetShaderHandle(pbrShaderHandle);
-				material->Save();
-			}
-		}
-
-		m_WhiteTexture = Texture2D::Create(1, 1);
-		uint32_t whitePixel = 0xffffffff;
-		m_WhiteTexture->SetData(&whitePixel, sizeof(uint32_t));
-
-		const std::filesystem::path skyboxDirectory =
-			"assets/textures/skybox/desert-evening";
-		TextureCubeFileSpecification skyboxSpecification;
-		skyboxSpecification.FacePaths = {
-			skyboxDirectory / "desert_evening_right.jpg",
-			skyboxDirectory / "desert_evening_left.jpg",
-			skyboxDirectory / "desert_evening_top.jpg",
-			{}, // This five-sided source pack does not include a bottom face.
-			skyboxDirectory / "desert_evening_front.jpg",
-			skyboxDirectory / "desert_evening_back.jpg"
-		};
-		skyboxSpecification.MissingFaceColor = { 52, 38, 26, 255 };
-		m_SkyboxTexture = TextureCube::Create(skyboxSpecification);
+		const AssetHandle defaultSkyboxHandle =
+			AssetManager::ImportAsset("assets/skyboxes/desert-evening.glsky");
 		m_SkyboxShader = m_ShaderLib.Load(
 			"Skybox", "assets/shaders/Skybox.glsl");
 
@@ -172,34 +132,6 @@ namespace gl {
 		// --- 场景 ---
 		SetEditorScene(CreateRef<Scene>());
 
-		// Play 模式需要的 ECS 主相机（带可视化标记 + Gizmo 交互）
-		auto camEntity = m_ActiveScene->CreateEntity("Main Camera");
-		auto& cc = camEntity.AddComponent<CameraComponent>();
-		cc.Camera.SetPerspective(glm::radians(45.0f), 0.1f, 1000.0f);
-		cc.Camera.SetViewportSize(1280, 720);
-		camEntity.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.8f, 0.8f, 0.2f, 0.6f }); // 半透明黄色标记
-		camEntity.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 0.0f };
-
-		// 测试实体
-		auto redSquare = m_ActiveScene->CreateEntity("Red Square");
-		redSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 1.0f, 0.2f, 0.2f, 1.0f });
-		redSquare.AddComponent<MaterialComponent>(defaultMaterialHandle);
-		redSquare.GetComponent<TransformComponent>().Translation = { -2.0f, 1.0f, -3.0f };
-
-		auto greenSquare = m_ActiveScene->CreateEntity("Green Square");
-		greenSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.2f, 1.0f, 0.2f, 1.0f });
-		greenSquare.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, -3.0f };
-
-		auto blueSquare = m_ActiveScene->CreateEntity("Blue Square");
-		blueSquare.AddComponent<SpriteRendererComponent>(glm::vec4{ 0.2f, 0.2f, 1.0f, 1.0f });
-		blueSquare.GetComponent<TransformComponent>().Translation = { 2.0f, -1.0f, -3.1f };
-
-		auto logicNode = m_ActiveScene->CreateEntity("Logic Controller");
-
-		auto pbrModelEntity = m_ActiveScene->CreateEntity("PBR Suzanne");
-		pbrModelEntity.AddComponent<ModelRendererComponent>(suzanneModelHandle);
-		pbrModelEntity.AddComponent<MaterialComponent>(defaultPBRMaterialHandle);
-
 		auto sunEntity = m_ActiveScene->CreateEntity("Sun");
 		sunEntity.AddComponent<DirectionalLightComponent>();
 		sunEntity.GetComponent<TransformComponent>().Rotation = { -50.0f, 30.0f, 0.0f };
@@ -209,6 +141,9 @@ namespace gl {
 		pointLight.Intensity = 80.0f;
 		pointLight.Range = 40.0f;
 		pointLightEntity.GetComponent<TransformComponent>().Translation = { 0.0f, 12.0f, 0.0f };
+
+		auto skyLightEntity = m_ActiveScene->CreateEntity("Sky Light");
+		skyLightEntity.AddComponent<SkyLightComponent>(defaultSkyboxHandle);
 
 		// --- 层级面板 ---
 		m_HierarchyPanel.SetContext(m_ActiveScene);
@@ -303,14 +238,21 @@ namespace gl {
 				}
 			}
 
-			if (hasSkyboxCamera && m_SkyboxEnabled)
+			Entity skyLightEntity = m_ActiveScene->GetSkyLightEntity();
+			if (hasSkyboxCamera && skyLightEntity)
 			{
-				SkyboxRenderer::Draw(
-					m_SkyboxTexture,
-					m_SkyboxShader,
-					skyboxView,
-					skyboxProjection,
-					m_SkyboxIntensity);
+				const auto& skyLight =
+					skyLightEntity.GetComponent<SkyLightComponent>();
+				if (Ref<Cubemap> cubemap =
+					AssetManager::GetCubemap(skyLight.CubemapHandle))
+				{
+					SkyboxRenderer::Draw(
+						cubemap->GetTexture(),
+						m_SkyboxShader,
+						skyboxView,
+						skyboxProjection,
+						skyLight.Intensity);
+				}
 			}
 		}
 
@@ -524,9 +466,6 @@ namespace gl {
 		ImGui::SeparatorText("HDR Output");
 		ImGui::DragFloat("Exposure", &m_Exposure, 0.05f, 0.01f, 10.0f);
 		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
-		ImGui::SeparatorText("Skybox");
-		ImGui::Checkbox("Enabled##Skybox", &m_SkyboxEnabled);
-		ImGui::DragFloat("Intensity##Skybox", &m_SkyboxIntensity, 0.05f, 0.0f, 20.0f);
 		ImGui::SeparatorText("Terrain Test");
 		ImGui::Checkbox("Use Procedural Height Map", &m_UseProceduralTerrain);
 		ImGui::DragFloat("Terrain Max Height", &m_TerrainMaxHeight, 0.1f, 0.0f, 100.0f);
@@ -576,6 +515,24 @@ namespace gl {
 					{
 						SetEditorScene(newScene);
 						GL_CORE_INFO("Dropped scene: {0}", path);
+					}
+				}				else if (ext == ".glsky")
+				{
+					AssetHandle handle = AssetManager::ImportAsset(path);
+					if (AssetManager::GetMetadata(handle).Type
+						== AssetType::Cubemap)
+					{
+						Entity skyLightEntity =
+							m_HierarchyPanel.GetSelectedEntity();
+						if (!skyLightEntity)
+							skyLightEntity =
+								m_ActiveScene->CreateEntity("Sky Light");
+						if (!skyLightEntity.HasComponent<SkyLightComponent>())
+							skyLightEntity.AddComponent<SkyLightComponent>(handle);
+						else
+							skyLightEntity.GetComponent<SkyLightComponent>()
+								.CubemapHandle = handle;
+						m_HierarchyPanel.SetSelectedEntity(skyLightEntity);
 					}
 				}
 			}

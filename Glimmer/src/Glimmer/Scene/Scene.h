@@ -24,6 +24,7 @@ namespace gl {
 		void DestroyEntity(Entity entity);
 
 		Entity GetPrimaryCameraEntity();
+		Entity GetSkyLightEntity();
 		Entity GetEntityByID(uint32_t id);              // entt entity ID 反向查找
 		Entity FindEntityByUUID(UUID uuid);
 

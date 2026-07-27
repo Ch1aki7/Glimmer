@@ -61,7 +61,7 @@ namespace gl {
 			entityMap[uuid] = static_cast<entt::entity>(destinationEntity);
 		}
 
-		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, ModelRendererComponent, MaterialComponent, DirectionalLightComponent, PointLightComponent, CameraComponent>(
+		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, ModelRendererComponent, MaterialComponent, DirectionalLightComponent, PointLightComponent, SkyLightComponent, CameraComponent>(
 			destination->m_Registry,
 			source->m_Registry,
 			entityMap);
@@ -137,6 +137,17 @@ namespace gl {
 		return {};
 	}
 
+	Entity Scene::GetSkyLightEntity()
+	{
+		auto view = m_Registry.view<SkyLightComponent>();
+		for (auto entity : view)
+		{
+			const auto& skyLight = view.get<SkyLightComponent>(entity);
+			if (skyLight.Enabled)
+				return Entity{ entity, this };
+		}
+		return {};
+	}
 	Entity Scene::GetEntityByID(uint32_t id)
 	{
 		entt::entity handle = (entt::entity)id;
@@ -144,7 +155,6 @@ namespace gl {
 			return Entity{ handle, this };
 		return {};
 	}
-
 
 	Entity Scene::FindEntityByUUID(UUID uuid)
 	{
@@ -374,6 +384,9 @@ namespace gl {
 
 	template<>
 	void Scene::OnComponentAdded<PointLightComponent>(Entity entity, PointLightComponent& component) {}
+
+	template<>
+	void Scene::OnComponentAdded<SkyLightComponent>(Entity entity, SkyLightComponent& component) {}
 	template<>
 	void Scene::OnComponentAdded<TagComponent>(Entity entity, TagComponent& component) {}
 

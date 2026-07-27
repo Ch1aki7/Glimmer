@@ -15,7 +15,8 @@ namespace gl {
 		Texture2D,
 		Model,
 		Shader,
-		Material
+		Material,
+		Cubemap
 	};
 
 	struct AssetMetadata

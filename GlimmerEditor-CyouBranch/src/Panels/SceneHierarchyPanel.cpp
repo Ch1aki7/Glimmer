@@ -87,6 +87,7 @@ namespace gl {
 		if (entity.HasComponent<MaterialComponent>())        badges += " [Mat]";
 		if (entity.HasComponent<DirectionalLightComponent>()) badges += " [Sun]";
 		if (entity.HasComponent<PointLightComponent>())       badges += " [Point]";
+		if (entity.HasComponent<SkyLightComponent>())         badges += " [Sky]";
 		if (entity.HasComponent<NativeScriptComponent>())    badges += " [Scr]";
 		label += badges;
 
@@ -153,6 +154,11 @@ namespace gl {
 			if (ImGui::Button("+ Point Light"))
 				entity.AddComponent<PointLightComponent>();
 		}
+		if (!entity.HasComponent<SkyLightComponent>())
+		{
+			if (ImGui::Button("+ Sky Light"))
+				entity.AddComponent<SkyLightComponent>();
+		}
 		// --- Transform ---
 		if (entity.HasComponent<TransformComponent>())
 		{
@@ -197,6 +203,46 @@ namespace gl {
 					0.1f, 0.0f, 1000.0f);
 				ImGui::DragFloat("Range##Point", &light.Range,
 					0.1f, 0.01f, 1000.0f);
+				ImGui::TreePop();
+			}
+		}
+		// --- Sky Light ---
+		if (entity.HasComponent<SkyLightComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(SkyLightComponent).hash_code(),
+				ImGuiTreeNodeFlags_DefaultOpen, "Sky Light"))
+			{
+				auto& skyLight = entity.GetComponent<SkyLightComponent>();
+				const AssetMetadata metadata =
+					AssetManager::GetMetadata(skyLight.CubemapHandle);
+				const bool hasCubemap = metadata.IsValid()
+					&& metadata.Type == AssetType::Cubemap;
+				const std::string assetName = hasCubemap
+					? metadata.FilePath.filename().string()
+					: "None (drag .glsky here)";
+
+				ImGui::Checkbox("Enabled##SkyLight", &skyLight.Enabled);
+				ImGui::DragFloat("Intensity##SkyLight", &skyLight.Intensity,
+					0.05f, 0.0f, 20.0f);
+				ImGui::Text("Cubemap: %s", assetName.c_str());
+				ImGui::SameLine();
+				if (hasCubemap && ImGui::SmallButton("X##SkyLight"))
+					skyLight.CubemapHandle = AssetHandle(0);
+
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+					{
+						std::string path(
+							(const char*)payload->Data,
+							payload->DataSize - 1);
+						AssetHandle handle = AssetManager::ImportAsset(path);
+						if (AssetManager::GetMetadata(handle).Type
+							== AssetType::Cubemap)
+							skyLight.CubemapHandle = handle;
+					}
+					ImGui::EndDragDropTarget();
+				}
 				ImGui::TreePop();
 			}
 		}

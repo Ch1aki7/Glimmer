@@ -102,6 +102,17 @@ namespace gl {
 		PointLightComponent() = default;
 		PointLightComponent(const PointLightComponent&) = default;
 	};
+	struct SkyLightComponent
+	{
+		AssetHandle CubemapHandle{ 0 };
+		float Intensity = 1.0f;
+		bool Enabled = true;
+
+		SkyLightComponent() = default;
+		SkyLightComponent(const SkyLightComponent&) = default;
+		explicit SkyLightComponent(AssetHandle handle)
+			: CubemapHandle(handle) {}
+	};
 	struct CameraComponent
 	{
 		gl::SceneCamera Camera;

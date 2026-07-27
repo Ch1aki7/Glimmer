@@ -1,0 +1,9 @@
+Cubemap:
+  ColorSpace: SRGB
+  Right: ../textures/skybox/desert-evening/desert_evening_right.jpg
+  Left: ../textures/skybox/desert-evening/desert_evening_left.jpg
+  Top: ../textures/skybox/desert-evening/desert_evening_top.jpg
+  Bottom: ""
+  Front: ../textures/skybox/desert-evening/desert_evening_front.jpg
+  Back: ../textures/skybox/desert-evening/desert_evening_back.jpg
+  MissingFaceColor: [52, 38, 26, 255]

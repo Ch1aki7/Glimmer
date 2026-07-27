@@ -9,6 +9,7 @@ namespace gl {
 	class Material;
 	class Model;
 	class Shader;
+	class Cubemap;
 
 	class AssetManager
 	{
@@ -30,6 +31,7 @@ namespace gl {
 		static Ref<Material> GetMaterial(AssetHandle handle);
 		static Ref<Model> GetModel(AssetHandle handle);
 		static Ref<Shader> GetShader(AssetHandle handle);
+		static Ref<Cubemap> GetCubemap(AssetHandle handle);
 
 	private:
 		static AssetType GetAssetTypeFromExtension(const std::filesystem::path& path);
