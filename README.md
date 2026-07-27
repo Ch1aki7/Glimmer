@@ -11345,6 +11345,8 @@ HDR Cubemap
 - `git diff --check` 通过。
 
 ![[README.assets/Pasted image 20260727151210.png]]
+属性面板整改后
+![[README.assets/Pasted image 20260727170815.png]]
 
 ## KB
 

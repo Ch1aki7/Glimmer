@@ -35,10 +35,6 @@ namespace gl {
 		});
 
 		ImGui::Separator();
-		if (m_SelectionContext && m_SelectionContext.HasComponent<TagComponent>())
-		{
-			DrawComponents(m_SelectionContext);
-		}
 
 		if (m_ShowDeletePopup) {
 			ImGui::OpenPopup("Delete Entity?");
@@ -71,6 +67,13 @@ namespace gl {
 			ImGui::EndPopup();
 		}
 
+		ImGui::End();
+
+		ImGui::Begin("Inspector");
+		if (m_SelectionContext && m_SelectionContext.HasComponent<TagComponent>())
+			DrawComponents(m_SelectionContext);
+		else
+			ImGui::TextDisabled("Select an entity to inspect its components.");
 		ImGui::End();
 	}
 
@@ -132,33 +135,6 @@ namespace gl {
 			}
 		}
 
-		if ((entity.HasComponent<SpriteRendererComponent>()
-			|| entity.HasComponent<ModelRendererComponent>())
-			&& !entity.HasComponent<MaterialComponent>())
-		{
-			if (ImGui::Button("+ Add Material"))
-				entity.AddComponent<MaterialComponent>();
-		}
-		if (!entity.HasComponent<ModelRendererComponent>())
-		{
-			if (ImGui::Button("+ Model Renderer"))
-				entity.AddComponent<ModelRendererComponent>();
-		}
-		if (!entity.HasComponent<DirectionalLightComponent>())
-		{
-			if (ImGui::Button("+ Directional Light"))
-				entity.AddComponent<DirectionalLightComponent>();
-		}
-		if (!entity.HasComponent<PointLightComponent>())
-		{
-			if (ImGui::Button("+ Point Light"))
-				entity.AddComponent<PointLightComponent>();
-		}
-		if (!entity.HasComponent<SkyLightComponent>())
-		{
-			if (ImGui::Button("+ Sky Light"))
-				entity.AddComponent<SkyLightComponent>();
-		}
 		// --- Transform ---
 		if (entity.HasComponent<TransformComponent>())
 		{
@@ -490,6 +466,45 @@ namespace gl {
 				ImGui::TreePop();
 			}
 		}
+		ImGui::Spacing();
+		ImGui::Separator();
+		const float buttonWidth = std::min(220.0f, ImGui::GetContentRegionAvail().x);
+		if (ImGui::Button("Add Component", ImVec2(buttonWidth, 0.0f)))
+			ImGui::OpenPopup("AddComponentPopup");
+		DrawAddComponentMenu(entity);
+	}
+
+	void SceneHierarchyPanel::DrawAddComponentMenu(Entity entity)
+	{
+		if (!ImGui::BeginPopup("AddComponentPopup"))
+			return;
+
+		bool hasAvailableComponent = false;
+		auto addMenuItem = [&](const char* label, bool alreadyExists, auto addComponent)
+		{
+			if (alreadyExists)
+				return;
+			hasAvailableComponent = true;
+			if (ImGui::MenuItem(label))
+			{
+				addComponent();
+				ImGui::CloseCurrentPopup();
+			}
+		};
+
+		addMenuItem("Camera", entity.HasComponent<CameraComponent>(), [&]() { entity.AddComponent<CameraComponent>(); });
+		addMenuItem("Sprite Renderer", entity.HasComponent<SpriteRendererComponent>(), [&]() { entity.AddComponent<SpriteRendererComponent>(); });
+		addMenuItem("Model Renderer", entity.HasComponent<ModelRendererComponent>(), [&]() { entity.AddComponent<ModelRendererComponent>(); });
+		addMenuItem("Material", entity.HasComponent<MaterialComponent>(), [&]() { entity.AddComponent<MaterialComponent>(); });
+		if (hasAvailableComponent)
+			ImGui::Separator();
+		addMenuItem("Directional Light", entity.HasComponent<DirectionalLightComponent>(), [&]() { entity.AddComponent<DirectionalLightComponent>(); });
+		addMenuItem("Point Light", entity.HasComponent<PointLightComponent>(), [&]() { entity.AddComponent<PointLightComponent>(); });
+		addMenuItem("Sky Light", entity.HasComponent<SkyLightComponent>(), [&]() { entity.AddComponent<SkyLightComponent>(); });
+
+		if (!hasAvailableComponent)
+			ImGui::TextDisabled("No components available.");
+		ImGui::EndPopup();
 	}
 
 }

@@ -1,9 +1,6 @@
 #pragma once
 #include "Glimmer/Core/Layer.h"
 
-#include "Glimmer/Events/ApplicationEvent.h"
-#include "Glimmer/Events/KeyEvent.h"
-#include "Glimmer/Events/MouseEvent.h"
 
 namespace gl {
     class ImGuiLayer : public Layer {
@@ -20,15 +17,6 @@ namespace gl {
         void End();   // 每帧结束后呼叫
 
 		void BlockEvents(bool block) { m_BlockEvents = block; }
-    private:
-        bool OnMouseButtonPressedEvent(MouseButtonPressedEvent& e);
-        bool OnMouseButtonReleasedEvent(MouseButtonReleasedEvent& e);
-        bool OnMouseMovedEvent(MouseMovedEvent& e);
-        bool OnMouseScrolledEvent(MouseScrolledEvent& e);
-        //bool OnKeyPressedEvent(KeyPressedEvent& e);
-        //bool OnKeyReleasedEvent(KeyReleasedEvent& e);
-        bool OnKeyTypedEvent(KeyTypedEvent& e);
-        bool OnWindowResizeEvent(WindowResizeEvent& e);
 
     private:
 		bool m_BlockEvents = true;

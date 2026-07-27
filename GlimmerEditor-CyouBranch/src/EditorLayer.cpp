@@ -451,16 +451,6 @@ namespace gl {
 		ImGui::Text("Quads: %d", stats.QuadCount);
 		ImGui::End();
 
-		// 3D Settings
-		ImGui::Begin("3D Settings");
-		ImGui::TextWrapped(
-			"3D rendering is entity-driven. Assign Model Renderer and Material "
-			"components in the Properties panel.");
-		ImGui::Separator();
-		const char* gizmoNames[] = { "Translate", "Rotate", "Scale" };
-		ImGui::Combo("Gizmo", &m_GizmoType, gizmoNames, 3);
-		ImGui::End();
-
 		// Settings
 		ImGui::Begin("Settings");
 		ImGui::SeparatorText("HDR Output");
