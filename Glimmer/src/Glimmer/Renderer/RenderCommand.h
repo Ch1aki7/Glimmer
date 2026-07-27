@@ -21,6 +21,11 @@ namespace gl {
 			s_RendererAPI->Clear();
 		}
 
+		inline static void SetDepthFunction(DepthFunction function)
+		{
+			s_RendererAPI->SetDepthFunction(function);
+		}
+
 		inline static void DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t count = 0)
 		{
 			s_RendererAPI->DrawIndexed(vertexArray, count);

@@ -6,6 +6,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <ImGuizmo.h>
 
+#include <array>
 #include <algorithm>
 #include <vector>
 namespace gl {
@@ -109,6 +110,22 @@ namespace gl {
 		m_WhiteTexture = Texture2D::Create(1, 1);
 		uint32_t whitePixel = 0xffffffff;
 		m_WhiteTexture->SetData(&whitePixel, sizeof(uint32_t));
+
+		const std::filesystem::path skyboxDirectory =
+			"assets/textures/skybox/desert-evening";
+		TextureCubeFileSpecification skyboxSpecification;
+		skyboxSpecification.FacePaths = {
+			skyboxDirectory / "desert_evening_right.jpg",
+			skyboxDirectory / "desert_evening_left.jpg",
+			skyboxDirectory / "desert_evening_top.jpg",
+			{}, // This five-sided source pack does not include a bottom face.
+			skyboxDirectory / "desert_evening_front.jpg",
+			skyboxDirectory / "desert_evening_back.jpg"
+		};
+		skyboxSpecification.MissingFaceColor = { 52, 38, 26, 255 };
+		m_SkyboxTexture = TextureCube::Create(skyboxSpecification);
+		m_SkyboxShader = m_ShaderLib.Load(
+			"Skybox", "assets/shaders/Skybox.glsl");
 
 		// --- 地形系统 ---
 		m_TerrainShader = m_ShaderLib.Load("Terrain", "assets/shaders/Terrain.glsl");
@@ -257,14 +274,42 @@ namespace gl {
 
 		{
 			GL_PROFILE_SCOPE("Scene Draw");
+			glm::mat4 skyboxView{ 1.0f };
+			glm::mat4 skyboxProjection{ 1.0f };
+			bool hasSkyboxCamera = false;
+
 			if (m_SceneState == SceneState::Edit)
 			{
-				glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
-				m_ActiveScene->OnUpdateEditor(ts, vp, m_EditorCamera.GetPosition());
+				skyboxView = m_EditorCamera.GetViewMatrix();
+				skyboxProjection = m_EditorCamera.GetProjectionMatrix();
+				hasSkyboxCamera = true;
+				m_ActiveScene->OnUpdateEditor(
+					ts, skyboxProjection * skyboxView, m_EditorCamera.GetPosition());
 			}
 			else
 			{
 				m_ActiveScene->OnUpdateRuntime(ts);
+				Entity cameraEntity = m_ActiveScene->GetPrimaryCameraEntity();
+				if (cameraEntity
+					&& cameraEntity.HasComponent<CameraComponent>()
+					&& cameraEntity.HasComponent<TransformComponent>())
+				{
+					skyboxProjection = cameraEntity
+						.GetComponent<CameraComponent>().Camera.GetProjection();
+					skyboxView = glm::inverse(cameraEntity
+						.GetComponent<TransformComponent>().GetTransform());
+					hasSkyboxCamera = true;
+				}
+			}
+
+			if (hasSkyboxCamera && m_SkyboxEnabled)
+			{
+				SkyboxRenderer::Draw(
+					m_SkyboxTexture,
+					m_SkyboxShader,
+					skyboxView,
+					skyboxProjection,
+					m_SkyboxIntensity);
 			}
 		}
 
@@ -478,6 +523,9 @@ namespace gl {
 		ImGui::SeparatorText("HDR Output");
 		ImGui::DragFloat("Exposure", &m_Exposure, 0.05f, 0.01f, 10.0f);
 		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
+		ImGui::SeparatorText("Skybox");
+		ImGui::Checkbox("Enabled##Skybox", &m_SkyboxEnabled);
+		ImGui::DragFloat("Intensity##Skybox", &m_SkyboxIntensity, 0.05f, 0.0f, 20.0f);
 		ImGui::SeparatorText("Terrain Test");
 		ImGui::Checkbox("Use Procedural Height Map", &m_UseProceduralTerrain);
 		ImGui::DragFloat("Terrain Max Height", &m_TerrainMaxHeight, 0.1f, 0.0f, 100.0f);

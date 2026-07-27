@@ -2,6 +2,7 @@
 #include "Renderer.h"
 #include "Renderer2D.h"
 #include "Renderer3D.h"
+#include "SkyboxRenderer.h"
 #include "UniformBuffer.h"
 namespace gl {
 
@@ -39,11 +40,13 @@ namespace gl {
 		Renderer2D::Init();
 		Renderer3D::Init();
 		s_LightUniformBuffer = UniformBuffer::Create(sizeof(GPULightEnvironment), 1);
+		SkyboxRenderer::Init();
 	}
 
 	void Renderer::Shutdown() {
 		s_LightUniformBuffer.reset();
 		Renderer3D::Shutdown();
+		SkyboxRenderer::Shutdown();
 		Renderer2D::Shutdown();
 	}
 

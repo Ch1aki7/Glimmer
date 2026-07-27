@@ -19,6 +19,8 @@
 #include "Glimmer/Renderer/Renderer.h"
 #include "Glimmer/Renderer/LightEnvironment.h"
 #include "Glimmer/Renderer/Renderer2D.h"
+#include "Glimmer/Renderer/SkyboxRenderer.h"
+#include "Glimmer/Renderer/TextureCube.h"
 #include "Glimmer/Renderer/Renderer3D.h"
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Buffer.h"

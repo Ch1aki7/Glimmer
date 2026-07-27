@@ -11,6 +11,7 @@ namespace gl {
 		virtual void SetClearColor(const glm::vec4& color) override;
 		virtual void Clear() override;
 
+		virtual void SetDepthFunction(DepthFunction function) override;
 		virtual void DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount = 0) override;
 	};
 

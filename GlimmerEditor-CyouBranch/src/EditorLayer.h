@@ -37,6 +37,10 @@ namespace gl {
 		Ref<Texture2D> m_HenryTexture;
 		Ref<Texture2D> m_WhiteTexture;
 		EditorCamera m_EditorCamera;
+		Ref<TextureCube> m_SkyboxTexture;
+		Ref<Shader> m_SkyboxShader;
+		float m_SkyboxIntensity = 1.0f;
+		bool m_SkyboxEnabled = true;
 
 		// 3D 模型
 		Ref<Framebuffer> m_Framebuffer;
