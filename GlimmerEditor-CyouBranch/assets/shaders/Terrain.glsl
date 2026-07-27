@@ -90,6 +90,7 @@ void main()
 	float snowBlend = smoothstep(0.55, 0.80, v_Height);
 	vec3 baseColor = mix(grass, rock, rockBlend);
 	baseColor = mix(baseColor, snow, snowBlend);
+	baseColor = pow(max(baseColor, vec3(0.0)), vec3(2.2));
 
 	vec3 normal = normalize(v_Normal);
 	vec3 viewDirection = normalize(u_CameraPos - v_WorldPos);

@@ -93,6 +93,7 @@ void main()
 		case 30: texColor *= texture(u_Textures[30], Input.TexCoord * Input.TilingFactor); break;
 		case 31: texColor *= texture(u_Textures[31], Input.TexCoord * Input.TilingFactor); break;
 	}
+	texColor.rgb = pow(max(texColor.rgb, vec3(0.0)), vec3(2.2));
 	color = texColor;
 
 	entityID = v_EntityID;

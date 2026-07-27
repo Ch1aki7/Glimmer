@@ -152,9 +152,6 @@ void main()
             radiance, albedo, metallic, roughness);
     }
 
-    result = result / (result + vec3(1.0));
-    result = pow(max(result, vec3(0.0)), vec3(1.0 / 2.2));
-
-    o_Color = vec4(result, u_BaseColor.a * sampledColor.a);
+    o_Color = vec4(max(result, vec3(0.0)), u_BaseColor.a * sampledColor.a);
     o_EntityID = u_EntityID;
 }

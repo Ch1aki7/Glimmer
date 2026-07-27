@@ -40,8 +40,9 @@ namespace gl {
 
 		// 3D 模型
 		Ref<Framebuffer> m_Framebuffer;
-		Ref<Framebuffer> m_PostProcessFB;
-		bool m_PostProcessEnabled = false;
+		Ref<Framebuffer> m_DisplayFramebuffer;
+		bool m_GrayscaleEnabled = false;
+		float m_Exposure = 1.0f;
 		uint32_t m_FinalSceneTexture = 0;
 
 		// 场景 & 层级面板

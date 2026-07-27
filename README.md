@@ -10764,7 +10764,7 @@ ShaderHandle → AssetManager::GetShader()
 - BaseColor 纹理与 TilingFactor；
 - 一个方向光和最多 16 个点光源；
 - 点光源距离及 Range 衰减；
-- 简单 Reinhard Tone Mapping 和 Gamma 编码。
+- 线性 HDR 输出，Tone Mapping 和 Gamma 编码由独立显示 Pass 负责。
 
 Shader 还会向整数颜色附件输出实体 ID，保证 3D 模型可参与 Mouse Picking：
 
@@ -10875,18 +10875,256 @@ GlimmerEditor-CyouBranch/assets/
 
 当前完成的是基础 Forward PBR 验证链，仍有以下边界：
 
-1. 主颜色附件仍是 RGBA8，并非 HDR Render Target；
-2. Tone Mapping 暂时位于模型 Shader 内；
+1. HDR Render Target 已在下一章节完成，场景主颜色附件升级为 RGBA16F；
+2. Tone Mapping 已从模型 Shader 迁移到独立显示 Pass；
 3. Texture2D 尚未区分 sRGB 颜色纹理与线性数据纹理；
 4. 尚未支持 Normal、Metallic、Roughness、AO 纹理；
 5. 尚未实现 IBL、环境贴图、阴影和反射探针；
 6. Renderer3D 仍为逐 Mesh 即时提交；
 7. Terrain 尚未进入统一的实体化 3D Material Pass。
 
-下一步应优先建立 HDR Framebuffer 与明确的颜色空间规则，将 Tone Mapping 移入独立后处理 Pass，然后再扩展 PBR 纹理集与 IBL。
+HDR Framebuffer 与独立 Tone Mapping 已在下一章节完成。后续应建立 TextureColorSpace 与 TextureCube 接口，再接入天空盒、PBR 纹理集和 IBL。
 
 ![[README.assets/Pasted image 20260727111039.png]]
 ![[README.assets/Pasted image 20260727111113.png]]
+
+## 线性 HDR 场景缓冲与独立 Tone Mapping
+
+基础 PBR 验证完成后，原有帧图仍把场景直接绘制到 `RGBA8`，并允许在关闭后处理时直接把场景附件交给 ImGui。该流程会在光照计算结束后立即截断超过 `1.0` 的高亮信息，也让每个材质 Shader 被迫各自处理 Tone Mapping 和 Gamma 编码。
+
+本阶段将颜色流程重构为：
+
+```text
+线性场景渲染
+    → RGBA16F Scene Framebuffer
+        → 3D PBR
+        → Renderer2D
+        → Terrain
+        → 未来 Skybox
+    → 固定 Tone Mapping Pass
+        → Exposure
+        → ACES Filmic
+        → 可选 Grayscale
+        → Gamma Encode
+    → RGBA8 Display Framebuffer
+    → ImGui Viewport
+```
+
+### 为什么需要 HDR 场景目标
+
+`RGBA8` 每个通道只有 8 位归一化范围，写入时只能保存 `[0, 1]`。PBR 中点光源、高光和未来天空太阳区域经常产生大于 `1.0` 的辐射亮度。如果直接写入 RGBA8，这些值会提前被裁剪，后处理阶段无法区分普通白色和极亮区域。
+
+场景主颜色附件现改为半精度浮点：
+
+```cpp
+FramebufferSpecification sceneFramebufferSpec;
+sceneFramebufferSpec.Attachments = {
+    { FramebufferTextureFormat::RGBA16F },
+    { FramebufferTextureFormat::RED_INTEGER }
+};
+```
+
+附件职责保持明确：
+
+| 附件 | 格式 | 用途 |
+|---|---|---|
+| Scene Color 0 | `RGBA16F` | 保存线性 HDR 场景颜色 |
+| Scene Color 1 | `RED_INTEGER` | 保存 Mouse Picking 实体 ID |
+| Scene Depth | `Depth24Stencil8` | 深度和模板测试 |
+
+最终显示目标使用独立规格：
+
+```cpp
+FramebufferSpecification displayFramebufferSpec;
+displayFramebufferSpec.Attachments = {
+    { FramebufferTextureFormat::RGBA8 }
+};
+```
+
+`m_PostProcessFB` 同时承担“任意后处理”和“最终显示目标”两种含义，容易混淆，因此重命名为 `m_DisplayFramebuffer`。
+
+### 固定 Tone Mapping Pass
+
+HDR 场景不能直接显示到普通 RGBA8 Viewport，因此 Tone Mapping 不再是可整体关闭的视觉特效，而是帧图中固定存在的颜色空间转换步骤：
+
+```cpp
+RenderPassSpecification toneMappingPass;
+toneMappingPass.Target = m_DisplayFramebuffer;
+RenderPass::Begin(toneMappingPass);
+
+Renderer2D::DrawPostProcess(
+    toneMappingShader,
+    m_Framebuffer->GetColorAttachmentRendererID());
+
+RenderPass::End();
+m_FinalSceneTexture =
+    m_DisplayFramebuffer->GetColorAttachmentRendererID();
+```
+
+原来的开关逻辑为：
+
+```text
+开启后处理 → PostProcess FBO
+关闭后处理 → 直接显示 Scene FBO
+```
+
+现在统一为：
+
+```text
+Scene RGBA16F
+    → ToneMapping.glsl
+    → Display RGBA8
+    → Viewport
+```
+
+这保证所有显示路径都经过相同的曝光、Tone Mapping 和 Gamma 编码，避免切换开关时画面亮度和颜色空间发生突变。
+
+### ToneMapping Shader
+
+新增 `assets/shaders/ToneMapping.glsl`，集中负责 HDR 到显示空间的转换。
+
+核心流程：
+
+```glsl
+vec3 hdrColor = max(sceneColor.rgb, vec3(0.0)) * u_Exposure;
+vec3 mappedColor = ACESFilm(hdrColor);
+vec3 displayColor = pow(mappedColor, vec3(1.0 / 2.2));
+```
+
+当前采用 ACES Filmic 近似曲线。相比简单 Reinhard，ACES 能保留更自然的中间调和高光过渡，并为后续天空盒、太阳高亮、Bloom 和曝光控制提供更稳定的显示基础。
+
+Shader 参数：
+
+| Uniform | 作用 |
+|---|---|
+| `u_SceneTexture` | RGBA16F 场景颜色附件 |
+| `u_Exposure` | 进入 Tone Mapping 前的曝光倍率 |
+| `u_ApplyGrayscale` | Tone Mapping 后、Gamma 前应用可选灰度效果 |
+
+灰度不再代表整个后处理是否启用，而只是 Tone Mapping Pass 中的一个可选效果。
+
+### 线性输出约定
+
+PBR Shader 已删除内部 Reinhard 和 Gamma 编码：
+
+```glsl
+o_Color = vec4(max(result, vec3(0.0)), alpha);
+```
+
+它现在只输出线性 HDR 光照结果。Tone Mapping 不属于单个材质，不能分别散落在 PBR、Terrain、Sprite 和未来 Skybox Shader 中。
+
+当前其他场景 Shader 的处理：
+
+- `Texture.glsl`：将颜色纹理和 Tint 的结果近似按 Gamma 2.2 解码到线性空间；
+- `Terrain.glsl`：将 Grass、Rock、Snow 调色板颜色转换到线性空间后再参与光照；
+- `PBRModel.glsl`：在线性空间执行 BRDF，直接输出 HDR Radiance；
+- `ToneMapping.glsl`：唯一负责 Tone Mapping 和 Gamma 编码的显示 Shader。
+
+当前纹理仍使用普通 `RGBA8` GPU 内部格式，因此 Sprite 和 PBR BaseColor 采用 Shader 手工解码。这是可运行的过渡方案，不代表完整的纹理颜色空间资产系统。
+
+### 后端无关的纹理绑定
+
+旧 `Renderer2D::DrawPostProcess()` 使用：
+
+```cpp
+std::dynamic_pointer_cast<OpenGLShader>(shader)->BindTexture(...);
+```
+
+这让引擎核心 Renderer2D 直接依赖 OpenGL 后端。现在改为：
+
+```cpp
+shader->BindTexture("u_SceneTexture", 0, inputTextureID);
+```
+
+具体后端通过 `Shader` 虚接口实现纹理绑定。未来 Vulkan 后端可以用 Descriptor Set 实现同一操作，而 Renderer2D 和 Tone Mapping Pass 不需要修改。
+
+### 编辑器控制
+
+Settings 面板新增：
+
+```text
+HDR Output
+    Exposure   0.01 ～ 10.0
+    Grayscale  On / Off
+```
+
+`Exposure` 控制进入 ACES 曲线前的线性亮度倍率。它不是灯光强度的替代品：灯光 Intensity 描述场景照明，Exposure 描述观察和显示映射。
+
+### 天空盒接入计划
+
+天空盒已加入 `Documents/生态系统模拟引擎路线图.md`，安排在 HDR 与基础 PBR 完成之后、IBL 之前：
+
+```text
+HDR + 基础 PBR
+    → TextureCube / Cubemap 资源抽象
+    → 可见 Skybox Pass
+    → Diffuse Irradiance Map
+    → Specular Prefilter Map
+    → BRDF LUT
+    → 完整 IBL
+```
+
+这个顺序的必要性：
+
+1. 天空盒通常包含太阳和高亮环境区域，必须写入 RGBA16F；
+2. 天空盒应和场景几何统一经过 Tone Mapping；
+3. 可见天空盒和 IBL 应复用同一 Cubemap 资产；
+4. 先验证 Cubemap 导入与采样，再生成 Irradiance 和 Prefilter，便于分层排错；
+5. TextureCube 的创建必须位于跨 API Texture 抽象和平台后端，不能在 `EditorLayer` 直接调用 OpenGL。
+
+计划中的可见 Skybox Pass 将在不清除已有几何的情况下绘制，并使用移除平移的 View 矩阵，使天空盒只随相机旋转、不随相机位置移动。
+
+### 文件职责
+
+```text
+Glimmer/src/Glimmer/Renderer/
+  FrameBuffer.h                     RGBA16F 跨 API 附件格式
+  Renderer2D.cpp                    全屏绘制与跨 API 输入纹理绑定
+
+Glimmer/src/Platform/OpenGL/
+  OpenGLFramebuffer.cpp             GL_RGBA16F 创建、调整尺寸和采样
+
+GlimmerEditor-CyouBranch/src/
+  EditorLayer.h                     Display FBO、Exposure、Grayscale 状态
+  EditorLayer.cpp                   HDR Scene Pass 与固定 Tone Mapping Pass
+
+GlimmerEditor-CyouBranch/assets/shaders/
+  PBRModel.glsl                     线性 HDR PBR 输出
+  Texture.glsl                      Sprite 颜色线性化
+  Terrain.glsl                      地形调色板线性化
+  ToneMapping.glsl                  ACES、Exposure、Gamma 与可选灰度
+
+Documents/
+  生态系统模拟引擎路线图.md          Skybox → IBL 接入顺序
+```
+
+![[README.assets/Pasted image 20260727115626.png]]
+
+### 验证结果
+
+1. `FramebufferTextureFormat::RGBA16F` 已由 OpenGL 后端映射到 `GL_RGBA16F`；
+2. Scene FBO 使用 RGBA16F 与 RED_INTEGER 两个颜色附件；
+3. Display FBO 使用 RGBA8；
+4. VS2026 Premake 工程生成成功；
+5. `Debug | x64` 编辑器编译和链接成功；
+6. `ToneMapping.glsl` 运行期编译成功；
+7. 编辑器持续运行 45 秒，没有 Framebuffer assertion、Shader assertion 或初始化崩溃；
+8. 测试结束后相关编辑器和 MSBuild 进程已清理；
+9. `git diff --check` 通过。
+
+### 当前边界与下一步
+
+当前 HDR 显示链已经建立，但颜色空间资产基础仍需继续完善：
+
+1. Texture2D 尚未保存 `sRGB`、`Linear` 等颜色空间元数据；
+2. 颜色纹理目前由 Shader 手工 Gamma 解码；
+3. Normal、Height、Roughness 等数据纹理必须保持线性，不能套用颜色解码；
+4. 尚未提供 TextureCube 跨 API 接口；
+5. 尚未实现自动曝光、Bloom 和 HDR 调试视图；
+6. Terrain 与 Sprite 的颜色空间仍是过渡实现；
+7. Display FBO 目前会创建不必要的默认深度附件，后续可在 Framebuffer 规格中允许显式禁用。
+
+下一步建议先加入 `TextureColorSpace` 和纹理用途元数据，再实现 `TextureCube` 与可见天空盒。完成 Cubemap 资源链后，再进入 Irradiance、Prefilter 和 BRDF LUT，建立完整 IBL。
 
 ## KB
 

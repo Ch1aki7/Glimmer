@@ -129,17 +129,22 @@ namespace gl {
 			"assets/shaders/Terrain/GenerateFBM.comp");
 		m_TerrainPanel.SetContext(m_TerrainGenerator.get());
 		m_TerrainMesh = CreateRef<TerrainMesh>(256);
-		FramebufferSpecification fbSpec;
-		fbSpec.Width = 1280;
-		fbSpec.Height = 720;
-		fbSpec.Attachments = {
-			{ FramebufferTextureFormat::RGBA8 },
+		FramebufferSpecification sceneFramebufferSpec;
+		sceneFramebufferSpec.Width = 1280;
+		sceneFramebufferSpec.Height = 720;
+		sceneFramebufferSpec.Attachments = {
+			{ FramebufferTextureFormat::RGBA16F },
 			{ FramebufferTextureFormat::RED_INTEGER }  // 鼠标拾取
 		};
-		m_Framebuffer = Framebuffer::Create(fbSpec);
-		m_PostProcessFB = Framebuffer::Create(fbSpec);
+		m_Framebuffer = Framebuffer::Create(sceneFramebufferSpec);
 
-		m_ShaderLib.Load("assets/shaders/PostProcess.glsl");
+		FramebufferSpecification displayFramebufferSpec;
+		displayFramebufferSpec.Width = 1280;
+		displayFramebufferSpec.Height = 720;
+		displayFramebufferSpec.Attachments = { { FramebufferTextureFormat::RGBA8 } };
+		m_DisplayFramebuffer = Framebuffer::Create(displayFramebufferSpec);
+
+		m_ShaderLib.Load("assets/shaders/ToneMapping.glsl");
 		m_ShaderLib.Load("assets/shaders/Overlay.glsl");
 		m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
 		m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
@@ -307,20 +312,17 @@ namespace gl {
 		//	RenderPass::End();
 		//}
 
-		if (m_PostProcessEnabled)
-		{
-			RenderPassSpecification ppPass;
-			ppPass.Target = m_PostProcessFB;
-			RenderPass::Begin(ppPass);
-			auto grayscaleShader = m_ShaderLib.Get("PostProcess");
-			Renderer2D::DrawPostProcess(grayscaleShader, m_Framebuffer->GetColorAttachmentRendererID());
-			RenderPass::End();
-			m_FinalSceneTexture = m_PostProcessFB->GetColorAttachmentRendererID();
-		}
-		else
-		{
-			m_FinalSceneTexture = m_Framebuffer->GetColorAttachmentRendererID();
-		}
+		RenderPassSpecification toneMappingPass;
+		toneMappingPass.Target = m_DisplayFramebuffer;
+		RenderPass::Begin(toneMappingPass);
+		auto toneMappingShader = m_ShaderLib.Get("ToneMapping");
+		toneMappingShader->Bind();
+		toneMappingShader->UploadUniformFloat("u_Exposure", m_Exposure);
+		toneMappingShader->UploadUniformInt("u_ApplyGrayscale", m_GrayscaleEnabled ? 1 : 0);
+		Renderer2D::DrawPostProcess(
+			toneMappingShader, m_Framebuffer->GetColorAttachmentRendererID());
+		RenderPass::End();
+		m_FinalSceneTexture = m_DisplayFramebuffer->GetColorAttachmentRendererID();
 	}
 
 	void EditorLayer::OnImGuiRender() {
@@ -472,7 +474,9 @@ namespace gl {
 
 		// Settings
 		ImGui::Begin("Settings");
-		ImGui::Checkbox("Enable Post-Processing", &m_PostProcessEnabled);
+		ImGui::SeparatorText("HDR Output");
+		ImGui::DragFloat("Exposure", &m_Exposure, 0.05f, 0.01f, 10.0f);
+		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
 		ImGui::SeparatorText("Terrain Test");
 		ImGui::Checkbox("Use Procedural Height Map", &m_UseProceduralTerrain);
 		ImGui::DragFloat("Terrain Max Height", &m_TerrainMaxHeight, 0.1f, 0.0f, 100.0f);
@@ -501,7 +505,7 @@ namespace gl {
 			(spec.Width != viewportPanelSize.x || spec.Height != viewportPanelSize.y))
 		{
 			m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
-			m_PostProcessFB->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
+			m_DisplayFramebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
 			m_EditorCamera.SetViewportSize(viewportPanelSize.x, viewportPanelSize.y);
 		}
 
