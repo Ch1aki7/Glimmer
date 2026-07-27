@@ -1,0 +1,49 @@
+Scene: Untitled
+Version: 6
+Entities:
+  - Entity: 7453059670050133646
+    Components:
+      TagComponent: Entity
+      TransformComponent:
+        Translation: [-8.1884, 33.918945, 17.946411]
+        Rotation: [0, 0, 0]
+        Scale: [38.319397, 38.319397, 38.319397]
+      ModelRendererComponent:
+        Model: 9710033314010145366
+      MaterialComponent:
+        Material: 9736745633360246474
+  - Entity: 2974173958494684516
+    Components:
+      TagComponent: Sky Light
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      SkyLightComponent:
+        Cubemap: 14395647676425568118
+        Intensity: 1.25
+        Enabled: true
+  - Entity: 8093621244201242321
+    Components:
+      TagComponent: Point Light
+      TransformComponent:
+        Translation: [0, 12, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      PointLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 80
+        Range: 40
+        Enabled: false
+  - Entity: 9595611053847044387
+    Components:
+      TagComponent: Sun
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [-50, 30, 0]
+        Scale: [1, 1, 1]
+      DirectionalLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 1
+        AmbientIntensity: 0.05
+        Enabled: true

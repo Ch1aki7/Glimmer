@@ -15,6 +15,7 @@ namespace gl {
 
 	private:
 		void DrawDirectoryTree(const std::filesystem::path& dir);
+		void DrawCreateContextMenu();
 
 		std::filesystem::path m_BaseDir;
 		std::filesystem::path m_CurrentDir;

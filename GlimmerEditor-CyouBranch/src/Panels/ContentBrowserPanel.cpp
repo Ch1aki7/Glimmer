@@ -1,4 +1,5 @@
 #include "ContentBrowserPanel.h"
+#include "../Utils/EditorAssetFactory.h"
 #include <imgui.h>
 
 #define ICON_FA_FOLDER  "\xef\x81\xbb"
@@ -79,6 +80,54 @@ namespace gl {
 	// 主渲染
 	// ============================================================
 
+	void ContentBrowserPanel::DrawCreateContextMenu()
+	{
+		if (!ImGui::BeginPopupContextWindow(
+			"ContentBrowserCreate",
+			ImGuiPopupFlags_MouseButtonRight
+				| ImGuiPopupFlags_NoOpenOverItems))
+			return;
+
+		std::filesystem::path createdPath;
+		if (ImGui::MenuItem("New Folder"))
+			createdPath = EditorAssetFactory::CreateFolder(m_CurrentDir);
+
+		if (ImGui::BeginMenu("Create Asset"))
+		{
+			if (ImGui::MenuItem("Material (.glmat)"))
+				createdPath = EditorAssetFactory::CreateMaterial(m_CurrentDir);
+			if (ImGui::MenuItem("Skybox (.glsky)"))
+				createdPath = EditorAssetFactory::CreateSkybox(m_CurrentDir);
+			if (ImGui::MenuItem("Scene (.glimmer)"))
+				createdPath = EditorAssetFactory::CreateScene(m_CurrentDir);
+			if (ImGui::MenuItem("Shader (.glsl)"))
+				createdPath = EditorAssetFactory::CreateShader(m_CurrentDir);
+			ImGui::EndMenu();
+		}
+
+		if (ImGui::BeginMenu("Create Geometry"))
+		{
+			if (ImGui::MenuItem("Cube"))
+				createdPath = EditorAssetFactory::CreateGeometry(
+					m_CurrentDir, PrimitiveGeometry::Cube);
+			if (ImGui::MenuItem("UV Sphere"))
+				createdPath = EditorAssetFactory::CreateGeometry(
+					m_CurrentDir, PrimitiveGeometry::UVSphere);
+			if (ImGui::MenuItem("Plane"))
+				createdPath = EditorAssetFactory::CreateGeometry(
+					m_CurrentDir, PrimitiveGeometry::Plane);
+			ImGui::EndMenu();
+		}
+
+		if (!createdPath.empty())
+		{
+			m_SelectedFile = createdPath.string();
+			if (std::filesystem::is_regular_file(createdPath)
+				&& createdPath.extension() != ".glimmer")
+				AssetManager::ImportAsset(createdPath);
+		}
+		ImGui::EndPopup();
+	}
 	void ContentBrowserPanel::OnImGuiRender()
 	{
 		LazyInit(m_BaseDir, m_CurrentDir);
@@ -191,6 +240,7 @@ namespace gl {
 			}
 			ImGui::Columns(1);
 		}
+		DrawCreateContextMenu();
 		ImGui::EndChild();
 
 		ImGui::End();
