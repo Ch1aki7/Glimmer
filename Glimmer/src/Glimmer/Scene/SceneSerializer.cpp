@@ -116,6 +116,62 @@ namespace gl {
 		if (node["Material"])
 			comp.MaterialHandle = AssetHandle(node["Material"].as<uint64_t>());
 	}
+	static void SerializeComponent(YAML::Emitter& out, const TerrainComponent& comp)
+	{
+		const auto& spec = comp.Specification;
+		const auto& noise = spec.Noise;
+		out << YAML::Key << "TerrainComponent" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Procedural" << YAML::Value << spec.Procedural;
+		out << YAML::Key << "HeightMapResolution" << YAML::Value << spec.HeightMapResolution;
+		out << YAML::Key << "MeshResolution" << YAML::Value << spec.MeshResolution;
+		out << YAML::Key << "HeightScale" << YAML::Value << spec.HeightScale;
+		out << YAML::Key << "HeightMap" << YAML::Value << static_cast<uint64_t>(spec.HeightMapHandle);
+		out << YAML::Key << "RenderShader" << YAML::Value << static_cast<uint64_t>(spec.RenderShaderHandle);
+		out << YAML::Key << "GenerationShader" << YAML::Value << static_cast<uint64_t>(spec.GenerationShaderHandle);
+		out << YAML::Key << "Noise" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Seed" << YAML::Value << noise.Seed;
+		out << YAML::Key << "Octaves" << YAML::Value << noise.Octaves;
+		out << YAML::Key << "Frequency" << YAML::Value << noise.Frequency;
+		out << YAML::Key << "Lacunarity" << YAML::Value << noise.Lacunarity;
+		out << YAML::Key << "Persistence" << YAML::Value << noise.Persistence;
+		out << YAML::Key << "DomainWarp" << YAML::Value << noise.DomainWarp;
+		out << YAML::Key << "RidgeStrength" << YAML::Value << noise.RidgeStrength;
+		out << YAML::Key << "ContinentScale" << YAML::Value << noise.ContinentScale;
+		out << YAML::Key << "ErosionStrength" << YAML::Value << noise.ErosionStrength;
+		out << YAML::Key << "DetailStrength" << YAML::Value << noise.DetailStrength;
+		out << YAML::Key << "Offset" << YAML::Value << YAML::Flow << YAML::BeginSeq
+			<< noise.Offset.x << noise.Offset.y << YAML::EndSeq;
+		out << YAML::EndMap << YAML::EndMap;
+	}
+
+	static void DeserializeComponent(const YAML::Node& node, TerrainComponent& comp)
+	{
+		auto& spec = comp.Specification;
+		if (node["Procedural"]) spec.Procedural = node["Procedural"].as<bool>();
+		if (node["HeightMapResolution"]) spec.HeightMapResolution = node["HeightMapResolution"].as<uint32_t>();
+		if (node["MeshResolution"]) spec.MeshResolution = node["MeshResolution"].as<uint32_t>();
+		if (node["HeightScale"]) spec.HeightScale = node["HeightScale"].as<float>();
+		if (node["HeightMap"]) spec.HeightMapHandle = AssetHandle(node["HeightMap"].as<uint64_t>());
+		if (node["RenderShader"]) spec.RenderShaderHandle = AssetHandle(node["RenderShader"].as<uint64_t>());
+		if (node["GenerationShader"]) spec.GenerationShaderHandle = AssetHandle(node["GenerationShader"].as<uint64_t>());
+		if (const auto noiseNode = node["Noise"])
+		{
+			auto& noise = spec.Noise;
+			if (noiseNode["Seed"]) noise.Seed = noiseNode["Seed"].as<int>();
+			if (noiseNode["Octaves"]) noise.Octaves = noiseNode["Octaves"].as<int>();
+			if (noiseNode["Frequency"]) noise.Frequency = noiseNode["Frequency"].as<float>();
+			if (noiseNode["Lacunarity"]) noise.Lacunarity = noiseNode["Lacunarity"].as<float>();
+			if (noiseNode["Persistence"]) noise.Persistence = noiseNode["Persistence"].as<float>();
+			if (noiseNode["DomainWarp"]) noise.DomainWarp = noiseNode["DomainWarp"].as<float>();
+			if (noiseNode["RidgeStrength"]) noise.RidgeStrength = noiseNode["RidgeStrength"].as<float>();
+			if (noiseNode["ContinentScale"]) noise.ContinentScale = noiseNode["ContinentScale"].as<float>();
+			if (noiseNode["ErosionStrength"]) noise.ErosionStrength = noiseNode["ErosionStrength"].as<float>();
+			if (noiseNode["DetailStrength"]) noise.DetailStrength = noiseNode["DetailStrength"].as<float>();
+			if (const auto offset = noiseNode["Offset"]; offset && offset.size() >= 2)
+				noise.Offset = { offset[0].as<float>(), offset[1].as<float>() };
+		}
+		comp.Runtime.reset();
+	}
 	static void SerializeComponent(YAML::Emitter& out, const DirectionalLightComponent& comp)
 	{
 		out << YAML::Key << "DirectionalLightComponent" << YAML::Value << YAML::BeginMap;
@@ -231,6 +287,8 @@ namespace gl {
 				SerializeComponent(out, entity.GetComponent<ModelRendererComponent>());
 			if (entity.HasComponent<MaterialComponent>())
 				SerializeComponent(out, entity.GetComponent<MaterialComponent>());
+			if (entity.HasComponent<TerrainComponent>())
+				SerializeComponent(out, entity.GetComponent<TerrainComponent>());
 			if (entity.HasComponent<DirectionalLightComponent>())
 				SerializeComponent(out, entity.GetComponent<DirectionalLightComponent>());
 			if (entity.HasComponent<PointLightComponent>())
@@ -303,7 +361,11 @@ namespace gl {
 					auto& mc = entity.AddComponent<MaterialComponent>();
 					DeserializeComponent(comps["MaterialComponent"], mc);
 				}
-				if (comps["DirectionalLightComponent"])
+				if (comps["TerrainComponent"])
+				{
+					auto& terrain = entity.AddComponent<TerrainComponent>();
+					DeserializeComponent(comps["TerrainComponent"], terrain);
+				}				if (comps["DirectionalLightComponent"])
 				{
 					auto& light = entity.AddComponent<DirectionalLightComponent>();
 					DeserializeComponent(comps["DirectionalLightComponent"], light);

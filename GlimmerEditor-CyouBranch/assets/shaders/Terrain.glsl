@@ -5,6 +5,8 @@ layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec2 a_TexCoord;
 
 uniform mat4 u_ViewProjection;
+uniform mat4 u_Transform;
+uniform int u_EntityID;
 uniform sampler2D u_HeightMap;
 uniform float u_MaxHeight;
 uniform float u_UVScale;
@@ -14,6 +16,7 @@ uniform float u_SampleSpacing;
 out vec3 v_WorldPos;
 out vec3 v_Normal;
 out float v_Height;
+flat out int v_EntityID;
 
 float SampleHeight(vec2 uv)
 {
@@ -39,20 +42,24 @@ void main()
 		1.0,
 		(heightDown - heightUp) * u_MaxHeight / (2.0 * sampleSpacing)));
 
-	v_WorldPos = worldPosition;
-	v_Normal = normal;
+	vec4 transformedPosition = u_Transform * vec4(worldPosition, 1.0);
+	v_WorldPos = transformedPosition.xyz;
+	v_Normal = normalize(transpose(inverse(mat3(u_Transform))) * normal);
 	v_Height = height;
-	gl_Position = u_ViewProjection * vec4(worldPosition, 1.0);
+	v_EntityID = u_EntityID;
+	gl_Position = u_ViewProjection * transformedPosition;
 }
 
 #type fragment
 #version 450 core
 
 layout(location = 0) out vec4 color;
+layout(location = 1) out int entityID;
 
 in vec3 v_WorldPos;
 in vec3 v_Normal;
 in float v_Height;
+flat in int v_EntityID;
 
 uniform vec3 u_CameraPos;
 
@@ -124,4 +131,5 @@ void main()
 	}
 
 	color = vec4(result, 1.0);
+	entityID = v_EntityID;
 }

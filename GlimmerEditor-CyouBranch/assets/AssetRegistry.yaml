@@ -13,6 +13,9 @@ AssetRegistry:
     FilePath: textures/Checkerboard.png
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 7633283146183385932
+    Type: Shader
+    FilePath: shaders/Terrain/GenerateFBM.comp
   - Handle: 8553044135784550654
     Type: Model
     FilePath: models/suzanne.obj
@@ -40,6 +43,9 @@ AssetRegistry:
     FilePath: textures/heightmap-example.png
     ColorSpace: Linear
     Semantic: Height
+  - Handle: 13614654561704837220
+    Type: Shader
+    FilePath: shaders/Terrain.glsl
   - Handle: 13777784352782102236
     Type: Material
     FilePath: materials/DefaultSprite.glmat

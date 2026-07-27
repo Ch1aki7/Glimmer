@@ -3,9 +3,7 @@
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/ShaderPanel.h"
-#include "Panels/TerrainPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
-#include "Glimmer/Renderer/TerrainMesh.h"
 
 namespace gl {
 
@@ -30,7 +28,6 @@ namespace gl {
 	private:
 		ShaderLibrary m_ShaderLib;
 		ShaderPanel m_ShaderPanel;
-		TerrainPanel m_TerrainPanel;
 
 		EditorCamera m_EditorCamera;
 		Ref<Shader> m_SkyboxShader;
@@ -52,14 +49,6 @@ namespace gl {
 		glm::vec2 m_ViewportSize = { 0.0f, 0.0f };
 		glm::vec2 m_ViewportBounds[2];
 		bool m_ViewportFocused = false, m_ViewportHovered = false;
-
-		// Terrain
-		Ref<TerrainMesh> m_TerrainMesh;
-		Ref<Texture2D> m_HeightMapTexture;
-		Scope<TerrainGenerator> m_TerrainGenerator;
-		Ref<Shader> m_TerrainShader;
-		bool m_UseProceduralTerrain = true;
-		float m_TerrainMaxHeight = 24.0f;
 
 		// Gizmos
 		int m_GizmoType = 0; // 0=Translate, 1=Rotate, 2=Scale

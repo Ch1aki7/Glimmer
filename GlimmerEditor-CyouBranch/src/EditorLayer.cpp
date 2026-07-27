@@ -87,26 +87,12 @@ namespace gl {
 		m_SkyboxShader = m_ShaderLib.Load(
 			"Skybox", "assets/shaders/Skybox.glsl");
 
-		// --- 地形系统 ---
-		m_TerrainShader = m_ShaderLib.Load("Terrain", "assets/shaders/Terrain.glsl");
-		
-		// 加载预设高度图
-		
-		m_HeightMapTexture = Texture2D::Create(
-			"assets/textures/heightmap-example.png", TextureColorSpace::Linear);
-
-		SimulationGridSpecification heightGridSpecification;
-		heightGridSpecification.Width = 512;
-		heightGridSpecification.Height = 512;
-		heightGridSpecification.Format = TextureFormat::R32F;
-		heightGridSpecification.Filter = TextureFilter::Linear;
-		heightGridSpecification.Wrap = TextureWrap::ClampToEdge;
-
-		m_TerrainGenerator = CreateScope<TerrainGenerator>(
-			heightGridSpecification,
-			"assets/shaders/Terrain/GenerateFBM.comp");
-		m_TerrainPanel.SetContext(m_TerrainGenerator.get());
-		m_TerrainMesh = CreateRef<TerrainMesh>(256);
+		const AssetHandle terrainShaderHandle =
+			AssetManager::ImportAsset("assets/shaders/Terrain.glsl");
+		const AssetHandle terrainGenerationShaderHandle =
+			AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
+		const AssetHandle defaultHeightMapHandle =
+			AssetManager::ImportAsset("assets/textures/heightmap-example.png");
 		FramebufferSpecification sceneFramebufferSpec;
 		sceneFramebufferSpec.Width = 1280;
 		sceneFramebufferSpec.Height = 720;
@@ -144,6 +130,11 @@ namespace gl {
 
 		auto skyLightEntity = m_ActiveScene->CreateEntity("Sky Light");
 		skyLightEntity.AddComponent<SkyLightComponent>(defaultSkyboxHandle);
+		auto terrainEntity = m_ActiveScene->CreateEntity("Terrain");
+		auto& terrain = terrainEntity.AddComponent<TerrainComponent>();
+		terrain.Specification.RenderShaderHandle = terrainShaderHandle;
+		terrain.Specification.GenerationShaderHandle = terrainGenerationShaderHandle;
+		terrain.Specification.HeightMapHandle = defaultHeightMapHandle;
 
 		// --- 层级面板 ---
 		m_HierarchyPanel.SetContext(m_ActiveScene);
@@ -181,7 +172,6 @@ namespace gl {
 	void EditorLayer::OnUpdate(Timestep ts) {
 		GL_PROFILE_FUNCTION();
 		m_ShaderPanel.OnUpdate();
-		m_TerrainPanel.OnUpdate();
 
 		// --- 编辑器相机（仅编辑模式） ---
 		m_EditorCamera.SetInputEnabled(m_ViewportHovered);
@@ -257,37 +247,6 @@ namespace gl {
 		}
 
 		RenderPass::End();
-
-		// --- Pass 2: Terrain ---
-		{
-			RenderPassSpecification terrainPass;
-			terrainPass.Target = m_Framebuffer;
-			terrainPass.ClearColor = false;
-			terrainPass.ClearDepth = false;
-			RenderPass::Begin(terrainPass);
-			
-			glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
-			const Ref<Texture2D>& activeHeightMap =
-				m_UseProceduralTerrain ? m_TerrainGenerator->GetHeightMap() : m_HeightMapTexture;
-			m_TerrainShader->Bind();
-			m_TerrainShader->UploadUniformMat4("u_ViewProjection", vp);
-			m_TerrainShader->UploadUniformFloat("u_MaxHeight", m_TerrainMaxHeight);
-			m_TerrainShader->UploadUniformFloat("u_UVScale", 1.0f);
-			activeHeightMap->Bind(0);
-			m_TerrainShader->UploadUniformInt("u_HeightMap", 0);
-			m_TerrainShader->UploadUniformFloat2("u_TexelSize", {
-				1.0f / static_cast<float>(activeHeightMap->GetWidth()),
-				1.0f / static_cast<float>(activeHeightMap->GetHeight())
-			});
-			m_TerrainShader->UploadUniformFloat("u_SampleSpacing",
-				static_cast<float>(m_TerrainMesh->GetGridSize()) /
-				static_cast<float>(std::max(activeHeightMap->GetWidth() - 1, 1u)));
-			m_TerrainShader->UploadUniformFloat3("u_CameraPos", m_EditorCamera.GetPosition());
-			m_TerrainMesh->Bind();
-			RenderCommand::DrawIndexed(m_TerrainMesh->GetVertexArray(), m_TerrainMesh->GetIndexCount());
-			
-			RenderPass::End();
-		}
 
 		// --- Pass 3: Overlay ---
 		//{
@@ -441,7 +400,6 @@ namespace gl {
 		// --- Content Browser ---
 		m_ContentBrowser.OnImGuiRender();
 		m_ShaderPanel.OnImGuiRender();
-		m_TerrainPanel.OnImGuiRender();
 
 		// Stats
 		ImGui::Begin("Stats");
@@ -456,9 +414,6 @@ namespace gl {
 		ImGui::SeparatorText("HDR Output");
 		ImGui::DragFloat("Exposure", &m_Exposure, 0.05f, 0.01f, 10.0f);
 		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
-		ImGui::SeparatorText("Terrain Test");
-		ImGui::Checkbox("Use Procedural Height Map", &m_UseProceduralTerrain);
-		ImGui::DragFloat("Terrain Max Height", &m_TerrainMaxHeight, 0.1f, 0.0f, 100.0f);
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 		ImGui::End();
 
@@ -523,6 +478,22 @@ namespace gl {
 							skyLightEntity.GetComponent<SkyLightComponent>()
 								.CubemapHandle = handle;
 						m_HierarchyPanel.SetSelectedEntity(skyLightEntity);
+					}
+				}				else if (ext == ".png" || ext == ".jpg" || ext == ".jpeg"
+					|| ext == ".tga" || ext == ".bmp")
+				{
+					const AssetHandle heightMapHandle = AssetManager::ImportAsset(path);
+					if (AssetManager::GetMetadata(heightMapHandle).Type == AssetType::Texture2D)
+					{
+						Entity terrainEntity = m_ActiveScene->CreateEntity("Terrain");
+						auto& terrain = terrainEntity.AddComponent<TerrainComponent>();
+						terrain.Specification.Procedural = false;
+						terrain.Specification.HeightMapHandle = heightMapHandle;
+						terrain.Specification.RenderShaderHandle =
+							AssetManager::ImportAsset("assets/shaders/Terrain.glsl");
+						terrain.Specification.GenerationShaderHandle =
+							AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
+						m_HierarchyPanel.SetSelectedEntity(terrainEntity);
 					}
 				}
 			}

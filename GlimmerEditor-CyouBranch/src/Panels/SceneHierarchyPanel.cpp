@@ -1,6 +1,7 @@
 #include "SceneHierarchyPanel.h"
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <filesystem>
 #include <algorithm>
@@ -88,6 +89,7 @@ namespace gl {
 		if (entity.HasComponent<SpriteRendererComponent>())  badges += " [Spr]";
 		if (entity.HasComponent<ModelRendererComponent>())   badges += " [Model]";
 		if (entity.HasComponent<MaterialComponent>())        badges += " [Mat]";
+		if (entity.HasComponent<TerrainComponent>())         badges += " [Terrain]";
 		if (entity.HasComponent<DirectionalLightComponent>()) badges += " [Sun]";
 		if (entity.HasComponent<PointLightComponent>())       badges += " [Point]";
 		if (entity.HasComponent<SkyLightComponent>())         badges += " [Sky]";
@@ -109,6 +111,10 @@ namespace gl {
 		}
 
 		if (ImGui::BeginPopupContextItem()) {
+			if (ImGui::MenuItem("Duplicate")) {
+				m_SelectionContext = m_Context->DuplicateEntity(entity);
+				if (OnEntitySelected) OnEntitySelected(m_SelectionContext);
+			}
 			if (ImGui::MenuItem("Delete")) {
 				m_RightClickedEntity = entity;
 				m_ShowDeletePopup = true;
@@ -148,6 +154,72 @@ namespace gl {
 			}
 		}
 
+		// --- Terrain ---
+		if (entity.HasComponent<TerrainComponent>())
+		{
+			if (ImGui::TreeNodeEx((void*)typeid(TerrainComponent).hash_code(),
+				ImGuiTreeNodeFlags_DefaultOpen, "Terrain"))
+			{
+				auto& terrain = entity.GetComponent<TerrainComponent>();
+				auto& spec = terrain.Specification;
+				bool regenerate = false;
+				regenerate |= ImGui::Checkbox("Procedural", &spec.Procedural);
+				int heightResolution = static_cast<int>(spec.HeightMapResolution);
+				if (ImGui::InputInt("Height Resolution", &heightResolution, 0))
+				{
+					spec.HeightMapResolution = static_cast<uint32_t>(std::clamp(heightResolution, 64, 2048));
+					terrain.Runtime.reset();
+				}
+				int meshResolution = static_cast<int>(spec.MeshResolution);
+				if (ImGui::InputInt("Mesh Resolution", &meshResolution, 0))
+				{
+					spec.MeshResolution = static_cast<uint32_t>(std::clamp(meshResolution, 16, 512));
+					terrain.Runtime.reset();
+				}
+				regenerate |= ImGui::DragFloat("Height Scale", &spec.HeightScale, 0.1f, 0.0f, 500.0f);
+
+				if (spec.Procedural)
+				{
+					auto& noise = spec.Noise;
+					regenerate |= ImGui::DragInt("Seed", &noise.Seed, 1.0f);
+					regenerate |= ImGui::SliderInt("Octaves", &noise.Octaves, 1, 12);
+					regenerate |= ImGui::DragFloat("Frequency", &noise.Frequency, 0.01f, 0.05f, 32.0f);
+					regenerate |= ImGui::DragFloat("Lacunarity", &noise.Lacunarity, 0.01f, 1.0f, 4.0f);
+					regenerate |= ImGui::DragFloat("Persistence", &noise.Persistence, 0.01f, 0.05f, 0.95f);
+					regenerate |= ImGui::DragFloat("Domain Warp", &noise.DomainWarp, 0.01f, 0.0f, 4.0f);
+					regenerate |= ImGui::SliderFloat("Ridge Strength", &noise.RidgeStrength, 0.0f, 1.0f);
+					regenerate |= ImGui::SliderFloat("Continent Scale", &noise.ContinentScale, 0.05f, 1.0f);
+					regenerate |= ImGui::SliderFloat("Erosion Strength", &noise.ErosionStrength, 0.0f, 0.5f);
+					regenerate |= ImGui::SliderFloat("Detail Strength", &noise.DetailStrength, 0.0f, 0.25f);
+					regenerate |= ImGui::DragFloat2("Offset", &noise.Offset.x, 0.005f);
+				}
+				else
+				{
+					const AssetMetadata metadata = AssetManager::GetMetadata(spec.HeightMapHandle);
+					ImGui::Text("Height Map: %s", metadata.IsValid()
+						? metadata.FilePath.filename().string().c_str() : "None (drag image here)");
+					if (ImGui::BeginDragDropTarget())
+					{
+						if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+						{
+							std::string path((const char*)payload->Data, payload->DataSize - 1);
+							AssetHandle handle = AssetManager::ImportAsset(path);
+							if (AssetManager::GetMetadata(handle).Type == AssetType::Texture2D)
+							{
+								spec.HeightMapHandle = handle;
+								terrain.Runtime.reset();
+							}
+						}
+						ImGui::EndDragDropTarget();
+					}
+				}
+				if (regenerate)
+					TerrainRenderer::Invalidate(terrain);
+				if (ImGui::Button("Regenerate"))
+					TerrainRenderer::Invalidate(terrain);
+				ImGui::TreePop();
+			}
+		}
 		// --- Directional Light ---
 		if (entity.HasComponent<DirectionalLightComponent>())
 		{
@@ -496,6 +568,11 @@ namespace gl {
 		addMenuItem("Sprite Renderer", entity.HasComponent<SpriteRendererComponent>(), [&]() { entity.AddComponent<SpriteRendererComponent>(); });
 		addMenuItem("Model Renderer", entity.HasComponent<ModelRendererComponent>(), [&]() { entity.AddComponent<ModelRendererComponent>(); });
 		addMenuItem("Material", entity.HasComponent<MaterialComponent>(), [&]() { entity.AddComponent<MaterialComponent>(); });
+		addMenuItem("Terrain", entity.HasComponent<TerrainComponent>(), [&]() {
+			auto& terrain = entity.AddComponent<TerrainComponent>();
+			terrain.Specification.RenderShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain.glsl");
+			terrain.Specification.GenerationShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
+		});
 		if (hasAvailableComponent)
 			ImGui::Separator();
 		addMenuItem("Directional Light", entity.HasComponent<DirectionalLightComponent>(), [&]() { entity.AddComponent<DirectionalLightComponent>(); });

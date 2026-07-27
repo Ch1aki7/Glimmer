@@ -7,11 +7,14 @@
 #include "Glimmer/Core/UUID.h"
 #include "SceneCamera.h"
 #include "ScriptableEntity.h"
+#include "Glimmer/Terrain/TerrainSettings.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/quaternion.hpp>
 
 namespace gl {
+
+	struct TerrainRuntime;
 
 	struct IDComponent
 	{
@@ -80,6 +83,15 @@ namespace gl {
 		MaterialComponent() = default;
 		MaterialComponent(const MaterialComponent&) = default;
 		explicit MaterialComponent(AssetHandle handle) : MaterialHandle(handle) {}
+	};
+	struct TerrainComponent
+	{
+		TerrainSpecification Specification;
+		Ref<TerrainRuntime> Runtime;
+
+		TerrainComponent() = default;
+		TerrainComponent(const TerrainComponent& other)
+			: Specification(other.Specification) {}
 	};
 	struct DirectionalLightComponent
 	{

@@ -22,6 +22,7 @@ namespace gl {
 		Entity CreateEntity(const std::string& name = std::string());
 		Entity CreateEntityWithUUID(UUID uuid, const std::string& name = std::string());
 		void DestroyEntity(Entity entity);
+		Entity DuplicateEntity(Entity entity);
 
 		Entity GetPrimaryCameraEntity();
 		Entity GetSkyLightEntity();

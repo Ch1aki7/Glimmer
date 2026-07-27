@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/Renderer.h"
 #include "Glimmer/Renderer/Renderer2D.h"
 #include "Glimmer/Renderer/Renderer3D.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
 #include "Entity.h"
 
 #include <glm/glm.hpp>
@@ -31,6 +32,16 @@ namespace gl {
 		}(), ...);
 	}
 
+	template<typename T>
+	static void CopyComponentIfPresent(Entity source, Entity destination)
+	{
+		if (!source.HasComponent<T>())
+			return;
+		if (destination.HasComponent<T>())
+			destination.GetComponent<T>() = source.GetComponent<T>();
+		else
+			destination.AddComponent<T>(source.GetComponent<T>());
+	}
 	Scene::Scene()
 	{
 	}
@@ -61,7 +72,7 @@ namespace gl {
 			entityMap[uuid] = static_cast<entt::entity>(destinationEntity);
 		}
 
-		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, ModelRendererComponent, MaterialComponent, DirectionalLightComponent, PointLightComponent, SkyLightComponent, CameraComponent>(
+		CopyComponents<TransformComponent, TagComponent, SpriteRendererComponent, ModelRendererComponent, MaterialComponent, DirectionalLightComponent, PointLightComponent, SkyLightComponent, CameraComponent, TerrainComponent>(
 			destination->m_Registry,
 			source->m_Registry,
 			entityMap);
@@ -102,6 +113,23 @@ namespace gl {
 		return entity;
 	}
 
+	Entity Scene::DuplicateEntity(Entity source)
+	{
+		if (!source || !source.HasComponent<TagComponent>())
+			return {};
+
+		Entity destination = CreateEntity(source.GetComponent<TagComponent>().Tag + " Copy");
+		CopyComponentIfPresent<TransformComponent>(source, destination);
+		CopyComponentIfPresent<SpriteRendererComponent>(source, destination);
+		CopyComponentIfPresent<ModelRendererComponent>(source, destination);
+		CopyComponentIfPresent<MaterialComponent>(source, destination);
+		CopyComponentIfPresent<TerrainComponent>(source, destination);
+		CopyComponentIfPresent<DirectionalLightComponent>(source, destination);
+		CopyComponentIfPresent<PointLightComponent>(source, destination);
+		CopyComponentIfPresent<SkyLightComponent>(source, destination);
+		CopyComponentIfPresent<CameraComponent>(source, destination);
+		return destination;
+	}
 	void Scene::DestroyEntity(Entity entity)
 	{
 		if (entity.HasComponent<NativeScriptComponent>())
@@ -250,6 +278,15 @@ namespace gl {
 					static_cast<int>(static_cast<uint32_t>(entity)));
 			}
 
+			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
+			for (auto entity : terrainView)
+			{
+				auto& transform = terrainView.get<TransformComponent>(entity);
+				auto& terrain = terrainView.get<TerrainComponent>(entity);
+				TerrainRenderer::Draw(terrain, transform.GetTransform(), viewProjection,
+					cameraPosition, static_cast<int>(static_cast<uint32_t>(entity)));
+			}
+
 			Renderer2D::BeginScene(viewProjection);
 
 			auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
@@ -282,6 +319,15 @@ namespace gl {
 				transform.GetTransform(), model.ModelHandle,
 				material ? material->MaterialHandle : AssetHandle(0),
 				static_cast<int>(static_cast<uint32_t>(entity)));
+		}
+
+		auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
+		for (auto entity : terrainView)
+		{
+			auto& transform = terrainView.get<TransformComponent>(entity);
+			auto& terrain = terrainView.get<TerrainComponent>(entity);
+			TerrainRenderer::Draw(terrain, transform.GetTransform(), viewProjection,
+				cameraPosition, static_cast<int>(static_cast<uint32_t>(entity)));
 		}
 
 		Renderer2D::BeginScene(viewProjection);
@@ -379,6 +425,8 @@ namespace gl {
 	void Scene::OnComponentAdded<ModelRendererComponent>(Entity entity, ModelRendererComponent& component) {}
 	template<>
 	void Scene::OnComponentAdded<MaterialComponent>(Entity entity, MaterialComponent& component) {}
+	template<>
+	void Scene::OnComponentAdded<TerrainComponent>(Entity entity, TerrainComponent& component) {}
 	template<>
 	void Scene::OnComponentAdded<DirectionalLightComponent>(Entity entity, DirectionalLightComponent& component) {}
 
