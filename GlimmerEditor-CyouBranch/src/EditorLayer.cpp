@@ -115,7 +115,8 @@ namespace gl {
 		
 		// 加载预设高度图
 		
-		m_HeightMapTexture = Texture2D::Create("assets/textures/heightmap-example.png");
+		m_HeightMapTexture = Texture2D::Create(
+			"assets/textures/heightmap-example.png", TextureColorSpace::Linear);
 
 		SimulationGridSpecification heightGridSpecification;
 		heightGridSpecification.Width = 512;

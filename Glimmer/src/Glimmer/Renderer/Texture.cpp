@@ -6,9 +6,10 @@
 
 namespace gl {
 
-	Ref<Texture2D> Texture2D::Create(const std::string& path)
+	Ref<Texture2D> Texture2D::Create(
+		const std::string& path, TextureColorSpace colorSpace)
 	{
-		return CreateRef<OpenGLTexture2D>(path);
+		return CreateRef<OpenGLTexture2D>(path, colorSpace);
 	}
 
 	Ref<Texture2D> Texture2D::Create(uint32_t width, uint32_t height)

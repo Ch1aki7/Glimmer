@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Glimmer/Core/Core.h"
+#include "Glimmer/Asset/TextureAssetMetadata.h"
 
 #include <glm/glm.hpp>
 #include <string>
@@ -44,6 +45,7 @@ namespace gl {
 		TextureWrap WrapS = TextureWrap::Repeat;
 		TextureWrap WrapT = TextureWrap::Repeat;
 		TextureUsage Usage = TextureUsage::Sampled;
+		TextureColorSpace ColorSpace = TextureColorSpace::Linear;
 	};
 
 	class Texture {
@@ -66,7 +68,8 @@ namespace gl {
 
 	class Texture2D : public Texture {
 	public:
-		static Ref<Texture2D> Create(const std::string& path);
+		static Ref<Texture2D> Create(const std::string& path,
+			TextureColorSpace colorSpace = TextureColorSpace::SRGB);
 		static Ref<Texture2D> Create(uint32_t width, uint32_t height);
 		static Ref<Texture2D> Create(const TextureSpecification& specification);
 	};

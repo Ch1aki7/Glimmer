@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Glimmer/Core/UUID.h"
+#include "Glimmer/Asset/TextureAssetMetadata.h"
 
 #include <filesystem>
 
@@ -22,6 +23,8 @@ namespace gl {
 		AssetHandle Handle{ 0 };
 		AssetType Type = AssetType::None;
 		std::filesystem::path FilePath;
+		TextureColorSpace ColorSpace = TextureColorSpace::Linear;
+		TextureSemantic Semantic = TextureSemantic::Data;
 
 		bool IsValid() const
 		{

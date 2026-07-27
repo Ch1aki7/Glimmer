@@ -21,6 +21,9 @@ namespace gl {
 		static AssetHandle ImportAsset(const std::filesystem::path& path);
 		static bool IsAssetHandleValid(AssetHandle handle);
 		static AssetMetadata GetMetadata(AssetHandle handle);
+		static bool SetTextureMetadata(AssetHandle handle,
+			TextureColorSpace colorSpace,
+			TextureSemantic semantic);
 		static std::filesystem::path GetFileSystemPath(AssetHandle handle);
 
 		static Ref<Texture2D> GetTexture2D(AssetHandle handle);

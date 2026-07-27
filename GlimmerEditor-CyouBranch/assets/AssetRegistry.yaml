@@ -8,6 +8,8 @@ AssetRegistry:
   - Handle: 9195328290163695800
     Type: Texture2D
     FilePath: textures/balatro.png
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 9214643851391544329
     Type: Model
     FilePath: models/planet.obj
@@ -20,6 +22,8 @@ AssetRegistry:
   - Handle: 10096056566838588892
     Type: Texture2D
     FilePath: textures/STS.png
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 13777784352782102236
     Type: Material
     FilePath: materials/DefaultSprite.glmat
@@ -29,3 +33,5 @@ AssetRegistry:
   - Handle: 18204455804917931031
     Type: Texture2D
     FilePath: textures/Henry.jpg
+    ColorSpace: SRGB
+    Semantic: Color

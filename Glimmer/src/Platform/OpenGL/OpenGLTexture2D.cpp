@@ -10,13 +10,15 @@ namespace gl {
 
 	namespace {
 
-		GLenum ToInternalFormat(TextureFormat format)
+		GLenum ToInternalFormat(TextureFormat format, TextureColorSpace colorSpace)
 		{
 			switch (format)
 			{
 			case TextureFormat::R8: return GL_R8;
-			case TextureFormat::RGB8: return GL_RGB8;
-			case TextureFormat::RGBA8: return GL_RGBA8;
+			case TextureFormat::RGB8: return colorSpace == TextureColorSpace::SRGB
+				? GL_SRGB8 : GL_RGB8;
+			case TextureFormat::RGBA8: return colorSpace == TextureColorSpace::SRGB
+				? GL_SRGB8_ALPHA8 : GL_RGBA8;
 			case TextureFormat::R16F: return GL_R16F;
 			case TextureFormat::RG16F: return GL_RG16F;
 			case TextureFormat::RGBA16F: return GL_RGBA16F;
@@ -88,12 +90,14 @@ namespace gl {
 
 	}
 
-	OpenGLTexture2D::OpenGLTexture2D(const std::string& path)
+	OpenGLTexture2D::OpenGLTexture2D(
+		const std::string& path, TextureColorSpace colorSpace)
 		: m_Path(path)
 	{
 		GL_PROFILE_FUNCTION();
 
 		stbi_set_flip_vertically_on_load(1);
+		m_Specification.ColorSpace = colorSpace;
 		int width = 0;
 		int height = 0;
 		int channels = 0;
@@ -134,7 +138,16 @@ namespace gl {
 
 	void OpenGLTexture2D::CreateStorage()
 	{
-		m_InternalFormat = ToInternalFormat(m_Specification.Format);
+		if (m_Specification.ColorSpace == TextureColorSpace::SRGB
+			&& m_Specification.Format != TextureFormat::RGB8
+			&& m_Specification.Format != TextureFormat::RGBA8)
+		{
+			GL_CORE_WARN("sRGB is unsupported for this texture format; using Linear.");
+			m_Specification.ColorSpace = TextureColorSpace::Linear;
+		}
+
+		m_InternalFormat = ToInternalFormat(
+			m_Specification.Format, m_Specification.ColorSpace);
 		m_DataFormat = ToDataFormat(m_Specification.Format);
 		m_DataType = ToDataType(m_Specification.Format);
 		GL_CORE_ASSERT(m_InternalFormat != GL_NONE && m_DataFormat != GL_NONE && m_DataType != GL_NONE,

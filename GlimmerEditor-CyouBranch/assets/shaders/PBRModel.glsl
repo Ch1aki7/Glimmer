@@ -114,7 +114,8 @@ void main()
     if (u_HasBaseColorTexture != 0)
         sampledColor = texture(u_BaseColorTexture, v_TexCoord * u_TilingFactor);
 
-    vec3 albedo = pow(max(u_BaseColor.rgb * sampledColor.rgb, vec3(0.0)), vec3(2.2));
+	vec3 linearBaseColor = pow(max(u_BaseColor.rgb, vec3(0.0)), vec3(2.2));
+	vec3 albedo = linearBaseColor * sampledColor.rgb;
     float metallic = clamp(u_Metallic, 0.0, 1.0);
     float roughness = clamp(u_Roughness, 0.04, 1.0);
     vec3 normal = normalize(v_WorldNormal);

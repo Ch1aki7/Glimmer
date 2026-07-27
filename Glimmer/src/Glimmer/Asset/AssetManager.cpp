@@ -26,6 +26,7 @@ namespace gl {
 			std::unordered_map<AssetHandle, Ref<Shader>> ShaderCache;
 			std::mutex Mutex;
 			bool Initialized = false;
+			bool RegistryNeedsMigration = false;
 		};
 
 		AssetManagerData s_Data;
@@ -62,6 +63,71 @@ namespace gl {
 			return AssetType::None;
 		}
 
+		const char* TextureColorSpaceToString(TextureColorSpace colorSpace)
+		{
+			return colorSpace == TextureColorSpace::SRGB ? "SRGB" : "Linear";
+		}
+
+		TextureColorSpace TextureColorSpaceFromString(const std::string& value)
+		{
+			return value == "SRGB"
+				? TextureColorSpace::SRGB
+				: TextureColorSpace::Linear;
+		}
+
+		const char* TextureSemanticToString(TextureSemantic semantic)
+		{
+			switch (semantic)
+			{
+				case TextureSemantic::Color: return "Color";
+				case TextureSemantic::Normal: return "Normal";
+				case TextureSemantic::Height: return "Height";
+				default: return "Data";
+			}
+		}
+
+		TextureSemantic TextureSemanticFromString(const std::string& value)
+		{
+			if (value == "Color") return TextureSemantic::Color;
+			if (value == "Normal") return TextureSemantic::Normal;
+			if (value == "Height") return TextureSemantic::Height;
+			return TextureSemantic::Data;
+		}
+
+		void InferTextureMetadata(
+			const std::filesystem::path& path, AssetMetadata& metadata)
+		{
+			std::string name = NormalizePathKey(path.filename());
+			const auto contains = [&name](const char* token)
+			{
+				return name.find(token) != std::string::npos;
+			};
+
+			if (contains("normal") || contains("_n.") || contains("_nrm"))
+			{
+				metadata.ColorSpace = TextureColorSpace::Linear;
+				metadata.Semantic = TextureSemantic::Normal;
+			}
+			else if (contains("height") || contains("displacement")
+				|| contains("_disp"))
+			{
+				metadata.ColorSpace = TextureColorSpace::Linear;
+				metadata.Semantic = TextureSemantic::Height;
+			}
+			else if (contains("roughness") || contains("metallic")
+				|| contains("metalness") || contains("ambientocclusion")
+				|| contains("_ao.") || contains("_orm."))
+			{
+				metadata.ColorSpace = TextureColorSpace::Linear;
+				metadata.Semantic = TextureSemantic::Data;
+			}
+			else
+			{
+				metadata.ColorSpace = TextureColorSpace::SRGB;
+				metadata.Semantic = TextureSemantic::Color;
+			}
+		}
+
 	}
 
 	void AssetManager::Initialize(
@@ -82,6 +148,11 @@ namespace gl {
 			: std::filesystem::absolute(registryPath).lexically_normal();
 		s_Data.Initialized = true;
 		DeserializeRegistry();
+		if (s_Data.RegistryNeedsMigration)
+		{
+			SerializeRegistry();
+			s_Data.RegistryNeedsMigration = false;
+		}
 	}
 
 	void AssetManager::Shutdown()
@@ -96,6 +167,7 @@ namespace gl {
 		s_Data.AssetDirectory.clear();
 		s_Data.RegistryPath.clear();
 		s_Data.Initialized = false;
+		s_Data.RegistryNeedsMigration = false;
 	}
 
 	AssetHandle AssetManager::ImportAsset(const std::filesystem::path& path)
@@ -143,6 +215,8 @@ namespace gl {
 		metadata.Handle = AssetHandle();
 		metadata.Type = type;
 		metadata.FilePath = relativePath.lexically_normal();
+		if (metadata.Type == AssetType::Texture2D)
+			InferTextureMetadata(metadata.FilePath, metadata);
 		s_Data.Registry.emplace(metadata.Handle, metadata);
 		s_Data.PathToHandle.emplace(key, metadata.Handle);
 		SerializeRegistry();
@@ -161,6 +235,28 @@ namespace gl {
 		std::scoped_lock lock(s_Data.Mutex);
 		auto iterator = s_Data.Registry.find(handle);
 		return iterator != s_Data.Registry.end() ? iterator->second : s_NullMetadata;
+	}
+
+	bool AssetManager::SetTextureMetadata(
+		AssetHandle handle,
+		TextureColorSpace colorSpace,
+		TextureSemantic semantic)
+	{
+		std::scoped_lock lock(s_Data.Mutex);
+		auto iterator = s_Data.Registry.find(handle);
+		if (iterator == s_Data.Registry.end()
+			|| iterator->second.Type != AssetType::Texture2D)
+			return false;
+
+		auto& metadata = iterator->second;
+		if (metadata.ColorSpace == colorSpace && metadata.Semantic == semantic)
+			return true;
+
+		metadata.ColorSpace = colorSpace;
+		metadata.Semantic = semantic;
+		s_Data.TextureCache.erase(handle);
+		SerializeRegistry();
+		return true;
 	}
 
 	std::filesystem::path AssetManager::GetFileSystemPath(AssetHandle handle)
@@ -193,7 +289,8 @@ namespace gl {
 			return nullptr;
 		}
 
-		Ref<Texture2D> texture = Texture2D::Create(path.string());
+		Ref<Texture2D> texture = Texture2D::Create(
+			path.string(), metadata->second.ColorSpace);
 		s_Data.TextureCache.emplace(handle, texture);
 		return texture;
 	}
@@ -303,6 +400,13 @@ namespace gl {
 				<< static_cast<uint64_t>(metadata.Handle);
 			output << YAML::Key << "Type" << YAML::Value << AssetTypeToString(metadata.Type);
 			output << YAML::Key << "FilePath" << YAML::Value << metadata.FilePath.generic_string();
+			if (metadata.Type == AssetType::Texture2D)
+			{
+				output << YAML::Key << "ColorSpace" << YAML::Value
+					<< TextureColorSpaceToString(metadata.ColorSpace);
+				output << YAML::Key << "Semantic" << YAML::Value
+					<< TextureSemanticToString(metadata.Semantic);
+			}
 			output << YAML::EndMap;
 		}
 		output << YAML::EndSeq;
@@ -335,6 +439,21 @@ namespace gl {
 				metadata.Handle = AssetHandle(entry["Handle"].as<uint64_t>());
 				metadata.Type = AssetTypeFromString(entry["Type"].as<std::string>());
 				metadata.FilePath = entry["FilePath"].as<std::string>();
+				if (metadata.Type == AssetType::Texture2D)
+				{
+					if (entry["ColorSpace"] && entry["Semantic"])
+					{
+						metadata.ColorSpace = TextureColorSpaceFromString(
+							entry["ColorSpace"].as<std::string>());
+						metadata.Semantic = TextureSemanticFromString(
+							entry["Semantic"].as<std::string>());
+					}
+					else
+					{
+						InferTextureMetadata(metadata.FilePath, metadata);
+						s_Data.RegistryNeedsMigration = true;
+					}
+				}
 				if (!metadata.IsValid())
 					continue;
 
