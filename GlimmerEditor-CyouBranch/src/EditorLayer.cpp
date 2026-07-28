@@ -23,9 +23,16 @@ namespace gl {
 		if (m_SceneState == SceneState::Play)
 			OnSceneStop();
 
+		m_CommandHistory.Clear();
 		m_EditorScene = scene;
 		m_ActiveScene = m_EditorScene;
 		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
+		m_HierarchyPanel.SetSelectionContext(&m_SelectionContext);
+		m_InspectorPanel.SetContext(m_ActiveScene);
+		m_InspectorPanel.SetSelectionContext(&m_SelectionContext);
+		m_InspectorPanel.SetEntityDrawer(
+			[this](Entity entity) { m_HierarchyPanel.DrawComponents(entity); });
 		m_HierarchyPanel.SetSelectedEntity({});
 	}
 
@@ -46,6 +53,7 @@ namespace gl {
 		GL_CORE_INFO("Runtime scene started.");
 
 		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_InspectorPanel.SetContext(m_ActiveScene);
 		m_HierarchyPanel.SetSelectedEntity(
 			static_cast<uint64_t>(selectedUUID) != 0
 				? m_ActiveScene->FindEntityByUUID(selectedUUID)
@@ -71,6 +79,7 @@ namespace gl {
 		GL_CORE_INFO("Runtime scene stopped; editor scene restored.");
 
 		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_InspectorPanel.SetContext(m_ActiveScene);
 		m_HierarchyPanel.SetSelectedEntity(
 			m_ActiveScene && static_cast<uint64_t>(selectedUUID) != 0
 				? m_ActiveScene->FindEntityByUUID(selectedUUID)
@@ -159,6 +168,11 @@ namespace gl {
 				}
 			}
 			};
+		m_ContentBrowser.OnAssetSelected = [this](AssetHandle handle) {
+			m_SelectionContext.SelectAsset(handle);
+			m_HierarchyPanel.SetSelectedEntity({});
+			m_SelectionContext.SelectAsset(handle);
+		};
 
 
 	}
@@ -278,6 +292,12 @@ namespace gl {
 
 		// --- 全局快捷键 ---
 		auto& io = ImGui::GetIO();
+		if (ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl))
+			m_CommandHistory.Undo();
+		if (ImGui::IsKeyChordPressed(ImGuiKey_Y | ImGuiMod_Ctrl)
+			|| ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl | ImGuiMod_Shift))
+			m_CommandHistory.Redo();
+
 		if (ImGui::IsKeyChordPressed(ImGuiKey_P | ImGuiMod_Ctrl)) {
 			if (m_SceneState == SceneState::Play)
 				OnSceneStop();
@@ -396,6 +416,7 @@ namespace gl {
 
 		// --- Scene Hierarchy ---
 		m_HierarchyPanel.OnImGuiRender();
+		m_InspectorPanel.OnImGuiRender();
 
 		// --- Content Browser ---
 		m_ContentBrowser.OnImGuiRender();

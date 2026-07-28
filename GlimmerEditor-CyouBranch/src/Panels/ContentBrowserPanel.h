@@ -11,6 +11,7 @@ namespace gl {
 
 		void OnImGuiRender();
 
+		std::function<void(AssetHandle)> OnAssetSelected;
 		std::function<void(const std::string& path)> OnFileDoubleClicked;
 
 	private:

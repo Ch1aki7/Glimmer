@@ -1,9 +1,11 @@
 #pragma once
 #include "Glimmer.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "Panels/InspectorPanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/ShaderPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
+#include "Editor/EditorCommand.h"
 
 namespace gl {
 
@@ -43,6 +45,9 @@ namespace gl {
 		Ref<Scene> m_RuntimeScene;
 		Ref<Scene> m_ActiveScene;
 		SceneHierarchyPanel m_HierarchyPanel;
+		InspectorPanel m_InspectorPanel;
+		EditorCommandHistory m_CommandHistory;
+		SelectionContext m_SelectionContext;
 		ContentBrowserPanel m_ContentBrowser;
 
 		// 视口

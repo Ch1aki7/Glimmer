@@ -8,6 +8,13 @@
 #include <cctype>
 
 namespace gl {
+	void SceneHierarchyPanel::SetSelectedEntity(Entity entity)
+	{
+		m_SelectionContext = entity;
+		if (m_SharedSelection)
+			m_SharedSelection->SelectEntity(entity);
+	}
+
 
 	void SceneHierarchyPanel::OnImGuiRender()
 	{
@@ -21,7 +28,7 @@ namespace gl {
 		if (ImGui::Button("+ Create Entity"))
 		{
 			auto entity = m_Context->CreateEntity();
-			m_SelectionContext = entity;
+			SetSelectedEntity(entity);
 			if (OnEntitySelected) OnEntitySelected(entity);
 		}
 
@@ -51,7 +58,7 @@ namespace gl {
 
 			if (ImGui::Button("Yes", ImVec2(80, 0))) {
 				if (m_SelectionContext == m_RightClickedEntity)
-					m_SelectionContext = Entity{};
+					SetSelectedEntity({});
 
 				if (OnEntityDeleted)
 					OnEntityDeleted(m_RightClickedEntity);
@@ -70,12 +77,6 @@ namespace gl {
 
 		ImGui::End();
 
-		ImGui::Begin("Inspector");
-		if (m_SelectionContext && m_SelectionContext.HasComponent<TagComponent>())
-			DrawComponents(m_SelectionContext);
-		else
-			ImGui::TextDisabled("Select an entity to inspect its components.");
-		ImGui::End();
 	}
 
 	void SceneHierarchyPanel::DrawEntityNode(Entity entity, uint32_t& idCounter)
@@ -106,13 +107,13 @@ namespace gl {
 		ImGui::TreeNodeEx((void*)(uint64_t)(uint32_t)entity, flags, "%s", label.c_str());
 
 		if (ImGui::IsItemClicked()) {
-			m_SelectionContext = entity;
+			SetSelectedEntity(entity);
 			if (OnEntitySelected) OnEntitySelected(entity);
 		}
 
 		if (ImGui::BeginPopupContextItem()) {
 			if (ImGui::MenuItem("Duplicate")) {
-				m_SelectionContext = m_Context->DuplicateEntity(entity);
+				SetSelectedEntity(m_Context->DuplicateEntity(entity));
 				if (OnEntitySelected) OnEntitySelected(m_SelectionContext);
 			}
 			if (ImGui::MenuItem("Delete")) {
@@ -141,18 +142,46 @@ namespace gl {
 			}
 		}
 
-		// --- Transform ---
-		if (entity.HasComponent<TransformComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(TransformComponent).hash_code(), ImGuiTreeNodeFlags_DefaultOpen, "Transform"))
-			{
-				auto& tc = entity.GetComponent<TransformComponent>();
-				ImGui::DragFloat3("Position", glm::value_ptr(tc.Translation), 0.1f);
-				ImGui::DragFloat3("Rotation", glm::value_ptr(tc.Rotation), 1.0f);
-				ImGui::DragFloat3("Scale",    glm::value_ptr(tc.Scale), 0.05f, 0.01f, 10.0f);
-				ImGui::TreePop();
-			}
-		}
+		DrawComponent<TransformComponent>("Transform", entity,
+			[this, entity](TransformComponent& transform) {
+				auto drawVector = [this, entity, &transform](
+					const char* label, glm::vec3& value, float speed,
+					float minimum = 0.0f, float maximum = 0.0f) {
+					const TransformComponent valueBeforeWidget = transform;
+					ImGui::DragFloat3(label, glm::value_ptr(value), speed, minimum, maximum);
+
+					if (ImGui::IsItemActivated())
+						m_TransformBeforeEdit = valueBeforeWidget;
+
+					if (ImGui::IsItemDeactivatedAfterEdit()
+						&& m_TransformBeforeEdit && m_CommandHistory && m_Context)
+					{
+						const TransformComponent before = *m_TransformBeforeEdit;
+						const TransformComponent after = transform;
+						const Ref<Scene> scene = m_Context;
+						const UUID uuid = entity.GetUUID();
+						m_CommandHistory->PushExecuted(
+							std::make_unique<LambdaEditorCommand>(
+								std::string("Edit Transform ") + label,
+								[scene, uuid, after]() {
+									Entity target = scene->FindEntityByUUID(uuid);
+									if (target && target.HasComponent<TransformComponent>())
+										target.GetComponent<TransformComponent>() = after;
+								},
+								[scene, uuid, before]() {
+									Entity target = scene->FindEntityByUUID(uuid);
+									if (target && target.HasComponent<TransformComponent>())
+										target.GetComponent<TransformComponent>() = before;
+								}));
+						m_TransformBeforeEdit.reset();
+					}
+				};
+
+				drawVector("Position", transform.Translation, 0.1f);
+				drawVector("Rotation", transform.Rotation, 1.0f);
+				drawVector("Scale", transform.Scale, 0.05f, 0.01f, 10.0f);
+			},
+			false);
 
 		// --- Terrain ---
 		if (entity.HasComponent<TerrainComponent>())

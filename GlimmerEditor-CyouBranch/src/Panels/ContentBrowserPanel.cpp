@@ -209,6 +209,8 @@ namespace gl {
 				if (ImGui::Selectable(display.c_str(), &isSelected, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(cellSize, cellSize)))
 				{
 					m_SelectedFile = path.string();
+					if (!isDir && OnAssetSelected)
+						OnAssetSelected(AssetManager::ImportAsset(path));
 					if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					{
 						if (isDir)

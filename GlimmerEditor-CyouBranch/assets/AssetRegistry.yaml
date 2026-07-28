@@ -2,12 +2,24 @@ AssetRegistry:
   - Handle: 3179645585411309739
     Type: Model
     FilePath: models/New Folder/Cube.obj
+  - Handle: 3528201362395488632
+    Type: Shader
+    FilePath: shaders/Hologram.glsl
   - Handle: 3818937180868702455
     Type: Model
     FilePath: models/dragon.obj
+  - Handle: 4883067855471021819
+    Type: Shader
+    FilePath: shaders/InkOutline.glsl
   - Handle: 4920561031285178863
     Type: Model
     FilePath: models/UV Sphere.obj
+  - Handle: 5081802945264621299
+    Type: Shader
+    FilePath: shaders/CrossHatch.glsl
+  - Handle: 5637376273557172649
+    Type: Shader
+    FilePath: shaders/Phong.glsl
   - Handle: 7227538360213676180
     Type: Texture2D
     FilePath: textures/Checkerboard.png
@@ -16,9 +28,15 @@ AssetRegistry:
   - Handle: 7633283146183385932
     Type: Shader
     FilePath: shaders/Terrain/GenerateFBM.comp
+  - Handle: 7909942403015271490
+    Type: Shader
+    FilePath: shaders/BlinnPhong.glsl
   - Handle: 8553044135784550654
     Type: Model
     FilePath: models/suzanne.obj
+  - Handle: 8631387498429252298
+    Type: Model
+    FilePath: models/geos/Cube.obj
   - Handle: 9195328290163695800
     Type: Texture2D
     FilePath: textures/balatro.png
@@ -33,16 +51,25 @@ AssetRegistry:
   - Handle: 9736745633360246474
     Type: Material
     FilePath: materials/DefaultPBR.glmat
+  - Handle: 9752225403836206364
+    Type: Shader
+    FilePath: shaders/FlatColor.glsl
   - Handle: 10096056566838588892
     Type: Texture2D
     FilePath: textures/STS.png
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 10520412357890499155
+    Type: Shader
+    FilePath: shaders/PostProcess.glsl
   - Handle: 11108635257915747845
     Type: Texture2D
     FilePath: textures/heightmap-example.png
     ColorSpace: Linear
     Semantic: Height
+  - Handle: 12085106509985387647
+    Type: Model
+    FilePath: models/spacecraft.obj
   - Handle: 13614654561704837220
     Type: Shader
     FilePath: shaders/Terrain.glsl
@@ -55,6 +82,9 @@ AssetRegistry:
   - Handle: 15365846500528399802
     Type: Shader
     FilePath: shaders/PBRModel.glsl
+  - Handle: 16046880885886658744
+    Type: Shader
+    FilePath: shaders/Skybox.glsl
   - Handle: 18188504540743061743
     Type: Model
     FilePath: models/geos/UV Sphere.obj
@@ -63,3 +93,6 @@ AssetRegistry:
     FilePath: textures/Henry.jpg
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 18232177742706088879
+    Type: Shader
+    FilePath: shaders/Tunnel.glsl

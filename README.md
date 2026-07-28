@@ -11348,6 +11348,10 @@ HDR Cubemap
 属性面板整改后
 ![[README.assets/Pasted image 20260727170815.png]]
 
+## 编辑器基础收口
+Entity 与 Asset 选中互斥
+接入 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+Shift+Z`
+
 ## KB
 
 ### 为什么不用动态库？
