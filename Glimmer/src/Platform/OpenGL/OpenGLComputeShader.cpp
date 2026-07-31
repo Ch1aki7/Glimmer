@@ -89,6 +89,16 @@ namespace gl {
 			error = "Could not read file: " + m_FilePath.string();
 			return false;
 		}
+
+		// GLSL requires #version to begin at the start of the source. Some
+		// editors save UTF-8 files with a BOM, which strict drivers reject.
+		if (source.size() >= 3 &&
+			static_cast<unsigned char>(source[0]) == 0xEF &&
+			static_cast<unsigned char>(source[1]) == 0xBB &&
+			static_cast<unsigned char>(source[2]) == 0xBF)
+		{
+			source.erase(0, 3);
+		}
 		return true;
 	}
 

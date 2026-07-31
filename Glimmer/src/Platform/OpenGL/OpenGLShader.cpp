@@ -156,6 +156,16 @@ namespace gl {
 			error = "Could not read file: " + m_FilePath.string();
 			return false;
 		}
+
+		// Normalize UTF-8 shader files before preprocessing. A BOM is not
+		// valid GLSL input and is rejected by some OpenGL drivers.
+		if (source.size() >= 3 &&
+			static_cast<unsigned char>(source[0]) == 0xEF &&
+			static_cast<unsigned char>(source[1]) == 0xBB &&
+			static_cast<unsigned char>(source[2]) == 0xBF)
+		{
+			source.erase(0, 3);
+		}
 		return true;
 	}
 
