@@ -129,8 +129,10 @@ namespace gl {
 				glTexImage2D(GL_TEXTURE_2D, 0, TextureFormatToInternal(att.Format),
 					w, h, 0, TextureFormatToGL(att.Format),
 					TextureFormatToDataType(att.Format), nullptr);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+				const GLenum filter = att.Format == FramebufferTextureFormat::RED_INTEGER
+					? GL_NEAREST : GL_LINEAR;
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -280,6 +282,8 @@ namespace gl {
 			return;
 		}
 
+		if (m_Specification.Width == width && m_Specification.Height == height)
+			return;
 		m_Specification.Width = width;
 		m_Specification.Height = height;
 		ResizeAttachments();

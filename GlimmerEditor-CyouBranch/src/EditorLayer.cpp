@@ -27,12 +27,10 @@ namespace gl {
 		m_EditorScene = scene;
 		m_ActiveScene = m_EditorScene;
 		m_HierarchyPanel.SetContext(m_ActiveScene);
-		m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
 		m_HierarchyPanel.SetSelectionContext(&m_SelectionContext);
 		m_InspectorPanel.SetContext(m_ActiveScene);
 		m_InspectorPanel.SetSelectionContext(&m_SelectionContext);
-		m_InspectorPanel.SetEntityDrawer(
-			[this](Entity entity) { m_HierarchyPanel.DrawComponents(entity); });
+		m_InspectorPanel.SetCommandHistory(&m_CommandHistory);
 		m_HierarchyPanel.SetSelectedEntity({});
 	}
 
@@ -194,16 +192,23 @@ namespace gl {
 
 		Renderer2D::ResetStats();
 
-		if (FramebufferSpecification spec = m_Framebuffer->GetSpecification();
-			m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
+		if (m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
 		{
-			m_EditorCamera.SetViewportSize(m_ViewportSize.x, m_ViewportSize.y);
-			if (m_ActiveScene)
+			const uint32_t viewportWidth = static_cast<uint32_t>(m_ViewportSize.x);
+			const uint32_t viewportHeight = static_cast<uint32_t>(m_ViewportSize.y);
+			const auto& framebufferSpecification = m_Framebuffer->GetSpecification();
+			if (framebufferSpecification.Width != viewportWidth
+				|| framebufferSpecification.Height != viewportHeight)
 			{
-				m_ActiveScene->OnViewportResize(
-					static_cast<uint32_t>(m_ViewportSize.x),
-					static_cast<uint32_t>(m_ViewportSize.y));
+				m_Framebuffer->Resize(viewportWidth, viewportHeight);
+				m_DisplayFramebuffer->Resize(viewportWidth, viewportHeight);
 			}
+
+			m_EditorCamera.SetViewportSize(
+				static_cast<float>(viewportWidth),
+				static_cast<float>(viewportHeight));
+			if (m_ActiveScene)
+				m_ActiveScene->OnViewportResize(viewportWidth, viewportHeight);
 		}
 
 		RenderPassSpecification scenePass;
@@ -452,17 +457,10 @@ namespace gl {
 		m_ViewportBounds[1] = { vpMax.x + vpOff.x, vpMax.y + vpOff.y };
 
 		ImVec2 viewportPanelSize = ImGui::GetContentRegionAvail();
-		m_ViewportSize = { viewportPanelSize.x, viewportPanelSize.y };
-
-
-		auto& spec = m_Framebuffer->GetSpecification();
-		if (viewportPanelSize.x > 0.0f && viewportPanelSize.y > 0.0f &&
-			(spec.Width != viewportPanelSize.x || spec.Height != viewportPanelSize.y))
-		{
-			m_Framebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
-			m_DisplayFramebuffer->Resize((uint32_t)viewportPanelSize.x, (uint32_t)viewportPanelSize.y);
-			m_EditorCamera.SetViewportSize(viewportPanelSize.x, viewportPanelSize.y);
-		}
+		m_ViewportSize = {
+			static_cast<float>(static_cast<uint32_t>(std::max(viewportPanelSize.x, 0.0f))),
+			static_cast<float>(static_cast<uint32_t>(std::max(viewportPanelSize.y, 0.0f)))
+		};
 
 		uint32_t textureID = m_FinalSceneTexture;
 		ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });

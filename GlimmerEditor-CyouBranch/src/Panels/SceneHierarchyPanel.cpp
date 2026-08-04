@@ -1,4 +1,5 @@
 #include "SceneHierarchyPanel.h"
+#include "InspectorPanel.h"
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/TerrainRenderer.h"
@@ -126,7 +127,7 @@ namespace gl {
 		(void)idCounter;
 	}
 
-	void SceneHierarchyPanel::DrawComponents(Entity entity)
+	void InspectorPanel::DrawComponents(Entity entity)
 	{
 		// --- Tag ---
 		if (entity.HasComponent<TagComponent>())
@@ -575,7 +576,7 @@ namespace gl {
 		DrawAddComponentMenu(entity);
 	}
 
-	void SceneHierarchyPanel::DrawAddComponentMenu(Entity entity)
+	void InspectorPanel::DrawAddComponentMenu(Entity entity)
 	{
 		if (!ImGui::BeginPopup("AddComponentPopup"))
 			return;

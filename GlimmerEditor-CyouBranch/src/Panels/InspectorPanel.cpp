@@ -15,8 +15,8 @@ namespace gl
 		else if (m_Selection->IsEntitySelected())
 		{
 			Entity entity = m_Selection->GetEntity();
-			if (entity && m_EntityDrawer)
-				m_EntityDrawer(entity);
+			if (entity)
+				DrawComponents(entity);
 			else
 				ImGui::TextDisabled("The selected entity is no longer valid.");
 		}
