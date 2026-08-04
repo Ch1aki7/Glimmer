@@ -28,6 +28,7 @@ namespace gl {
 		m_ActiveScene = m_EditorScene;
 		m_HierarchyPanel.SetContext(m_ActiveScene);
 		m_HierarchyPanel.SetSelectionContext(&m_SelectionContext);
+		m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
 		m_InspectorPanel.SetContext(m_ActiveScene);
 		m_InspectorPanel.SetSelectionContext(&m_SelectionContext);
 		m_InspectorPanel.SetCommandHistory(&m_CommandHistory);
@@ -52,6 +53,8 @@ namespace gl {
 
 		m_HierarchyPanel.SetContext(m_ActiveScene);
 		m_InspectorPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetCommandHistory(nullptr);
+		m_InspectorPanel.SetCommandHistory(nullptr);
 		m_HierarchyPanel.SetSelectedEntity(
 			static_cast<uint64_t>(selectedUUID) != 0
 				? m_ActiveScene->FindEntityByUUID(selectedUUID)
@@ -78,6 +81,8 @@ namespace gl {
 
 		m_HierarchyPanel.SetContext(m_ActiveScene);
 		m_InspectorPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
+		m_InspectorPanel.SetCommandHistory(&m_CommandHistory);
 		m_HierarchyPanel.SetSelectedEntity(
 			m_ActiveScene && static_cast<uint64_t>(selectedUUID) != 0
 				? m_ActiveScene->FindEntityByUUID(selectedUUID)
@@ -297,10 +302,12 @@ namespace gl {
 
 		// --- 全局快捷键 ---
 		auto& io = ImGui::GetIO();
-		if (ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl))
+		if (m_SceneState == SceneState::Edit
+			&& ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl))
 			m_CommandHistory.Undo();
-		if (ImGui::IsKeyChordPressed(ImGuiKey_Y | ImGuiMod_Ctrl)
-			|| ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl | ImGuiMod_Shift))
+		if (m_SceneState == SceneState::Edit
+			&& (ImGui::IsKeyChordPressed(ImGuiKey_Y | ImGuiMod_Ctrl)
+				|| ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl | ImGuiMod_Shift)))
 			m_CommandHistory.Redo();
 
 		if (ImGui::IsKeyChordPressed(ImGuiKey_P | ImGuiMod_Ctrl)) {

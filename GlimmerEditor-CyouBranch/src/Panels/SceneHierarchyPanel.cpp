@@ -28,9 +28,28 @@ namespace gl {
 
 		if (ImGui::Button("+ Create Entity"))
 		{
-			auto entity = m_Context->CreateEntity();
+			Entity entity = m_Context->CreateEntity();
+			const EntitySnapshot snapshot = EntitySnapshot::Capture(entity);
 			SetSelectedEntity(entity);
 			if (OnEntitySelected) OnEntitySelected(entity);
+
+			if (m_CommandHistory)
+			{
+				const Ref<Scene> scene = m_Context;
+				m_CommandHistory->PushExecuted(std::make_unique<LambdaEditorCommand>(
+					"Create Entity",
+					[this, scene, snapshot]() {
+						Entity restored = snapshot.Restore(scene);
+						SetSelectedEntity(restored);
+						if (OnEntitySelected) OnEntitySelected(restored);
+					},
+					[this, scene, snapshot]() {
+						Entity target = scene->FindEntityByUUID(snapshot.ID);
+						if (target)
+							scene->DestroyEntity(target);
+						SetSelectedEntity({});
+					}));
+			}
 		}
 
 		ImGui::Separator();
@@ -58,6 +77,8 @@ namespace gl {
 			ImGui::Separator();
 
 			if (ImGui::Button("Yes", ImVec2(80, 0))) {
+				const EntitySnapshot snapshot =
+					EntitySnapshot::Capture(m_RightClickedEntity);
 				if (m_SelectionContext == m_RightClickedEntity)
 					SetSelectedEntity({});
 
@@ -65,6 +86,23 @@ namespace gl {
 					OnEntityDeleted(m_RightClickedEntity);
 
 				m_Context->DestroyEntity(m_RightClickedEntity);
+				if (m_CommandHistory)
+				{
+					const Ref<Scene> scene = m_Context;
+					m_CommandHistory->PushExecuted(std::make_unique<LambdaEditorCommand>(
+						"Delete Entity",
+						[this, scene, snapshot]() {
+							Entity target = scene->FindEntityByUUID(snapshot.ID);
+							if (target)
+								scene->DestroyEntity(target);
+							SetSelectedEntity({});
+						},
+						[this, scene, snapshot]() {
+							Entity restored = snapshot.Restore(scene);
+							SetSelectedEntity(restored);
+							if (OnEntitySelected) OnEntitySelected(restored);
+						}));
+				}
 				m_RightClickedEntity = Entity{};
 				ImGui::CloseCurrentPopup();
 			}
@@ -114,8 +152,27 @@ namespace gl {
 
 		if (ImGui::BeginPopupContextItem()) {
 			if (ImGui::MenuItem("Duplicate")) {
-				SetSelectedEntity(m_Context->DuplicateEntity(entity));
+				Entity duplicate = m_Context->DuplicateEntity(entity);
+				const EntitySnapshot snapshot = EntitySnapshot::Capture(duplicate);
+				SetSelectedEntity(duplicate);
 				if (OnEntitySelected) OnEntitySelected(m_SelectionContext);
+				if (m_CommandHistory)
+				{
+					const Ref<Scene> scene = m_Context;
+					m_CommandHistory->PushExecuted(std::make_unique<LambdaEditorCommand>(
+						"Duplicate Entity",
+						[this, scene, snapshot]() {
+							Entity restored = snapshot.Restore(scene);
+							SetSelectedEntity(restored);
+							if (OnEntitySelected) OnEntitySelected(restored);
+						},
+						[this, scene, snapshot]() {
+							Entity target = scene->FindEntityByUUID(snapshot.ID);
+							if (target)
+								scene->DestroyEntity(target);
+							SetSelectedEntity({});
+						}));
+				}
 			}
 			if (ImGui::MenuItem("Delete")) {
 				m_RightClickedEntity = entity;
@@ -594,20 +651,21 @@ namespace gl {
 			}
 		};
 
-		addMenuItem("Camera", entity.HasComponent<CameraComponent>(), [&]() { entity.AddComponent<CameraComponent>(); });
-		addMenuItem("Sprite Renderer", entity.HasComponent<SpriteRendererComponent>(), [&]() { entity.AddComponent<SpriteRendererComponent>(); });
-		addMenuItem("Model Renderer", entity.HasComponent<ModelRendererComponent>(), [&]() { entity.AddComponent<ModelRendererComponent>(); });
-		addMenuItem("Material", entity.HasComponent<MaterialComponent>(), [&]() { entity.AddComponent<MaterialComponent>(); });
+		addMenuItem("Camera", entity.HasComponent<CameraComponent>(), [&]() { AddComponent<CameraComponent>(entity, "Camera"); });
+		addMenuItem("Sprite Renderer", entity.HasComponent<SpriteRendererComponent>(), [&]() { AddComponent<SpriteRendererComponent>(entity, "Sprite Renderer"); });
+		addMenuItem("Model Renderer", entity.HasComponent<ModelRendererComponent>(), [&]() { AddComponent<ModelRendererComponent>(entity, "Model Renderer"); });
+		addMenuItem("Material", entity.HasComponent<MaterialComponent>(), [&]() { AddComponent<MaterialComponent>(entity, "Material"); });
 		addMenuItem("Terrain", entity.HasComponent<TerrainComponent>(), [&]() {
-			auto& terrain = entity.AddComponent<TerrainComponent>();
+			TerrainComponent terrain;
 			terrain.Specification.RenderShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain.glsl");
 			terrain.Specification.GenerationShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
+			AddComponent<TerrainComponent>(entity, "Terrain", terrain);
 		});
 		if (hasAvailableComponent)
 			ImGui::Separator();
-		addMenuItem("Directional Light", entity.HasComponent<DirectionalLightComponent>(), [&]() { entity.AddComponent<DirectionalLightComponent>(); });
-		addMenuItem("Point Light", entity.HasComponent<PointLightComponent>(), [&]() { entity.AddComponent<PointLightComponent>(); });
-		addMenuItem("Sky Light", entity.HasComponent<SkyLightComponent>(), [&]() { entity.AddComponent<SkyLightComponent>(); });
+		addMenuItem("Directional Light", entity.HasComponent<DirectionalLightComponent>(), [&]() { AddComponent<DirectionalLightComponent>(entity, "Directional Light"); });
+		addMenuItem("Point Light", entity.HasComponent<PointLightComponent>(), [&]() { AddComponent<PointLightComponent>(entity, "Point Light"); });
+		addMenuItem("Sky Light", entity.HasComponent<SkyLightComponent>(), [&]() { AddComponent<SkyLightComponent>(entity, "Sky Light"); });
 
 		if (!hasAvailableComponent)
 			ImGui::TextDisabled("No components available.");

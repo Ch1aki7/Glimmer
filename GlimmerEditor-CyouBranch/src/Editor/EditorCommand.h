@@ -1,12 +1,36 @@
 #pragma once
 
+#include "Glimmer.h"
+
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace gl
 {
+	struct EntitySnapshot
+	{
+		UUID ID{ 0 };
+		TagComponent Tag;
+		TransformComponent Transform;
+		std::optional<SpriteRendererComponent> SpriteRenderer;
+		std::optional<ModelRendererComponent> ModelRenderer;
+		std::optional<MaterialComponent> Material;
+		std::optional<TerrainComponent> Terrain;
+		std::optional<DirectionalLightComponent> DirectionalLight;
+		std::optional<PointLightComponent> PointLight;
+		std::optional<SkyLightComponent> SkyLight;
+		std::optional<CameraComponent> Camera;
+		bool HasNativeScript = false;
+		ScriptableEntity* (*InstantiateScript)() = nullptr;
+		void (*DestroyScript)(NativeScriptComponent*) = nullptr;
+
+		static EntitySnapshot Capture(Entity entity);
+		Entity Restore(const Ref<Scene>& scene) const;
+	};
+
 	class IEditorCommand
 	{
 	public:

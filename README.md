@@ -11349,8 +11349,168 @@ HDR Cubemap
 ![[README.assets/Pasted image 20260727170815.png]]
 
 ## 编辑器基础收口
-Entity 与 Asset 选中互斥
-接入 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+Shift+Z`
+
+### 建设目标
+
+随着 Terrain、Material、Light 和环境组件持续增加，实体选择、属性编辑和撤销逻辑如果继续堆积在 `EditorLayer` 或层级面板中，会使面板之间互相依赖，也会让后续组件难以复用统一的编辑行为。本阶段先收口编辑器基础设施，使场景参数继续组件化时不必重复实现选择与命令逻辑。
+
+本轮主要完成：
+
+- `SceneHierarchyPanel` 与 `InspectorPanel` 分离显示职责；
+- 使用统一 `SelectionContext` 管理 Entity/Asset 选择；
+- 建立 `EditorCommandHistory` 与快捷键入口；
+- 为实体生命周期建立基于 UUID 的快照和恢复流程；
+- 将实体创建、复制、删除和 Add Component 接入 Undo/Redo；
+- 让通用 `DrawComponent<T>` 的 Reset/Remove 操作具备命令化能力；
+- 隔离 Edit Scene 与 Runtime Scene 的命令历史。
+
+### SelectionContext
+
+`SelectionContext` 只允许一种有效选择类型：
+
+```text
+None
+Entity -> 保存当前 Entity，清空 AssetHandle
+Asset  -> 保存当前 AssetHandle，清空 Entity
+```
+
+层级面板选中实体时调用 `SelectEntity`，内容浏览器选中资源时调用 `SelectAsset`。因此 Entity 与 Asset 不会在 Inspector 中同时残留，Inspector 也不需要读取 `EditorLayer` 的私有选中字段。
+
+Inspector 根据选择类型进行分流：
+
+- Entity：显示实体名称与组件属性；
+- Asset：显示资源文件名、Handle、路径和资源类型；
+- None：显示未选择提示；
+- 已失效对象：显示失效提示，不继续访问组件。
+
+### CommandHistory
+
+编辑器命令统一实现 `IEditorCommand`：
+
+```cpp
+class IEditorCommand
+{
+public:
+    virtual void Execute() = 0;
+    virtual void Undo() = 0;
+    virtual const char* GetName() const = 0;
+};
+```
+
+`EditorCommandHistory` 维护 Undo Stack 与 Redo Stack：
+
+1. `Execute` 执行新命令，将命令压入 Undo Stack，并清空 Redo Stack；
+2. `Undo` 调用命令的反向操作，再将命令移动到 Redo Stack；
+3. `Redo` 重新执行命令，再将命令放回 Undo Stack；
+4. 打开新场景或替换编辑场景时清空历史，防止旧命令继续持有旧 Scene。
+
+对于 ImGui 拖动控件，属性会在拖动过程中实时更新，因此使用 `PushExecuted` 在控件结束编辑时记录“已发生”的操作，避免每一帧产生一条命令。当前 Transform 已采用该事务边界，后续 Terrain、Light 与 Material 属性将复用相同模式。
+
+快捷键如下：
+
+| 操作 | 快捷键 |
+| --- | --- |
+| Undo | `Ctrl+Z` |
+| Redo | `Ctrl+Y` |
+| Redo | `Ctrl+Shift+Z` |
+
+### EntitySnapshot 与 UUID 恢复
+
+不能在 Undo 命令中长期保存 `entt::entity`：实体销毁后 Handle 已失效，而且 Handle 可能被 registry 重新利用。因此实体命令使用 `EntitySnapshot` 保存稳定 UUID 和可序列化组件数据。
+
+当前快照覆盖：
+
+- `TagComponent`、`TransformComponent`；
+- Sprite、Model 与 Material 组件；
+- `TerrainComponent`；
+- Directional Light、Point Light 与 Sky Light；
+- `CameraComponent`；
+- Native Script 的实例化/销毁函数绑定。
+
+恢复流程为：
+
+```text
+Undo/Redo
+  -> Scene::FindEntityByUUID
+  -> 若不存在则 CreateEntityWithUUID
+  -> 恢复基础组件
+  -> 恢复可选渲染、地形、光照和相机组件
+  -> 重新同步 SelectionContext
+```
+
+`TerrainComponent` 的复制构造只复制 `TerrainSpecification`，不会复用旧的 `TerrainRuntime` GPU 对象。地形恢复后由 `TerrainRenderer` 按需重新建立运行时资源。
+
+Native Script 快照只保存脚本工厂绑定，不复制正在运行的 `ScriptableEntity::Instance`，避免两个实体共同持有同一个脚本实例。
+
+### 实体生命周期命令
+
+以下层级面板操作已接入命令历史：
+
+- Create Entity：Undo 销毁新实体，Redo 使用原 UUID 恢复；
+- Duplicate Entity：保存复制结果的完整快照，Undo/Redo 不重新随机生成 UUID；
+- Delete Entity：删除前捕获快照，Undo 恢复组件和选择状态；
+- Add Component：保存组件初始值，Undo 移除，Redo 恢复。
+
+命令内部每次操作前都会通过 UUID 重新查找实体，并检查组件是否存在，避免使用已经失效的 Entity Handle 或重复添加/删除组件。
+
+### 通用组件菜单
+
+`InspectorPanel::DrawComponent<T>` 统一提供组件标题、折叠内容和右键菜单。Reset 与 Remove Component 不再直接修改 registry，而是创建 `LambdaEditorCommand`：
+
+- Reset 保存修改前组件和默认组件，支持双向恢复；
+- Remove 在删除前复制组件，Undo 时使用原始数据重新添加；
+- Transform 不允许删除，但可以 Reset；
+- 组件命令只持有 `Ref<Scene>`、UUID 和值快照，不保存组件引用。
+
+目前 Add Component 已覆盖 Camera、Sprite Renderer、Model Renderer、Material、Terrain、Directional Light、Point Light 和 Sky Light。其余仍使用手写 TreeNode 的属性区域会在下一步迁移到 `DrawComponent<T>`，迁移后即可统一显示 Reset/Remove 菜单。
+
+### Edit/Play 模式边界
+
+进入 Play 模式后，`SceneHierarchyPanel` 和 `InspectorPanel` 会切换到 Runtime Scene。为防止编辑器历史混入临时运行时对象，本轮增加以下约束：
+
+- Play 时暂时向两个面板注入空 CommandHistory；
+- Play 时禁用全局 Undo/Redo 快捷键；
+- Stop 后重新绑定 Editor Scene 的 CommandHistory；
+- 编辑场景原有历史不会捕获或长期持有 Runtime Scene。
+
+这样运行时调试修改仍然是临时状态，停止播放后恢复编辑场景，不会出现 Undo 修改错误 Scene 的情况。
+
+### 文件职责
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/Editor/EditorCommand.h/.cpp` | 命令接口、双栈历史、实体快照与恢复 |
+| `src/Panels/SelectionContext.h` | Entity/Asset 互斥选择状态 |
+| `src/Panels/SceneHierarchyPanel.h/.cpp` | 实体列表与实体生命周期命令入口 |
+| `src/Panels/InspectorPanel.h/.cpp` | 选择分流、通用组件 UI 与组件命令入口 |
+| `src/EditorLayer.cpp` | 面板依赖注入、快捷键和 Edit/Play 状态编排 |
+
+这些文件均位于 `GlimmerEditor-CyouBranch`，属于编辑器工作流，不进入核心 `Glimmer` 运行时库。Scene、Entity、UUID 和组件数据仍由核心库提供。
+
+### 验证结果
+
+- VS2026 `Debug | x64` 编译和链接成功；
+- 通过已打开的 Glimmer VS 实例构建，失败项目为 0；
+- 连续第二次 VS 热构建耗时约 0.1 秒，增量状态正常；
+- `git diff --check` 通过；
+- 未运行 Premake，未删除 `bin` 或 `bin-int`；
+- Entity/Asset 选择互斥；
+- 实体创建、复制、删除与组件添加可进入 Undo/Redo 历史；
+- 播放模式不会执行编辑场景 Undo/Redo。
+
+建议交互验证顺序：创建实体 -> 添加 Terrain 或 Light -> `Ctrl+Z` 连续撤销 -> `Ctrl+Y` 连续恢复；随后删除实体并撤销，确认 UUID、组件和 Inspector 选择状态均恢复。
+
+### 当前边界与下一步
+
+当前命令系统已经覆盖实体和组件结构变化，但属性事务尚未全部统一：
+
+- Transform 连续拖动已经只生成一条命令；
+- Terrain、Directional Light、Point Light、Sky Light 和普通组件属性仍需统一接入属性事务；
+- `.glmat` 修改的是共享 Material Asset，需要建立 Asset Command，而不是错误地当作实体组件值处理；
+- Gizmos Transform 操作也应在开始拖动时快照、结束拖动时提交一条命令；
+- 后续可增加历史容量限制、命令合并和保存后的 Dirty 标记。
+
+下一步将抽取通用 Inspector 属性编辑事务，先覆盖 Terrain 与 Light，再单独建设 Material Asset 的保存、Undo 和 Redo 流程。
 
 ## KB
 

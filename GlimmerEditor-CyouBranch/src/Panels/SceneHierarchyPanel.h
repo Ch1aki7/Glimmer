@@ -1,6 +1,7 @@
 #pragma once
 #include "Glimmer.h"
 #include "SelectionContext.h"
+#include "../Editor/EditorCommand.h"
 #include <functional>
 
 namespace gl {
@@ -16,6 +17,7 @@ namespace gl {
 		// 绑定要展示的场景
 		void SetSelectionContext(SelectionContext* selection) { m_SharedSelection = selection; }
 		void SetContext(const Ref<Scene>& scene) { m_Context = scene; }
+		void SetCommandHistory(EditorCommandHistory* history) { m_CommandHistory = history; }
 
 		// 每帧在 ImGui 中绘制
 		void OnImGuiRender();
@@ -32,6 +34,7 @@ namespace gl {
 	private:
 		void DrawEntityNode(Entity entity, uint32_t& idCounter);
 		SelectionContext* m_SharedSelection = nullptr;
+		EditorCommandHistory* m_CommandHistory = nullptr;
 
 		Ref<Scene> m_Context;
 		Entity m_SelectionContext;
