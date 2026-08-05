@@ -2,7 +2,7 @@
 #include "Renderer3D.h"
 
 #include "Glimmer/Asset/AssetManager.h"
-#include "Glimmer/Renderer/Material.h"
+#include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Renderer/Model.h"
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Shader.h"
@@ -47,14 +47,17 @@ namespace gl {
 		const glm::mat4& transform,
 		AssetHandle modelHandle,
 		AssetHandle materialHandle,
-		int entityID)
+		int entityID,
+		const MaterialOverrides* overrides)
 	{
 		const Ref<Model> model = AssetManager::GetModel(modelHandle);
 		const Ref<Material> material = AssetManager::GetMaterial(materialHandle);
 		if (!model || !material)
 			return;
 
-		const Ref<Shader> shader = AssetManager::GetShader(material->GetShaderHandle());
+		const MaterialInstance instance(
+			material, overrides ? *overrides : MaterialOverrides{});
+		const Ref<Shader> shader = AssetManager::GetShader(instance.GetShaderHandle());
 		if (!shader)
 			return;
 
@@ -65,7 +68,7 @@ namespace gl {
 		shader->UploadUniformFloat3("u_CameraPos", s_Data.CameraPosition);
 		shader->UploadUniformInt("u_EntityID", entityID);
 
-		const auto& properties = material->GetProperties();
+		const auto& properties = instance.GetProperties();
 		shader->UploadUniformFloat4("u_BaseColor", properties.BaseColor);
 		shader->UploadUniformFloat("u_Metallic", properties.Metallic);
 		shader->UploadUniformFloat("u_Roughness", properties.Roughness);

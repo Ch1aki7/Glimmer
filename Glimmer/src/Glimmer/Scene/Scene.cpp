@@ -275,7 +275,8 @@ namespace gl {
 				Renderer3D::DrawModel(
 					transform.GetTransform(), model.ModelHandle,
 					material ? material->MaterialHandle : AssetHandle(0),
-					static_cast<int>(static_cast<uint32_t>(entity)));
+					static_cast<int>(static_cast<uint32_t>(entity)),
+					material ? &material->Overrides : nullptr);
 			}
 
 			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
@@ -298,7 +299,8 @@ namespace gl {
 				const auto* material = m_Registry.try_get<MaterialComponent>(entity);
 				Renderer2D::DrawSprite(
 					transform.GetTransform(), sprite, (int)(uint32_t)entity,
-					material ? material->MaterialHandle : AssetHandle(0));
+					material ? material->MaterialHandle : AssetHandle(0),
+					material ? &material->Overrides : nullptr);
 			}
 
 			Renderer2D::EndScene();
@@ -318,7 +320,8 @@ namespace gl {
 			Renderer3D::DrawModel(
 				transform.GetTransform(), model.ModelHandle,
 				material ? material->MaterialHandle : AssetHandle(0),
-				static_cast<int>(static_cast<uint32_t>(entity)));
+				static_cast<int>(static_cast<uint32_t>(entity)),
+				material ? &material->Overrides : nullptr);
 		}
 
 		auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
@@ -339,7 +342,8 @@ namespace gl {
 			const auto* material = m_Registry.try_get<MaterialComponent>(entityHandle);
 			Renderer2D::DrawSprite(
 				transform.GetTransform(), sprite, (int)(uint32_t)entityHandle,
-				material ? material->MaterialHandle : AssetHandle(0));
+				material ? material->MaterialHandle : AssetHandle(0),
+				material ? &material->Overrides : nullptr);
 		}
 
 		Renderer2D::EndScene();

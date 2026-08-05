@@ -2,7 +2,7 @@
 #include "Renderer2D.h"
 
 #include "Glimmer/Asset/AssetManager.h"
-#include "Glimmer/Renderer/Material.h"
+#include "Glimmer/Renderer/MaterialInstance.h"
 
 #include "Glimmer/Renderer/UniformBuffer.h"
 #include "Glimmer/Renderer/VertexArray.h"
@@ -451,7 +451,7 @@ namespace gl {
 	}
 
 	void Renderer2D::DrawSprite(const glm::mat4& transform, const SpriteRendererComponent& src,
-		int entityID, AssetHandle materialHandle)
+		int entityID, AssetHandle materialHandle, const MaterialOverrides* overrides)
 	{
 		glm::vec4 color = src.Color;
 		AssetHandle textureHandle = src.TextureHandle;
@@ -459,7 +459,9 @@ namespace gl {
 
 		if (Ref<Material> material = AssetManager::GetMaterial(materialHandle))
 		{
-			const auto& properties = material->GetProperties();
+			const MaterialInstance instance(
+				material, overrides ? *overrides : MaterialOverrides{});
+			const auto& properties = instance.GetProperties();
 			color = properties.BaseColor;
 			textureHandle = properties.BaseColorTexture;
 			tilingFactor = properties.TilingFactor;

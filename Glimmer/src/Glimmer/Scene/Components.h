@@ -7,6 +7,7 @@
 #include "Glimmer/Core/UUID.h"
 #include "SceneCamera.h"
 #include "ScriptableEntity.h"
+#include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Terrain/TerrainSettings.h"
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -79,6 +80,7 @@ namespace gl {
 	struct MaterialComponent
 	{
 		AssetHandle MaterialHandle{ 0 };
+		MaterialOverrides Overrides;
 
 		MaterialComponent() = default;
 		MaterialComponent(const MaterialComponent&) = default;

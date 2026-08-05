@@ -3,5 +3,5 @@ Material:
   BaseColor: [1, 1, 1, 1]
   BaseColorTexture: 0
   TilingFactor: 22.26
-  Metallic: 0.652
+  Metallic: 0.7
   Roughness: 0.223

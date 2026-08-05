@@ -479,7 +479,7 @@ namespace gl {
 		// --- Material ---
 		DrawComponent<MaterialComponent>("Material", entity,
 			[](MaterialComponent& component) {
-				AssetMetadata metadata = AssetManager::GetMetadata(component.MaterialHandle);
+				const AssetMetadata metadata = AssetManager::GetMetadata(component.MaterialHandle);
 				const bool hasMaterial = metadata.IsValid()
 					&& metadata.Type == AssetType::Material;
 
@@ -489,7 +489,10 @@ namespace gl {
 				ImGui::Text("Asset: %s", materialName.c_str());
 				ImGui::SameLine();
 				if (hasMaterial && ImGui::SmallButton("X##Material"))
+				{
 					component.MaterialHandle = AssetHandle(0);
+					component.Overrides.Clear();
+				}
 
 				if (ImGui::BeginDragDropTarget())
 				{
@@ -500,64 +503,108 @@ namespace gl {
 						std::transform(extension.begin(), extension.end(), extension.begin(),
 							[](unsigned char character) { return static_cast<char>(std::tolower(character)); });
 						if (extension == ".glmat")
-							component.MaterialHandle = AssetManager::ImportAsset(path);
+						{
+							const AssetHandle handle = AssetManager::ImportAsset(path);
+							if (handle != component.MaterialHandle)
+							{
+								component.MaterialHandle = handle;
+								component.Overrides.Clear();
+							}
+						}
 					}
 					ImGui::EndDragDropTarget();
 				}
 
 				if (Ref<Material> material = AssetManager::GetMaterial(component.MaterialHandle))
 				{
-					auto& properties = material->GetProperties();
-					bool changed = false;
+					const auto& base = material->GetProperties();
+					auto& overrides = component.Overrides;
+					auto& values = overrides.Values;
 
-					AssetMetadata shaderMetadata =
+					const AssetMetadata shaderMetadata =
 						AssetManager::GetMetadata(material->GetShaderHandle());
 					const bool hasShader = shaderMetadata.IsValid()
 						&& shaderMetadata.Type == AssetType::Shader;
 					const std::string shaderName = hasShader
 						? shaderMetadata.FilePath.filename().string()
-						: "None (drag .glsl here)";
-					ImGui::Text("Shader: %s", shaderName.c_str());
-					ImGui::SameLine();
-					if (hasShader && ImGui::SmallButton("X##MaterialShader"))
-					{
-						material->SetShaderHandle(AssetHandle(0));
-						changed = true;
-					}
-					if (ImGui::BeginDragDropTarget())
-					{
-						if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
-						{
-							std::string path((const char*)payload->Data, payload->DataSize - 1);
-							AssetHandle handle = AssetManager::ImportAsset(path);
-							if (AssetManager::GetMetadata(handle).Type == AssetType::Shader)
-							{
-								material->SetShaderHandle(handle);
-								changed = true;
-							}
-						}
-						ImGui::EndDragDropTarget();
-					}
-					changed |= ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor));
-					changed |= ImGui::DragFloat("Material Tiling", &properties.TilingFactor,
-						0.05f, 0.01f, 100.0f);
-					changed |= ImGui::SliderFloat("Metallic", &properties.Metallic, 0.0f, 1.0f);
-					changed |= ImGui::SliderFloat("Roughness", &properties.Roughness, 0.04f, 1.0f);
+						: "None";
+					ImGui::Text("Shader (inherited): %s", shaderName.c_str());
+					ImGui::TextDisabled("Checkboxes enable per-entity overrides.");
 
-					AssetMetadata textureMetadata =
-						AssetManager::GetMetadata(properties.BaseColorTexture);
+					auto toggleOverride = [&overrides](
+						const char* id, MaterialOverride property, auto initialize) {
+						bool enabled = overrides.IsEnabled(property);
+						if (ImGui::Checkbox(id, &enabled))
+						{
+							if (enabled)
+								initialize();
+							overrides.SetEnabled(property, enabled);
+						}
+						return enabled;
+					};
+
+					bool overrideBaseColor = toggleOverride(
+						"##OverrideBaseColor", MaterialOverride::BaseColor,
+						[&]() { values.BaseColor = base.BaseColor; });
+					ImGui::SameLine();
+					glm::vec4 inheritedBaseColor = base.BaseColor;
+					ImGui::BeginDisabled(!overrideBaseColor);
+					ImGui::ColorEdit4("Base Color",
+						glm::value_ptr(overrideBaseColor ? values.BaseColor : inheritedBaseColor));
+					ImGui::EndDisabled();
+
+					bool overrideTiling = toggleOverride(
+						"##OverrideTiling", MaterialOverride::TilingFactor,
+						[&]() { values.TilingFactor = base.TilingFactor; });
+					ImGui::SameLine();
+					float inheritedTiling = base.TilingFactor;
+					ImGui::BeginDisabled(!overrideTiling);
+					ImGui::DragFloat("Material Tiling",
+						overrideTiling ? &values.TilingFactor : &inheritedTiling,
+						0.05f, 0.01f, 100.0f);
+					ImGui::EndDisabled();
+
+					bool overrideMetallic = toggleOverride(
+						"##OverrideMetallic", MaterialOverride::Metallic,
+						[&]() { values.Metallic = base.Metallic; });
+					ImGui::SameLine();
+					float inheritedMetallic = base.Metallic;
+					ImGui::BeginDisabled(!overrideMetallic);
+					ImGui::SliderFloat("Metallic",
+						overrideMetallic ? &values.Metallic : &inheritedMetallic,
+						0.0f, 1.0f);
+					ImGui::EndDisabled();
+
+					bool overrideRoughness = toggleOverride(
+						"##OverrideRoughness", MaterialOverride::Roughness,
+						[&]() { values.Roughness = base.Roughness; });
+					ImGui::SameLine();
+					float inheritedRoughness = base.Roughness;
+					ImGui::BeginDisabled(!overrideRoughness);
+					ImGui::SliderFloat("Roughness",
+						overrideRoughness ? &values.Roughness : &inheritedRoughness,
+						0.04f, 1.0f);
+					ImGui::EndDisabled();
+
+					bool overrideTexture = toggleOverride(
+						"##OverrideBaseColorTexture", MaterialOverride::BaseColorTexture,
+						[&]() { values.BaseColorTexture = base.BaseColorTexture; });
+					ImGui::SameLine();
+					const AssetHandle effectiveTexture = overrideTexture
+						? values.BaseColorTexture : base.BaseColorTexture;
+					const AssetMetadata textureMetadata =
+						AssetManager::GetMetadata(effectiveTexture);
 					const bool hasBaseColorTexture = textureMetadata.IsValid()
 						&& textureMetadata.Type == AssetType::Texture2D;
 					const std::string textureName = hasBaseColorTexture
 						? textureMetadata.FilePath.filename().string()
-						: "None (drag image here)";
-					ImGui::Text("Base Color Texture: %s", textureName.c_str());
+						: "None";
+					ImGui::Text("Base Color Texture: %s%s", textureName.c_str(),
+						overrideTexture ? "" : " (Inherited)");
 					ImGui::SameLine();
-					if (hasBaseColorTexture && ImGui::SmallButton("X##MaterialTexture"))
-					{
-						properties.BaseColorTexture = AssetHandle(0);
-						changed = true;
-					}
+					if (overrideTexture && hasBaseColorTexture
+						&& ImGui::SmallButton("X##MaterialTexture"))
+						values.BaseColorTexture = AssetHandle(0);
 
 					if (ImGui::BeginDragDropTarget())
 					{
@@ -568,15 +615,16 @@ namespace gl {
 							AssetMetadata droppedMetadata = AssetManager::GetMetadata(textureHandle);
 							if (droppedMetadata.Type == AssetType::Texture2D)
 							{
-								properties.BaseColorTexture = textureHandle;
-								changed = true;
+								values.BaseColorTexture = textureHandle;
+								overrides.SetEnabled(
+									MaterialOverride::BaseColorTexture, true);
 							}
 						}
 						ImGui::EndDragDropTarget();
 					}
 
-					if (changed && !material->Save())
-						GL_CORE_ERROR("Failed to save material: {0}", material->GetPath().string());
+					if (!overrides.Empty() && ImGui::Button("Reset Overrides"))
+						overrides.Clear();
 				}
 			});
 		ImGui::Spacing();

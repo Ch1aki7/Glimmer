@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Glimmer/Asset/Asset.h"
+#include "Glimmer/Renderer/MaterialInstance.h"
 #include <glm/glm.hpp>
 
 namespace gl {
@@ -16,7 +17,8 @@ namespace gl {
 			const glm::mat4& transform,
 			AssetHandle modelHandle,
 			AssetHandle materialHandle,
-			int entityID);
+			int entityID,
+			const MaterialOverrides* overrides = nullptr);
 	};
 
 }

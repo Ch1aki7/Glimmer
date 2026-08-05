@@ -42,7 +42,12 @@ namespace gl {
 		static void DrawQuad(const glm::mat4& transform, const Ref<Texture2D>& texture, float tilingFactor, const glm::vec4& tintColor, int entityID);
 
 		// 便捷方法：根据 SpriteRendererComponent 自动选纯色/纹理
-		static void DrawSprite(const glm::mat4& transform, const SpriteRendererComponent& src, int entityID, AssetHandle materialHandle = AssetHandle(0));
+		static void DrawSprite(
+			const glm::mat4& transform,
+			const SpriteRendererComponent& src,
+			int entityID,
+			AssetHandle materialHandle = AssetHandle(0),
+			const MaterialOverrides* overrides = nullptr);
 
 		// 旋转 DrawQuad (纯色)
 		static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color);

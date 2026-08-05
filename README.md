@@ -10202,10 +10202,11 @@ Entity
 struct MaterialComponent
 {
     AssetHandle MaterialHandle{ 0 };
+    MaterialOverrides Overrides;
 };
 ```
 
-`MaterialComponent` 只保存材质句柄。真正的颜色、纹理和表面参数保存在 `.glmat` 文件及运行期 `Material` 对象中。同一材质可以被多个实体引用，避免 Scene YAML 重复保存参数，也避免组件直接持有 Shader、Texture 或 OpenGL 对象。
+`MaterialComponent` 保存共享材质句柄和该实体的局部覆盖值。基础颜色、纹理和表面参数仍保存在 `.glmat` 文件及运行期 `Material` 对象中；只有显式启用的 Override 才写入场景组件。同一材质可以被多个实体引用，同时允许个别实体调整外观而不修改共享资产。组件仍不直接持有 Shader、Texture 或 OpenGL 对象。
 
 ### Material 核心结构
 
@@ -10322,7 +10323,7 @@ Metallic 和 Roughness 没有强行加入 Texture Shader，因为当前 Renderer
 5. 将图片拖到 Base Color Texture；
 6. 使用 `X` 清除材质或材质纹理。
 
-材质属性变化时通过 `Material::Save()` 写回 `.glmat`。Properties 面板只操作材质对象和 AssetHandle，不调用 OpenGL API。层级面板使用 `[Mat]` 标记拥有 MaterialComponent 的实体。
+实体 Inspector 编辑的是 `MaterialComponent::Overrides`，不会调用 `Material::Save()`，因此不会修改共享 `.glmat`。只有在 Content Browser 中选中材质资产后，Asset Inspector 才允许编辑基础材质并写回文件。层级面板使用 `[Mat]` 标记拥有 MaterialComponent 的实体。
 
 ### 场景复制与序列化
 
@@ -10341,9 +10342,16 @@ Material 阶段曾将场景 YAML 升级为 `Version: 3`。后续加入光源组�
 ```yaml
 MaterialComponent:
   Material: 13777784352782102236
+  Overrides:
+    Mask: 5
+    BaseColor: [0.2, 0.7, 1.0, 1.0]
+    BaseColorTexture: 0
+    TilingFactor: 1.0
+    Metallic: 0.0
+    Roughness: 0.5
 ```
 
-场景只保存材质句柄，不重复保存 `.glmat` 参数。MaterialComponent 是可选组件，没有该字段的旧场景仍能加载。
+场景始终保存基础材质句柄；只有存在实体覆盖时才额外写出 `Overrides`。`Mask` 标记哪些字段真正覆盖基础材质，其余值不会参与合并。没有 `Overrides` 节点的旧场景仍按纯共享材质加载，因此保持向后兼容。
 
 ### 默认验证材质
 
@@ -10398,7 +10406,7 @@ GlimmerEditor-CyouBranch/assets/
 3. 尚未支持 Normal、AO、Emissive 等纹理；
 4. 外部修改 `.glmat` 后还没有自动文件监视；
 5. Material 与 Shader 的参数布局尚未通过反射校验；
-6. 尚未区分共享 Material 与实体级 MaterialInstance 覆盖参数。
+6. 已区分共享 Material 与实体级 MaterialInstance 覆盖参数；后续仍需将属性修改接入统一 Undo/Redo 事务。
 
 统一光源数据已经在下一章节完成。后续应在此基础上建立 3D Material Pass，再实现基础 PBR Shader。若直接继续向 Material 增加参数，而没有渲染管线和颜色空间基础，材质系统会变成“可以编辑但无法正确渲染”的参数容器。
 
@@ -11511,6 +11519,210 @@ Native Script 快照只保存脚本工厂绑定，不复制正在运行的 `Scri
 - 后续可增加历史容量限制、命令合并和保存后的 Dirty 标记。
 
 下一步将抽取通用 Inspector 属性编辑事务，先覆盖 Terrain 与 Light，再单独建设 Material Asset 的保存、Undo 和 Redo 流程。
+
+## MaterialInstance 与实体材质 Override
+
+### 建设目的
+
+此前多个实体引用同一个 `.glmat` 时，实体 Inspector 直接修改 `Material::GetProperties()` 并调用 `Material::Save()`。由于 `AssetManager` 会按 `AssetHandle` 缓存并共享同一个 `Material` 对象，对任意实体调整颜色、纹理、金属度或粗糙度都会修改原始材质资产，并同步影响所有引用它的实体。
+
+本阶段将材质数据拆成两层：
+
+```text
+Material Asset（.glmat，共享基础值）
+    -> MaterialComponent::MaterialHandle
+    -> MaterialOverrides（实体局部值）
+    -> MaterialInstance（运行时合并结果）
+    -> Renderer2D / Renderer3D
+```
+
+这样既保留 `.glmat` 的复用能力，也允许实体拥有局部外观差异。`MaterialInstance` 不复制 Shader、Texture 或 GPU 对象，只在提交渲染时解析最终参数。
+
+### 核心数据结构
+
+`MaterialOverride` 使用位掩码标记单个属性是否覆盖基础材质：
+
+```cpp
+enum class MaterialOverride : uint32_t
+{
+    None             = 0,
+    BaseColor        = 1 << 0,
+    BaseColorTexture = 1 << 1,
+    TilingFactor     = 1 << 2,
+    Metallic         = 1 << 3,
+    Roughness        = 1 << 4
+};
+
+struct MaterialOverrides
+{
+    uint32_t Mask = 0;
+    MaterialProperties Values;
+
+    bool IsEnabled(MaterialOverride property) const;
+    void SetEnabled(MaterialOverride property, bool enabled);
+    void Clear();
+    bool Empty() const;
+};
+```
+
+当前允许实体覆盖：
+
+| 属性 | 用途 |
+| --- | --- |
+| `BaseColor` | 实体局部基础颜色或 Tint |
+| `BaseColorTexture` | 实体局部基础颜色纹理 |
+| `TilingFactor` | 实体局部 UV 平铺倍率 |
+| `Metallic` | 实体局部金属度 |
+| `Roughness` | 实体局部粗糙度 |
+
+Shader 仍由基础 `.glmat` 决定，不允许实体覆盖。Shader 会影响管线、顶点布局和参数布局，把它作为普通实例参数会导致渲染状态难以归类，也不利于后续排序与合批。
+
+`MaterialComponent` 现在同时保存共享材质引用和局部覆盖数据：
+
+```cpp
+struct MaterialComponent
+{
+    AssetHandle MaterialHandle{ 0 };
+    MaterialOverrides Overrides;
+};
+```
+
+### MaterialInstance 合并流程
+
+`MaterialInstance` 位于核心库 `Renderer` 目录。构造时先复制基础 `MaterialProperties`，再只应用 `Mask` 中启用的字段：
+
+```text
+AssetManager::GetMaterial(MaterialHandle)
+    -> 取得共享 Material
+    -> 复制基础 MaterialProperties
+    -> 应用启用的 MaterialOverrides
+    -> 约束参数范围
+    -> 得到本次绘制使用的最终属性
+```
+
+合并后继续保持以下约束：
+
+- `TilingFactor >= 0.01`；
+- `Metallic` 位于 `[0, 1]`；
+- `Roughness` 位于 `[0.04, 1]`。
+
+未启用的字段始终继承基础材质。因此修改 `.glmat` 后，所有未覆盖字段仍会使用最新的共享值；只有明确覆盖的字段保持实体自己的值。
+
+### Inspector 编辑边界
+
+实体和资产采用两条不同的编辑路径：
+
+```text
+Hierarchy 选中 Entity
+    -> Entity Inspector
+    -> 编辑 MaterialComponent::Overrides
+    -> 不调用 Material::Save()
+
+Content Browser 选中 .glmat
+    -> Asset Inspector
+    -> 编辑共享 MaterialProperties
+    -> Material::Save()
+    -> 所有继承该字段的实体同步更新
+```
+
+实体 Material 面板为每个可覆盖属性提供启用开关。第一次启用时会复制当前基础值，避免控件突然跳到 `MaterialProperties` 的默认值。拖入纹理会自动启用 `BaseColorTexture` Override；`Reset Overrides` 会清除全部位标记，使实体重新完整继承基础材质。
+
+更换或移除实体的基础 `.glmat` 时会清空旧 Overrides，防止原材质的局部参数意外套用到结构或语义不同的新材质上。
+
+Asset Inspector 会提示当前操作修改的是共享资源，避免把资产编辑误认为实体局部编辑。
+
+### Renderer2D 与 Renderer3D 接入
+
+`Scene` 在编辑模式和运行模式的 2D、3D 绘制路径中都会把 `MaterialComponent::Overrides` 传给 Renderer。
+
+Renderer2D 解析后的颜色、Tiling 和纹理仍通过现有 Quad 顶点数据与纹理槽提交：
+
+- 不同 `BaseColor` 不会打断合批；
+- 不同 `TilingFactor` 不会打断合批；
+- 已存在于当前批次的纹理会复用纹理槽；
+- 单批超过可用纹理槽或索引容量时才执行 Flush；
+- Renderer2D 当前仍固定使用 `TextureShader`，`.glmat` 的 ShaderHandle 尚未参与 2D 管线选择。
+
+Renderer3D 使用合并后的 ShaderHandle 和 PBR 属性上传 Uniform，并解析最终基础颜色纹理。当前 Renderer3D 仍是逐模型、逐 Mesh 提交，本阶段没有新增额外拆批；后续真正建设 3D Instancing 时，应按 Shader、RenderState、Mesh、Material 和纹理组合生成 RenderKey，再把 Transform、EntityID 和可实例化材质参数写入 Instance Buffer 或 Material Buffer。
+
+`MaterialInstance` 本身不创建新的 GPU Material，也不会复制纹理。当前额外 CPU 成本主要是每个实体提交时进行一次属性复制和位掩码合并；实体数量显著增大后，可以增加版本号、Dirty 标记和解析结果缓存。
+
+### 场景复制与序列化
+
+场景 YAML 仅在存在覆盖时写出 `Overrides`：
+
+```yaml
+MaterialComponent:
+  Material: 13777784352782102236
+  Overrides:
+    Mask: 21
+    BaseColor: [0.2, 0.7, 1.0, 1.0]
+    BaseColorTexture: 0
+    TilingFactor: 2.0
+    Metallic: 0.1
+    Roughness: 0.6
+```
+
+`Mask` 是实际生效字段的唯一依据。完整写出 `Values` 可以保持格式稳定，也便于以后启用某一字段时恢复已保存的数据。
+
+兼容策略如下：
+
+- 旧场景没有 `Overrides`：覆盖集合保持为空，行为与原先一致；
+- 新场景有 `Overrides`：读取 Mask 和所有候选值；
+- `Scene::Copy()`、实体复制和 `EntitySnapshot` 按值复制 `MaterialComponent`，Override 会自然进入 Runtime Scene、Duplicate 和 Undo 恢复流程；
+- `.glmat` 继续只保存共享基础值，不包含任何实体 UUID 或场景局部数据。
+
+### 其它 Asset 组件审计
+
+本轮同时检查了可以挂载到实体的其它 AssetHandle 组件：
+
+| 组件 | 资源引用 | 实体局部数据 | 是否需要 Instance/Override |
+| --- | --- | --- | --- |
+| `SpriteRendererComponent` | `TextureHandle` | Color、TilingFactor | 不需要；组件没有反向修改 Texture 资产 |
+| `ModelRendererComponent` | `ModelHandle` | 当前无共享模型参数编辑 | 不需要 |
+| `SkyLightComponent` | `CubemapHandle` | Enabled、Intensity | 不需要；Cubemap 只读，环境强度已组件化 |
+| `TerrainComponent` | HeightMap、Shader 等句柄 | TerrainSpecification | 暂不需要；生成参数属于实体，底层资产未被反向修改 |
+| `MaterialComponent` | `MaterialHandle` | MaterialOverrides | 需要；基础材质包含可被多个实体共享的可编辑参数 |
+
+判断是否需要 Asset Instance 的标准不是“组件是否保存 AssetHandle”，而是“实体是否需要修改资产内部数据且不能影响其它引用者”。Texture、Model 和 Cubemap 当前都是只读引用；如果后续为它们增加每实体采样器、子网格可见性或环境旋转等设置，应优先把这些设置放入组件局部数据，而不是修改共享资产对象。
+
+### 文件职责
+
+| 文件 | 职责 |
+| --- | --- |
+| `Glimmer/src/Glimmer/Renderer/MaterialInstance.h/.cpp` | Override 位掩码、局部值和最终材质属性合并 |
+| `Glimmer/src/Glimmer/Scene/Components.h` | 在 MaterialComponent 中保存材质句柄与 Overrides |
+| `Glimmer/src/Glimmer/Scene/Scene.cpp` | 编辑/运行场景向 2D、3D Renderer 传递 Overrides |
+| `Glimmer/src/Glimmer/Scene/SceneSerializer.cpp` | Material Overrides 的兼容序列化与反序列化 |
+| `Glimmer/src/Glimmer/Renderer/Renderer2D.h/.cpp` | 将最终颜色、纹理和 Tiling 接入 Sprite 批处理 |
+| `Glimmer/src/Glimmer/Renderer/Renderer3D.h/.cpp` | 将最终 PBR 参数接入模型绘制 |
+| `GlimmerEditor-CyouBranch/src/Panels/SceneHierarchyPanel.cpp` | 实体 Material Override 编辑界面 |
+| `GlimmerEditor-CyouBranch/src/Panels/InspectorPanel.cpp` | 共享 `.glmat` Asset Inspector 与保存入口 |
+
+核心数据合并与渲染逻辑位于 `Glimmer`；实体/资产编辑交互位于 `GlimmerEditor-CyouBranch`，没有把 ImGui 或编辑器状态引入运行时核心库。
+
+### 验证结果
+
+- 新增核心源文件后重新运行 VS2026 Premake 脚本，工程文件成功包含 `MaterialInstance.h/.cpp`；
+- `Debug | x64` 完整编译和链接成功；
+- 同一 Visual Studio 实例再次增量构建成功，失败项目为 0，耗时约 0.1 秒；
+- `git diff --check` 通过；
+- 未删除 `bin` 或 `bin-int`，保留 Visual Studio 增量构建缓存；
+- Entity Inspector 不再调用 `Material::Save()`；
+- `.glmat` 的共享写入只保留在 Asset Inspector。
+
+建议交互验证：为两个实体挂载同一个 `.glmat`，只给其中一个实体启用 BaseColor 或纹理 Override；另一个实体和原始 `.glmat` 应保持不变。随后保存并重新打开场景，确认 Override 恢复；最后点击 `Reset Overrides`，确认该实体重新继承共享材质。
+
+### 当前边界与后续方向
+
+1. Material Override 的逐属性编辑尚未接入统一 Undo/Redo 属性事务；
+2. Renderer2D 暂不支持按 `.glmat` ShaderHandle 切换兼容批次；
+3. Renderer3D 尚未建立 RenderQueue、RenderKey、材质排序和 Instanced Draw；
+4. MaterialInstance 当前按绘制临时解析，尚无 Dirty/version 缓存；
+5. Normal、AO、Emissive 和更多 PBR 纹理加入后，需要扩展 Override Mask 和 Inspector，但应保持同一合并模型；
+6. 共享 `.glmat` 的 Asset Inspector 修改后续应进入 Asset Command，而不是组件命令。
+
+下一步建议优先将 Material Override 和 Material Asset 编辑分别接入组件属性命令与 Asset Command，然后再建设 3D RenderQueue。这样 Undo/Redo、共享资产语义和后续合批边界能够保持一致。
 
 ## KB
 

@@ -108,6 +108,20 @@ namespace gl {
 		out << YAML::Key << "MaterialComponent" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "Material" << YAML::Value
 			<< static_cast<uint64_t>(comp.MaterialHandle);
+		if (!comp.Overrides.Empty())
+		{
+			const auto& values = comp.Overrides.Values;
+			out << YAML::Key << "Overrides" << YAML::Value << YAML::BeginMap;
+			out << YAML::Key << "Mask" << YAML::Value << comp.Overrides.Mask;
+			out << YAML::Key << "BaseColor" << YAML::Value;
+			SerializeVec4(out, values.BaseColor);
+			out << YAML::Key << "BaseColorTexture" << YAML::Value
+				<< static_cast<uint64_t>(values.BaseColorTexture);
+			out << YAML::Key << "TilingFactor" << YAML::Value << values.TilingFactor;
+			out << YAML::Key << "Metallic" << YAML::Value << values.Metallic;
+			out << YAML::Key << "Roughness" << YAML::Value << values.Roughness;
+			out << YAML::EndMap;
+		}
 		out << YAML::EndMap;
 	}
 
@@ -115,6 +129,24 @@ namespace gl {
 	{
 		if (node["Material"])
 			comp.MaterialHandle = AssetHandle(node["Material"].as<uint64_t>());
+
+		const YAML::Node overrides = node["Overrides"];
+		if (!overrides)
+			return;
+
+		if (overrides["Mask"])
+			comp.Overrides.Mask = overrides["Mask"].as<uint32_t>();
+		if (overrides["BaseColor"])
+			DeserializeVec4(overrides["BaseColor"], comp.Overrides.Values.BaseColor);
+		if (overrides["BaseColorTexture"])
+			comp.Overrides.Values.BaseColorTexture =
+				AssetHandle(overrides["BaseColorTexture"].as<uint64_t>());
+		if (overrides["TilingFactor"])
+			comp.Overrides.Values.TilingFactor = overrides["TilingFactor"].as<float>();
+		if (overrides["Metallic"])
+			comp.Overrides.Values.Metallic = overrides["Metallic"].as<float>();
+		if (overrides["Roughness"])
+			comp.Overrides.Values.Roughness = overrides["Roughness"].as<float>();
 	}
 	static void SerializeComponent(YAML::Emitter& out, const TerrainComponent& comp)
 	{
