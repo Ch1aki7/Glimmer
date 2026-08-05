@@ -5,6 +5,7 @@
 
 #include "../Editor/EditorCommand.h"
 #include <optional>
+#include <type_traits>
 
 namespace gl
 {
@@ -51,18 +52,20 @@ namespace gl
 
 		template<typename T, typename UIFunction>
 		void DrawComponent(const char* name, Entity entity, UIFunction drawUI,
-			bool removable = true)
+			bool removable = true, bool resettable = true)
 		{
 			if (!entity.HasComponent<T>())
 				return;
 
 			ImGui::PushID(static_cast<int>(typeid(T).hash_code()));
 			const bool open = ImGui::TreeNodeEx(
-				"##Component", ImGuiTreeNodeFlags_DefaultOpen, "%s", name);
+				"##Component",
+				ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth,
+				"%s", name);
 			bool removeComponent = false;
 			if (ImGui::BeginPopupContextItem("ComponentSettings"))
 			{
-				if (ImGui::MenuItem("Reset"))
+				if (resettable && ImGui::MenuItem("Reset"))
 				{
 					const T before = entity.GetComponent<T>();
 					const T after{};
@@ -75,16 +78,16 @@ namespace gl
 							[scene, uuid, after]() {
 								Entity target = scene->FindEntityByUUID(uuid);
 								if (target && target.HasComponent<T>())
-									target.GetComponent<T>() = after;
+									ReplaceComponentValue<T>(target, after);
 							},
 							[scene, uuid, before]() {
 								Entity target = scene->FindEntityByUUID(uuid);
 								if (target && target.HasComponent<T>())
-									target.GetComponent<T>() = before;
+									ReplaceComponentValue<T>(target, before);
 							}));
 					}
 					else
-						entity.GetComponent<T>() = after;
+						ReplaceComponentValue<T>(entity, after);
 				}
 				if (removable && ImGui::MenuItem("Remove Component"))
 					removeComponent = true;
@@ -122,6 +125,19 @@ namespace gl
 			ImGui::PopID();
 		}
 
+		template<typename T>
+		static void ReplaceComponentValue(Entity entity, const T& value)
+		{
+			if constexpr (std::is_same_v<T, TransformComponent>)
+			{
+				entity.GetComponent<T>() = value;
+			}
+			else
+			{
+				entity.RemoveComponent<T>();
+				entity.AddComponent<T>(value);
+			}
+		}
 
 	private:
 		Ref<Scene> m_Context;

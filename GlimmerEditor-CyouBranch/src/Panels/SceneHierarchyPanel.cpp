@@ -242,12 +242,8 @@ namespace gl {
 			false);
 
 		// --- Terrain ---
-		if (entity.HasComponent<TerrainComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(TerrainComponent).hash_code(),
-				ImGuiTreeNodeFlags_DefaultOpen, "Terrain"))
-			{
-				auto& terrain = entity.GetComponent<TerrainComponent>();
+		DrawComponent<TerrainComponent>("Terrain", entity,
+			[](TerrainComponent& terrain) {
 				auto& spec = terrain.Specification;
 				bool regenerate = false;
 				regenerate |= ImGui::Checkbox("Procedural", &spec.Procedural);
@@ -304,16 +300,11 @@ namespace gl {
 					TerrainRenderer::Invalidate(terrain);
 				if (ImGui::Button("Regenerate"))
 					TerrainRenderer::Invalidate(terrain);
-				ImGui::TreePop();
-			}
-		}
+			},
+			true, false);
 		// --- Directional Light ---
-		if (entity.HasComponent<DirectionalLightComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(DirectionalLightComponent).hash_code(),
-				ImGuiTreeNodeFlags_DefaultOpen, "Directional Light"))
-			{
-				auto& light = entity.GetComponent<DirectionalLightComponent>();
+		DrawComponent<DirectionalLightComponent>("Directional Light", entity,
+			[](DirectionalLightComponent& light) {
 				ImGui::Checkbox("Enabled##Directional", &light.Enabled);
 				ImGui::ColorEdit3("Color##Directional", glm::value_ptr(light.Color));
 				ImGui::DragFloat("Intensity##Directional", &light.Intensity,
@@ -321,33 +312,22 @@ namespace gl {
 				ImGui::DragFloat("Ambient##Directional", &light.AmbientIntensity,
 					0.01f, 0.0f, 10.0f);
 				ImGui::TextDisabled("Direction follows Transform rotation.");
-				ImGui::TreePop();
-			}
-		}
+			});
 
 		// --- Point Light ---
-		if (entity.HasComponent<PointLightComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(PointLightComponent).hash_code(),
-				ImGuiTreeNodeFlags_DefaultOpen, "Point Light"))
-			{
-				auto& light = entity.GetComponent<PointLightComponent>();
+		DrawComponent<PointLightComponent>("Point Light", entity,
+			[](PointLightComponent& light) {
 				ImGui::Checkbox("Enabled##Point", &light.Enabled);
 				ImGui::ColorEdit3("Color##Point", glm::value_ptr(light.Color));
 				ImGui::DragFloat("Intensity##Point", &light.Intensity,
 					0.1f, 0.0f, 1000.0f);
 				ImGui::DragFloat("Range##Point", &light.Range,
 					0.1f, 0.01f, 1000.0f);
-				ImGui::TreePop();
-			}
-		}
+			});
+
 		// --- Sky Light ---
-		if (entity.HasComponent<SkyLightComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(SkyLightComponent).hash_code(),
-				ImGuiTreeNodeFlags_DefaultOpen, "Sky Light"))
-			{
-				auto& skyLight = entity.GetComponent<SkyLightComponent>();
+		DrawComponent<SkyLightComponent>("Sky Light", entity,
+			[](SkyLightComponent& skyLight) {
 				const AssetMetadata metadata =
 					AssetManager::GetMetadata(skyLight.CubemapHandle);
 				const bool hasCubemap = metadata.IsValid()
@@ -378,15 +358,10 @@ namespace gl {
 					}
 					ImGui::EndDragDropTarget();
 				}
-				ImGui::TreePop();
-			}
-		}
+			});
 		// --- Camera ---
-		if (entity.HasComponent<CameraComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(CameraComponent).hash_code(), ImGuiTreeNodeFlags_DefaultOpen, "Camera"))
-			{
-				auto& cameraComponent = entity.GetComponent<CameraComponent>();
+		DrawComponent<CameraComponent>("Camera", entity,
+			[](CameraComponent& cameraComponent) {
 				auto& camera = cameraComponent.Camera;
 
 				ImGui::Checkbox("Primary", &cameraComponent.Primary);
@@ -440,18 +415,11 @@ namespace gl {
 
 					ImGui::Checkbox("Fixed Aspect Ratio", &cameraComponent.FixedAspectRatio);
 				}
-
-				ImGui::TreePop();
-			}
-		}
+			});
 
 		// --- Model Renderer ---
-		if (entity.HasComponent<ModelRendererComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(ModelRendererComponent).hash_code(),
-				ImGuiTreeNodeFlags_DefaultOpen, "Model Renderer"))
-			{
-				auto& component = entity.GetComponent<ModelRendererComponent>();
+		DrawComponent<ModelRendererComponent>("Model Renderer", entity,
+			[](ModelRendererComponent& component) {
 				AssetMetadata metadata = AssetManager::GetMetadata(component.ModelHandle);
 				const bool hasModel = metadata.IsValid() && metadata.Type == AssetType::Model;
 				const std::string modelName = hasModel
@@ -473,15 +441,11 @@ namespace gl {
 					}
 					ImGui::EndDragDropTarget();
 				}
-				ImGui::TreePop();
-			}
-		}
+			});
+
 		// --- Sprite Renderer ---
-		if (entity.HasComponent<SpriteRendererComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(SpriteRendererComponent).hash_code(), ImGuiTreeNodeFlags_DefaultOpen, "Sprite Renderer"))
-			{
-				auto& src = entity.GetComponent<SpriteRendererComponent>();
+		DrawComponent<SpriteRendererComponent>("Sprite Renderer", entity,
+			[](SpriteRendererComponent& src) {
 				ImGui::ColorEdit4("Color", glm::value_ptr(src.Color));
 				ImGui::DragFloat("Tiling", &src.TilingFactor, 0.1f, 0.1f, 10.0f);
 
@@ -511,17 +475,10 @@ namespace gl {
 					}
 					ImGui::EndDragDropTarget();
 				}
-
-				ImGui::TreePop();
-			}
-		}
+			});
 		// --- Material ---
-		if (entity.HasComponent<MaterialComponent>())
-		{
-			if (ImGui::TreeNodeEx((void*)typeid(MaterialComponent).hash_code(),
-				ImGuiTreeNodeFlags_DefaultOpen, "Material"))
-			{
-				auto& component = entity.GetComponent<MaterialComponent>();
+		DrawComponent<MaterialComponent>("Material", entity,
+			[](MaterialComponent& component) {
 				AssetMetadata metadata = AssetManager::GetMetadata(component.MaterialHandle);
 				const bool hasMaterial = metadata.IsValid()
 					&& metadata.Type == AssetType::Material;
@@ -621,10 +578,7 @@ namespace gl {
 					if (changed && !material->Save())
 						GL_CORE_ERROR("Failed to save material: {0}", material->GetPath().string());
 				}
-
-				ImGui::TreePop();
-			}
-		}
+			});
 		ImGui::Spacing();
 		ImGui::Separator();
 		const float buttonWidth = std::min(220.0f, ImGui::GetContentRegionAvail().x);
