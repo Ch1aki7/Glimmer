@@ -11892,6 +11892,93 @@ MaterialInstance 已经区分共享 `.glmat` 与实体局部 Override，但此�
 3. 当前 MaterialInstance 仍在绘制提交时临时合并，缓存与版本管理留给 RenderQueue/Instancing 阶段；
 4. 下一主线是 3D RenderQueue 与状态排序，不在本次材质事务中提前实现。
 
+## 3D Opaque RenderQueue 与状态排序
+
+### 建设目标
+
+此前 `Renderer3D::DrawModel()` 在遍历 Scene 时立即解析资产、绑定 Shader、绑定纹理并逐 Mesh 绘制。多个实体共享 Shader、Material 和 Texture 时仍会重复绑定，且没有统一提交边界支持后续 Instancing、透明队列或可见性处理。
+
+本次将模型渲染拆为三个阶段：
+
+1. `BeginScene` 保存 ViewProjection/Camera 并清空本帧队列和统计；
+2. `SubmitModel` 解析资产和 MaterialInstance，将每个 Mesh 展开为 RenderItem；
+3. `EndScene` 排序 Opaque Queue、缓存 GPU 状态并统一执行。
+
+### RenderItem 与 RenderKey
+
+每个 RenderItem 保存：
+
+- Mesh、Shader 和最终 Texture 的强引用，保证队列执行前资源有效；
+- 合并 Overrides 后的 MaterialProperties；
+- Transform 和 EntityID；
+- 是否使用真实 BaseColorTexture；
+- 用于排序的 RenderKey。
+
+RenderKey 采用以下优先级：
+
+```text
+ShaderHandle → MaterialHandle → Texture RendererID → Mesh 地址 → EntityID
+```
+
+Shader、Material 和 Texture 排在前面以减少昂贵状态切换；Mesh 地址在资源生命周期内稳定；EntityID 提供最终全序，使同一 Scene 中改变 ECS 提交顺序不会改变不透明队列执行顺序。该键只用于运行时帧内排序，不作为持久化 ID。
+
+### 状态缓存与 Uniform 上传
+
+执行阶段只在 Shader 真正变化时调用 Bind，并上传场景级 ViewProjection、CameraPosition 和 BaseColorTexture Slot。每个 Item 继续上传 Transform、EntityID、BaseColor、Metallic、Roughness、TilingFactor 和纹理存在标记，保证不同 Overrides 不会错误复用参数。
+
+Texture2D 只在 GPU RendererID 变化时重新绑定。为使缓存有效，`OpenGLRendererAPI::DrawIndexed` 不再在每次 Draw 后调用 `glBindTexture(GL_TEXTURE_2D, 0)`；资源解绑不再由低层 Draw 命令隐式决定，而由下一位状态所有者覆盖。
+
+无效 Model、Material、Shader、空 Mesh 或零索引 Mesh 不进入队列，并计入 SkippedModels 或直接跳过，不导致渲染崩溃。
+
+### Scene 接入顺序
+
+编辑和运行场景均使用相同流程：
+
+```text
+Renderer3D::BeginScene
+  → 遍历 ModelRendererComponent
+  → Renderer3D::SubmitModel
+  → Renderer3D::EndScene
+  → TerrainRenderer
+  → Renderer2D
+```
+
+因此模型相对 Terrain、Sprite、Skybox 和 Tone Mapping 的 Pass 顺序保持不变。EntityID 仍作为逐 Item Uniform 写入整数附件，鼠标拾取协议没有变化。
+
+### 统计面板
+
+Renderer3D Statistics 提供：
+
+- SubmittedModels、SubmittedItems 和 SkippedModels；
+- DrawCalls、ShaderBinds、TextureBinds；
+- ImmediateModeShaderBinds 和 ImmediateModeTextureBinds 估算；
+- SavedShaderBinds 和 SavedTextureBinds。
+
+`GlimmerEditor-CyouBranch` 的 Stats 面板同时显示 Renderer2D 与 Renderer3D 数据。绑定估算使用改造前行为：每个有效 Model 绑定一次 Shader，每个 Mesh 绑定一次 Texture。
+
+### 验证结果
+
+- 临时原生 OpenGL 宿主加载同一个最小模型和 DefaultPBR Material 三次，并以 `30,10,20` 与 `20,30,10` 两种 EntityID 提交顺序执行；两次统计一致；
+- 每轮得到 3 个 SubmittedItems、3 个 DrawCalls，ShaderBinds 从立即模式估算 3 降为 1，TextureBinds 从 3 降为 1；
+- 同轮提交无效 ModelHandle，SkippedModels 增加 1 且无崩溃；
+- Debug 运行时断言验证队列已排序、每个 RenderItem 都被执行、绑定次数不高于旧模式估算；
+- VS2026、MSVC v145、`Debug | x64` 全解决方案构建成功；
+- 完整编辑器在 Intel Iris Xe/OpenGL 4.6 下完成 Terrain、Skybox、Renderer2D、Tone Mapping 和 Compute Shader 初始化并稳定运行 8 秒；
+- `git diff --check` 通过。
+
+### 资产审计发现
+
+当前 `GlimmerEditor-CyouBranch/assets/AssetRegistry.yaml` 包含多个 Model Handle，但新检出中缺少对应的 Wavefront `.obj` 文件。根因是 Visual Studio 通用忽略规则 `*.obj` 同时误伤了模型资源。
+
+`.gitignore` 已增加 `!**/assets/**/*.obj`，今后恢复或新增的模型可以正常进入 Git。当前缺失模型仍需从原设备、远程历史或备份找回；RenderQueue 对这类失效 Handle 会安全跳过并计入统计。
+
+### 当前边界与下一步
+
+1. 当前只处理不透明队列，没有 BlendMode、透明分类或反向距离排序；
+2. 状态排序减少绑定次数，但每个 RenderItem 仍执行一次 DrawIndexed；
+3. MaterialInstance 仍在每次 Model Submit 时合并，没有 version/Dirty 缓存；
+4. 下一主线是在现有 RenderKey 上建立 Instancing Batch、Instance Buffer 和实例 EntityID。
+
 ## 项目工作文档同步约定
 
 为保证不同设备和不同 Codex 会话读取到一致的项目状态，仓库使用三份职责互补的工作文档：

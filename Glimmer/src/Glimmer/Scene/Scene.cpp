@@ -272,12 +272,13 @@ namespace gl {
 				const auto& transform = modelView.get<TransformComponent>(entity);
 				const auto& model = modelView.get<ModelRendererComponent>(entity);
 				const auto* material = m_Registry.try_get<MaterialComponent>(entity);
-				Renderer3D::DrawModel(
+				Renderer3D::SubmitModel(
 					transform.GetTransform(), model.ModelHandle,
 					material ? material->MaterialHandle : AssetHandle(0),
 					static_cast<int>(static_cast<uint32_t>(entity)),
 					material ? &material->Overrides : nullptr);
 			}
+			Renderer3D::EndScene();
 
 			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 			for (auto entity : terrainView)
@@ -317,12 +318,13 @@ namespace gl {
 			const auto& transform = modelView.get<TransformComponent>(entity);
 			const auto& model = modelView.get<ModelRendererComponent>(entity);
 			const auto* material = m_Registry.try_get<MaterialComponent>(entity);
-			Renderer3D::DrawModel(
+			Renderer3D::SubmitModel(
 				transform.GetTransform(), model.ModelHandle,
 				material ? material->MaterialHandle : AssetHandle(0),
 				static_cast<int>(static_cast<uint32_t>(entity)),
 				material ? &material->Overrides : nullptr);
 		}
+		Renderer3D::EndScene();
 
 		auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 		for (auto entity : terrainView)

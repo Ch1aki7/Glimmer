@@ -14,7 +14,7 @@ Glimmer 是一个面向 Windows 的 C++17 图形/游戏引擎实验项目。核�
 - `GlimmerEditor` 保留较早的编辑器/渲染演示实现，不代表当前完整编辑器架构；
 - `Sandbox` 用于基础引擎与 Renderer2D 示例验证，也是 Premake 默认启动项目；
 - 场景和资产以 YAML 描述文件持久化，实体与资产分别使用稳定 UUID/AssetHandle；
-- 3D 渲染仍是逐模型、逐 Mesh 的立即提交，尚未建立 RenderQueue、状态排序和 Instancing。
+- 3D 模型使用不透明 RenderQueue 和状态排序；尚未实现透明队列与 Instancing。
 
 ## 2. 仓库组成
 
@@ -141,7 +141,7 @@ flowchart TD
     Scene --> Models["Transform + ModelRenderer (+ Material)"]
     Scene --> Terrain["Transform + Terrain"]
     Scene --> Sprites["Transform + SpriteRenderer (+ Material)"]
-    Models --> R3D["Renderer3D::DrawModel"]
+    Models --> R3D["Renderer3D::SubmitModel → Opaque Queue → EndScene"]
     Terrain --> TR["TerrainRenderer::Draw"]
     Sprites --> R2D["Renderer2D 批处理"]
 ```
@@ -154,7 +154,11 @@ flowchart TD
 
 Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
 
-Renderer3D 当前立即解析 Model、Material 和 Shader，构造临时 `MaterialInstance`，上传 ViewProjection、Transform、Camera、EntityID 和基础 PBR 参数，然后逐 Mesh 绑定纹理并绘制。纹理优先级为 Material BaseColorTexture、Mesh 自带纹理、白纹理回退。此路径尚无提交队列或跨物体批处理。
+Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，构造临时 `MaterialInstance`，再将每个有效 Mesh 展开为一个 RenderItem。RenderItem 保存 Mesh/Shader/Texture 引用、最终 MaterialProperties、Transform、EntityID 和 RenderKey；纹理优先级仍为 Material BaseColorTexture、Mesh 自带纹理、白纹理回退。
+
+`EndScene` 按 ShaderHandle、MaterialHandle、Texture GPU ID、Mesh 生命周期地址和 EntityID 排序 Opaque Queue。EntityID 作为最终键保证同一帧中改变 ECS 提交顺序不会改变最终队列顺序。执行阶段缓存当前 Shader 与 Texture：Shader 切换时上传场景级 ViewProjection、Camera 和采样器槽，每个 Item 只上传 Transform、EntityID 与材质参数。OpenGL `DrawIndexed` 不再隐式解绑 Texture2D，纹理状态由 Renderer3D/Renderer2D 等上层所有者维护。
+
+Renderer3D Statistics 记录 SubmittedModels、SubmittedItems、SkippedModels、DrawCalls、ShaderBinds、TextureBinds，并保存旧立即模式的绑定估算用于计算节省量。当前排序减少状态绑定，但每个 RenderItem 仍对应一个 DrawCall；Instancing 是下一层批次优化。
 
 ### 5.3 Framebuffer、多 Pass 与拾取
 
@@ -374,7 +378,7 @@ flowchart LR
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以长期工作台为准，当前首先建立 3D RenderQueue/状态排序；之后是 Instancing/MaterialInstance 缓存和 PBR 通道扩展。Vulkan 后端、透明队列、阴影/IBL 与发布打包仍是长期候选。
+近期架构演进顺序以长期工作台为准，当前首先建立 3D Instancing 与 MaterialInstance 缓存；之后是 PBR 通道扩展。Vulkan 后端、透明队列、阴影/IBL 与发布打包仍是长期候选。
 
 ## 12. 文档同步边界
 

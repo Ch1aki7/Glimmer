@@ -9,7 +9,7 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：3D RenderQueue 与状态排序
+- 当前主线：3D Instancing 与 MaterialInstance 缓存
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,44 +55,45 @@
 
 ## 当前主线
 
-### 3D RenderQueue 与状态排序
+### 3D Instancing 与 MaterialInstance 缓存
 
 **目的**
 
-将 `Renderer3D::DrawModel()` 的立即绘制拆为 Submit 与 Execute，建立稳定的不透明渲染队列和状态排序基础，为后续 Instancing 与 MaterialInstance 缓存提供批次边界。
+在稳定 Opaque RenderQueue 上合并兼容的 Mesh/Shader/Material 项，使用 Instance Buffer 一次提交多个 Transform 与 EntityID，并避免每帧重复解析 MaterialInstance。
 
 **当前问题**
 
-- Renderer3D 逐实体解析 Model、Material、Shader 并立即逐 Mesh 绘制；
-- 相邻物体即使共享 Shader、Material 或纹理，也会重复绑定状态；
-- 缺少可测量的 DrawCall、ShaderBind、TextureBind 等 3D 统计；
-- 尚无稳定的 RenderItem/RenderKey，可见性、透明队列和 Instancing 无统一提交边界。
+- Opaque Queue 已排序并减少状态绑定，但仍然每个 RenderItem 发起一次 DrawCall；
+- MaterialInstance 仍在每次 Model Submit 时合并基础材质和 Overrides；
+- Mesh 顶点布局与 Shader 尚未定义实例矩阵和实例 EntityID 契约；
+- 不支持 Instancing 的 Shader 缺少明确回退标记。
 
 **实施范围**
 
-- [ ] 将 3D 绘制拆分为场景 Begin、Submit、Execute/End；
-- [ ] 建立包含 Mesh、Shader、Material 状态、Transform 和 EntityID 的 `RenderItem`；
-- [ ] 建立稳定的 Opaque `RenderKey`，按 Shader、Material、Texture、Mesh 排序；
-- [ ] 保持 EntityID 输出，确保编辑器鼠标拾取不退化；
-- [ ] 缓存当前绑定状态，避免无意义的 Shader 和 Texture 重绑；
-- [ ] 增加 DrawCall、SubmittedItem、ShaderBind、TextureBind 等统计；
-- [ ] 保留不兼容或无效资源的安全跳过行为；
+- [ ] 定义 Instancing 兼容键和 Batch 聚合规则；
+- [ ] 建立动态 Instance Buffer，上传 Transform 与 EntityID；
+- [ ] 扩展 VertexArray/RendererAPI 的实例属性与 DrawIndexedInstanced；
+- [ ] 为兼容 Shader 增加实例输入，不兼容 Shader 自动回退普通 Draw；
+- [ ] 为 Material/MaterialOverrides 增加 version/Dirty，并缓存最终 MaterialProperties；
+- [ ] 保持 EntityID 附件和鼠标拾取正确；
+- [ ] 增加 InstanceCount、BatchCount、InstancedDrawCalls 和节省 DrawCall 统计；
 - [ ] 更新 README 和 ARCHITECTURE 对应章节。
 
 **暂不包含**
 
 - 透明物体队列和距离排序；
-- 3D Instancing 与 Instance Buffer；
 - 遮挡剔除；
+- GPU Driven Rendering；
 - Vulkan 后端。
 
 **验收条件**
 
-- [ ] 默认场景与改造前渲染结果一致；
-- [ ] 改变实体提交顺序不影响不透明物体结果；
-- [ ] EntityID 拾取保持正确；
-- [ ] 统计能够证明共享状态场景中的绑定次数下降；
-- [ ] 无效 Model、Material 或 Shader 不导致崩溃；
+- [ ] 多个相同 Cube/Material 合并为单个实例 DrawCall；
+- [ ] Transform 和 EntityID 每实例正确，编辑器拾取不退化；
+- [ ] Material Override 不同的实体不会被错误合批；
+- [ ] 不兼容 Shader 保持普通绘制结果；
+- [ ] MaterialInstance 缓存仅在基础材质或 Overrides 变化时重算；
+- [ ] 统计能够证明重复模型场景 DrawCall 下降；
 - [ ] VS2026 `Debug | x64` 全量构建成功；
 - [ ] 编辑器启动并稳定渲染首帧；
 - [ ] `git diff --check` 通过。
@@ -100,18 +101,6 @@
 ## 后续任务
 
 任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。
-
-### P2：3D Instancing 与 MaterialInstance 缓存
-
-**依赖**：RenderQueue 与 RenderKey 稳定。
-
-**目标**
-
-- 为相同 Mesh、Shader、Material 和兼容渲染状态建立实例批次；
-- 使用 Instance Buffer 上传 Transform 与 EntityID；
-- 为 MaterialInstance 增加 Dirty/version 或解析结果缓存；
-- 不兼容 Instancing 的 Shader 自动回退普通 Draw；
-- 添加实例数、批次数和节省 DrawCall 的统计。
 
 ### P3：PBR 材质通道扩展
 
@@ -147,6 +136,17 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-05：3D Opaque RenderQueue 与状态排序
+
+- 将 Renderer3D 从逐模型立即绘制拆为 `BeginScene`、`SubmitModel`、`EndScene`，每个 Mesh 形成包含完整材质状态、Transform 和 EntityID 的 RenderItem；
+- 使用 ShaderHandle、MaterialHandle、Texture GPU ID、Mesh 生命周期地址和 EntityID 构造帧内稳定 RenderKey；
+- 排序执行时缓存 Shader/Texture 状态，并在 Stats 面板展示提交、跳过、DrawCall、绑定次数及相对旧模式节省量；
+- OpenGL `DrawIndexed` 不再隐式解绑 Texture2D，使纹理状态所有权回归上层渲染器；
+- 验证：临时真实 OpenGL 宿主以两种顺序提交 3 个相同模型，均得到 3 个 RenderItem/DrawCall，Shader 绑定由 3 降至 1、Texture 绑定由 3 降至 1，并安全跳过 1 个无效资源；VS2026 `Debug | x64` 全解决方案构建成功；完整编辑器稳定运行 8 秒；`git diff --check`；
+- 资产发现：当前仓库 AssetRegistry 的 Model 路径均缺少实际 `.obj` 文件；已修正 `.gitignore` 允许跟踪 `assets/**/*.obj`，源模型仍需从原设备或备份恢复；
+- README：新增“3D Opaque RenderQueue 与状态排序”；
+- 提交：待提交。
 
 ### 2026-08-05：材质编辑事务与 Undo/Redo
 
@@ -242,6 +242,7 @@
 - 部分 Git 子模块包含 Premake 生成的未跟踪文件，可能使根仓库显示子模块为脏状态；不要在不确认内容的情况下清理或重置子模块；
 - SPIRV-Cross 上游 Premake 会递归包含 samples/tests，根 Premake 当前通过 `removefiles` 排除；修改依赖生成逻辑时必须复验；
 - GLFW Premake 仍使用已弃用的 `flags`、`NoRuntimeChecks` 和 `NoIncrementalLink` 写法，会产生生成警告。
+- `GlimmerEditor-CyouBranch/assets/AssetRegistry.yaml` 保留多个 Model Handle，但当前检出缺少对应 `.obj`；`.gitignore` 已允许未来跟踪 `assets/**/*.obj`，仍需从原设备或备份恢复模型源文件并逐项复验注册表。
 
 ### 编辑器
 
@@ -252,8 +253,8 @@
 
 ### 渲染
 
-- Renderer3D 仍逐模型、逐 Mesh 立即绘制；
-- 没有 RenderQueue、RenderKey、状态排序或 3D Instancing；
+- Renderer3D 已有不透明 RenderQueue、稳定排序和 Shader/Texture 状态缓存，但仍逐 RenderItem Draw，没有 3D Instancing；
+- 暂无透明队列、距离排序和显式材质 BlendMode；当前 Opaque Queue 假设参与项不透明；
 - MaterialInstance 当前按提交临时解析，没有 Dirty/version 缓存；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。

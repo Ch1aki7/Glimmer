@@ -440,6 +440,17 @@ namespace gl {
 		ImGui::Text("Renderer2D Stats:");
 		ImGui::Text("Draw Calls: %d", stats.DrawCalls);
 		ImGui::Text("Quads: %d", stats.QuadCount);
+		ImGui::Separator();
+		const auto stats3D = Renderer3D::GetStats();
+		ImGui::Text("Renderer3D Opaque Queue:");
+		ImGui::Text("Models / Items: %u / %u",
+			stats3D.SubmittedModels, stats3D.SubmittedItems);
+		ImGui::Text("Skipped Models: %u", stats3D.SkippedModels);
+		ImGui::Text("Draw Calls: %u", stats3D.DrawCalls);
+		ImGui::Text("Shader Binds: %u (saved %u)",
+			stats3D.ShaderBinds, stats3D.GetSavedShaderBinds());
+		ImGui::Text("Texture Binds: %u (saved %u)",
+			stats3D.TextureBinds, stats3D.GetSavedTextureBinds());
 		ImGui::End();
 
 		// Settings

@@ -13,12 +13,39 @@ namespace gl {
 		static void Shutdown();
 
 		static void BeginScene(const glm::mat4& viewProjection, const glm::vec3& cameraPosition);
-		static void DrawModel(
+		static void SubmitModel(
 			const glm::mat4& transform,
 			AssetHandle modelHandle,
 			AssetHandle materialHandle,
 			int entityID,
 			const MaterialOverrides* overrides = nullptr);
+		static void EndScene();
+
+		struct Statistics
+		{
+			uint32_t SubmittedModels = 0;
+			uint32_t SubmittedItems = 0;
+			uint32_t SkippedModels = 0;
+			uint32_t DrawCalls = 0;
+			uint32_t ShaderBinds = 0;
+			uint32_t TextureBinds = 0;
+			uint32_t ImmediateModeShaderBinds = 0;
+			uint32_t ImmediateModeTextureBinds = 0;
+
+			uint32_t GetSavedShaderBinds() const
+			{
+				return ImmediateModeShaderBinds > ShaderBinds
+					? ImmediateModeShaderBinds - ShaderBinds : 0;
+			}
+			uint32_t GetSavedTextureBinds() const
+			{
+				return ImmediateModeTextureBinds > TextureBinds
+					? ImmediateModeTextureBinds - TextureBinds : 0;
+			}
+		};
+
+		static void ResetStats();
+		static Statistics GetStats();
 	};
 
 }
