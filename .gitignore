@@ -444,8 +444,5 @@ CGCourseProject/
 # tmp
 tmp/tmp.txt
 
-# doc
-Documents/
-
 # Dear ImGui
 **/imgui.ini

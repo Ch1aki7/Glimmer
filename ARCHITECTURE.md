@@ -1,154 +1,387 @@
 # Glimmer 项目架构说明
 
-> 本文基于当前代码（2026-07-13）整理，描述已落地的实现，而非 README 中的规划清单。
+> 本文最近于 2026-08-05 对照当前源码同步，只描述已经落地的结构与数据流。
+> 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
-## 1. 项目定位
+## 1. 项目定位与当前边界
 
-Glimmer 是一个面向 Windows 的 C++17 图形/游戏引擎实验项目。它以 `Glimmer` 静态库提供核心能力，并由两个可执行程序承载具体使用场景：
+Glimmer 是一个面向 Windows 的 C++17 图形/游戏引擎实验项目。核心引擎编译为 `Glimmer` 静态库，应用通过 `Application`、`Layer`、Scene/ECS、资产系统和渲染抽象使用引擎能力。
 
-- `Sandbox`：引擎功能验证与 2D 示例程序，也是 Premake 默认启动项目。
-- `GlimmerEditor`：基于 Dear ImGui 的编辑器/渲染演示程序，包含停靠式界面、场景视口、帧缓冲和后处理。
+当前状态：
 
-当前渲染后端为 OpenGL；窗口与输入由 GLFW 提供。接口层已使用工厂和抽象类隔离部分平台、图形 API 细节，但尚未实现 Vulkan/DirectX 等其他后端。
+- 唯一可运行的图形后端是 OpenGL；Vulkan、SPIR-V 只完成枚举、接口和依赖预埋；
+- 当前主要开发宿主是 `GlimmerEditor-CyouBranch`，它包含完整场景编辑、资产浏览、材质、地形和多 Pass 视口链路；
+- `GlimmerEditor` 保留较早的编辑器/渲染演示实现，不代表当前完整编辑器架构；
+- `Sandbox` 用于基础引擎与 Renderer2D 示例验证，也是 Premake 默认启动项目；
+- 场景和资产以 YAML 描述文件持久化，实体与资产分别使用稳定 UUID/AssetHandle；
+- 3D 渲染仍是逐模型、逐 Mesh 的立即提交，尚未建立 RenderQueue、状态排序和 Instancing。
 
 ## 2. 仓库组成
 
 ```text
 .
-├── Glimmer/                 # 引擎静态库
-│   ├── src/Glimmer/         # 平台无关的核心、事件、渲染、场景、ImGui
-│   ├── src/Platform/        # Windows 与 OpenGL 的具体实现
-│   └── vendor/              # GLFW、GLAD、ImGui、GLM、EnTT、spdlog 等依赖
-├── Sandbox/                 # 示例应用与 2D 测试资源
-├── GlimmerEditor/           # 编辑器应用、着色器/模型/纹理资源
-├── scripts/                 # Windows 工程生成脚本
-├── vendor/bin/premake/      # Premake 可执行文件
-├── premake5.lua             # 工作区与第三方依赖配置
-└── README.md                # 学习过程与功能规划（部分内容超出当前实现）
+├── Glimmer/                         # 引擎静态库
+│   ├── src/Glimmer/
+│   │   ├── Asset/                   # AssetHandle、注册表、类型缓存
+│   │   ├── Core/                    # Application、Window、Layer、输入、日志、UUID
+│   │   ├── Events/                  # 强类型事件与分发
+│   │   ├── ImGui/                   # ImGui 生命周期与输入拦截
+│   │   ├── Renderer/                # 渲染抽象、2D/3D、材质、地形、天空盒
+│   │   ├── Scene/                   # ECS、组件、场景复制与 YAML 序列化
+│   │   ├── Simulation/              # GPU 读写纹理网格
+│   │   ├── Terrain/                 # 程序化地形配置与生成
+│   │   └── Utils/                   # 文件对话框等公共工具
+│   ├── src/Platform/OpenGL/         # 当前图形后端
+│   ├── src/Platform/Windows/        # GLFW 窗口、输入、原生文件对话框
+│   └── vendor/                      # 第三方依赖
+├── Sandbox/                         # 基础示例宿主
+├── GlimmerEditor/                   # 较早编辑器宿主
+├── GlimmerEditor-CyouBranch/        # 当前完整编辑器宿主
+│   ├── src/Editor/                  # CommandHistory 与实体快照
+│   ├── src/Panels/                  # Hierarchy、Inspector、Content、Shader、Terrain
+│   └── src/Utils/                   # 编辑器资产创建辅助
+├── resources/                       # 品牌资源与 Windows RC/ICO
+├── scripts/                         # VS2022/VS2026 工程生成脚本
+├── Documents/PROJECT_STATUS.md      # 跨设备长期工作状态
+├── premake5.lua                     # 工作区与依赖入口
+├── ARCHITECTURE.md                  # 当前架构事实
+└── README.md                        # 功能演进、实现说明与 KB
 ```
 
-## 3. 构建与产物
+各宿主拥有自己的 `assets/`。当前编辑器以工作目录下的 `assets` 初始化资产管理器，因此启动时的工作目录必须能正确解析相对资源路径。
 
-构建系统采用 Premake5，工作区名为 `GlimmerEngine`，目标架构是 `x64`，支持 `Debug`、`Release`、`Dist` 三种配置。
+## 3. 构建系统与项目图
 
-```text
-Glimmer（StaticLib）
-├── Sandbox（ConsoleApp，链接 Glimmer）
-└── GlimmerEditor（ConsoleApp，链接 Glimmer）
-```
-
-在 Windows 下可运行 `scripts/Win-GenerateProject.bat` 生成 Visual Studio 2022 工程；生成后选择相应配置编译。可执行文件会输出至 `bin/<配置>-windows-x86_64/<项目名>/`，中间文件位于 `bin-int/`。
-
-依赖关系如下：
-
-- `GLFW`：窗口创建、事件轮询、OpenGL 上下文宿主。
-- `GLAD`：OpenGL 函数加载。
-- `Dear ImGui`：编辑器即时模式 UI，启用了 Docking 与多视口。
-- `GLM`：向量、矩阵和相机计算。
-- `EnTT`：场景 ECS 注册表。
-- `spdlog`：日志。
-- `stb_image`、`tinyobjloader`：纹理与 OBJ 模型加载。
-
-注意：根 `premake5.lua` 还包含 `include "CGCourseProject"`，但当前仓库目录中未见该项目。若 Premake 生成失败，应先移除此 include，或补回对应目录；这不影响本文对现有三个项目的架构描述。
-
-## 4. 分层架构
+构建系统采用 Premake5，工作区为 `GlimmerEngine`，架构为 `x64`，配置包括 `Debug`、`Release`、`Dist`。当前跨设备验证基线是 Visual Studio 2026、MSVC `v145`、`Debug | x64`；仓库仍保留 VS2022 生成脚本用于兼容性尝试，但不是当前验证基线。
 
 ```mermaid
-flowchart TB
-    Apps["应用层：Sandbox / GlimmerEditor"] --> App["Application + LayerStack"]
-    App --> Core["核心：事件、窗口抽象、输入、日志、计时与性能采样"]
-    App --> UI["ImGuiLayer：Docking、多视口、输入拦截"]
-    Apps --> Scene["场景层：Scene / Entity / Components / Native Script"]
-    Scene --> Render["渲染抽象：Renderer、Renderer2D、资源与命令"]
-    Apps --> Render
-    Core --> Win["WindowsWindow / WindowsInput"]
-    Render --> GL["OpenGL 后端：Context、Buffer、Shader、Texture、Framebuffer"]
-    Win --> GLFW["GLFW"]
-    GL --> OpenGL["OpenGL + GLAD"]
-    UI --> ImGui["Dear ImGui GLFW/OpenGL 后端"]
+flowchart LR
+    Premake["premake5.lua"] --> Engine["Glimmer (StaticLib)"]
+    Premake --> Sandbox["Sandbox"]
+    Premake --> Legacy["GlimmerEditor"]
+    Premake --> Editor["GlimmerEditor-CyouBranch"]
+    Sandbox --> Engine
+    Legacy --> Engine
+    Editor --> Engine
+    Engine --> Deps["GLFW / Glad / ImGui / yaml-cpp / ImGuizmo"]
+    Engine --> HeaderDeps["GLM / EnTT / spdlog / stb_image / tinyobjloader"]
 ```
 
-### 核心与应用生命周期
+工程生成入口：
 
-`Glimmer/Core/EntryPoint.h` 提供唯一的 `main()`：初始化日志，调用应用侧 `gl::CreateApplication()`，执行 `Application::Run()`，并在启动、运行、退出三个阶段写出 Chrome Trace 兼容的性能采样 JSON。
+- `scripts/Win-GenerateProject-vs2026.bat`：当前使用的 VS2026 工程；
+- `scripts/Win-GenerateProject-vs2022.bat`：生成 VS2022 工程；
+- 生成产物位于 `bin/<配置>-windows-x86_64/<项目名>/`；
+- 中间产物位于 `bin-int/<配置>-windows-x86_64/<项目名>/`。
 
-`Application` 是运行时协调器，负责：
+所有三个可执行宿主都编译共享的 `resources/windows/Glimmer.rc`，从 `resources/branding/Glimmer.ico` 获取 Windows 应用图标。
 
-1. 通过 `Window::Create` 创建窗口并注册统一事件回调。
-2. 初始化 `Renderer`，再将 `ImGuiLayer` 作为 Overlay 压入层栈。
-3. 在循环中计算 `Timestep`，依次调用各层 `OnUpdate`、启动 ImGui 帧、调用各层 `OnImGuiRender`、结束 ImGui 帧，再执行窗口的事件轮询与交换缓冲。
-4. 接收窗口事件后，先处理应用级关闭事件，再以逆序把事件分发给 Layer；顶部 Overlay（通常是 ImGui）优先得到事件，已处理的事件停止继续传递。
+第三方项目由根 Premake 纳入 `Dependencies` 分组。SPIRV-Cross 的上游 Premake 会递归加入 samples/tests，根配置使用 `removefiles` 排除这些非引擎目标。
 
-`LayerStack` 将普通 `Layer` 放在前部，将 `Overlay` 放在尾部，提供更新顺序与事件优先级的基础。应用通过继承 `Application` 并实现 `CreateApplication()` 接入该生命周期。
+## 4. 应用生命周期、平台与事件
 
-## 5. 平台、窗口与事件
-
-`Window` 是窗口接口；当前 Windows 实现是 `Platform/Windows/WindowsWindow`。它初始化 GLFW 窗口和 `OpenGLContext`，并把 GLFW 的窗口大小、关闭、键盘、字符、鼠标按键、滚轮与移动回调，转换为 `Glimmer/Events` 中的强类型事件。
-
-事件系统由 `Event`、`EventDispatcher` 和分类位掩码构成。应用层使用 `Handled` 标记控制冒泡终止；`ImGuiLayer::BlockEvents` 会根据 ImGui 是否需要鼠标/键盘输入拦截对应事件。
-
-## 6. 渲染架构
-
-渲染公共接口位于 `Glimmer/Renderer`，后端实现位于 `Platform/OpenGL`。
-
-| 层次 | 职责 | 当前实现 |
-| --- | --- | --- |
-| `RendererAPI` / `RenderCommand` | 清屏、绘制等低层命令抽象 | `OpenGLRendererAPI` |
-| 资源抽象 | Buffer、VertexArray、Shader、Texture、Framebuffer | 对应的 `OpenGL*` 实现与工厂 `Create` |
-| `Renderer` | 基础场景提交，上传 ViewProjection 和模型矩阵 | 适用于通用网格/3D 提交 |
-| `Renderer2D` | Quad 批处理、纹理槽管理、全屏四边形和后处理 | 单批最多 20,000 个 Quad、32 个纹理槽 |
-
-### 关键渲染链路
+`Glimmer/Core/EntryPoint.h` 提供 Windows 程序入口。宿主实现 `gl::CreateApplication()`，创建自己的 `Application` 子类并压入业务 Layer。
 
 ```mermaid
 sequenceDiagram
-    participant Layer as 应用 Layer
-    participant R2D as Renderer2D / Renderer
-    participant API as RenderCommand
-    participant GL as OpenGL 后端
-    Layer->>R2D: BeginScene(camera)
-    Layer->>R2D: DrawQuad / Submit
-    R2D->>R2D: 聚合顶点与纹理槽
-    Layer->>R2D: EndScene()
-    R2D->>API: DrawIndexed()
-    API->>GL: OpenGL 绘制调用
+    participant Entry as EntryPoint
+    participant App as Application
+    participant Layers as LayerStack
+    participant UI as ImGuiLayer
+    participant Window as WindowsWindow
+    Entry->>App: CreateApplication()
+    App->>App: Renderer::Init()
+    loop 每帧
+        App->>Layers: OnUpdate(Timestep)
+        App->>UI: Begin()
+        App->>Layers: OnImGuiRender()
+        App->>UI: End()
+        App->>Window: OnUpdate()
+    end
+    App->>App: Renderer::Shutdown()
 ```
 
-`Renderer2D` 在 CPU 端累积四边形顶点数据，在 `EndScene` 上传一次顶点缓冲并绘制；当 Quad 数或纹理槽超出上限时会 Flush 并开始下一批。它还提供全屏四边形绘制与以纹理 ID 为输入的后处理入口。
+核心职责：
 
-`Framebuffer` 抽象用于离屏渲染。编辑器先将画面绘制到主 FBO，按配置可再将颜色附件送入后处理 FBO，最终把颜色附件的 OpenGL 纹理 ID 显示在 ImGui Viewport 中。
+- `Application`：窗口、主循环、LayerStack、Renderer 和 ImGuiLayer 的生命周期协调；
+- `LayerStack`：普通 Layer 正序更新，Overlay 位于栈顶并优先接收逆序事件；
+- `Window`：平台无关接口，当前工厂创建 `WindowsWindow`；
+- `WindowsWindow`：创建 GLFW 窗口和 `OpenGLContext`，把 GLFW 回调转换为 Glimmer 事件；
+- `EventDispatcher`：按事件类型分派并用 `Handled` 控制传播终止；
+- `ImGuiLayer`：启用 Docking/多视口，并根据 ImGui 捕获状态拦截鼠标和键盘事件；
+- `WindowsInput`：实现轮询式键盘、鼠标输入；
+- `WindowsFileDialog`：实现场景和资产选择所需的原生打开/保存对话框。
 
-## 7. 场景与 ECS
+日志由 spdlog 封装；`Instrumentor` 可输出 Chrome Trace 兼容的性能采样 JSON。
 
-`Scene` 使用 EnTT 的 `registry` 存储实体和组件；`Entity` 是 `entt::entity` 与所属 `Scene` 的轻量包装。当前组件定义在 `Components.h`：
+## 5. 渲染架构
 
-- `TagComponent`：实体名称。
-- `TransformComponent`：平移、欧拉旋转、缩放，以及模型矩阵生成。
-- `SpriteRendererComponent`：2D Quad 颜色。
-- `CameraComponent`：`SceneCamera`、主相机标记、固定宽高比选项。
-- `NativeScriptComponent`：通过模板 `Bind<T>()` 延迟实例化 C++ 脚本。
+### 5.1 抽象层与 OpenGL 后端
 
-运行时更新先延迟创建并更新脚本，然后选择标记为 `Primary` 的相机，最后遍历带有 Transform 与 SpriteRenderer 的实体，交给 `Renderer2D` 绘制。视口尺寸变化会更新所有非固定比例相机。
+渲染公共接口位于 `Glimmer/Renderer`，OpenGL 实现位于 `Platform/OpenGL`。
 
-## 8. 两个宿主程序
+| 层次 | 职责 | 当前实现 |
+| --- | --- | --- |
+| `RendererAPI` / `RenderCommand` | 清屏、视口、索引绘制等低层命令 | `OpenGLRendererAPI` |
+| GPU 资源抽象 | Buffer、VertexArray、Texture、Framebuffer、UniformBuffer、PixelBuffer | 对应的 `OpenGL*` 实现 |
+| Shader 抽象 | 图形 Shader、Compute Shader、热重载结果 | GLSL/OpenGL Program |
+| 场景渲染器 | `Renderer2D`、`Renderer3D`、`TerrainRenderer`、`SkyboxRenderer` | OpenGL 驱动的静态渲染器 |
+| Pass 编排 | FBO 绑定、清理和结束生命周期 | `RenderPass` |
 
-### Sandbox
+`Renderer::Init()` 依次初始化 `RenderCommand`、Renderer2D、Renderer3D、绑定点 1 的 Light UBO 和 SkyboxRenderer。资源对象通过静态 `Create` 工厂根据 `RendererAPI` 选择后端；目前选择 Vulkan 会触发“尚未实现”的断言。
 
-`SandboxApp.cpp` 创建 `Sandbox` 应用并压入 `Sandbox2D`（可替换为 `ExampleLayer`）。它用于验证引擎层、2D 渲染、资源和输入等基础能力。
+### 5.2 场景渲染路径
 
-### GlimmerEditor
+Scene 负责从 ECS 收集可渲染组件，具体绘制由专用渲染器完成。
 
-`EditorApp.cpp` 创建 `GlimmerEditor` 并压入 `EditorLayer`。该层在附加时加载着色器、纹理、OBJ 模型、双帧缓冲和示例场景；更新阶段执行背景全屏 Shader、3D 模型提交、ECS 场景 2D 绘制与可选后处理；ImGui 阶段提供 DockSpace、统计面板、Shader/光照设置及 Viewport。
+```mermaid
+flowchart TD
+    Scene["Scene::OnUpdateEditor / OnUpdateRuntime"] --> Lights["收集 Directional/Point Light"]
+    Lights --> UBO["Renderer::UploadLightEnvironment (binding 1)"]
+    Scene --> Models["Transform + ModelRenderer (+ Material)"]
+    Scene --> Terrain["Transform + Terrain"]
+    Scene --> Sprites["Transform + SpriteRenderer (+ Material)"]
+    Models --> R3D["Renderer3D::DrawModel"]
+    Terrain --> TR["TerrainRenderer::Draw"]
+    Sprites --> R2D["Renderer2D 批处理"]
+```
 
-编辑器以 `m_ViewportFocused` / `m_ViewportHovered` 决定相机控制器和 ImGui 输入拦截，避免编辑 UI 与场景操作相互干扰。
+运行模式和编辑模式共享模型、地形、Sprite 与光照上传路径，区别在相机和脚本：
 
-## 9. 资源、诊断与扩展边界
+- 编辑模式由 `EditorCamera` 提供 ViewProjection 和相机位置，不运行 Native Script；
+- 运行模式先创建/更新 Native Script，再查找 `Primary` SceneCamera；没有主相机时不执行场景绘制；
+- `OnRuntimeStop()` 调用脚本 `OnDestroy()` 并释放运行时实例。
 
-- 应用资源随宿主程序存放在各自的 `assets/` 目录，代码当前使用相对路径加载，因此运行时工作目录需要能解析这些路径。
-- 日志由 `Log` 封装的 spdlog 提供；性能采样宏生成的 JSON 可导入 Chrome `chrome://tracing` 或兼容的 Trace 查看器。
-- 新增图形后端需实现资源与命令抽象的工厂/接口，并调整 API 选择逻辑；当前 `RendererAPI::API` 仅枚举并使用 OpenGL。
-- 新增应用通常只需链接 `Glimmer`、实现 `gl::CreateApplication()` 并压入业务 Layer；新增功能应尽量放在 Layer、Scene 或 Renderer 抽象层，而非直接耦合 `WindowsWindow` / `OpenGL*` 类。
+Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
 
-## 10. 当前边界与待完善项
+Renderer3D 当前立即解析 Model、Material 和 Shader，构造临时 `MaterialInstance`，上传 ViewProjection、Transform、Camera、EntityID 和基础 PBR 参数，然后逐 Mesh 绑定纹理并绘制。纹理优先级为 Material BaseColorTexture、Mesh 自带纹理、白纹理回退。此路径尚无提交队列或跨物体批处理。
 
-当前代码已经具备引擎循环、层栈、窗口事件、OpenGL 渲染、2D 批处理、基础 ECS、原生脚本和编辑器视口。但 README 中提到的场景层级面板、Inspector、Gizmo、多后端支持等，在当前源码中尚未形成完整实现；`SceneHierarchyPanel` 目前仅作为 `Scene` 的友元前置预留。使用或扩展该项目时，应以源码为准。
+### 5.3 Framebuffer、多 Pass 与拾取
+
+Framebuffer 支持以下附件格式：
+
+- `RGBA8`：普通 LDR 颜色；
+- `RGBA16F`：线性 HDR 场景颜色；
+- `RED_INTEGER`：实体 ID；
+- `Depth24Stencil8`：深度/模板。
+
+当前完整编辑器的视口链路为：
+
+```mermaid
+flowchart LR
+    ScenePass["Scene Pass\nRGBA16F + EntityID + Depth"] --> Tone["Tone Mapping Pass\nExposure / ACES / 可选灰度"]
+    Tone --> Display["Display Framebuffer"]
+    Display --> Viewport["ImGui Viewport"]
+    ScenePass --> Picking["ReadPixel(EntityID)"]
+    Picking --> Selection["SelectionContext"]
+```
+
+Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Skybox 使用深度测试在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
+
+### 5.4 光照、PBR、天空盒与地形
+
+Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight 构造 `LightEnvironment`。Renderer 将其转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO。
+
+当前 3D Material 参数包括 BaseColor、BaseColorTexture、TilingFactor、Metallic 和 Roughness，Shader 使用基础 Cook–Torrance PBR。场景先在线性 HDR 空间渲染，再由 ToneMapping Shader 应用曝光和 ACES 映射。
+
+`SkyLightComponent` 引用 `.glsky` Cubemap 资产；描述文件保存六个面图路径，AssetManager 缓存解析后的 `Cubemap`，SkyboxRenderer 使用去除平移的视图方向绘制背景。
+
+地形实体由 `TerrainComponent` 保存可序列化的 `TerrainSpecification`，运行时 GPU 对象放在不持久化的 `TerrainRuntime` 中：
+
+- `TerrainGenerator` 使用 Compute Shader 和 `SimulationGrid` 生成高度纹理；
+- 也可引用导入的高度图 Texture Asset；
+- `TerrainMesh` 生成规则网格；
+- `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；
+- 参数或资源变化时通过 `Invalidate` 使 Runtime 失效。
+
+### 5.5 Shader、Compute 与数据读回
+
+图形 Shader 支持单文件 `#type` 分段格式，`ShaderLibrary` 按名称管理并支持轮询热重载。OpenGL Shader 采用事务式 Program 替换：新源码完整编译/链接成功后才替换旧 Program，失败时保留上一有效版本并返回 `ShaderReloadResult`。
+
+Compute Shader 提供 Dispatch、MemoryBarrier 和同样的文件轮询重载能力。图形/计算 Shader 读取源码时都会剥离 UTF-8 BOM，避免严格 OpenGL 驱动把 `EF BB BF` 识别为非法 GLSL 字符。
+
+同步纹理读回由 Texture 接口提供；`PixelBuffer` 封装 PBO，用于异步双缓冲读回。Framebuffer 的整数像素读取是编辑器拾取的独立同步路径。
+
+## 6. Scene、Entity 与 ECS
+
+`Scene` 持有 EnTT `registry`；`Entity` 是 `entt::entity` 与所属 Scene 的轻量包装。每个实体创建时至少包含：
+
+- `IDComponent`：稳定 UUID，用于序列化、复制、Undo/Redo 和跨重载查找；
+- `TagComponent`：显示名称；
+- `TransformComponent`：平移、欧拉旋转、缩放并生成模型矩阵。
+
+可选组件：
+
+| 组件 | 作用 |
+| --- | --- |
+| `SpriteRendererComponent` | 颜色、Texture AssetHandle、TilingFactor |
+| `ModelRendererComponent` | Model AssetHandle |
+| `MaterialComponent` | Material AssetHandle 与实体局部 Overrides |
+| `TerrainComponent` | 地形规格与非序列化 Runtime |
+| `DirectionalLightComponent` | 方向光颜色、强度、环境强度、启用状态 |
+| `PointLightComponent` | 点光颜色、强度、范围、启用状态 |
+| `SkyLightComponent` | Cubemap AssetHandle、强度、启用状态 |
+| `CameraComponent` | SceneCamera、Primary、固定宽高比 |
+| `NativeScriptComponent` | C++ 脚本实例化/销毁函数指针与运行时实例 |
+
+Scene 维护 `UUID -> entt::entity` 映射，提供按 UUID 和临时 EnTT ID 查找。`Scene::Copy()` 保留 UUID 并复制所有已支持组件，用于 Edit/Play 隔离。`TerrainComponent` 的复制只保留 Specification，强制目标 Scene 重建 Runtime GPU 资源。
+
+## 7. 资产系统与材质继承
+
+### 7.1 AssetRegistry
+
+`AssetHandle` 是 UUID。`AssetManager::Initialize("assets")` 加载 `assets/AssetRegistry.yaml`，注册表保存 Handle、类型、相对路径以及纹理颜色空间/语义。资产必须位于项目资产目录内；导入目录外文件会被拒绝。
+
+支持的资产类型：
+
+- Texture2D；
+- Model；
+- Shader；
+- Material（`.glmat`）；
+- Cubemap（`.glsky`）。
+
+AssetManager 按规范化相对路径去重导入，并分别维护 Texture、Model、Shader、Material、Cubemap 缓存。Texture 元数据区分 Linear/sRGB 与 Color/Data 语义，修改元数据时清除对应缓存并重写注册表。
+
+```mermaid
+flowchart LR
+    Path["assets 内文件"] --> Import["ImportAsset"]
+    Import --> Registry["AssetRegistry.yaml"]
+    Registry --> Handle["AssetHandle"]
+    Handle --> Cache["按类型延迟缓存"]
+    Cache --> Runtime["Texture / Model / Shader / Material / Cubemap"]
+    Handle --> SceneFile[".glimmer 组件字段"]
+```
+
+### 7.2 Material 与 MaterialInstance
+
+`.glmat` 是共享 Material Asset，保存 ShaderHandle 与 `MaterialProperties`。实体不复制整份材质，而由 `MaterialComponent` 保存 MaterialHandle 和 `MaterialOverrides` 位掩码。
+
+`MaterialInstance` 在提交时以共享 Material 为基础，仅替换启用的字段：
+
+```text
+最终属性 = MaterialProperties + MaterialOverrides(Mask, Values)
+```
+
+这使多个实体可以继承同一 `.glmat`，同时覆盖 BaseColor、BaseColorTexture、TilingFactor、Metallic 或 Roughness。当前 MaterialInstance 是轻量临时解析对象，没有 Dirty/version 或解析结果缓存。
+
+## 8. 场景序列化
+
+`SceneSerializer` 使用 yaml-cpp 读写 `.glimmer` 文件。实体记录稳定 UUID，并序列化当前支持的 Tag、Transform、SpriteRenderer、ModelRenderer、Material、Terrain、DirectionalLight、PointLight、SkyLight 和 Camera 组件。
+
+持久化规则：
+
+- 资源引用一律保存 AssetHandle，不保存运行时指针或 OpenGL ID；
+- Material Overrides 保存 Mask 和 Values，使禁用字段仍可保留编辑值；
+- Terrain 只保存 Specification，加载后按需重建 Runtime；
+- NativeScript 包含函数指针，当前不参与场景序列化；
+- 反序列化使用 `CreateEntityWithUUID` 恢复稳定身份；
+- Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例。
+
+## 9. 当前编辑器架构
+
+### 9.1 EditorLayer 编排
+
+`GlimmerEditor-CyouBranch/src/EditorLayer` 是当前完整编辑器协调层，持有：
+
+- `m_EditorScene`：可编辑的源场景；
+- `m_RuntimeScene`：进入 Play 时复制出的运行时场景；
+- `m_ActiveScene`：面板和渲染当前使用的场景；
+- `EditorCamera`、Scene/Display Framebuffer 和 Tone Mapping 参数；
+- `SelectionContext`、`EditorCommandHistory`；
+- Hierarchy、Inspector、ContentBrowser、ShaderPanel。
+
+进入 Play 时，EditorLayer 清理选择，复制 EditorScene 为 RuntimeScene，切换所有面板上下文并禁用编辑命令历史；停止时销毁运行时脚本，丢弃 RuntimeScene，再切回 EditorScene。运行时修改不会写回编辑场景。
+
+### 9.2 选择与面板职责
+
+`SelectionContext` 是实体选择和资产选择的互斥联合状态：选择资产会清除实体，选择实体会清除资产。
+
+| 面板 | 当前职责 |
+| --- | --- |
+| `SceneHierarchyPanel` | 枚举 Scene 实体、选择、创建/复制/删除入口 |
+| `InspectorPanel` | 根据 SelectionType 绘制 Entity Components 或 Asset 属性 |
+| `ContentBrowserPanel` | 目录树、文件网格、资产选择、拖放和双击打开 |
+| `ShaderPanel` | ShaderLibrary 自动/手动重载与结果显示 |
+| `TerrainPanel` | 保留的 TerrainGenerator 参数面板接口；正式场景地形主要由组件 Inspector 驱动 |
+
+Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入，不直接拥有编辑器 Scene 生命周期。
+
+### 9.3 CommandHistory 与当前覆盖范围
+
+编辑器命令实现 `IEditorCommand::Execute/Undo`；`EditorCommandHistory` 维护 Undo/Redo 栈，新命令执行后清空 Redo 栈。`LambdaEditorCommand` 用于轻量操作，`EntitySnapshot` 捕获 UUID 和可复制组件，用于实体删除、恢复等生命周期命令。
+
+当前已经接入：
+
+- 实体创建、删除、复制；
+- 组件添加、移除、重置；
+- Transform 连续拖动压缩为单次 Undo；
+- Edit 模式快捷键 Undo/Redo。
+
+当前尚未统一接入：
+
+- Material Override 的全部字段、纹理拖放和 Reset；
+- 共享 `.glmat` 的内存/磁盘事务；
+- Terrain、Light、Camera 等全部连续属性编辑；
+- 通用 Asset Dirty、保存失败反馈和退出提示。
+
+以上未实现部分属于 `Documents/PROJECT_STATUS.md` 中的当前主线或后续技术债，不应视为现有保证。
+
+## 10. 关键跨层数据流
+
+### 编辑器场景帧
+
+```mermaid
+sequenceDiagram
+    participant Editor as EditorLayer
+    participant Scene as Active Scene
+    participant Assets as AssetManager
+    participant Renderers as 2D/3D/Terrain
+    participant FBO as Scene Framebuffer
+    participant Tone as Tone Mapping
+    Editor->>FBO: Begin Scene Pass / Clear EntityID
+    Editor->>Scene: OnUpdateEditor 或 OnUpdateRuntime
+    Scene->>Assets: 通过 Handle 解析资源
+    Scene->>Renderers: 提交组件和 EntityID
+    Editor->>Assets: 解析 SkyLight Cubemap
+    Editor->>FBO: End Scene Pass
+    Editor->>Tone: HDR 颜色附件 + Exposure
+    Tone-->>Editor: Display Texture
+```
+
+### 场景保存与恢复
+
+```mermaid
+flowchart LR
+    ECS["Scene / EnTT"] --> Serializer["SceneSerializer"]
+    Serializer --> File[".glimmer YAML"]
+    File --> Deserialize["Deserialize"]
+    Deserialize --> UUID["CreateEntityWithUUID"]
+    UUID --> Components["恢复组件与 AssetHandle"]
+    Components --> Assets["AssetManager 延迟解析资源"]
+```
+
+## 11. 扩展约束与近期演进方向
+
+新增功能应遵守以下边界：
+
+- 平台代码放入 `Platform/Windows` 或新的平台目录，不让 Scene/Renderer 直接依赖 Win32；
+- 图形 API 资源通过 Renderer 抽象和工厂创建，不在编辑器中直接构造 `OpenGL*` 对象；
+- Scene 组件只保存可复制、可序列化的业务状态，GPU 对象放入运行时结构或资产缓存；
+- 持久资源使用 AssetHandle，实体长期身份使用 UUID，临时 EnTT ID 只用于当前 Scene 与拾取；
+- 编辑器面板通过上下文和命令接口修改数据，不拥有 Application/Scene 生命周期；
+- 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
+- README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
+
+近期架构演进顺序以长期工作台为准，当前首先补齐材质编辑事务；之后才是 3D RenderQueue/状态排序、Instancing/MaterialInstance 缓存和 PBR 通道扩展。Vulkan 后端、透明队列、阴影/IBL 与发布打包仍是长期候选。
+
+## 12. 文档同步边界
+
+项目使用三份互补文档维持跨设备和跨会话一致性：
+
+| 文档 | 记录内容 | 不负责记录 |
+| --- | --- | --- |
+| `Documents/PROJECT_STATUS.md` | 当前任务、优先级、验收、完成记录与技术债 | 详细架构和长篇实现教程 |
+| `ARCHITECTURE.md` | 已实现架构、模块所有权、依赖、数据流与当前边界 | 尚未落地的规划清单 |
+| `README.md` | 功能行为、建设过程、使用/维护方式、验证和 KB | 当前任务排期 |
+
+完成任何代码、资源、构建或工作流任务时都必须审查三份文档。只有对应事实发生变化时才修改 ARCHITECTURE 或 README，但 PROJECT_STATUS 必须反映任务结果、验证证据与下一步。若文档与源码冲突，以源码为准，并在同一任务内修正文档。
