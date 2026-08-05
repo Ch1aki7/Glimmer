@@ -17,6 +17,12 @@ namespace gl {
 		float Roughness = 0.5f;
 	};
 
+	struct MaterialState
+	{
+		AssetHandle ShaderHandle{ 0 };
+		MaterialProperties Properties;
+	};
+
 	class Material
 	{
 	public:
@@ -28,6 +34,12 @@ namespace gl {
 		const std::filesystem::path& GetPath() const { return m_Path; }
 		AssetHandle GetShaderHandle() const { return m_ShaderHandle; }
 		void SetShaderHandle(AssetHandle handle) { m_ShaderHandle = handle; }
+		MaterialState GetState() const { return { m_ShaderHandle, m_Properties }; }
+		void SetState(const MaterialState& state)
+		{
+			m_ShaderHandle = state.ShaderHandle;
+			m_Properties = state.Properties;
+		}
 
 		MaterialProperties& GetProperties() { return m_Properties; }
 		const MaterialProperties& GetProperties() const { return m_Properties; }

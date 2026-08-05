@@ -9,7 +9,7 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：材质编辑事务与 Undo/Redo
+- 当前主线：3D RenderQueue 与状态排序
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,74 +55,51 @@
 
 ## 当前主线
 
-### 材质编辑事务与 Undo/Redo
+### 3D RenderQueue 与状态排序
 
 **目的**
 
-让实体材质 Override 与共享 `.glmat` Asset 的编辑具备可靠的事务边界、撤销/重做和磁盘一致性，为后续 RenderQueue、PBR 扩展与编辑器资产工作流建立稳定基础。
+将 `Renderer3D::DrawModel()` 的立即绘制拆为 Submit 与 Execute，建立稳定的不透明渲染队列和状态排序基础，为后续 Instancing 与 MaterialInstance 缓存提供批次边界。
 
 **当前问题**
 
-- Material Override 的开关、数值编辑、纹理拖放和 `Reset Overrides` 直接修改组件；
-- 共享 Material Asset 的 Inspector 在控件变化时立即调用 `Material::Save()`；
-- 连续拖动控件尚未统一合并为单个命令；
-- `EditorCommandHistory` 当前主要依赖临时 Lambda，缺少可复用的属性事务模型；
-- Asset 修改与 Scene/Component 修改尚未明确区分生命周期。
+- Renderer3D 逐实体解析 Model、Material、Shader 并立即逐 Mesh 绘制；
+- 相邻物体即使共享 Shader、Material 或纹理，也会重复绑定状态；
+- 缺少可测量的 DrawCall、ShaderBind、TextureBind 等 3D 统计；
+- 尚无稳定的 RenderItem/RenderKey，可见性、透明队列和 Instancing 无统一提交边界。
 
 **实施范围**
 
-- [ ] 建立可复用的组件属性命令或属性事务辅助层；
-- [ ] 使用 `IsItemActivated` 捕获修改前状态；
-- [ ] 使用 `IsItemDeactivatedAfterEdit` 将一次连续编辑压缩为一个命令；
-- [ ] 接入 MaterialHandle 更换与清除；
-- [ ] 接入 Override 启用、禁用和全部可覆盖属性；
-- [ ] 接入纹理拖放、纹理清除和 `Reset Overrides`；
-- [ ] 建立共享 Material Asset 编辑命令，保存完整修改前后状态；
-- [ ] Execute、Undo、Redo 后保持 Material 内存状态与 `.glmat` 文件一致；
-- [ ] 明确保存失败时的错误反馈和命令历史行为；
-- [ ] 更新 README 对应功能章节。
+- [ ] 将 3D 绘制拆分为场景 Begin、Submit、Execute/End；
+- [ ] 建立包含 Mesh、Shader、Material 状态、Transform 和 EntityID 的 `RenderItem`；
+- [ ] 建立稳定的 Opaque `RenderKey`，按 Shader、Material、Texture、Mesh 排序；
+- [ ] 保持 EntityID 输出，确保编辑器鼠标拾取不退化；
+- [ ] 缓存当前绑定状态，避免无意义的 Shader 和 Texture 重绑；
+- [ ] 增加 DrawCall、SubmittedItem、ShaderBind、TextureBind 等统计；
+- [ ] 保留不兼容或无效资源的安全跳过行为；
+- [ ] 更新 README 和 ARCHITECTURE 对应章节。
 
 **暂不包含**
 
-- 3D RenderQueue 和 Instancing；
-- 新增 Normal、AO、Emissive 等 PBR 通道；
-- Vulkan 后端；
-- 全编辑器所有组件属性的一次性迁移。
+- 透明物体队列和距离排序；
+- 3D Instancing 与 Instance Buffer；
+- 遮挡剔除；
+- Vulkan 后端。
 
 **验收条件**
 
-- [ ] 连续拖动一个材质数值只产生一个 Undo 记录；
-- [ ] Override 开关、属性、纹理拖放和 Reset 均可 Undo/Redo；
-- [ ] 更换 MaterialHandle 后 Undo 能恢复原材质和原 Overrides；
-- [ ] 修改共享 `.glmat` 会影响所有继承实体；Undo 后内存和磁盘同时恢复；
-- [ ] 保存并重启编辑器后，材质和场景状态与退出前一致；
-- [ ] Edit/Play 切换不会把运行时修改写回编辑场景；
+- [ ] 默认场景与改造前渲染结果一致；
+- [ ] 改变实体提交顺序不影响不透明物体结果；
+- [ ] EntityID 拾取保持正确；
+- [ ] 统计能够证明共享状态场景中的绑定次数下降；
+- [ ] 无效 Model、Material 或 Shader 不导致崩溃；
 - [ ] VS2026 `Debug | x64` 全量构建成功；
+- [ ] 编辑器启动并稳定渲染首帧；
 - [ ] `git diff --check` 通过。
 
 ## 后续任务
 
 任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。
-
-### P1：3D RenderQueue 与状态排序
-
-**依赖**：材质编辑事务完成，最终材质状态语义稳定。
-
-**目标**
-
-- 将 `Renderer3D::DrawModel()` 的立即绘制拆为 Submit 与 Execute；
-- 建立 `RenderItem`、Opaque Queue 和稳定的 RenderKey；
-- 按 Shader、Material、Texture、Mesh 排序，减少重复状态绑定；
-- 保留 EntityID，确保编辑器鼠标拾取不退化；
-- 增加 DrawCall、ShaderBind、TextureBind 等统计；
-- 第一版只处理不透明队列，不直接实现 Instancing。
-
-**验收重点**
-
-- 相同场景渲染结果与改造前一致；
-- 提交顺序变化不影响不透明物体结果；
-- 状态绑定次数可测量且下降；
-- 编辑器实体拾取保持正确。
 
 ### P2：3D Instancing 与 MaterialInstance 缓存
 
@@ -170,6 +147,17 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-05：材质编辑事务与 Undo/Redo
+
+- 建立失败感知的 `ValueEditorCommand` 与可复用 `EditorValueTransaction`，失败的 Execute/Undo/Redo 不移动历史栈；
+- 实体 MaterialHandle、全部 Override 开关/数值、纹理拖放/清除和 Reset 使用完整 `MaterialComponent` 快照；
+- 共享 `.glmat` 使用完整 `MaterialState` 事务，连续控件编辑压缩为单条命令，Undo/Redo 同步内存和磁盘；
+- Material 保存改为临时文件、备份和替换流程，失败时恢复内存与原文件；Play 模式下共享 Asset 只读；
+- 验证：VS2026 `Debug | x64` 全解决方案构建成功；原生冒烟测试通过保存/重载/Undo/Redo及文件锁定失败回滚；编辑器在 Intel Iris Xe/OpenGL 4.6 下完成初始化并稳定运行 8 秒；`git diff --check`；
+- 已知警告：保留既有 C4244、C4267 和 `strncpy` C4996 警告；
+- README：新增“材质编辑事务与 Undo/Redo”；
+- 提交：待提交。
 
 ### 2026-08-05：建立三文档同步制度
 
@@ -258,9 +246,9 @@
 ### 编辑器
 
 - Undo/Redo 尚未覆盖所有组件属性；
-- 共享 Asset 修改缺少统一 Dirty、保存、撤销和失败反馈；
+- Material Asset 已具备保存、撤销和失败反馈；其它共享 Asset 仍缺少统一 Dirty、保存和退出提示；
 - Terrain、Light、Camera 等属性仍有直接修改路径；
-- 连续控件编辑的事务逻辑尚未统一抽象。
+- 已有通用值事务辅助层，但 Terrain、Light、Camera 等连续控件尚未迁移。
 
 ### 渲染
 

@@ -11813,6 +11813,85 @@ scripts\Win-GenerateProject-vs2026.bat
 4. 所有 Windows 应用共享 `Glimmer.rc`，避免出现资源 ID、图标版本或视觉风格分叉；
 5. README 和其它 Markdown 文档引用品牌图片时使用仓库相对路径，保证 GitHub 和本地预览均可显示。
 
+## 材质编辑事务与 Undo/Redo
+
+### 建设目标
+
+MaterialInstance 已经区分共享 `.glmat` 与实体局部 Override，但此前 Inspector 仍直接修改内存：数值拖动会产生大量中间状态，共享材质每帧变化都立即保存，实体 Override 和纹理操作无法撤销，保存失败也没有可靠的历史栈语义。
+
+本次改造建立两类事务边界：
+
+- `MaterialComponent` 事务负责实体的 MaterialHandle 与完整 Overrides；
+- `MaterialState` 事务负责共享 Material 的 ShaderHandle 与全部 MaterialProperties，并同步 `.glmat` 文件。
+
+### 失败感知的 CommandHistory
+
+`IEditorCommand::Execute()` 与 `Undo()` 现在返回 `bool`。`EditorCommandHistory` 只有在操作成功后才移动命令：
+
+- 新命令 Execute 失败时不进入 Undo 栈，也不清空现有 Redo 栈；
+- Undo 失败时命令仍留在 Undo 栈；
+- Redo 失败时命令仍留在 Redo 栈；
+- 用户排除文件锁定、权限等问题后，可以再次执行原操作。
+
+`LambdaEditorCommand` 继续服务于不会失败的实体生命周期操作。新增的 `ValueEditorCommand<T>` 保存 Before/After，并通过统一 Apply 回调恢复任一状态；`EditorValueTransaction<T>` 在 ImGui Item 激活时捕获 Before，在 `IsItemDeactivatedAfterEdit` 时结束事务。
+
+### 实体 MaterialComponent 事务
+
+以下 Inspector 操作现在都以完整 `MaterialComponent` 快照进入 Undo/Redo：
+
+- 更换或清除 MaterialHandle；更换材质时一并清理 Overrides，Undo 会同时恢复旧 Handle 和旧 Overrides；
+- 启用或禁用 BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness Override；
+- 连续编辑 BaseColor、TilingFactor、Metallic 和 Roughness；
+- BaseColorTexture 拖放、清除以及自动启用纹理 Override；
+- `Reset Overrides`。
+
+连续拖动期间场景保持实时预览，但只在控件结束编辑时生成一条命令。命令通过实体 UUID 重新查找目标，不依赖可能失效的 EnTT 临时句柄。
+
+### 共享 Material Asset 事务
+
+`MaterialState` 同时保存 ShaderHandle 和 MaterialProperties。共享 Asset Inspector 的 Shader、BaseColorTexture 和所有数值修改都使用完整状态命令。
+
+连续拖动时只改变缓存中的 Material，以便所有继承实体实时更新；控件结束编辑后才保存一次 `.glmat` 并推入历史。Undo/Redo 都执行相同的“设置状态并保存”流程，因此内存缓存与磁盘文件保持一致。
+
+如果保存失败，Inspector 会显示错误，内存恢复到操作前状态，CommandHistory 不移动。进入 Play 后共享 Material Inspector 变为只读，避免 RuntimeScene 操作写回全局资产；实体组件仍只修改 RuntimeScene 副本，Stop 后被丢弃。
+
+### 安全落盘
+
+`Material::Save()` 不再直接截断目标 `.glmat`。新流程为：
+
+1. 将完整 YAML 写入同目录临时文件并检查 Flush 结果；
+2. 将原文件改名为备份；
+3. 将临时文件改名为正式文件；
+4. 替换失败时恢复备份，成功后清理备份。
+
+这保证普通写入失败或文件锁定不会破坏上一份有效材质文件。若备份恢复本身失败，日志会保留明确错误和备份路径供人工恢复。
+
+### 文件职责
+
+| 文件 | 职责 |
+| --- | --- |
+| `Glimmer/src/Glimmer/Renderer/Material.h` | `MaterialState` 与完整状态捕获/恢复 |
+| `Glimmer/src/Glimmer/Renderer/Material.cpp` | `.glmat` 解析与安全替换保存 |
+| `GlimmerEditor-CyouBranch/src/Editor/EditorCommand.*` | 失败感知历史、值命令与连续编辑事务 |
+| `GlimmerEditor-CyouBranch/src/Panels/InspectorPanel.*` | 共享 Material Asset 事务和保存反馈 |
+| `GlimmerEditor-CyouBranch/src/Panels/SceneHierarchyPanel.cpp` | 实体 MaterialComponent/Overrides 事务接入 |
+
+### 验证结果
+
+- VS2026、MSVC v145、`Debug | x64` 全解决方案连续两次构建成功；
+- 临时原生 C++ 冒烟测试使用实际 Material 和 EditorCommandHistory，验证 Execute → 文件重载 → Undo → 文件重载 → Redo；
+- 测试使用无删除共享权限的 Windows 文件句柄锁定 `.glmat`，Redo 正确失败，内存和磁盘均保持旧状态，命令留在 Redo 栈；解锁后同一 Redo 成功；
+- `GlimmerEditor-CyouBranch` 在 Intel Iris Xe、OpenGL 4.6 下完成全部 Shader/Compute Shader 初始化并稳定运行 8 秒；
+- `git diff --check` 通过；
+- 构建仍包含项目既有的 C4244、C4267 和 `strncpy` C4996 警告，本次未扩大范围处理。
+
+### 当前边界与下一步
+
+1. Terrain、Light、Camera 等组件仍有未事务化的连续控件；后续可复用 `ValueEditorCommand` 和 `EditorValueTransaction` 逐步迁移；
+2. Material 以外共享 Asset 尚无统一 Dirty 状态、退出保存提示或 Asset Command；
+3. 当前 MaterialInstance 仍在绘制提交时临时合并，缓存与版本管理留给 RenderQueue/Instancing 阶段；
+4. 下一主线是 3D RenderQueue 与状态排序，不在本次材质事务中提前实现。
+
 ## 项目工作文档同步约定
 
 为保证不同设备和不同 Codex 会话读取到一致的项目状态，仓库使用三份职责互补的工作文档：

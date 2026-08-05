@@ -9,6 +9,30 @@
 #include <cctype>
 
 namespace gl {
+	namespace
+	{
+		bool SameMaterialProperties(
+			const MaterialProperties& left,
+			const MaterialProperties& right)
+		{
+			return glm::all(glm::equal(left.BaseColor, right.BaseColor))
+				&& left.BaseColorTexture == right.BaseColorTexture
+				&& left.TilingFactor == right.TilingFactor
+				&& left.Metallic == right.Metallic
+				&& left.Roughness == right.Roughness;
+		}
+
+		bool SameMaterialComponent(
+			const MaterialComponent& left,
+			const MaterialComponent& right)
+		{
+			return left.MaterialHandle == right.MaterialHandle
+				&& left.Overrides.Mask == right.Overrides.Mask
+				&& SameMaterialProperties(
+					left.Overrides.Values, right.Overrides.Values);
+		}
+	}
+
 	void SceneHierarchyPanel::SetSelectedEntity(Entity entity)
 	{
 		m_SelectionContext = entity;
@@ -184,6 +208,65 @@ namespace gl {
 		(void)idCounter;
 	}
 
+	void InspectorPanel::ExecuteMaterialComponentEdit(
+		Entity entity,
+		const char* name,
+		const MaterialComponent& before,
+		const MaterialComponent& after)
+	{
+		if (!entity || SameMaterialComponent(before, after))
+			return;
+
+		const Ref<Scene> scene = m_Context;
+		const UUID uuid = entity.GetUUID();
+		auto apply = [scene, uuid](const MaterialComponent& value) {
+			Entity target = scene ? scene->FindEntityByUUID(uuid) : Entity{};
+			if (!target || !target.HasComponent<MaterialComponent>())
+				return false;
+			target.GetComponent<MaterialComponent>() = value;
+			return true;
+		};
+
+		if (m_CommandHistory)
+		{
+			m_CommandHistory->Execute(
+				std::make_unique<ValueEditorCommand<MaterialComponent>>(
+					name, before, after, apply));
+		}
+		else
+		{
+			apply(after);
+		}
+	}
+
+	void InspectorPanel::CommitMaterialComponentWidget(
+		Entity entity,
+		const char* name,
+		const MaterialComponent& after)
+	{
+		if (!m_MaterialComponentEdit.IsActive())
+			return;
+
+		const MaterialComponent before = m_MaterialComponentEdit.GetBefore();
+		m_MaterialComponentEdit.Reset();
+		if (!m_CommandHistory || !m_Context
+			|| SameMaterialComponent(before, after))
+			return;
+
+		const Ref<Scene> scene = m_Context;
+		const UUID uuid = entity.GetUUID();
+		auto apply = [scene, uuid](const MaterialComponent& value) {
+			Entity target = scene->FindEntityByUUID(uuid);
+			if (!target || !target.HasComponent<MaterialComponent>())
+				return false;
+			target.GetComponent<MaterialComponent>() = value;
+			return true;
+		};
+		m_CommandHistory->PushExecuted(
+			std::make_unique<ValueEditorCommand<MaterialComponent>>(
+				name, before, after, apply));
+	}
+
 	void InspectorPanel::DrawComponents(Entity entity)
 	{
 		// --- Tag ---
@@ -209,29 +292,32 @@ namespace gl {
 					ImGui::DragFloat3(label, glm::value_ptr(value), speed, minimum, maximum);
 
 					if (ImGui::IsItemActivated())
-						m_TransformBeforeEdit = valueBeforeWidget;
+						m_TransformEdit.Begin(valueBeforeWidget);
 
 					if (ImGui::IsItemDeactivatedAfterEdit()
-						&& m_TransformBeforeEdit && m_CommandHistory && m_Context)
+						&& m_TransformEdit.IsActive())
 					{
-						const TransformComponent before = *m_TransformBeforeEdit;
-						const TransformComponent after = transform;
-						const Ref<Scene> scene = m_Context;
-						const UUID uuid = entity.GetUUID();
-						m_CommandHistory->PushExecuted(
-							std::make_unique<LambdaEditorCommand>(
-								std::string("Edit Transform ") + label,
-								[scene, uuid, after]() {
-									Entity target = scene->FindEntityByUUID(uuid);
-									if (target && target.HasComponent<TransformComponent>())
-										target.GetComponent<TransformComponent>() = after;
-								},
-								[scene, uuid, before]() {
-									Entity target = scene->FindEntityByUUID(uuid);
-									if (target && target.HasComponent<TransformComponent>())
-										target.GetComponent<TransformComponent>() = before;
-								}));
-						m_TransformBeforeEdit.reset();
+						if (m_CommandHistory && m_Context)
+						{
+							const TransformComponent before = m_TransformEdit.GetBefore();
+							const TransformComponent after = transform;
+							const Ref<Scene> scene = m_Context;
+							const UUID uuid = entity.GetUUID();
+							m_CommandHistory->PushExecuted(
+								std::make_unique<LambdaEditorCommand>(
+									std::string("Edit Transform ") + label,
+									[scene, uuid, after]() {
+										Entity target = scene->FindEntityByUUID(uuid);
+										if (target && target.HasComponent<TransformComponent>())
+											target.GetComponent<TransformComponent>() = after;
+									},
+									[scene, uuid, before]() {
+										Entity target = scene->FindEntityByUUID(uuid);
+										if (target && target.HasComponent<TransformComponent>())
+											target.GetComponent<TransformComponent>() = before;
+									}));
+						}
+						m_TransformEdit.Reset();
 					}
 				};
 
@@ -478,7 +564,7 @@ namespace gl {
 			});
 		// --- Material ---
 		DrawComponent<MaterialComponent>("Material", entity,
-			[](MaterialComponent& component) {
+			[this, entity](MaterialComponent& component) {
 				const AssetMetadata metadata = AssetManager::GetMetadata(component.MaterialHandle);
 				const bool hasMaterial = metadata.IsValid()
 					&& metadata.Type == AssetType::Material;
@@ -490,8 +576,12 @@ namespace gl {
 				ImGui::SameLine();
 				if (hasMaterial && ImGui::SmallButton("X##Material"))
 				{
-					component.MaterialHandle = AssetHandle(0);
-					component.Overrides.Clear();
+					const MaterialComponent before = component;
+					MaterialComponent after = before;
+					after.MaterialHandle = AssetHandle(0);
+					after.Overrides.Clear();
+					ExecuteMaterialComponentEdit(
+						entity, "Clear Entity Material", before, after);
 				}
 
 				if (ImGui::BeginDragDropTarget())
@@ -505,10 +595,15 @@ namespace gl {
 						if (extension == ".glmat")
 						{
 							const AssetHandle handle = AssetManager::ImportAsset(path);
-							if (handle != component.MaterialHandle)
+							if (AssetManager::GetMetadata(handle).Type == AssetType::Material
+								&& handle != component.MaterialHandle)
 							{
-								component.MaterialHandle = handle;
-								component.Overrides.Clear();
+								const MaterialComponent before = component;
+								MaterialComponent after = before;
+								after.MaterialHandle = handle;
+								after.Overrides.Clear();
+								ExecuteMaterialComponentEdit(
+									entity, "Set Entity Material", before, after);
 							}
 						}
 					}
@@ -531,64 +626,93 @@ namespace gl {
 					ImGui::Text("Shader (inherited): %s", shaderName.c_str());
 					ImGui::TextDisabled("Checkboxes enable per-entity overrides.");
 
-					auto toggleOverride = [&overrides](
+					auto toggleOverride = [this, entity, &component](
 						const char* id, MaterialOverride property, auto initialize) {
-						bool enabled = overrides.IsEnabled(property);
+						bool enabled = component.Overrides.IsEnabled(property);
 						if (ImGui::Checkbox(id, &enabled))
 						{
+							const MaterialComponent before = component;
+							MaterialComponent after = before;
 							if (enabled)
-								initialize();
-							overrides.SetEnabled(property, enabled);
+								initialize(after.Overrides.Values);
+							after.Overrides.SetEnabled(property, enabled);
+							ExecuteMaterialComponentEdit(
+								entity, "Toggle Material Override", before, after);
 						}
-						return enabled;
+						return component.Overrides.IsEnabled(property);
+					};
+					auto trackContinuousEdit = [this, entity, &component](
+						const char* name, const MaterialComponent& beforeWidget) {
+						if (ImGui::IsItemActivated())
+							m_MaterialComponentEdit.Begin(beforeWidget);
+						if (ImGui::IsItemDeactivatedAfterEdit())
+							CommitMaterialComponentWidget(entity, name, component);
 					};
 
 					bool overrideBaseColor = toggleOverride(
 						"##OverrideBaseColor", MaterialOverride::BaseColor,
-						[&]() { values.BaseColor = base.BaseColor; });
+						[&](MaterialProperties& target) { target.BaseColor = base.BaseColor; });
 					ImGui::SameLine();
 					glm::vec4 inheritedBaseColor = base.BaseColor;
 					ImGui::BeginDisabled(!overrideBaseColor);
+					MaterialComponent beforeWidget = component;
 					ImGui::ColorEdit4("Base Color",
 						glm::value_ptr(overrideBaseColor ? values.BaseColor : inheritedBaseColor));
+					if (overrideBaseColor)
+						trackContinuousEdit(
+							"Edit Base Color Override", beforeWidget);
 					ImGui::EndDisabled();
 
 					bool overrideTiling = toggleOverride(
 						"##OverrideTiling", MaterialOverride::TilingFactor,
-						[&]() { values.TilingFactor = base.TilingFactor; });
+						[&](MaterialProperties& target) { target.TilingFactor = base.TilingFactor; });
 					ImGui::SameLine();
 					float inheritedTiling = base.TilingFactor;
 					ImGui::BeginDisabled(!overrideTiling);
+					beforeWidget = component;
 					ImGui::DragFloat("Material Tiling",
 						overrideTiling ? &values.TilingFactor : &inheritedTiling,
 						0.05f, 0.01f, 100.0f);
+					if (overrideTiling)
+						trackContinuousEdit(
+							"Edit Tiling Override", beforeWidget);
 					ImGui::EndDisabled();
 
 					bool overrideMetallic = toggleOverride(
 						"##OverrideMetallic", MaterialOverride::Metallic,
-						[&]() { values.Metallic = base.Metallic; });
+						[&](MaterialProperties& target) { target.Metallic = base.Metallic; });
 					ImGui::SameLine();
 					float inheritedMetallic = base.Metallic;
 					ImGui::BeginDisabled(!overrideMetallic);
+					beforeWidget = component;
 					ImGui::SliderFloat("Metallic",
 						overrideMetallic ? &values.Metallic : &inheritedMetallic,
 						0.0f, 1.0f);
+					if (overrideMetallic)
+						trackContinuousEdit(
+							"Edit Metallic Override", beforeWidget);
 					ImGui::EndDisabled();
 
 					bool overrideRoughness = toggleOverride(
 						"##OverrideRoughness", MaterialOverride::Roughness,
-						[&]() { values.Roughness = base.Roughness; });
+						[&](MaterialProperties& target) { target.Roughness = base.Roughness; });
 					ImGui::SameLine();
 					float inheritedRoughness = base.Roughness;
 					ImGui::BeginDisabled(!overrideRoughness);
+					beforeWidget = component;
 					ImGui::SliderFloat("Roughness",
 						overrideRoughness ? &values.Roughness : &inheritedRoughness,
 						0.04f, 1.0f);
+					if (overrideRoughness)
+						trackContinuousEdit(
+							"Edit Roughness Override", beforeWidget);
 					ImGui::EndDisabled();
 
 					bool overrideTexture = toggleOverride(
 						"##OverrideBaseColorTexture", MaterialOverride::BaseColorTexture,
-						[&]() { values.BaseColorTexture = base.BaseColorTexture; });
+						[&](MaterialProperties& target) {
+							target.BaseColorTexture = base.BaseColorTexture;
+						});
 					ImGui::SameLine();
 					const AssetHandle effectiveTexture = overrideTexture
 						? values.BaseColorTexture : base.BaseColorTexture;
@@ -604,7 +728,13 @@ namespace gl {
 					ImGui::SameLine();
 					if (overrideTexture && hasBaseColorTexture
 						&& ImGui::SmallButton("X##MaterialTexture"))
-						values.BaseColorTexture = AssetHandle(0);
+					{
+						const MaterialComponent before = component;
+						MaterialComponent after = before;
+						after.Overrides.Values.BaseColorTexture = AssetHandle(0);
+						ExecuteMaterialComponentEdit(
+							entity, "Clear Texture Override", before, after);
+					}
 
 					if (ImGui::BeginDragDropTarget())
 					{
@@ -615,16 +745,26 @@ namespace gl {
 							AssetMetadata droppedMetadata = AssetManager::GetMetadata(textureHandle);
 							if (droppedMetadata.Type == AssetType::Texture2D)
 							{
-								values.BaseColorTexture = textureHandle;
-								overrides.SetEnabled(
+								const MaterialComponent before = component;
+								MaterialComponent after = before;
+								after.Overrides.Values.BaseColorTexture = textureHandle;
+								after.Overrides.SetEnabled(
 									MaterialOverride::BaseColorTexture, true);
+								ExecuteMaterialComponentEdit(
+									entity, "Set Texture Override", before, after);
 							}
 						}
 						ImGui::EndDragDropTarget();
 					}
 
 					if (!overrides.Empty() && ImGui::Button("Reset Overrides"))
-						overrides.Clear();
+					{
+						const MaterialComponent before = component;
+						MaterialComponent after = before;
+						after.Overrides.Clear();
+						ExecuteMaterialComponentEdit(
+							entity, "Reset Material Overrides", before, after);
+					}
 				}
 			});
 		ImGui::Spacing();

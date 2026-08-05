@@ -7,6 +7,26 @@
 
 namespace gl
 {
+	namespace
+	{
+		bool SameMaterialProperties(
+			const MaterialProperties& left,
+			const MaterialProperties& right)
+		{
+			return glm::all(glm::equal(left.BaseColor, right.BaseColor))
+				&& left.BaseColorTexture == right.BaseColorTexture
+				&& left.TilingFactor == right.TilingFactor
+				&& left.Metallic == right.Metallic
+				&& left.Roughness == right.Roughness;
+		}
+
+		bool SameMaterialState(const MaterialState& left, const MaterialState& right)
+		{
+			return left.ShaderHandle == right.ShaderHandle
+				&& SameMaterialProperties(left.Properties, right.Properties);
+		}
+	}
+
 	void InspectorPanel::OnImGuiRender()
 	{
 		ImGui::Begin("Inspector");
@@ -35,6 +55,66 @@ namespace gl
 		ImGui::End();
 	}
 
+	bool InspectorPanel::ApplyMaterialState(
+		const Ref<Material>& material,
+		const MaterialState& state)
+	{
+		if (!material)
+			return false;
+
+		const MaterialState previous = material->GetState();
+		material->SetState(state);
+		if (material->Save())
+		{
+			m_MaterialSaveError.clear();
+			return true;
+		}
+
+		material->SetState(previous);
+		m_MaterialSaveError = "Could not save material: "
+			+ material->GetPath().string();
+		GL_CORE_ERROR("{0}", m_MaterialSaveError);
+		return false;
+	}
+
+	void InspectorPanel::ExecuteMaterialAssetEdit(
+		const Ref<Material>& material,
+		const char* name,
+		const MaterialState& before,
+		const MaterialState& after,
+		bool alreadyApplied)
+	{
+		if (!material || SameMaterialState(before, after))
+			return;
+
+		auto apply = [this, material](const MaterialState& state) {
+			return ApplyMaterialState(material, state);
+		};
+		auto command = std::make_unique<ValueEditorCommand<MaterialState>>(
+			name, before, after, apply);
+
+		if (alreadyApplied)
+		{
+			if (!material->Save())
+			{
+				material->SetState(before);
+				m_MaterialSaveError = "Could not save material: "
+					+ material->GetPath().string();
+				GL_CORE_ERROR("{0}", m_MaterialSaveError);
+				return;
+			}
+			m_MaterialSaveError.clear();
+			if (m_CommandHistory)
+				m_CommandHistory->PushExecuted(std::move(command));
+			return;
+		}
+
+		if (m_CommandHistory)
+			m_CommandHistory->Execute(std::move(command));
+		else
+			apply(after);
+	}
+
 	void InspectorPanel::DrawAssetInspector(AssetHandle handle)
 	{
 		const AssetMetadata metadata = AssetManager::GetMetadata(handle);
@@ -61,8 +141,15 @@ namespace gl
 		}
 
 		ImGui::Separator();
-		ImGui::TextDisabled("Editing this shared asset affects every entity that inherits it.");
-		bool changed = false;
+		ImGui::TextDisabled(
+			"Editing this shared asset affects every entity that inherits it.");
+		const bool canEditSharedAsset = m_CommandHistory != nullptr;
+		if (!canEditSharedAsset)
+			ImGui::TextDisabled("Shared assets are read-only while the scene is playing.");
+		if (!m_MaterialSaveError.empty())
+			ImGui::TextColored(ImVec4(0.95f, 0.25f, 0.2f, 1.0f), "%s",
+				m_MaterialSaveError.c_str());
+		ImGui::BeginDisabled(!canEditSharedAsset);
 
 		const AssetMetadata shaderMetadata =
 			AssetManager::GetMetadata(material->GetShaderHandle());
@@ -75,8 +162,10 @@ namespace gl
 		ImGui::SameLine();
 		if (hasShader && ImGui::SmallButton("X##AssetMaterialShader"))
 		{
-			material->SetShaderHandle(AssetHandle(0));
-			changed = true;
+			const MaterialState before = material->GetState();
+			MaterialState after = before;
+			after.ShaderHandle = AssetHandle(0);
+			ExecuteMaterialAssetEdit(material, "Clear Material Shader", before, after);
 		}
 		if (ImGui::BeginDragDropTarget())
 		{
@@ -86,19 +175,47 @@ namespace gl
 				const AssetHandle shaderHandle = AssetManager::ImportAsset(path);
 				if (AssetManager::GetMetadata(shaderHandle).Type == AssetType::Shader)
 				{
-					material->SetShaderHandle(shaderHandle);
-					changed = true;
+					const MaterialState before = material->GetState();
+					MaterialState after = before;
+					after.ShaderHandle = shaderHandle;
+					ExecuteMaterialAssetEdit(
+						material, "Set Material Shader", before, after);
 				}
 			}
 			ImGui::EndDragDropTarget();
 		}
 
+		auto trackContinuousEdit = [this, material](
+			const char* name, const MaterialState& beforeWidget) {
+			if (ImGui::IsItemActivated())
+				m_MaterialAssetEdit.Begin(beforeWidget);
+			if (ImGui::IsItemDeactivatedAfterEdit()
+				&& m_MaterialAssetEdit.IsActive())
+			{
+				const MaterialState before = m_MaterialAssetEdit.GetBefore();
+				const MaterialState after = material->GetState();
+				m_MaterialAssetEdit.Reset();
+				ExecuteMaterialAssetEdit(material, name, before, after, true);
+			}
+		};
+
 		auto& properties = material->GetProperties();
-		changed |= ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor));
-		changed |= ImGui::DragFloat("Material Tiling", &properties.TilingFactor,
+		MaterialState beforeWidget = material->GetState();
+		ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor));
+		trackContinuousEdit("Edit Material Base Color", beforeWidget);
+
+		beforeWidget = material->GetState();
+		ImGui::DragFloat("Material Tiling", &properties.TilingFactor,
 			0.05f, 0.01f, 100.0f);
-		changed |= ImGui::SliderFloat("Metallic", &properties.Metallic, 0.0f, 1.0f);
-		changed |= ImGui::SliderFloat("Roughness", &properties.Roughness, 0.04f, 1.0f);
+		trackContinuousEdit("Edit Material Tiling", beforeWidget);
+
+		beforeWidget = material->GetState();
+		ImGui::SliderFloat("Metallic", &properties.Metallic, 0.0f, 1.0f);
+		trackContinuousEdit("Edit Material Metallic", beforeWidget);
+
+		beforeWidget = material->GetState();
+		ImGui::SliderFloat("Roughness", &properties.Roughness, 0.04f, 1.0f);
+		trackContinuousEdit("Edit Material Roughness", beforeWidget);
 
 		const AssetMetadata textureMetadata =
 			AssetManager::GetMetadata(properties.BaseColorTexture);
@@ -111,8 +228,11 @@ namespace gl
 		ImGui::SameLine();
 		if (hasTexture && ImGui::SmallButton("X##AssetMaterialTexture"))
 		{
-			properties.BaseColorTexture = AssetHandle(0);
-			changed = true;
+			const MaterialState before = material->GetState();
+			MaterialState after = before;
+			after.Properties.BaseColorTexture = AssetHandle(0);
+			ExecuteMaterialAssetEdit(
+				material, "Clear Material Texture", before, after);
 		}
 		if (ImGui::BeginDragDropTarget())
 		{
@@ -122,14 +242,15 @@ namespace gl
 				const AssetHandle textureHandle = AssetManager::ImportAsset(path);
 				if (AssetManager::GetMetadata(textureHandle).Type == AssetType::Texture2D)
 				{
-					properties.BaseColorTexture = textureHandle;
-					changed = true;
+					const MaterialState before = material->GetState();
+					MaterialState after = before;
+					after.Properties.BaseColorTexture = textureHandle;
+					ExecuteMaterialAssetEdit(
+						material, "Set Material Texture", before, after);
 				}
 			}
 			ImGui::EndDragDropTarget();
 		}
-
-		if (changed && !material->Save())
-			GL_CORE_ERROR("Failed to save material: {0}", material->GetPath().string());
+		ImGui::EndDisabled();
 	}
 }

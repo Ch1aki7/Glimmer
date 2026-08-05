@@ -22,6 +22,15 @@ namespace gl
 		void DrawAssetInspector(AssetHandle handle);
 		void DrawComponents(Entity entity);
 		void DrawAddComponentMenu(Entity entity);
+		void ExecuteMaterialComponentEdit(Entity entity, const char* name,
+			const MaterialComponent& before, const MaterialComponent& after);
+		void CommitMaterialComponentWidget(Entity entity, const char* name,
+			const MaterialComponent& after);
+		bool ApplyMaterialState(const Ref<Material>& material,
+			const MaterialState& state);
+		void ExecuteMaterialAssetEdit(const Ref<Material>& material,
+			const char* name, const MaterialState& before,
+			const MaterialState& after, bool alreadyApplied = false);
 
 		template<typename T>
 		void AddComponent(Entity entity, const char* name, const T& component = T{})
@@ -143,6 +152,9 @@ namespace gl
 		Ref<Scene> m_Context;
 		SelectionContext* m_Selection = nullptr;
 		EditorCommandHistory* m_CommandHistory = nullptr;
-		std::optional<TransformComponent> m_TransformBeforeEdit;
+		EditorValueTransaction<TransformComponent> m_TransformEdit;
+		EditorValueTransaction<MaterialComponent> m_MaterialComponentEdit;
+		EditorValueTransaction<MaterialState> m_MaterialAssetEdit;
+		std::string m_MaterialSaveError;
 	};
 }

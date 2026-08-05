@@ -29,6 +29,80 @@ namespace gl {
 			return true;
 		}
 
+		bool ReplaceFileSafely(
+			const std::filesystem::path& destination,
+			const std::string& contents)
+		{
+			std::filesystem::path temporary = destination;
+			temporary += ".tmp";
+			std::filesystem::path backup = destination;
+			backup += ".bak";
+
+			std::error_code error;
+			std::filesystem::remove(temporary, error);
+			error.clear();
+			{
+				std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+				if (!stream)
+					return false;
+				stream << contents;
+				stream.flush();
+				if (!stream.good())
+				{
+					stream.close();
+					std::filesystem::remove(temporary, error);
+					return false;
+				}
+			}
+
+			const bool hadOriginal = std::filesystem::is_regular_file(destination, error);
+			if (error)
+			{
+				std::filesystem::remove(temporary, error);
+				return false;
+			}
+
+			if (hadOriginal)
+			{
+				std::filesystem::remove(backup, error);
+				error.clear();
+				std::filesystem::rename(destination, backup, error);
+				if (error)
+				{
+					std::filesystem::remove(temporary, error);
+					return false;
+				}
+			}
+
+			std::filesystem::rename(temporary, destination, error);
+			if (error)
+			{
+				const std::error_code replaceError = error;
+				if (hadOriginal)
+				{
+					std::error_code restoreError;
+					std::filesystem::rename(backup, destination, restoreError);
+					if (restoreError)
+						GL_CORE_ERROR(
+							"Could not restore material backup {0}: {1}",
+							backup.string(), restoreError.message());
+				}
+				std::filesystem::remove(temporary, error);
+				GL_CORE_ERROR("Could not replace material file {0}: {1}",
+					destination.string(), replaceError.message());
+				return false;
+			}
+
+			if (hadOriginal)
+			{
+				std::filesystem::remove(backup, error);
+				if (error)
+					GL_CORE_WARN("Could not remove material backup {0}: {1}",
+						backup.string(), error.message());
+			}
+			return true;
+		}
+
 	}
 
 	Material::Material(std::filesystem::path path)
@@ -103,14 +177,11 @@ namespace gl {
 		output << YAML::EndMap;
 		output << YAML::EndMap;
 
-		std::ofstream stream(m_Path);
-		if (!stream)
+		if (!ReplaceFileSafely(m_Path, output.c_str()))
 		{
 			GL_CORE_ERROR("Could not write material: {0}", m_Path.string());
 			return false;
 		}
-
-		stream << output.c_str();
 		return true;
 	}
 

@@ -254,7 +254,9 @@ flowchart LR
 
 ### 7.2 Material 与 MaterialInstance
 
-`.glmat` 是共享 Material Asset，保存 ShaderHandle 与 `MaterialProperties`。实体不复制整份材质，而由 `MaterialComponent` 保存 MaterialHandle 和 `MaterialOverrides` 位掩码。
+`.glmat` 是共享 Material Asset，保存 ShaderHandle 与 `MaterialProperties`。`MaterialState` 可以一次捕获或恢复两者，供共享资产编辑事务使用。保存时先写临时文件，再通过备份和替换更新目标；替换失败会恢复原文件并向调用方返回失败。
+
+实体不复制整份材质，而由 `MaterialComponent` 保存 MaterialHandle 和 `MaterialOverrides` 位掩码。
 
 `MaterialInstance` 在提交时以共享 Material 为基础，仅替换启用的字段：
 
@@ -308,23 +310,23 @@ Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入�
 
 ### 9.3 CommandHistory 与当前覆盖范围
 
-编辑器命令实现 `IEditorCommand::Execute/Undo`；`EditorCommandHistory` 维护 Undo/Redo 栈，新命令执行后清空 Redo 栈。`LambdaEditorCommand` 用于轻量操作，`EntitySnapshot` 捕获 UUID 和可复制组件，用于实体删除、恢复等生命周期命令。
+编辑器命令实现返回成功状态的 `IEditorCommand::Execute/Undo`；`EditorCommandHistory` 只在操作成功后移动 Undo/Redo 栈，新命令成功执行后才清空 Redo 栈。`LambdaEditorCommand` 用于不会失败的轻量操作，`ValueEditorCommand<T>` 保存修改前后值并允许 Apply 返回失败，`EditorValueTransaction<T>` 负责连续控件的激活快照。`EntitySnapshot` 捕获 UUID 和可复制组件，用于实体删除、恢复等生命周期命令。
 
 当前已经接入：
 
 - 实体创建、删除、复制；
 - 组件添加、移除、重置；
 - Transform 连续拖动压缩为单次 Undo；
+- MaterialHandle、MaterialOverrides 的开关、数值、纹理和 Reset；
+- 共享 Material Asset 的完整状态、磁盘保存和失败回滚；
 - Edit 模式快捷键 Undo/Redo。
 
 当前尚未统一接入：
 
-- Material Override 的全部字段、纹理拖放和 Reset；
-- 共享 `.glmat` 的内存/磁盘事务；
 - Terrain、Light、Camera 等全部连续属性编辑；
-- 通用 Asset Dirty、保存失败反馈和退出提示。
+- Material 以外 Asset 的统一 Dirty、保存失败反馈和退出提示。
 
-以上未实现部分属于 `Documents/PROJECT_STATUS.md` 中的当前主线或后续技术债，不应视为现有保证。
+共享 Material 在 Play 模式下只读，避免运行时编辑写回磁盘；实体组件编辑发生在 RuntimeScene 副本中，停止播放后丢弃。以上未实现部分属于 `Documents/PROJECT_STATUS.md` 中的后续技术债，不应视为现有保证。
 
 ## 10. 关键跨层数据流
 
@@ -372,7 +374,7 @@ flowchart LR
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以长期工作台为准，当前首先补齐材质编辑事务；之后才是 3D RenderQueue/状态排序、Instancing/MaterialInstance 缓存和 PBR 通道扩展。Vulkan 后端、透明队列、阴影/IBL 与发布打包仍是长期候选。
+近期架构演进顺序以长期工作台为准，当前首先建立 3D RenderQueue/状态排序；之后是 Instancing/MaterialInstance 缓存和 PBR 通道扩展。Vulkan 后端、透明队列、阴影/IBL 与发布打包仍是长期候选。
 
 ## 12. 文档同步边界
 

@@ -78,12 +78,14 @@ namespace gl
 		return entity;
 	}
 
-	void EditorCommandHistory::Execute(std::unique_ptr<IEditorCommand> command)
+	bool EditorCommandHistory::Execute(std::unique_ptr<IEditorCommand> command)
 	{
 		if (!command)
-			return;
-		command->Execute();
+			return false;
+		if (!command->Execute())
+			return false;
 		PushExecuted(std::move(command));
+		return true;
 	}
 
 	void EditorCommandHistory::PushExecuted(std::unique_ptr<IEditorCommand> command)
@@ -99,9 +101,12 @@ namespace gl
 		if (m_UndoStack.empty())
 			return false;
 
-		auto command = std::move(m_UndoStack.back());
+		auto& pending = m_UndoStack.back();
+		if (!pending->Undo())
+			return false;
+
+		auto command = std::move(pending);
 		m_UndoStack.pop_back();
-		command->Undo();
 		m_RedoStack.emplace_back(std::move(command));
 		return true;
 	}
@@ -111,9 +116,12 @@ namespace gl
 		if (m_RedoStack.empty())
 			return false;
 
-		auto command = std::move(m_RedoStack.back());
+		auto& pending = m_RedoStack.back();
+		if (!pending->Execute())
+			return false;
+
+		auto command = std::move(pending);
 		m_RedoStack.pop_back();
-		command->Execute();
 		m_UndoStack.emplace_back(std::move(command));
 		return true;
 	}
