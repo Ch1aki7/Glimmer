@@ -10,7 +10,8 @@ project "GlimmerEditor"
 
     files {
         "src/**.h",
-        "src/**.cpp"
+        "src/**.cpp",
+        "../resources/windows/Glimmer.rc"
     }
 
     includedirs {

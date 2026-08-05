@@ -11724,6 +11724,95 @@ MaterialComponent:
 
 下一步建议优先将 Material Override 和 Material Asset 编辑分别接入组件属性命令与 Asset Command，然后再建设 3D RenderQueue。这样 Undo/Redo、共享资产语义和后续合批边界能够保持一致。
 
+## 项目品牌与 Windows 应用图标
+
+### 建设目标
+
+本轮将散落在 `tmp/logo/` 中的 Logo 源图迁移为正式项目资源，并为所有 Windows 可执行项目提供统一的应用图标。目标包括：
+
+- 品牌源图和派生图标具有稳定、可追踪的目录；
+- Sandbox 与两个编辑器使用同一个窗口、任务栏和 EXE 图标；
+- 图标直接嵌入可执行文件，不依赖运行时工作目录或额外资源复制；
+- 后续新增应用时只需复用同一份资源脚本；
+- `tmp/` 继续只保存可删除的中间文件，不承担正式资源职责。
+
+### 资源目录
+
+```text
+resources/
+├── branding/
+│   ├── GlimmerAppIcon.png          # 512×512 透明应用图标
+│   ├── GlimmerAppIcon-Source.png   # 应用图标高分辨率源图
+│   ├── GlimmerLogo-Crystal.png     # 水晶切面品牌方案
+│   └── GlimmerLogo-Minimal.png     # 简洁金属品牌方案
+└── windows/
+    ├── Glimmer.ico                 # Windows 多尺寸图标（16–256 px）
+    └── Glimmer.rc                  # 将图标嵌入 EXE 的资源脚本
+```
+
+`GlimmerAppIcon.png` 是从方形高分辨率源图确定性裁切和缩放得到的透明 PNG，没有重新生成或改变 Logo 设计。`Glimmer.ico` 包含 16、24、32、48、64、128 和 256 px 图像，兼顾资源管理器、窗口标题栏、任务栏和高 DPI 显示。
+
+### Windows 资源接入
+
+GLFW 的 Win32 后端会在可执行文件中查找名为 `GLFW_ICON` 的图标资源。共享资源脚本定义如下：
+
+```rc
+GLFW_ICON ICON "../resources/windows/Glimmer.ico"
+```
+
+图标由 Windows Resource Compiler 在构建阶段写入 EXE。运行时不需要调用 `stbi_load()`，也不需要通过相对路径加载 PNG，因此从 Visual Studio、资源管理器或其它工作目录启动程序时行为一致。
+
+### Premake 工程接入
+
+`Sandbox`、`GlimmerEditor` 和 `GlimmerEditor-CyouBranch` 的 `premake5.lua` 均在 `files` 中包含共享资源脚本：
+
+```lua
+files {
+    "src/**.h",
+    "src/**.cpp",
+    "../resources/windows/Glimmer.rc"
+}
+```
+
+新增 Windows `ConsoleApp` 或 `WindowedApp` 项目时应复用这一路径，不要复制并维护项目私有的 `.ico` 或 `.rc`。Premake 会生成对应的 `<ResourceCompile>` 项，Visual Studio 构建时自动调用资源编译器。
+
+修改 Logo、ICO、RC 或 Premake 后，重新生成 VS2026 工程：
+
+```bat
+scripts\Win-GenerateProject-vs2026.bat
+```
+
+生成后再构建目标配置。不要手动修改 `.vcxproj`，因为生成文件会在下一次运行 Premake 时被覆盖。
+
+### 文件职责
+
+| 文件 | 职责 |
+| --- | --- |
+| `resources/branding/GlimmerAppIcon-Source.png` | 应用图标的高分辨率原始版本 |
+| `resources/branding/GlimmerAppIcon.png` | README、界面或宣传场景使用的标准透明 PNG |
+| `resources/branding/GlimmerLogo-Crystal.png` | 水晶切面品牌展示图 |
+| `resources/branding/GlimmerLogo-Minimal.png` | 简洁金属品牌展示图 |
+| `resources/windows/Glimmer.ico` | Windows EXE、窗口和任务栏使用的多尺寸图标 |
+| `resources/windows/Glimmer.rc` | 声明 GLFW 约定资源名并将 ICO 嵌入应用 |
+| 各应用的 `premake5.lua` | 将共享 RC 文件加入具体可执行项目 |
+
+### 验证结果
+
+- 重新运行 VS2026 Premake，三个应用工程均生成 `ResourceCompile` 项；
+- VS2026 `Debug | x64` 全解决方案编译和链接成功；
+- 从 `GlimmerEditor-CyouBranch.exe` 成功提取到关联图标，确认资源已实际嵌入 EXE；
+- Sandbox、GlimmerEditor 和 GlimmerEditor-CyouBranch 共用同一图标资源；
+- 原 `tmp/logo/` 已在资源迁移完成后清理；
+- `git diff --check` 通过。
+
+### 当前边界与维护约定
+
+1. 当前 `.rc/.ico` 接入只负责 Windows；未来接入 Linux 或 macOS 时应分别补充桌面文件图标和应用 Bundle 图标，不应复用 Win32 RC；
+2. 更新应用图标时必须同步更新标准 PNG 与多尺寸 ICO，并至少验证 16、32 和 256 px 显示效果；
+3. 正式品牌资源统一保存在 `resources/branding/`，不要重新放入 `tmp/`；
+4. 所有 Windows 应用共享 `Glimmer.rc`，避免出现资源 ID、图标版本或视觉风格分叉；
+5. README 和其它 Markdown 文档引用品牌图片时使用仓库相对路径，保证 GitHub 和本地预览均可显示。
+
 ## KB
 
 ### 为什么不用动态库？

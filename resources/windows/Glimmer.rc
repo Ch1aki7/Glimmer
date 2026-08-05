@@ -1,0 +1,2 @@
+// GLFW looks for this named resource when creating a Win32 window.
+GLFW_ICON ICON "../resources/windows/Glimmer.ico"

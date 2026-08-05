@@ -10,7 +10,8 @@ project "GlimmerEditor-CyouBranch"
 
     files {
         "src/**.h",
-        "src/**.cpp"
+        "src/**.cpp",
+        "../resources/windows/Glimmer.rc"
     }
 
     includedirs {
