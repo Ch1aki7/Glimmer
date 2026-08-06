@@ -9501,28 +9501,19 @@ GlimmerEditor-CyouBranch/
   assets/textures/heightmap-example.png
 ```
 
-### 当前限制与下一步
+### 历史限制与当前状态
 
-当前系统已经能显示和验证高度图地形，但仍属于编辑器级原型：
+本节最初记录的是高度图地形仍由 `EditorLayer` 持有的原型阶段。该所有权描述已经被后续实现替代：当前地形以 `Terrain Entity + TransformComponent + TerrainComponent` 进入 Scene，`TerrainRenderer` 负责绘制，`TerrainRuntime` 持有不参与序列化的 GPU 资源，编辑器和运行场景共享同一组件提交路径。
 
-1. `TerrainComponent` 尚未完全接入 Scene 的实体渲染流程，地形资源仍由 `EditorLayer` 持有；
-2. Terrain Pass 还没有独立的地形材质和 RenderPass 资源对象；
-3. 地形只有一个固定尺寸网格，没有 Chunk、LOD、视锥裁剪和地形流送；
-4. 高度图修改后没有局部更新、法线缓存或碰撞体同步；
-5. 材质仍是颜色混合，没有 Splat Map、纹理数组和 PBR 参数；
-6. 程序化高度已迁移至 Compute Shader；后续可在此基础上加入多 Pass 水力侵蚀、降雨和泥沙模拟；
-7. `RenderPassSpecification::ClearDepth` 仍需完善为真正独立的深度清除控制。
+目前仍然有效的限制是：
 
-推荐后续顺序：
+1. 地形仍是固定网格，尚无 Chunk、LOD、视锥剔除和流送；
+2. 尚未建立独立 TerrainMaterial 资产、四层 PBR、Splat/Material Weights 和 Triplanar；
+3. 尚未形成完整的 Normal、Slope、Curvature、Flow 派生图缓存；
+4. Authoring Erosion 与固定步长 Runtime Erosion 尚未落地；
+5. 高度变化后的局部网格、碰撞体和派生资源更新策略仍需明确。
 
-```text
-TerrainComponent 接入 Scene
-    → 地形材质与资源序列化
-    → 多 Pass 水力侵蚀与环境模拟
-    → Chunk + LOD
-    → GPU 水流/侵蚀模拟
-    → 植被分布与生态系统
-```
+具体实施顺序和验收条件已经统一收录到 `Documents/PROJECT_STATUS.md`，本历史章节不再维护第二份任务列表。
 
 ![[README.assets/Pasted image 20260722175227.png]]
 ![[README.assets/Pasted image 20260723134803.png]]
@@ -10397,18 +10388,11 @@ GlimmerEditor-CyouBranch/assets/
 6. 重复启动后 AssetRegistry SHA256 保持一致；
 7. `git diff --check` 通过。
 
-### 当前边界与后续方向
+### 历史边界与后续进展
 
-当前完成的是材质资产和 ECS 引用基础，不是完整 PBR：
+本节建立 Material Asset 时，3D Material Pass、基础 PBR、MaterialInstance 和材质事务尚未完成。后续章节已经补齐这些能力：3D Renderer 会使用材质 ShaderHandle、BaseColor、Metallic 和 Roughness；实体 Override 与共享 `.glmat` 已分离；MaterialHandle、Overrides 和共享 Material Asset 编辑均已接入 Undo/Redo 与失败回滚。
 
-1. `ShaderHandle` 尚未驱动 Shader 或 RenderPipeline 选择；
-2. Metallic、Roughness 尚未参与实际光照；
-3. 尚未支持 Normal、AO、Emissive 等纹理；
-4. 外部修改 `.glmat` 后还没有自动文件监视；
-5. Material 与 Shader 的参数布局尚未通过反射校验；
-6. 已区分共享 Material 与实体级 MaterialInstance 覆盖参数；后续仍需将属性修改接入统一 Undo/Redo 事务。
-
-统一光源数据已经在下一章节完成。后续应在此基础上建立 3D Material Pass，再实现基础 PBR Shader。若直接继续向 Material 增加参数，而没有渲染管线和颜色空间基础，材质系统会变成“可以编辑但无法正确渲染”的参数容器。
+当前仍待完成的是 Normal、AO、Emissive、Metallic-Roughness 等完整纹理通道，Material/Shader 参数布局反射，以及更严格的 sRGB/Linear 导入与验证。后续范围和验收条件以 `Documents/PROJECT_STATUS.md` 为准。
 
 ## 统一光源组件与 Light UBO
 
@@ -10815,27 +10799,7 @@ PBR Suzanne
 
 ### 地形位置的当前处理
 
-当前程序化地形仍由 `EditorLayer` 持有 TerrainMesh、HeightMap 和 Terrain Shader，尚未完整进入 Scene ECS，因此没有独立的 `TransformComponent`，不能直接在 Properties 面板调整位置。
-
-短期测试可以为 Terrain Shader 增加 `u_Transform`：
-
-```cpp
-glm::mat4 terrainTransform =
-    glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, -5.0f, 20.0f));
-m_TerrainShader->UploadUniformMat4("u_Transform", terrainTransform);
-```
-
-顶点 Shader 应先在局部空间应用高度，再转换到世界空间：
-
-```glsl
-vec3 localPosition = a_Position;
-localPosition.y = height * u_MaxHeight;
-vec4 worldPosition = u_Transform * vec4(localPosition, 1.0);
-v_WorldPos = worldPosition.xyz;
-gl_Position = u_ViewProjection * worldPosition;
-```
-
-正式方案应建立：
+下列组件化结构已经实现，不再是未来方案：
 
 ```text
 Terrain Entity
@@ -10847,7 +10811,7 @@ Terrain Entity
     → TerrainRenderer
 ```
 
-届时 Transform 将统一控制地形位置、旋转、X/Z 覆盖范围和 Y 高度倍率。非均匀缩放后，法线必须通过逆转置矩阵变换，否则光照会失真。
+`TransformComponent` 现在统一控制地形位置、旋转和实体缩放；地形覆盖范围与高度倍率继续由 `TerrainSpecification` 描述，最终在 TerrainRenderer 中与实体 Transform 合成。非均匀缩放时法线必须通过逆转置矩阵变换，否则光照会失真。
 
 ### 文件职责
 
@@ -11058,9 +11022,9 @@ HDR Output
 
 `Exposure` 控制进入 ACES 曲线前的线性亮度倍率。它不是灯光强度的替代品：灯光 Intensity 描述场景照明，Exposure 描述观察和显示映射。
 
-### 天空盒接入计划
+### 天空盒与 IBL 后续关系
 
-天空盒已加入 `Documents/生态系统模拟引擎路线图.md`，安排在 HDR 与基础 PBR 完成之后、IBL 之前：
+TextureCube、Cubemap 资产和可见 Skybox Pass 已在后续章节完成；尚未实现的 Diffuse/Specular IBL 与派生缓存已纳入 `Documents/PROJECT_STATUS.md` 的 P9：
 
 ```text
 HDR + 基础 PBR
@@ -11103,7 +11067,7 @@ GlimmerEditor-CyouBranch/assets/shaders/
   ToneMapping.glsl                  ACES、Exposure、Gamma 与可选灰度
 
 Documents/
-  生态系统模拟引擎路线图.md          Skybox → IBL 接入顺序
+  PROJECT_STATUS.md                  IBL 后续顺序与验收条件
 ```
 
 ![[README.assets/Pasted image 20260727115626.png]]
@@ -11996,6 +11960,28 @@ Renderer3D Statistics 提供：
 3. 如果功能行为、使用方式或维护流程发生变化，在本节上方、`## KB` 之前新增或更新相应 README 功能章节；
 4. 没有内容变化的文档无需制造无意义修改，但必须确认它仍与源码和另外两份文档一致；
 5. 三份文档发生冲突时，以当前源码为准，并在同一任务中完成修正。
+
+## 生态系统路线整合
+
+原独立的“程序化地形与环境模拟路线图”已经按文档职责拆分并融合：可执行阶段、依赖顺序和验收条件进入 `Documents/PROJECT_STATUS.md`；已经落地的模块职责和长期架构边界进入 `ARCHITECTURE.md`；本 README 继续记录用户可见行为、实现过程和验证方式。后续不再维护并行路线文件，避免 M0/M1 等已完成事项再次被误当作下一步。
+
+当前可作为后续生态建设基础的能力包括：
+
+- TerrainComponent、TerrainRuntime、TerrainRenderer 与外部/程序化 HeightMap；
+- Graphics/Compute Shader 热重载、SimulationGrid、GPU Ping-Pong 和数据读回；
+- Material/MaterialInstance、基础 Cook–Torrance PBR、Light UBO；
+- HDR Scene Buffer、ACES Tone Mapping、TextureCube、SkyLight 与可见天空盒；
+- UUID、Scene Copy、场景序列化、Edit/Play 隔离、SelectionContext 和 Undo/Redo 基础。
+
+未来每个阶段除自身验收外，还遵守以下公共验证约束：
+
+1. 使用独立 Lab 场景验证，不向默认编辑场景永久写入测试实体；
+2. 程序化生成在相同 Seed 和参数下可复现，只在 Dirty 或显式请求时 Dispatch；
+3. Compute Pass 不得无保护地读写同一纹理，结果必须无 NaN/Inf；
+4. 水流、侵蚀和气候模拟使用固定时间步，保持状态非负，并记录质量守恒误差；
+5. GPU Runtime 和派生缓存不写入场景文件，场景只保存业务参数与 AssetHandle；
+6. 根据改动范围验证构建、编辑器首帧、场景保存/重载、Edit → Play → Stop、Undo → Redo 和 `git diff --check`；
+7. 构建完成后保留 `bin` 与增量缓存，除非用户明确要求清理。
 
 ## KB
 

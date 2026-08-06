@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-05
+- 最近更新：2026-08-06
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -100,7 +100,7 @@
 
 ## 后续任务
 
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P3：PBR 材质通道扩展
 
@@ -113,9 +113,16 @@
 - 明确线性空间与 sRGB 纹理导入规则；
 - 保持旧材质文件向后兼容。
 
+**验收**
+
+- 标准材质球能够分别验证 Normal、AO、Emissive 和 Metallic-Roughness；
+- sRGB 颜色纹理与 Linear 数据纹理不发生重复 Gamma；
+- 旧 `.glmat` 和场景文件仍能加载；
+- Material Asset、MaterialOverrides、Inspector 与 YAML 往返一致。
+
 ### P4：自动化回归测试与持续构建
 
-**依赖**：可以与 P1/P2 穿插，不依赖渲染架构完成。
+**依赖**：可以与任一功能阶段穿插，不依赖渲染架构全部完成。
 
 **目标**
 
@@ -124,12 +131,171 @@
 - 建立最小场景加载/保存往返测试；
 - 记录不同设备拉取子模块、生成工程和构建的标准流程。
 
+**验收**
+
+- 无窗口测试能稳定复现失败并返回非零退出码；
+- Premake、VS2026 `Debug | x64` 和最小场景往返有可重复执行入口；
+- 每个后续 Lab 场景独立运行，不向默认编辑场景永久写入测试实体。
+
+### P5：Terrain 现状复核与编辑事务收口
+
+**依赖**：当前主线完成；可与 P3 并行准备，但不得重建已经存在的 TerrainComponent/TerrainRenderer。
+
+**目标**
+
+- 复核 Terrain Transform、Scene Copy、YAML 往返和 Runtime Invalidate；
+- 将 Terrain、Light、Camera 等剩余连续属性接入统一 Undo/Redo 事务；
+- 清除残余 EditorLayer 地形所有权和过时测试路径；
+- 正式参数保留在组件 Inspector，独立 Panel 只承担诊断。
+
+**验收**
+
+- Terrain Entity 移动、复制、保存/加载、Edit → Play → Stop 结果一致；
+- 连续参数拖动只生成一条可逆命令；
+- EditorLayer 不持有 TerrainMesh、HeightMap 或 Terrain Shader 的业务状态。
+
+### P6：山脉生成、派生图与 Authoring Erosion
+
+**依赖**：P5 完成，SimulationGrid、Compute 与 Terrain Runtime 边界稳定。
+
+**目标**
+
+- 形成连续山脉走向而非均匀随机尖峰；
+- 加入有限次 Thermal/Authoring Erosion；
+- 生成 Height、Normal、Slope、Curvature、Flow 与 Material Weights；
+- 提供 Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 等稳定预设。
+
+**验收**
+
+- 同一 Seed 和参数生成结果确定；
+- 只在 Dirty 或显式 Regenerate 时 Dispatch；
+- 所有 Compute Pass 无 NaN，且不存在无保护的同纹理读写；
+- Authoring Erosion 不进入每帧生态模拟循环。
+
+### P7：TerrainMaterial 与分层 PBR
+
+**依赖**：P3、P6 完成。
+
+**目标**
+
+- 明确 TerrainMaterial 的资产类型、注册表元数据、序列化和 Inspector 入口；
+- 建立 Grass、Soil、Rock、Snow 四层材质；
+- 按高度、坡度、曲率、湿度和权重混合；
+- 使用 Triplanar Mapping 避免陡坡 UV 拉伸。
+
+**验收**
+
+- 陡坡以岩石为主，高处平缓区域可积雪，湿润低地可驱动土壤/植被层；
+- 山壁无明显 UV 拉伸，材质计算保持 HDR 线性空间；
+- TerrainMaterial 可保存、重载、拖放且不污染普通 `.glmat` 布局。
+
+### P8：方向光阴影与 CSM
+
+**依赖**：P3 的直接光材质验证稳定；P7 可先使用单级阴影。
+
+**目标**
+
+- 先实现 Directional Shadow Map，再扩展 3～4 级 CSM；
+- 建立独立 Shadow Pass、深度资源和偏移策略；
+- 让 Model 与 Terrain 共用一致的阴影约定。
+
+**验收**
+
+- 山峰和模型遮挡关系稳定，无明显 Peter Panning 或大面积 Acne；
+- 级联切换不过度跳变，视锥外阴影对象不提交；
+- Shadow 资源不写入场景文件，只由可序列化设置重建。
+
+### P9：IBL 环境光照
+
+**依赖**：P3 的 PBR、颜色空间和 TextureCube 方向约定稳定。
+
+**目标**
+
+- 支持 HDR 经纬图导入、浮点 Cubemap 和完整 Mip Chain；
+- 依次实现 Diffuse Irradiance、Specular Prefilter 和 BRDF LUT；
+- 以源环境 Handle、资源版本和生成参数缓存派生贴图；
+- Terrain 与 Model 使用同一 SkyLight 环境数据。
+
+**验收**
+
+- 关闭方向光后材质仍有合理环境照明；
+- Roughness 增大时环境反射逐渐模糊；
+- Cubemap 无翻转、明显接缝或重复 Gamma；
+- 同一环境资源不会逐帧卷积或重复生成缓存。
+
+### P10：Terrain Chunk、LOD 与剔除
+
+**依赖**：P6 地形生成和 P7 TerrainMaterial 在单块地形上稳定。
+
+**目标**
+
+- 从固定 `3×3` Chunk 验证坐标、采样和边缘连续；
+- 共享网格模板，增加 Bounds、视锥剔除和距离 LOD；
+- 通过 Skirt、边缘索引或 Morph 解决 LOD 接缝；
+- 规模扩大后再评估 Quadtree、Geomipmapping 或 Clipmap。
+
+**验收**
+
+- Chunk 边缘无裂缝和法线断层；
+- 视锥外 Chunk 不提交 DrawCall；
+- LOD 切换不过度跳变，近景精度和远景覆盖可独立调整。
+
+### P11：山脉大气表现与后处理
+
+**依赖**：Scene Depth 世界位置重建稳定；优先在 P9 后接入环境一致性。
+
+**目标**
+
+- 依次实现距离雾、高度雾和主光方向驱动的雾色；
+- 校准 ACES Tone Mapping，再评估 Bloom 与 TAA；
+- 完整 Atmospheric Scattering、Motion Blur 和 DOF 不作为首版阻塞项。
+
+**验收**
+
+- 远山对比度和饱和度随距离下降；
+- 天空与地形交界自然，近景不会被均匀灰雾覆盖；
+- 曝光和雾效不产生重复 Tone Mapping/Gamma。
+
+### P12：固定步长水流与运行时侵蚀
+
+**依赖**：P5 Terrain Runtime、P6 派生资源和稳定 GPU Ping-Pong 完成。
+
+**目标**
+
+- 建立 Rainfall → Flux → WaterDepth/Velocity → Sediment → Erosion/Deposition 流程；
+- 提供 Play、Pause、Single Step、Reset 和统计；
+- 与有限次 Authoring Erosion 分开调度和保存。
+
+**验收**
+
+- 水深、泥沙和地形状态保持非负、有限且无 NaN；
+- 无降雨/蒸发边界下质量误差处于明确容差；
+- 洼地能蓄水，高处水流向低处，侵蚀和沉积方向合理；
+- 固定时间步下结果不依赖编辑器帧率。
+
+### P13：简化气候与植被闭环
+
+**依赖**：P12 稳定，P7 能接收湿度/植被材质权重。
+
+**目标**
+
+- 使用单层二维场实现 Temperature、Evaporation、Humidity Advection、Orographic Lift、Condensation/Rainfall；
+- 把降雨反馈到水流/侵蚀，把湿度和温度反馈到植被分布；
+- 首版使用常量或程序化水平风，不直接实现三维流体大气。
+
+**验收**
+
+- 湿度能随风输运并在地形抬升区形成更多降雨；
+- 蒸发、水汽、降雨和地表水变化具有可解释统计；
+- 植被响应可复现，不把单株测试实体永久写入默认场景。
+
 ### 长期候选
 
 - Vulkan 后端实际实现，而不只是接口预埋；
+- GPU Driven Rendering、遮挡剔除和间接绘制；
+- 完整三维大气与体积流体；
 - Linux/macOS 应用图标和打包资源；
 - 透明物体 RenderQueue 与深度排序；
-- 阴影、IBL 和更完整的 PBR 管线；
 - 统一 Asset Command、Dirty 状态和保存提示；
 - 发布构建、资源打包与项目模板。
 
@@ -257,6 +423,9 @@
 - 暂无透明队列、距离排序和显式材质 BlendMode；当前 Opaque Queue 假设参与项不透明；
 - MaterialInstance 当前按提交临时解析，没有 Dirty/version 缓存；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
+- Terrain 仍缺少正式 TerrainMaterial 资产、派生图缓存、Chunk/LOD 和运行时侵蚀调度；
+- SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
+- 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 
 ## 固定验证清单
