@@ -377,12 +377,13 @@ flowchart LR
 - 正式场景参数应组件化或资源化；编辑器面板通过上下文和命令接口修改数据，不拥有 Application/Scene 生命周期，独立测试 Panel 仅用于诊断；
 - `EditorLayer` 只负责 Scene、Framebuffer、Pass、Camera 和面板的生命周期编排，不承载 Terrain、IBL 或环境模拟算法及其正式业务状态；
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
+- 未来 Transparent RenderQueue 应建立明确的 `Opaque / Mask / Blend` 材质分类：Mask 通过 `discard` 保持深度写入，Blend 在 Skybox 之后按距离反向排序、开启深度测试并关闭深度写入；透明 Pass 必须恢复渲染状态，并保持 EntityID/拾取语义；这条约束不代表当前已经实现透明队列；
 - 地形有限次 Authoring Erosion 与固定步长 Runtime Erosion 必须分开调度、缓存和保存，不能共用隐式的每帧更新路径；
 - 未来 IBL 的 Irradiance、Prefilter 和 BRDF LUT 属于派生缓存，应按源环境 Handle、资源版本和生成参数失效，禁止逐帧卷积；这条约束不代表当前已经实现 IBL；
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。当前首先建立 3D Instancing 与 MaterialInstance 缓存；TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。当前首先建立 3D Instancing 与 MaterialInstance 缓存；随后在扩展 PBR 材质通道前完成 Transparent RenderQueue 与 AlphaMode，使材质分类和深度/排序契约先稳定。TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

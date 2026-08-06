@@ -102,9 +102,35 @@
 
 任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
-### P3：PBR 材质通道扩展
+### P3：Transparent RenderQueue 与材质 AlphaMode
 
-**依赖**：材质事务和 RenderQueue 完成。
+**依赖**：当前 3D Instancing 与 MaterialInstance 缓存主线完成，Opaque Queue、EntityID 和状态恢复规则稳定。
+
+**建设时机**
+
+在 PBR 材质通道扩展之前完成。透明分类会改变 Material schema、队列归属、深度写入、排序和拾取规则；先固定 `Opaque / Mask / Blend` 边界，可以避免 Normal、AO、Emissive 等通道加入后再次修改材质与场景格式。
+
+**目标**
+
+- 为 Material 增加 `AlphaMode`（Opaque、Mask、Blend）与 `AlphaCutoff`，同步 `.glmat`、MaterialOverrides、Inspector 和场景兼容读取；
+- Opaque 与 Mask 继续进入深度写入队列；Mask 在 Fragment Shader 中 `discard` 低于 Cutoff 的像素，透明区域不写颜色、深度或 EntityID；
+- Blend 进入独立 Transparent Queue，按相机距离由远到近排序，保持深度测试、关闭深度写入并使用明确的 Straight Alpha 混合；
+- 固定场景顺序为 Opaque/Mask → Skybox → Transparent，并在 Transparent Pass 后恢复 Blend、DepthMask 和 DepthFunc；
+- 透明对象默认回退普通 Draw，不因 Opaque Instancing 强行合批；以后只有排序语义兼容时才评估透明实例化；
+- 明确半透明像素的 EntityID 写入与拾取阈值，避免 PNG 全透明区域遮挡背景实体。
+
+**验收**
+
+- PNG 全透明区域显示 SkyLight/Skybox，而不是 Scene Clear Color；
+- Mask 材质可正确遮挡、写深度，透明区域不可被鼠标拾取；
+- 多层 Blend 对象由远到近稳定混合，Skybox 正确出现在透明对象后方；
+- Opaque RenderQueue、Instancing、EntityID 和 DrawCall 统计不退化；
+- 透明 Pass 结束后 OpenGL 状态完整恢复，不影响 Gizmo、Overlay 和后处理；
+- 旧 `.glmat` 默认按 Opaque 加载，保存/重载和 Undo/Redo 往返一致。
+
+### P4：PBR 材质通道扩展
+
+**依赖**：材质事务、Opaque/Transparent RenderQueue 和 AlphaMode 完成。
 
 **目标**
 
@@ -120,7 +146,7 @@
 - 旧 `.glmat` 和场景文件仍能加载；
 - Material Asset、MaterialOverrides、Inspector 与 YAML 往返一致。
 
-### P4：自动化回归测试与持续构建
+### P5：自动化回归测试与持续构建
 
 **依赖**：可以与任一功能阶段穿插，不依赖渲染架构全部完成。
 
@@ -137,9 +163,9 @@
 - Premake、VS2026 `Debug | x64` 和最小场景往返有可重复执行入口；
 - 每个后续 Lab 场景独立运行，不向默认编辑场景永久写入测试实体。
 
-### P5：Terrain 现状复核与编辑事务收口
+### P6：Terrain 现状复核与编辑事务收口
 
-**依赖**：当前主线完成；可与 P3 并行准备，但不得重建已经存在的 TerrainComponent/TerrainRenderer。
+**依赖**：当前主线完成；可与 P4 并行准备，但不得重建已经存在的 TerrainComponent/TerrainRenderer。
 
 **目标**
 
@@ -154,9 +180,9 @@
 - 连续参数拖动只生成一条可逆命令；
 - EditorLayer 不持有 TerrainMesh、HeightMap 或 Terrain Shader 的业务状态。
 
-### P6：山脉生成、派生图与 Authoring Erosion
+### P7：山脉生成、派生图与 Authoring Erosion
 
-**依赖**：P5 完成，SimulationGrid、Compute 与 Terrain Runtime 边界稳定。
+**依赖**：P6 完成，SimulationGrid、Compute 与 Terrain Runtime 边界稳定。
 
 **目标**
 
@@ -172,9 +198,9 @@
 - 所有 Compute Pass 无 NaN，且不存在无保护的同纹理读写；
 - Authoring Erosion 不进入每帧生态模拟循环。
 
-### P7：TerrainMaterial 与分层 PBR
+### P8：TerrainMaterial 与分层 PBR
 
-**依赖**：P3、P6 完成。
+**依赖**：P4、P7 完成。
 
 **目标**
 
@@ -189,9 +215,9 @@
 - 山壁无明显 UV 拉伸，材质计算保持 HDR 线性空间；
 - TerrainMaterial 可保存、重载、拖放且不污染普通 `.glmat` 布局。
 
-### P8：方向光阴影与 CSM
+### P9：方向光阴影与 CSM
 
-**依赖**：P3 的直接光材质验证稳定；P7 可先使用单级阴影。
+**依赖**：P4 的直接光材质验证稳定；P8 可先使用单级阴影。
 
 **目标**
 
@@ -205,9 +231,9 @@
 - 级联切换不过度跳变，视锥外阴影对象不提交；
 - Shadow 资源不写入场景文件，只由可序列化设置重建。
 
-### P9：IBL 环境光照
+### P10：IBL 环境光照
 
-**依赖**：P3 的 PBR、颜色空间和 TextureCube 方向约定稳定。
+**依赖**：P4 的 PBR、颜色空间和 TextureCube 方向约定稳定。
 
 **目标**
 
@@ -223,9 +249,9 @@
 - Cubemap 无翻转、明显接缝或重复 Gamma；
 - 同一环境资源不会逐帧卷积或重复生成缓存。
 
-### P10：Terrain Chunk、LOD 与剔除
+### P11：Terrain Chunk、LOD 与剔除
 
-**依赖**：P6 地形生成和 P7 TerrainMaterial 在单块地形上稳定。
+**依赖**：P7 地形生成和 P8 TerrainMaterial 在单块地形上稳定。
 
 **目标**
 
@@ -240,9 +266,9 @@
 - 视锥外 Chunk 不提交 DrawCall；
 - LOD 切换不过度跳变，近景精度和远景覆盖可独立调整。
 
-### P11：山脉大气表现与后处理
+### P12：山脉大气表现与后处理
 
-**依赖**：Scene Depth 世界位置重建稳定；优先在 P9 后接入环境一致性。
+**依赖**：Scene Depth 世界位置重建稳定；优先在 P10 后接入环境一致性。
 
 **目标**
 
@@ -256,9 +282,9 @@
 - 天空与地形交界自然，近景不会被均匀灰雾覆盖；
 - 曝光和雾效不产生重复 Tone Mapping/Gamma。
 
-### P12：固定步长水流与运行时侵蚀
+### P13：固定步长水流与运行时侵蚀
 
-**依赖**：P5 Terrain Runtime、P6 派生资源和稳定 GPU Ping-Pong 完成。
+**依赖**：P6 Terrain Runtime、P7 派生资源和稳定 GPU Ping-Pong 完成。
 
 **目标**
 
@@ -273,9 +299,9 @@
 - 洼地能蓄水，高处水流向低处，侵蚀和沉积方向合理；
 - 固定时间步下结果不依赖编辑器帧率。
 
-### P13：简化气候与植被闭环
+### P14：简化气候与植被闭环
 
-**依赖**：P12 稳定，P7 能接收湿度/植被材质权重。
+**依赖**：P13 稳定，P8 能接收湿度/植被材质权重。
 
 **目标**
 
@@ -295,7 +321,6 @@
 - GPU Driven Rendering、遮挡剔除和间接绘制；
 - 完整三维大气与体积流体；
 - Linux/macOS 应用图标和打包资源；
-- 透明物体 RenderQueue 与深度排序；
 - 统一 Asset Command、Dirty 状态和保存提示；
 - 发布构建、资源打包与项目模板。
 
