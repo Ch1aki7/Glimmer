@@ -30,6 +30,7 @@ namespace gl {
 		const std::string& GetName() const override { return m_Name; }
 		const std::filesystem::path& GetFilePath() const override { return m_FilePath; }
 		uint64_t GetVersion() const override { return m_Version; }
+		bool SupportsInstancing() const override { return m_SupportsInstancing; }
 		const ShaderReloadResult& GetLastReloadResult() const override { return m_LastReloadResult; }
 		bool IsFileBacked() const override { return !m_FilePath.empty(); }
 		ShaderReloadResult Reload() override;
@@ -46,12 +47,14 @@ namespace gl {
 			const std::unordered_map<GLenum, std::string>& shaderSources,
 			uint32_t& program,
 			std::string& error) const;
+		void UpdateCapabilities();
 
 		uint32_t m_RendererID = 0;
 		std::string m_Name;
 		std::filesystem::path m_FilePath;
 		std::unique_ptr<FileWatcher> m_FileWatcher;
 		uint64_t m_Version = 0;
+		bool m_SupportsInstancing = false;
 		ShaderReloadResult m_LastReloadResult;
 		mutable std::unordered_map<std::string, GLint> m_UniformCache;
 	};

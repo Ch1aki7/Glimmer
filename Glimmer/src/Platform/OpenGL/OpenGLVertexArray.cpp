@@ -31,6 +31,11 @@ namespace gl {
 		    || type == ShaderDataType::Int4;
 	}
 
+	static bool IsMatrixType(ShaderDataType type)
+	{
+		return type == ShaderDataType::Mat3 || type == ShaderDataType::Mat4;
+	}
+
 	OpenGLVertexArray::OpenGLVertexArray()
 	{
 		GL_PROFILE_FUNCTION();
@@ -61,25 +66,42 @@ namespace gl {
 		glBindVertexArray(m_RendererID);
 		vertexBuffer->Bind();
 
-		uint32_t index = 0;
 		const auto& layout = vertexBuffer->GetLayout();
 		for (const auto& element : layout)
 		{
-			glEnableVertexAttribArray(index);
+			if (IsMatrixType(element.Type))
+			{
+				const uint32_t columnCount = element.GetComponentCount();
+				for (uint32_t column = 0; column < columnCount; column++)
+				{
+					glEnableVertexAttribArray(m_VertexBufferIndex);
+					glVertexAttribPointer(m_VertexBufferIndex, columnCount, GL_FLOAT,
+						element.Normalized ? GL_TRUE : GL_FALSE, layout.GetStride(),
+						(const void*)(element.Offset + sizeof(float) * columnCount * column));
+					if (element.InputRate == BufferInputRate::PerInstance)
+						glVertexAttribDivisor(m_VertexBufferIndex, 1);
+					m_VertexBufferIndex++;
+				}
+				continue;
+			}
+
+			glEnableVertexAttribArray(m_VertexBufferIndex);
 			if (IsIntType(element.Type))
-				glVertexAttribIPointer(index,
+				glVertexAttribIPointer(m_VertexBufferIndex,
 					element.GetComponentCount(),
 					ShaderDataTypeToOpenGLBaseType(element.Type),
 					layout.GetStride(),
 					(const void*)element.Offset);
 			else
-				glVertexAttribPointer(index,
+				glVertexAttribPointer(m_VertexBufferIndex,
 					element.GetComponentCount(),
 					ShaderDataTypeToOpenGLBaseType(element.Type),
 					element.Normalized ? GL_TRUE : GL_FALSE,
 					layout.GetStride(),
 					(const void*)element.Offset);
-			index++;
+			if (element.InputRate == BufferInputRate::PerInstance)
+				glVertexAttribDivisor(m_VertexBufferIndex, 1);
+			m_VertexBufferIndex++;
 		}
 
 		m_VertexBuffers.push_back(vertexBuffer);

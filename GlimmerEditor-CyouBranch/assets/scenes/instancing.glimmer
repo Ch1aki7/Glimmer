@@ -1,0 +1,116 @@
+Scene: Untitled
+Version: 6
+Entities:
+  - Entity: 7645299181813547393
+    Components:
+      TagComponent: Entity
+      TransformComponent:
+        Translation: [0, 30.5639, 0]
+        Rotation: [-0.11201483, 32.75876, -28.338644]
+        Scale: [0.022274591, 0.022274487, 0.022274606]
+      ModelRendererComponent:
+        Model: 12085106509985387647
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 25
+          BaseColor: [0.41741168, 0.41846156, 0.4120237, 1]
+          BaseColorTexture: 0
+          TilingFactor: 22.26
+          Metallic: 0.608
+          Roughness: 0.631
+  - Entity: 7963097931014092450
+    Components:
+      TagComponent: Entity
+      TransformComponent:
+        Translation: [4.473474, 26.90532, 1.613332]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      ModelRendererComponent:
+        Model: 9710033314010145366
+      MaterialComponent:
+        Material: 9736745633360246474
+  - Entity: 7612805933106815251
+    Components:
+      TagComponent: Entity
+      TransformComponent:
+        Translation: [0.2, 27.013136, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      ModelRendererComponent:
+        Model: 9710033314010145366
+      MaterialComponent:
+        Material: 9736745633360246474
+  - Entity: 12994637101700219746
+    Components:
+      TagComponent: Entity
+      TransformComponent:
+        Translation: [-3.3192358, 26.625526, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      ModelRendererComponent:
+        Model: 9710033314010145366
+      MaterialComponent:
+        Material: 9736745633360246474
+  - Entity: 974259219944812047
+    Components:
+      TagComponent: Terrain
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      TerrainComponent:
+        Procedural: true
+        HeightMapResolution: 512
+        MeshResolution: 256
+        HeightScale: 24
+        HeightMap: 11108635257915747845
+        RenderShader: 13614654561704837220
+        GenerationShader: 7633283146183385932
+        Noise:
+          Seed: 1
+          Octaves: 7
+          Frequency: 2.2
+          Lacunarity: 2
+          Persistence: 0.48
+          DomainWarp: 0.65
+          RidgeStrength: 0.58
+          ContinentScale: 0.32
+          ErosionStrength: 0.18
+          DetailStrength: 0.07
+          Offset: [0, 0]
+  - Entity: 8005238800751071747
+    Components:
+      TagComponent: Sky Light
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      SkyLightComponent:
+        Cubemap: 14395647676425568118
+        Intensity: 1
+        Enabled: true
+  - Entity: 9990954633794483688
+    Components:
+      TagComponent: Point Light
+      TransformComponent:
+        Translation: [0, 12, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      PointLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 80
+        Range: 40
+        Enabled: true
+  - Entity: 5665072202226829063
+    Components:
+      TagComponent: Sun
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [-50, 30, 0]
+        Scale: [1, 1, 1]
+      DirectionalLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 1
+        AmbientIntensity: 0.05
+        Enabled: true

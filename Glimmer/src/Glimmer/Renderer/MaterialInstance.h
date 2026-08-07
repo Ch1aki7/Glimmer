@@ -24,6 +24,16 @@ namespace gl {
 		void SetEnabled(MaterialOverride property, bool enabled);
 		void Clear();
 		bool Empty() const { return Mask == 0; }
+		uint64_t GetVersion() const { return m_Version; }
+		void MarkDirty() { ++m_Version; }
+		bool operator==(const MaterialOverrides& other) const
+		{
+			return Mask == other.Mask && Values == other.Values;
+		}
+		bool operator!=(const MaterialOverrides& other) const { return !(*this == other); }
+
+	private:
+		uint64_t m_Version = 1;
 	};
 
 	class MaterialInstance

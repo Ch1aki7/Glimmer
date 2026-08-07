@@ -116,6 +116,23 @@ namespace gl {
 		return material->Reload() ? material : nullptr;
 	}
 
+	void Material::SetShaderHandle(AssetHandle handle)
+	{
+		if (m_ShaderHandle == handle)
+			return;
+		m_ShaderHandle = handle;
+		MarkDirty();
+	}
+
+	void Material::SetState(const MaterialState& state)
+	{
+		if (GetState() == state)
+			return;
+		m_ShaderHandle = state.ShaderHandle;
+		m_Properties = state.Properties;
+		MarkDirty();
+	}
+
 	bool Material::Reload()
 	{
 		try
@@ -149,8 +166,13 @@ namespace gl {
 			properties.Metallic = glm::clamp(properties.Metallic, 0.0f, 1.0f);
 			properties.Roughness = glm::clamp(properties.Roughness, 0.04f, 1.0f);
 
-			m_ShaderHandle = shaderHandle;
-			m_Properties = properties;
+			const MaterialState loadedState{ shaderHandle, properties };
+			if (GetState() != loadedState || m_Version == 0)
+			{
+				m_ShaderHandle = shaderHandle;
+				m_Properties = properties;
+				MarkDirty();
+			}
 			return true;
 		}
 		catch (const YAML::Exception& exception)

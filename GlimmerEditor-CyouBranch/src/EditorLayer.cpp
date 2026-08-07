@@ -447,6 +447,13 @@ namespace gl {
 			stats3D.SubmittedModels, stats3D.SubmittedItems);
 		ImGui::Text("Skipped Models: %u", stats3D.SkippedModels);
 		ImGui::Text("Draw Calls: %u", stats3D.DrawCalls);
+		ImGui::Text("Instanced / Individual Draws: %u / %u",
+			stats3D.InstancedDrawCalls, stats3D.IndividualDrawCalls);
+		ImGui::Text("Batches / Instances: %u / %u",
+			stats3D.BatchCount, stats3D.InstanceCount);
+		ImGui::Text("Saved Draws: %u", stats3D.GetSavedDrawCalls());
+		ImGui::Text("Material Cache Hit / Miss: %u / %u",
+			stats3D.MaterialCacheHits, stats3D.MaterialCacheMisses);
 		ImGui::Text("Shader Binds: %u (saved %u)",
 			stats3D.ShaderBinds, stats3D.GetSavedShaderBinds());
 		ImGui::Text("Texture Binds: %u (saved %u)",

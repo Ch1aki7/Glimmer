@@ -18,6 +18,8 @@ namespace gl {
         virtual void Clear() = 0;
 		virtual void SetDepthFunction(DepthFunction function) = 0;
 		virtual void DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount = 0) = 0;
+		virtual void DrawIndexedInstanced(const Ref<VertexArray>& vertexArray, uint32_t instanceCount,
+			uint32_t indexCount = 0) = 0;
 
         inline static API GetAPI() { return s_API; }
         inline static void SetAPI(API api) { s_API = api; }

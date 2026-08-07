@@ -31,6 +31,7 @@ namespace gl {
 		virtual const std::string& GetName() const = 0;
 		virtual const std::filesystem::path& GetFilePath() const = 0;
 		virtual uint64_t GetVersion() const = 0;
+		virtual bool SupportsInstancing() const = 0;
 		virtual const ShaderReloadResult& GetLastReloadResult() const = 0;
 		virtual bool IsFileBacked() const = 0;
 		virtual ShaderReloadResult Reload() = 0;

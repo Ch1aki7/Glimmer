@@ -201,20 +201,24 @@ namespace gl
 
 		auto& properties = material->GetProperties();
 		MaterialState beforeWidget = material->GetState();
-		ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor));
+		if (ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor)))
+			material->MarkDirty();
 		trackContinuousEdit("Edit Material Base Color", beforeWidget);
 
 		beforeWidget = material->GetState();
-		ImGui::DragFloat("Material Tiling", &properties.TilingFactor,
-			0.05f, 0.01f, 100.0f);
+		if (ImGui::DragFloat("Material Tiling", &properties.TilingFactor,
+			0.05f, 0.01f, 100.0f))
+			material->MarkDirty();
 		trackContinuousEdit("Edit Material Tiling", beforeWidget);
 
 		beforeWidget = material->GetState();
-		ImGui::SliderFloat("Metallic", &properties.Metallic, 0.0f, 1.0f);
+		if (ImGui::SliderFloat("Metallic", &properties.Metallic, 0.0f, 1.0f))
+			material->MarkDirty();
 		trackContinuousEdit("Edit Material Metallic", beforeWidget);
 
 		beforeWidget = material->GetState();
-		ImGui::SliderFloat("Roughness", &properties.Roughness, 0.04f, 1.0f);
+		if (ImGui::SliderFloat("Roughness", &properties.Roughness, 0.04f, 1.0f))
+			material->MarkDirty();
 		trackContinuousEdit("Edit Material Roughness", beforeWidget);
 
 		const AssetMetadata textureMetadata =

@@ -1,4 +1,7 @@
 AssetRegistry:
+  - Handle: 801164346423064841
+    Type: Model
+    FilePath: models/geos/Plane.obj
   - Handle: 3179645585411309739
     Type: Model
     FilePath: models/New Folder/Cube.obj

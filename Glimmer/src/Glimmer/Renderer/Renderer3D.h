@@ -27,10 +27,22 @@ namespace gl {
 			uint32_t SubmittedItems = 0;
 			uint32_t SkippedModels = 0;
 			uint32_t DrawCalls = 0;
+			uint32_t InstancedDrawCalls = 0;
+			uint32_t IndividualDrawCalls = 0;
+			uint32_t BatchCount = 0;
+			uint32_t RenderedItems = 0;
+			uint32_t InstanceCount = 0;
+			uint32_t MaterialCacheHits = 0;
+			uint32_t MaterialCacheMisses = 0;
 			uint32_t ShaderBinds = 0;
 			uint32_t TextureBinds = 0;
 			uint32_t ImmediateModeShaderBinds = 0;
 			uint32_t ImmediateModeTextureBinds = 0;
+
+			uint32_t GetSavedDrawCalls() const
+			{
+				return SubmittedItems > DrawCalls ? SubmittedItems - DrawCalls : 0;
+			}
 
 			uint32_t GetSavedShaderBinds() const
 			{

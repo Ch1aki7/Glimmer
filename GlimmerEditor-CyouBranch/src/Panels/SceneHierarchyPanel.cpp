@@ -656,8 +656,10 @@ namespace gl {
 					glm::vec4 inheritedBaseColor = base.BaseColor;
 					ImGui::BeginDisabled(!overrideBaseColor);
 					MaterialComponent beforeWidget = component;
-					ImGui::ColorEdit4("Base Color",
-						glm::value_ptr(overrideBaseColor ? values.BaseColor : inheritedBaseColor));
+					if (ImGui::ColorEdit4("Base Color",
+						glm::value_ptr(overrideBaseColor ? values.BaseColor : inheritedBaseColor))
+						&& overrideBaseColor)
+						overrides.MarkDirty();
 					if (overrideBaseColor)
 						trackContinuousEdit(
 							"Edit Base Color Override", beforeWidget);
@@ -670,9 +672,10 @@ namespace gl {
 					float inheritedTiling = base.TilingFactor;
 					ImGui::BeginDisabled(!overrideTiling);
 					beforeWidget = component;
-					ImGui::DragFloat("Material Tiling",
+					if (ImGui::DragFloat("Material Tiling",
 						overrideTiling ? &values.TilingFactor : &inheritedTiling,
-						0.05f, 0.01f, 100.0f);
+						0.05f, 0.01f, 100.0f) && overrideTiling)
+						overrides.MarkDirty();
 					if (overrideTiling)
 						trackContinuousEdit(
 							"Edit Tiling Override", beforeWidget);
@@ -685,9 +688,10 @@ namespace gl {
 					float inheritedMetallic = base.Metallic;
 					ImGui::BeginDisabled(!overrideMetallic);
 					beforeWidget = component;
-					ImGui::SliderFloat("Metallic",
+					if (ImGui::SliderFloat("Metallic",
 						overrideMetallic ? &values.Metallic : &inheritedMetallic,
-						0.0f, 1.0f);
+						0.0f, 1.0f) && overrideMetallic)
+						overrides.MarkDirty();
 					if (overrideMetallic)
 						trackContinuousEdit(
 							"Edit Metallic Override", beforeWidget);
@@ -700,9 +704,10 @@ namespace gl {
 					float inheritedRoughness = base.Roughness;
 					ImGui::BeginDisabled(!overrideRoughness);
 					beforeWidget = component;
-					ImGui::SliderFloat("Roughness",
+					if (ImGui::SliderFloat("Roughness",
 						overrideRoughness ? &values.Roughness : &inheritedRoughness,
-						0.04f, 1.0f);
+						0.04f, 1.0f) && overrideRoughness)
+						overrides.MarkDirty();
 					if (overrideRoughness)
 						trackContinuousEdit(
 							"Edit Roughness Override", beforeWidget);
@@ -732,6 +737,7 @@ namespace gl {
 						const MaterialComponent before = component;
 						MaterialComponent after = before;
 						after.Overrides.Values.BaseColorTexture = AssetHandle(0);
+						after.Overrides.MarkDirty();
 						ExecuteMaterialComponentEdit(
 							entity, "Clear Texture Override", before, after);
 					}
@@ -747,7 +753,8 @@ namespace gl {
 							{
 								const MaterialComponent before = component;
 								MaterialComponent after = before;
-								after.Overrides.Values.BaseColorTexture = textureHandle;
+							after.Overrides.Values.BaseColorTexture = textureHandle;
+							after.Overrides.MarkDirty();
 								after.Overrides.SetEnabled(
 									MaterialOverride::BaseColorTexture, true);
 								ExecuteMaterialComponentEdit(

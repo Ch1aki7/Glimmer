@@ -11939,9 +11939,9 @@ Renderer3D Statistics 提供：
 ### 当前边界与下一步
 
 1. 当前只处理不透明队列，没有 BlendMode、透明分类或反向距离排序；
-2. 状态排序减少绑定次数，但每个 RenderItem 仍执行一次 DrawIndexed；
-3. MaterialInstance 仍在每次 Model Submit 时合并，没有 version/Dirty 缓存；
-4. 下一主线是在现有 RenderKey 上建立 Instancing Batch、Instance Buffer 和实例 EntityID。
+2. Opaque Queue 已支持严格兼容的 Instancing Batch，不同最终材质状态不会错误合并；
+3. MaterialInstance 已有 version/Dirty 与最终属性缓存；
+4. 下一主线是建立 AlphaMode 和独立 Transparent RenderQueue。
 
 ## 项目工作文档同步约定
 
@@ -11982,6 +11982,56 @@ Renderer3D Statistics 提供：
 5. GPU Runtime 和派生缓存不写入场景文件，场景只保存业务参数与 AssetHandle；
 6. 根据改动范围验证构建、编辑器首帧、场景保存/重载、Edit → Play → Stop、Undo → Redo 和 `git diff --check`；
 7. 构建完成后保留 `bin` 与增量缓存，除非用户明确要求清理。
+
+## 3D Instancing 与 MaterialInstance 缓存
+
+在已有 Opaque RenderQueue 状态排序之上，Renderer3D 现在可以把兼容的重复模型合并为实例化绘制。目标不是盲目按模型名合批，而是保证 Mesh、Shader、纹理和最终材质参数完全一致时才共享一次 DrawCall。
+
+### 实例输入与渲染接口
+
+`BufferElement` 新增 `PerVertex / PerInstance` 输入频率。OpenGL VertexArray 不再让每个 VertexBuffer 从 attribute 0 重新开始，而是持续分配位置；Mat3/Mat4 会拆成多个列属性，实例元素使用 `glVertexAttribDivisor(..., 1)`。
+
+公共 `RendererAPI` / `RenderCommand` 增加 `DrawIndexedInstanced`，OpenGL 后端封装 `glDrawElementsInstanced`。Renderer3D 维护最多 1024 项的动态 Instance Buffer，每项包含：
+
+```cpp
+struct InstanceData
+{
+    glm::mat4 Transform;
+    glm::ivec4 EntityData; // x = EntityID
+};
+```
+
+PBRModel Shader 使用 location 4–7 接收实例矩阵，location 8 接收 EntityID。`u_UseInstancing` 在实例和普通绘制路径间切换，因此单物体、不同材质拆批和鼠标拾取仍共用同一 Shader。Shader 在初次链接及热重载后检查这三个输入；不满足契约的 Shader 不会报错或强行实例化，而是自动逐项 DrawIndexed。
+
+### 严格兼容合批
+
+Opaque Queue 的排序键加入最终 MaterialProperties 的浮点位模式。连续 RenderItem 只有同时满足以下条件才会合批：
+
+- Mesh、Shader 和实际绑定纹理相同；
+- BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness 完全相同；
+- 是否使用 BaseColor Texture 的状态相同。
+
+因此两个实体即使引用同一 `.glmat`，只要 Override 的最终结果不同就会拆批；不同 Override 写法若最终状态完全一致则可以安全合并。超过 1024 项的 Batch 自动拆成多个实例 DrawCall。
+
+### MaterialInstance 缓存
+
+Material 和 MaterialOverrides 增加运行期 version/Dirty。Inspector 修改共享材质或实体 Override 时会推进版本。Renderer3D 使用 `(EntityID, MaterialHandle)` 缓存最终 ShaderHandle 和 MaterialProperties，并保存完整 MaterialState、Overrides 和最后使用帧：
+
+- 基础材质和 Overrides 都未变化时直接命中；
+- 任一最终输入变化时重新解析 MaterialInstance；
+- 每次仍比较完整状态，保证 Undo/Redo 恢复旧版本号或遗漏 Dirty 时不会使用过期缓存；
+- 120 帧未使用的项自动回收。
+
+Stats 面板新增 Batch/Instance Count、Instanced/Individual Draws、Saved Draws 和 Material Cache Hit/Miss，可直接观察重复模型带来的收益。
+
+### 验证结果
+
+- 临时真实 OpenGL 场景提交 3 个相同 Cube/DefaultPBR：`3 Items → 1 Instanced Draw`，节省 2 次 DrawCall；
+- 第三个实体启用不同 Roughness Override：`3 Items → 2 Draws`，证明差异材质会拆批；
+- 再加入 2 个使用不兼容 Phong Shader 的模型：`5 Items → 4 Draws`，其中兼容的两个 Cube 合为 1 Draw，Phong 两项逐个回退；
+- PBR 实例 Transform/EntityID Shader 完成真实驱动编译和运行，最终无测试注入编辑器稳定运行 8 秒；
+- VS2026、v145、`Debug | x64` 全解决方案构建成功；相同命令二次增量构建约 3 秒且未重新编译源码；重新运行 VS2026 Premake 后，既有 SPIRV-Cross samples/tests 排除规则正确进入工程；
+- `git diff --check` 通过；测试实体和日志已移除，`bin` 与 `bin-int` 增量缓存保留。
 
 ## KB
 

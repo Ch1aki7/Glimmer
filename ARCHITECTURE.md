@@ -122,7 +122,7 @@ sequenceDiagram
 
 | 层次 | 职责 | 当前实现 |
 | --- | --- | --- |
-| `RendererAPI` / `RenderCommand` | 清屏、视口、索引绘制等低层命令 | `OpenGLRendererAPI` |
+| `RendererAPI` / `RenderCommand` | 清屏、视口、索引绘制与实例化索引绘制等低层命令 | `OpenGLRendererAPI` |
 | GPU 资源抽象 | Buffer、VertexArray、Texture、Framebuffer、UniformBuffer、PixelBuffer | 对应的 `OpenGL*` 实现 |
 | Shader 抽象 | 图形 Shader、Compute Shader、热重载结果 | GLSL/OpenGL Program |
 | 场景渲染器 | `Renderer2D`、`Renderer3D`、`TerrainRenderer`、`SkyboxRenderer` | OpenGL 驱动的静态渲染器 |
@@ -154,11 +154,13 @@ flowchart TD
 
 Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
 
-Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，构造临时 `MaterialInstance`，再将每个有效 Mesh 展开为一个 RenderItem。RenderItem 保存 Mesh/Shader/Texture 引用、最终 MaterialProperties、Transform、EntityID 和 RenderKey；纹理优先级仍为 Material BaseColorTexture、Mesh 自带纹理、白纹理回退。
+Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通过 `(EntityID, MaterialHandle)` 缓存最终 MaterialProperties。缓存保存基础 MaterialState、MaterialOverrides、版本与最后使用帧；完整状态未变化时复用结果，变化时重新构造 MaterialInstance，长期未使用项会被回收。每个有效 Mesh 再展开为一个 RenderItem；纹理优先级仍为 Material BaseColorTexture、Mesh 自带纹理、白纹理回退。
 
-`EndScene` 按 ShaderHandle、MaterialHandle、Texture GPU ID、Mesh 生命周期地址和 EntityID 排序 Opaque Queue。EntityID 作为最终键保证同一帧中改变 ECS 提交顺序不会改变最终队列顺序。执行阶段缓存当前 Shader 与 Texture：Shader 切换时上传场景级 ViewProjection、Camera 和采样器槽，每个 Item 只上传 Transform、EntityID 与材质参数。OpenGL `DrawIndexed` 不再隐式解绑 Texture2D，纹理状态由 Renderer3D/Renderer2D 等上层所有者维护。
+`EndScene` 按 ShaderHandle、MaterialHandle、Texture GPU ID、Mesh、最终材质位模式和 EntityID 排序 Opaque Queue。Mesh、Shader、纹理、最终 MaterialProperties 和纹理存在状态完全相同的连续项形成兼容 Batch。支持实例化契约且 Batch 大于一项时，Renderer3D 将 Transform 和 EntityID 上传到最多 1024 项的动态 Instance Buffer，并调用 `DrawIndexedInstanced`；不同 Override 结果会拆批，不支持实例属性的 Shader 自动执行普通 Draw。OpenGL `DrawIndexed` 不再隐式解绑 Texture2D，纹理状态由上层渲染器维护。
 
-Renderer3D Statistics 记录 SubmittedModels、SubmittedItems、SkippedModels、DrawCalls、ShaderBinds、TextureBinds，并保存旧立即模式的绑定估算用于计算节省量。当前排序减少状态绑定，但每个 RenderItem 仍对应一个 DrawCall；Instancing 是下一层批次优化。
+BufferLayout 的元素带 `PerVertex / PerInstance` 输入频率；OpenGLVertexArray 持续分配属性位置，将 Mat3/Mat4 拆为列属性，并为实例元素设置 divisor 1。Shader 在初次链接和热重载后检查 `a_InstanceTransform`、`a_InstanceEntityData` 和 `u_UseInstancing`，由公共接口报告是否支持实例化，Renderer3D 不依赖 OpenGLShader 类型。
+
+Renderer3D Statistics 除提交、跳过、DrawCall 和状态绑定外，还记录 BatchCount、InstanceCount、InstancedDrawCalls、IndividualDrawCalls、SavedDrawCalls 以及 Material Cache Hit/Miss。RenderedItems 必须等于 SubmittedItems；一个实例化 DrawCall 可以对应多个 RenderItem。
 
 ### 5.3 Framebuffer、多 Pass 与拾取
 
@@ -268,7 +270,7 @@ flowchart LR
 最终属性 = MaterialProperties + MaterialOverrides(Mask, Values)
 ```
 
-这使多个实体可以继承同一 `.glmat`，同时覆盖 BaseColor、BaseColorTexture、TilingFactor、Metallic 或 Roughness。当前 MaterialInstance 是轻量临时解析对象，没有 Dirty/version 或解析结果缓存。
+这使多个实体可以继承同一 `.glmat`，同时覆盖 BaseColor、BaseColorTexture、TilingFactor、Metallic 或 Roughness。Material 和 MaterialOverrides 均维护运行期 version/Dirty；Inspector 的连续属性修改和离散开关都会推进版本。Renderer3D 缓存最终解析结果，同时比较完整基础状态与 Overrides，因此 Undo/Redo 恢复旧版本号或某条写入路径遗漏 Dirty 时也不会复用不匹配结果。
 
 ## 8. 场景序列化
 
@@ -383,7 +385,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。当前首先建立 3D Instancing 与 MaterialInstance 缓存；随后在扩展 PBR 材质通道前完成 Transparent RenderQueue 与 AlphaMode，使材质分类和深度/排序契约先稳定。TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing 与 MaterialInstance 缓存已经落地；当前在扩展 PBR 材质通道前完成 Transparent RenderQueue 与 AlphaMode，使材质分类和深度/排序契约先稳定。TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

@@ -5,11 +5,11 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-06
+- 最近更新：2026-08-07
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：3D Instancing 与 MaterialInstance 缓存
+- 当前主线：Transparent RenderQueue 与材质 AlphaMode
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,45 +55,47 @@
 
 ## 当前主线
 
-### 3D Instancing 与 MaterialInstance 缓存
+### Transparent RenderQueue 与材质 AlphaMode
 
 **目的**
 
-在稳定 Opaque RenderQueue 上合并兼容的 Mesh/Shader/Material 项，使用 Instance Buffer 一次提交多个 Transform 与 EntityID，并避免每帧重复解析 MaterialInstance。
+在 PBR 材质通道继续扩展前固定 `Opaque / Mask / Blend` 分类、深度写入、排序、混合和拾取契约，解决透明 PNG 在 SkyLight 背景上显示 Scene Clear Color 的问题。
 
 **当前问题**
 
-- Opaque Queue 已排序并减少状态绑定，但仍然每个 RenderItem 发起一次 DrawCall；
-- MaterialInstance 仍在每次 Model Submit 时合并基础材质和 Overrides；
-- Mesh 顶点布局与 Shader 尚未定义实例矩阵和实例 EntityID 契约；
-- 不支持 Instancing 的 Shader 缺少明确回退标记。
+- Material schema 尚无 AlphaMode 与 AlphaCutoff，PNG Alpha 不能表达 Mask/Blend 语义；
+- 当前 3D 模型统一进入 Opaque Queue，透明像素仍可能写入深度和 EntityID；
+- Blend 对象缺少相机距离反向排序和独立深度写入策略；
+- Skybox、透明对象、Gizmo/Overlay 之间尚无明确且可恢复的状态边界。
 
 **实施范围**
 
-- [ ] 定义 Instancing 兼容键和 Batch 聚合规则；
-- [ ] 建立动态 Instance Buffer，上传 Transform 与 EntityID；
-- [ ] 扩展 VertexArray/RendererAPI 的实例属性与 DrawIndexedInstanced；
-- [ ] 为兼容 Shader 增加实例输入，不兼容 Shader 自动回退普通 Draw；
-- [ ] 为 Material/MaterialOverrides 增加 version/Dirty，并缓存最终 MaterialProperties；
-- [ ] 保持 EntityID 附件和鼠标拾取正确；
-- [ ] 增加 InstanceCount、BatchCount、InstancedDrawCalls 和节省 DrawCall 统计；
+- [ ] 为 Material 增加 AlphaMode（Opaque、Mask、Blend）与 AlphaCutoff；
+- [ ] 同步 `.glmat`、MaterialOverrides、Inspector、Undo/Redo 和兼容读取；
+- [ ] Opaque/Mask 保持深度写入，Mask 在 Fragment 阶段按 Cutoff 丢弃；
+- [ ] 建立独立 Transparent Queue，按相机距离由远到近绘制；
+- [ ] 固定 Opaque/Mask → Skybox → Transparent 顺序，并完整恢复 Blend、DepthMask 和 DepthFunc；
+- [ ] 明确透明像素 EntityID 写入与拾取阈值；
+- [ ] Transparent 默认普通 Draw，不破坏现有 Opaque Instancing；
 - [ ] 更新 README 和 ARCHITECTURE 对应章节。
 
 **暂不包含**
 
-- 透明物体队列和距离排序；
+- Order Independent Transparency；
+- 透明对象 Instancing；
+- PBR Normal、AO、Emissive 通道扩展；
 - 遮挡剔除；
 - GPU Driven Rendering；
 - Vulkan 后端。
 
 **验收条件**
 
-- [ ] 多个相同 Cube/Material 合并为单个实例 DrawCall；
-- [ ] Transform 和 EntityID 每实例正确，编辑器拾取不退化；
-- [ ] Material Override 不同的实体不会被错误合批；
-- [ ] 不兼容 Shader 保持普通绘制结果；
-- [ ] MaterialInstance 缓存仅在基础材质或 Overrides 变化时重算；
-- [ ] 统计能够证明重复模型场景 DrawCall 下降；
+- [ ] PNG 全透明区域显示 SkyLight/Skybox，而不是 Scene Clear Color；
+- [ ] Mask 材质正确遮挡并写深度，透明区域不写颜色、深度或 EntityID；
+- [ ] 多层 Blend 对象由远到近稳定混合；
+- [ ] Opaque RenderQueue、Instancing、EntityID 和统计不退化；
+- [ ] Transparent Pass 后 OpenGL 状态完整恢复；
+- [ ] 旧 `.glmat` 默认按 Opaque 加载，保存/重载与 Undo/Redo 往返一致；
 - [ ] VS2026 `Debug | x64` 全量构建成功；
 - [ ] 编辑器启动并稳定渲染首帧；
 - [ ] `git diff --check` 通过。
@@ -101,32 +103,6 @@
 ## 后续任务
 
 任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
-### P3：Transparent RenderQueue 与材质 AlphaMode
-
-**依赖**：当前 3D Instancing 与 MaterialInstance 缓存主线完成，Opaque Queue、EntityID 和状态恢复规则稳定。
-
-**建设时机**
-
-在 PBR 材质通道扩展之前完成。透明分类会改变 Material schema、队列归属、深度写入、排序和拾取规则；先固定 `Opaque / Mask / Blend` 边界，可以避免 Normal、AO、Emissive 等通道加入后再次修改材质与场景格式。
-
-**目标**
-
-- 为 Material 增加 `AlphaMode`（Opaque、Mask、Blend）与 `AlphaCutoff`，同步 `.glmat`、MaterialOverrides、Inspector 和场景兼容读取；
-- Opaque 与 Mask 继续进入深度写入队列；Mask 在 Fragment Shader 中 `discard` 低于 Cutoff 的像素，透明区域不写颜色、深度或 EntityID；
-- Blend 进入独立 Transparent Queue，按相机距离由远到近排序，保持深度测试、关闭深度写入并使用明确的 Straight Alpha 混合；
-- 固定场景顺序为 Opaque/Mask → Skybox → Transparent，并在 Transparent Pass 后恢复 Blend、DepthMask 和 DepthFunc；
-- 透明对象默认回退普通 Draw，不因 Opaque Instancing 强行合批；以后只有排序语义兼容时才评估透明实例化；
-- 明确半透明像素的 EntityID 写入与拾取阈值，避免 PNG 全透明区域遮挡背景实体。
-
-**验收**
-
-- PNG 全透明区域显示 SkyLight/Skybox，而不是 Scene Clear Color；
-- Mask 材质可正确遮挡、写深度，透明区域不可被鼠标拾取；
-- 多层 Blend 对象由远到近稳定混合，Skybox 正确出现在透明对象后方；
-- Opaque RenderQueue、Instancing、EntityID 和 DrawCall 统计不退化；
-- 透明 Pass 结束后 OpenGL 状态完整恢复，不影响 Gizmo、Overlay 和后处理；
-- 旧 `.glmat` 默认按 Opaque 加载，保存/重载和 Undo/Redo 往返一致。
 
 ### P4：PBR 材质通道扩展
 
@@ -327,6 +303,19 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-07：3D Instancing 与 MaterialInstance 缓存
+
+- 扩展 BufferLayout、VertexArray、RendererAPI 和 OpenGL 后端，支持 PerInstance 输入、矩阵属性拆分、`glVertexAttribDivisor` 与 `DrawIndexedInstanced`；
+- PBRModel 使用实例 Transform/EntityID，Shader 在编译和热重载后自检实例化契约，不兼容 Shader 自动逐项回退；
+- Renderer3D 仅合并 Mesh、Shader、纹理和最终 MaterialProperties 完全一致的项，按 1024 实例分块上传动态 Instance Buffer；
+- Material 与 MaterialOverrides 增加版本/Dirty，Renderer3D 以实体和材质为键缓存最终属性，并用完整状态比较保证 Undo/Redo 或遗漏标记时仍不会复用过期结果；
+- Stats 增加 BatchCount、InstanceCount、Instanced/Individual Draw、SavedDrawCalls 和 Material Cache Hit/Miss；
+- 验证：真实 OpenGL 临时场景中 3 个相同 Cube/Material 从 3 Draw 降为 1 Draw；单个 Roughness Override 后为 3 Items/2 Draw；再加入 2 个不兼容 Phong Shader 实体后为 5 Items/4 Draw，确认逐项回退；实例 EntityID 随 Instance Buffer 写入整数附件的 Shader 路径完成编译与运行；
+- 验证：VS2026 `Debug | x64` 全解决方案构建成功；相同命令二次增量构建约 3 秒且未重新编译源码；最终无测试注入编辑器稳定运行 8 秒；`git diff --check` 通过；未删除 `bin`/`bin-int`；
+- 构建修复：重新运行 VS2026 Premake，使既有 SPIRV-Cross samples/tests 排除规则同步到工程并恢复全解决方案构建；
+- README：新增“3D Instancing 与 MaterialInstance 缓存”；
+- 提交：待提交。
 
 ### 2026-08-05：3D Opaque RenderQueue 与状态排序
 

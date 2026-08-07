@@ -5,22 +5,31 @@ layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec3 a_Normal;
 layout(location = 2) in vec3 a_Tangent;
 layout(location = 3) in vec2 a_TexCoord;
+layout(location = 4) in mat4 a_InstanceTransform;
+layout(location = 8) in ivec4 a_InstanceEntityData;
 
 uniform mat4 u_ViewProjection;
 uniform mat4 u_Transform;
+uniform int u_EntityID;
+uniform int u_UseInstancing;
 
 layout(location = 0) out vec3 v_WorldPosition;
 layout(location = 1) out vec3 v_WorldNormal;
 layout(location = 2) out vec2 v_TexCoord;
+layout(location = 3) flat out int v_EntityID;
 
 void main()
 {
-    vec4 worldPosition = u_Transform * vec4(a_Position, 1.0);
-    mat3 normalMatrix = transpose(inverse(mat3(u_Transform)));
+    mat4 transform = u_UseInstancing != 0
+        ? a_InstanceTransform : u_Transform;
+    vec4 worldPosition = transform * vec4(a_Position, 1.0);
+    mat3 normalMatrix = transpose(inverse(mat3(transform)));
 
     v_WorldPosition = worldPosition.xyz;
     v_WorldNormal = normalize(normalMatrix * a_Normal);
     v_TexCoord = a_TexCoord;
+    v_EntityID = u_UseInstancing != 0
+        ? a_InstanceEntityData.x : u_EntityID;
     gl_Position = u_ViewProjection * worldPosition;
 }
 
@@ -33,6 +42,7 @@ layout(location = 1) out int o_EntityID;
 layout(location = 0) in vec3 v_WorldPosition;
 layout(location = 1) in vec3 v_WorldNormal;
 layout(location = 2) in vec2 v_TexCoord;
+layout(location = 3) flat in int v_EntityID;
 
 struct PointLightData
 {
@@ -56,7 +66,6 @@ uniform float u_Roughness;
 uniform float u_TilingFactor;
 uniform sampler2D u_BaseColorTexture;
 uniform int u_HasBaseColorTexture;
-uniform int u_EntityID;
 
 const float PI = 3.14159265359;
 
@@ -154,5 +163,5 @@ void main()
     }
 
     o_Color = vec4(max(result, vec3(0.0)), u_BaseColor.a * sampledColor.a);
-    o_EntityID = u_EntityID;
+    o_EntityID = v_EntityID;
 }

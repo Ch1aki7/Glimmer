@@ -65,6 +65,7 @@ namespace gl {
 		{
 			m_RendererID = program;
 			m_Version = 1;
+			UpdateCapabilities();
 		}
 		GL_CORE_ASSERT(success, "Initial shader compilation failed: {0}", error);
 	}
@@ -120,6 +121,7 @@ namespace gl {
 		const uint32_t oldProgram = m_RendererID;
 		m_RendererID = newProgram;
 		m_UniformCache.clear();
+		UpdateCapabilities();
 		++m_Version;
 		if (oldProgram != 0)
 			glDeleteProgram(oldProgram);
@@ -167,6 +169,14 @@ namespace gl {
 			source.erase(0, 3);
 		}
 		return true;
+	}
+
+	void OpenGLShader::UpdateCapabilities()
+	{
+		m_SupportsInstancing = m_RendererID != 0
+			&& glGetAttribLocation(m_RendererID, "a_InstanceTransform") >= 0
+			&& glGetAttribLocation(m_RendererID, "a_InstanceEntityData") >= 0
+			&& glGetUniformLocation(m_RendererID, "u_UseInstancing") >= 0;
 	}
 
 	bool OpenGLShader::PreProcess(

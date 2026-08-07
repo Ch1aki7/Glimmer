@@ -19,16 +19,22 @@ namespace gl {
 
 	void MaterialOverrides::SetEnabled(MaterialOverride property, bool enabled)
 	{
+		const uint32_t previousMask = Mask;
 		if (enabled)
 			Mask |= ToMask(property);
 		else
 			Mask &= ~ToMask(property);
+		if (Mask != previousMask)
+			MarkDirty();
 	}
 
 	void MaterialOverrides::Clear()
 	{
+		if (Mask == 0 && Values == MaterialProperties{})
+			return;
 		Mask = 0;
 		Values = MaterialProperties{};
+		MarkDirty();
 	}
 
 	MaterialInstance::MaterialInstance(

@@ -5,6 +5,11 @@ namespace gl {
         None = 0, Float, Float2, Float3, Float4, Mat3, Mat4, Int, Int2, Int3, Int4, Bool
     };
 
+    enum class BufferInputRate {
+        PerVertex = 0,
+        PerInstance
+    };
+
     static uint32_t ShaderDataTypeSize(ShaderDataType type) {
         switch (type) {
         case ShaderDataType::Float:    return 4;
@@ -28,9 +33,12 @@ namespace gl {
         uint32_t Size;
         uint32_t Offset;
         bool Normalized;
+        BufferInputRate InputRate;
 
-        BufferElement(ShaderDataType type, const std::string& name, bool normalized = false)
-            : Name(name), Type(type), Size(ShaderDataTypeSize(type)), Offset(0), Normalized(normalized) {}
+        BufferElement(ShaderDataType type, const std::string& name, bool normalized = false,
+            BufferInputRate inputRate = BufferInputRate::PerVertex)
+            : Name(name), Type(type), Size(ShaderDataTypeSize(type)), Offset(0),
+              Normalized(normalized), InputRate(inputRate) {}
 
         uint32_t GetComponentCount() const {
             switch (Type) {
@@ -38,8 +46,8 @@ namespace gl {
             case ShaderDataType::Float2:  return 2;
             case ShaderDataType::Float3:  return 3;
             case ShaderDataType::Float4:  return 4;
-            case ShaderDataType::Mat3:    return 3 * 3;
-            case ShaderDataType::Mat4:    return 4 * 4;
+            case ShaderDataType::Mat3:    return 3;
+            case ShaderDataType::Mat4:    return 4;
             case ShaderDataType::Int:     return 1;
             case ShaderDataType::Int2:    return 2;
             case ShaderDataType::Int3:    return 3;
