@@ -18,6 +18,8 @@ namespace gl {
 			const std::filesystem::path& directory);
 		static std::filesystem::path CreateMaterial(
 			const std::filesystem::path& directory);
+		static std::filesystem::path CreateTerrainMaterial(
+			const std::filesystem::path& directory);
 		static std::filesystem::path CreateSkybox(
 			const std::filesystem::path& directory);
 		static std::filesystem::path CreateScene(

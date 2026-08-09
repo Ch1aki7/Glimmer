@@ -12514,6 +12514,129 @@ Terrain Shader 采样 Height、派生法线和四层权重
 - GPU 读回确认全部值无 NaN/Inf、Height/派生通道范围合法，Grass/Soil/Rock/Snow 权重和为 1；
 - 显式验证入口为环境变量 `GLIMMER_TERRAIN_VALIDATE=1`，仅验证模式执行第二次生成与同步读回，正常编辑流程没有额外 Dispatch 或 Readback。
 
+## TerrainMaterial 四层 Triplanar PBR
+
+P7 已经从高度图派生 Grass、Soil、Rock、Snow 四通道权重，但当时 Terrain Shader 只用四种固定颜色做可视化。现在地形拥有独立的 `TerrainMaterial` 资产：它不复用普通模型材质的 `.glmat`，而以 `.glterrainmat` 保存四层纹理和混合参数。
+
+### 新增操作
+
+在 Content Browser 空白处右键，选择：
+
+```text
+Create Asset → Terrain Material (.glterrainmat)
+```
+
+选择该资产后，Inspector 可以编辑：
+
+- 全局 `Triplanar Sharpness`、`Weight Contrast`；
+- Height、Slope、Curvature、Moisture 四类影响强度；
+- Grass、Soil、Rock、Snow 各自的 Base Color、Tiling、Metallic、Roughness、Normal Scale 和 AO Strength；
+- 每层独立的 Albedo、Normal、AO 纹理。
+
+Albedo 拖入后登记为 `sRGB + Color`，Normal 为 `Linear + Normal`，AO 为 `Linear + Data`。点击 `Save Terrain Material` 原子保存文件，`Reload from Disk` 丢弃内存修改并重新读取磁盘。Terrain 实体的组件区域可以拖入或清除 `.glterrainmat`；也可以直接把该资产拖进 Viewport：选中对象是 Terrain 时替换其材质，否则创建一个使用该材质的新 Terrain。
+
+编辑器默认启动场景会创建一个 Alpine 程序化 Terrain，但其 `TerrainMaterialHandle` 保持为 0。Terrain Shader 和三个 Compute Shader 仍会生成高度及派生图，材质阶段使用内建 Grass/Soil/Rock/Snow 颜色与 PBR 数值，不解析 `.glterrainmat`，也不会加载四层 Albedo/Normal/AO 具体纹理。将 `assets/materials/DefaultTerrain.glterrainmat` 拖到该 Terrain 即可启用完整纹理，清空 Terrain Material 槽位则回到基础颜色路径。
+
+仓库自带 `assets/materials/DefaultTerrain.glterrainmat`，并已配置四套 ambientCG 1K PNG PBR 资源：Grass001、Ground054、Rock027 和 Snow005。Grass/Soil/Rock 使用 Color、NormalGL、AmbientOcclusion；Snow005 原始套装没有 AO，因此 Snow 层保持空 AO Handle 并稳定回退为 1。下载包中的 Roughness、Displacement 和 NormalDX 当前保留在资源目录，但不会注册为 TerrainMaterial 运行时输入。
+
+默认世界空间 Tiling 分别为 Grass `0.7`、Soil `0.4`、Rock `0.35`、Snow `0.55`。所有纹理层的 Base Color 设为白色，避免再次乘色改变已经校准的 Albedo；后续仍可用 Base Color 进行艺术化染色。
+
+### 资产与场景边界
+
+```yaml
+TerrainMaterial:
+  Version: 1
+  TriplanarSharpness: 4.0
+  WeightContrast: 1.15
+  HeightInfluence: 0.65
+  SlopeInfluence: 1.0
+  CurvatureInfluence: 0.35
+  MoistureInfluence: 0.65
+  Layers:
+    - Name: Grass
+      BaseColor: [0.18, 0.48, 0.12]
+      AlbedoTexture: 0
+      NormalTexture: 0
+      AOTexture: 0
+      Tiling: 0.12
+      Metallic: 0.0
+      Roughness: 0.88
+      NormalScale: 1.0
+      AOStrength: 1.0
+```
+
+Scene YAML 只在 `TerrainComponent` 中保存 `TerrainMaterialHandle`。四层配置属于共享资产；Height、Normal/Slope、Analysis 和 Material Weights 仍是 `TerrainRuntime` 的派生 GPU 纹理，不会写进场景文件。
+
+`.glterrainmat` 使用独立 `TerrainMaterial` YAML 根、AssetType 和 AssetManager 缓存，因此不会向普通 `.glmat` 增加地形专用字段，也不会进入 `MaterialInstance + MaterialOverrides` 继承链。
+
+### 四层混合规则
+
+Compute 阶段给出的四通道基础权重会在 Fragment Shader 中继续结合地貌上下文：
+
+```glsl
+float slope = 1.0 - clamp(normal.y, 0.0, 1.0);
+float curvature = analysis.r * 2.0 - 1.0;
+float moisture = clamp(
+    (1.0 - height) * 0.45
+    + flowPotential * 0.70
+    + max(-curvature, 0.0) * 0.25,
+    0.0, 1.0);
+
+weights.grass *= 1.0 + moisture * moistureInfluence * (1.0 - slope);
+weights.soil  *= 1.0 + moisture * moistureInfluence;
+weights.rock  *= 1.0 + slope * 3.0 * slopeInfluence;
+weights.snow  *= 1.0 + highAltitude * (1.0 - slope) * 3.0 * heightInfluence;
+weights = normalizeWeights(pow(weights, vec4(weightContrast)));
+```
+
+结果是陡坡优先岩石，高海拔且平缓的位置增强积雪，低地、汇流和凹地增强湿度，再驱动土壤和植被。参数不是重新生成高度图的开关，只影响材质阶段，因此编辑后可以立即观察结果。
+
+### Triplanar Mapping
+
+规则地形网格只有平面 UV；如果直接用它采样，近乎垂直的山壁会把纹理压成狭长条。Triplanar Mapping 改用世界坐标分别投影到三个平面：
+
+```glsl
+vec3 projectionWeights = pow(abs(worldNormal), vec3(sharpness));
+projectionWeights /= projectionWeights.x
+    + projectionWeights.y + projectionWeights.z;
+
+vec4 xProjection = texture(map, worldPosition.zy * tiling);
+vec4 yProjection = texture(map, worldPosition.xz * tiling);
+vec4 zProjection = texture(map, worldPosition.xy * tiling);
+vec4 sampleValue = xProjection * projectionWeights.x
+    + yProjection * projectionWeights.y
+    + zProjection * projectionWeights.z;
+```
+
+面朝哪个轴，就更多使用与该轴垂直的投影；转折处按法线平滑混合。Albedo、Normal 和 AO 使用同一世界空间尺度，因而不依赖 Terrain 网格 UV，也不会随网格分辨率改变贴图密度。
+
+### PBR 与纹理槽
+
+四层各自计算线性 Albedo、世界空间细节法线、Metallic、Roughness 和 AO，再按最终权重混合。光照沿用 Model 的 Cook–Torrance GGX/Smith/Schlick 直接光；AO 只调制环境项，最终颜色保持在线性 `RGBA16F` Scene Buffer 中，之后统一经过 ACES Tone Mapping。
+
+```text
+Slot 0      Height
+Slot 1      Normal / Slope
+Slot 2      Curvature / Flow Potential
+Slot 3      Grass / Soil / Rock / Snow Weights
+Slot 4–6    Grass Albedo / Normal / AO
+Slot 7–9    Soil Albedo / Normal / AO
+Slot 10–12  Rock Albedo / Normal / AO
+Slot 13–15  Snow Albedo / Normal / AO
+```
+
+Renderer 只绑定符合语义契约的 Texture Asset。贴图为空或语义不匹配时不会误采样：Albedo 回退 Base Color，Normal 回退派生/几何法线，AO 回退 1。
+
+### 验证结果
+
+- VS2026 / MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；
+- 53 项无窗口断言全部 PASS，覆盖 TerrainMaterial 四层参数/纹理保存重载、注册表类型/缓存隔离、独立 YAML 根和 Scene TerrainMaterialHandle 往返；
+- Intel Iris Xe、OpenGL 4.6 下新版 Terrain Shader 与 Generate/Thermal Erosion/Derive Maps 三个 Compute Shader 均编译成功；
+- `GLIMMER_TERRAIN_VALIDATE=1` 下默认 Alpine 仍为 30 次 Dispatch，两次 GPU 输出哈希均为 `4345498711584764525`。
+- Grass/Soil/Rock/Snow 的 11 张运行时纹理已逐项验证文件、注册表和 Handle 引用；直接运行既有编辑器二进制时没有纹理缺失或语义拒绝日志，本次纯资源配置不要求重新编译。
+- 默认 Alpine Terrain 保持 `TerrainMaterialHandle = 0` 后，VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；RTX 4060/OpenGL 4.6 下 Terrain 与 Generate/Thermal Erosion/Derive Maps 均成功编译，启动代码不会导入默认 TerrainMaterial 或其 11 张运行时纹理。
+- VS 启动时的撕裂/显示异常最终确认来自显卡切换与独显选择，不是 Terrain Shader。完整纹理路径最坏约执行 36 次层纹理采样，加上 Height/派生图后接近 40 次/像素；该数字仅作为后续 Top-2 层裁剪和质量分级的性能优化基线。
+
 ## KB
 
 ### 为什么不用动态库？

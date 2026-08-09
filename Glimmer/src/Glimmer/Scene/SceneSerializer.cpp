@@ -205,6 +205,7 @@ namespace gl {
 		out << YAML::Key << "GenerationShader" << YAML::Value << static_cast<uint64_t>(spec.GenerationShaderHandle);
 		out << YAML::Key << "ErosionShader" << YAML::Value << static_cast<uint64_t>(spec.ErosionShaderHandle);
 		out << YAML::Key << "DerivationShader" << YAML::Value << static_cast<uint64_t>(spec.DerivationShaderHandle);
+		out << YAML::Key << "TerrainMaterial" << YAML::Value << static_cast<uint64_t>(spec.TerrainMaterialHandle);
 		out << YAML::Key << "Noise" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "Seed" << YAML::Value << noise.Seed;
 		out << YAML::Key << "Octaves" << YAML::Value << noise.Octaves;
@@ -248,6 +249,7 @@ namespace gl {
 		if (node["GenerationShader"]) spec.GenerationShaderHandle = AssetHandle(node["GenerationShader"].as<uint64_t>());
 		if (node["ErosionShader"]) spec.ErosionShaderHandle = AssetHandle(node["ErosionShader"].as<uint64_t>());
 		if (node["DerivationShader"]) spec.DerivationShaderHandle = AssetHandle(node["DerivationShader"].as<uint64_t>());
+		if (node["TerrainMaterial"]) spec.TerrainMaterialHandle = AssetHandle(node["TerrainMaterial"].as<uint64_t>());
 		if (const auto noiseNode = node["Noise"])
 		{
 			auto& noise = spec.Noise;

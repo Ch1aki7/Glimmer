@@ -96,6 +96,8 @@ namespace gl {
 		{
 			if (ImGui::MenuItem("Material (.glmat)"))
 				createdPath = EditorAssetFactory::CreateMaterial(m_CurrentDir);
+			if (ImGui::MenuItem("Terrain Material (.glterrainmat)"))
+				createdPath = EditorAssetFactory::CreateTerrainMaterial(m_CurrentDir);
 			if (ImGui::MenuItem("Skybox (.glsky)"))
 				createdPath = EditorAssetFactory::CreateSkybox(m_CurrentDir);
 			if (ImGui::MenuItem("Scene (.glimmer)"))

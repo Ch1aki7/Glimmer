@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Terrain/Terrain.h"
+#include "Glimmer/Terrain/TerrainMaterial.h"
 
 #include <cstdlib>
 
@@ -47,6 +48,16 @@ namespace gl {
 			const char* value = std::getenv("GLIMMER_TERRAIN_VALIDATE");
 			return value && std::string(value) == "1";
 #endif
+		}
+
+		Ref<Texture2D> ResolveLayerTexture(AssetHandle handle,
+			TextureColorSpace colorSpace, TextureSemantic semantic)
+		{
+			const AssetMetadata metadata = AssetManager::GetMetadata(handle);
+			if (!metadata.IsValid() || metadata.Type != AssetType::Texture2D
+				|| metadata.ColorSpace != colorSpace || metadata.Semantic != semantic)
+				return nullptr;
+			return AssetManager::GetTexture2D(handle);
 		}
 	}
 
@@ -181,6 +192,57 @@ namespace gl {
 			shader->UploadUniformInt("u_NormalSlopeMap", 1);
 			shader->UploadUniformInt("u_TerrainAnalysisMap", 2);
 			shader->UploadUniformInt("u_MaterialWeightMap", 3);
+		}
+
+		TerrainMaterialProperties materialProperties =
+			TerrainMaterial::CreateDefaultProperties();
+		if (const Ref<TerrainMaterial> terrainMaterial =
+			AssetManager::GetTerrainMaterial(specification.TerrainMaterialHandle))
+			materialProperties = terrainMaterial->GetProperties();
+		shader->UploadUniformFloat("u_TriplanarSharpness",
+			materialProperties.TriplanarSharpness);
+		shader->UploadUniformFloat("u_WeightContrast",
+			materialProperties.WeightContrast);
+		shader->UploadUniformFloat("u_HeightInfluence",
+			materialProperties.HeightInfluence);
+		shader->UploadUniformFloat("u_SlopeInfluence",
+			materialProperties.SlopeInfluence);
+		shader->UploadUniformFloat("u_CurvatureInfluence",
+			materialProperties.CurvatureInfluence);
+		shader->UploadUniformFloat("u_MoistureInfluence",
+			materialProperties.MoistureInfluence);
+		for (size_t index = 0; index < materialProperties.Layers.size(); ++index)
+		{
+			const auto& layer = materialProperties.Layers[index];
+			const std::string prefix = "u_Layers[" + std::to_string(index) + "].";
+			shader->UploadUniformFloat3(prefix + "BaseColor", layer.BaseColor);
+			shader->UploadUniformFloat(prefix + "Tiling", layer.Tiling);
+			shader->UploadUniformFloat(prefix + "Metallic", layer.Metallic);
+			shader->UploadUniformFloat(prefix + "Roughness", layer.Roughness);
+			shader->UploadUniformFloat(prefix + "NormalScale", layer.NormalScale);
+			shader->UploadUniformFloat(prefix + "AOStrength", layer.AOStrength);
+
+			const uint32_t albedoSlot = 4 + static_cast<uint32_t>(index) * 3;
+			const uint32_t normalSlot = albedoSlot + 1;
+			const uint32_t aoSlot = albedoSlot + 2;
+			const Ref<Texture2D> albedo = ResolveLayerTexture(layer.AlbedoTexture,
+				TextureColorSpace::SRGB, TextureSemantic::Color);
+			const Ref<Texture2D> normal = ResolveLayerTexture(layer.NormalTexture,
+				TextureColorSpace::Linear, TextureSemantic::Normal);
+			const Ref<Texture2D> ao = ResolveLayerTexture(layer.AOTexture,
+				TextureColorSpace::Linear, TextureSemantic::Data);
+			shader->UploadUniformInt("u_AlbedoTextures[" + std::to_string(index) + "]",
+				static_cast<int>(albedoSlot));
+			shader->UploadUniformInt("u_NormalTextures[" + std::to_string(index) + "]",
+				static_cast<int>(normalSlot));
+			shader->UploadUniformInt("u_AOTextures[" + std::to_string(index) + "]",
+				static_cast<int>(aoSlot));
+			shader->UploadUniformInt(prefix + "HasAlbedo", albedo ? 1 : 0);
+			shader->UploadUniformInt(prefix + "HasNormal", normal ? 1 : 0);
+			shader->UploadUniformInt(prefix + "HasAO", ao ? 1 : 0);
+			if (albedo) albedo->Bind(albedoSlot);
+			if (normal) normal->Bind(normalSlot);
+			if (ao) ao->Bind(aoSlot);
 		}
 		runtime.Mesh->Bind();
 		RenderCommand::DrawIndexed(runtime.Mesh->GetVertexArray(), runtime.Mesh->GetIndexCount());

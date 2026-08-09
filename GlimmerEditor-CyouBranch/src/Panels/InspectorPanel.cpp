@@ -2,6 +2,7 @@
 
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
+#include "Glimmer/Terrain/TerrainMaterial.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -138,6 +139,95 @@ namespace gl
 		ImGui::Text("Handle: %llu", static_cast<unsigned long long>(handle));
 		ImGui::TextWrapped("Path: %s", metadata.FilePath.string().c_str());
 		ImGui::Text("Type: %d", static_cast<int>(metadata.Type));
+
+		if (metadata.Type == AssetType::TerrainMaterial)
+		{
+			Ref<TerrainMaterial> material = AssetManager::GetTerrainMaterial(handle);
+			if (!material)
+			{
+				ImGui::TextDisabled("Terrain material asset could not be loaded.");
+				return;
+			}
+			ImGui::Separator();
+			ImGui::TextDisabled("Four PBR layers use world-space triplanar mapping.");
+			const bool canEdit = m_CommandHistory != nullptr;
+			ImGui::BeginDisabled(!canEdit);
+			auto& properties = material->GetProperties();
+			auto editFloat = [material](const char* label, float& value,
+				float speed, float minimum, float maximum) {
+				if (ImGui::DragFloat(label, &value, speed, minimum, maximum))
+					material->MarkDirty();
+			};
+			editFloat("Triplanar Sharpness", properties.TriplanarSharpness, 0.1f, 1.0f, 16.0f);
+			editFloat("Weight Contrast", properties.WeightContrast, 0.02f, 0.25f, 4.0f);
+			editFloat("Height Influence", properties.HeightInfluence, 0.02f, 0.0f, 2.0f);
+			editFloat("Slope Influence", properties.SlopeInfluence, 0.02f, 0.0f, 2.0f);
+			editFloat("Curvature Influence", properties.CurvatureInfluence, 0.02f, 0.0f, 2.0f);
+			editFloat("Moisture Influence", properties.MoistureInfluence, 0.02f, 0.0f, 2.0f);
+
+			auto drawTexture = [material](const char* label, AssetHandle& field,
+				TextureColorSpace colorSpace, TextureSemantic semantic) {
+				const AssetMetadata textureMetadata = AssetManager::GetMetadata(field);
+				const bool valid = textureMetadata.IsValid()
+					&& textureMetadata.Type == AssetType::Texture2D;
+				ImGui::Text("%s: %s", label, valid
+					? textureMetadata.FilePath.filename().string().c_str()
+					: "None (drag image here)");
+				ImGui::SameLine();
+				if (valid && ImGui::SmallButton((std::string("X##") + label).c_str()))
+				{
+					field = AssetHandle(0);
+					material->MarkDirty();
+				}
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+					{
+						std::string path((const char*)payload->Data, payload->DataSize - 1);
+						const AssetHandle texture = AssetManager::ImportAsset(path);
+						if (AssetManager::GetMetadata(texture).Type == AssetType::Texture2D)
+						{
+							AssetManager::SetTextureMetadata(texture, colorSpace, semantic);
+							field = texture;
+							material->MarkDirty();
+						}
+					}
+					ImGui::EndDragDropTarget();
+				}
+			};
+
+			for (size_t index = 0; index < properties.Layers.size(); ++index)
+			{
+				ImGui::PushID(static_cast<int>(index));
+				const auto type = static_cast<TerrainMaterialLayerType>(index);
+				if (ImGui::CollapsingHeader(TerrainMaterialLayerTypeToString(type),
+					ImGuiTreeNodeFlags_DefaultOpen))
+				{
+					auto& layer = properties.Layers[index];
+					if (ImGui::ColorEdit3("Base Color", glm::value_ptr(layer.BaseColor)))
+						material->MarkDirty();
+					editFloat("Tiling", layer.Tiling, 0.005f, 0.001f, 10.0f);
+					editFloat("Metallic", layer.Metallic, 0.01f, 0.0f, 1.0f);
+					editFloat("Roughness", layer.Roughness, 0.01f, 0.04f, 1.0f);
+					editFloat("Normal Scale", layer.NormalScale, 0.01f, 0.0f, 2.0f);
+					editFloat("AO Strength", layer.AOStrength, 0.01f, 0.0f, 1.0f);
+					drawTexture("Albedo", layer.AlbedoTexture,
+						TextureColorSpace::SRGB, TextureSemantic::Color);
+					drawTexture("Normal", layer.NormalTexture,
+						TextureColorSpace::Linear, TextureSemantic::Normal);
+					drawTexture("AO", layer.AOTexture,
+						TextureColorSpace::Linear, TextureSemantic::Data);
+				}
+				ImGui::PopID();
+			}
+			if (ImGui::Button("Save Terrain Material"))
+				material->Save();
+			ImGui::SameLine();
+			if (ImGui::Button("Reload from Disk"))
+				material->Reload();
+			ImGui::EndDisabled();
+			return;
+		}
 
 		if (metadata.Type != AssetType::Material)
 			return;

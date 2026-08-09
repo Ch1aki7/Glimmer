@@ -3,6 +3,7 @@
 
 #include "Glimmer/Renderer/Texture.h"
 #include "Glimmer/Renderer/Material.h"
+#include "Glimmer/Terrain/TerrainMaterial.h"
 #include "Glimmer/Renderer/Model.h"
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/Cubemap.h"
@@ -23,6 +24,7 @@ namespace gl {
 			std::unordered_map<std::string, AssetHandle> PathToHandle;
 			std::unordered_map<AssetHandle, Ref<Texture2D>> TextureCache;
 			std::unordered_map<AssetHandle, Ref<Material>> MaterialCache;
+			std::unordered_map<AssetHandle, Ref<TerrainMaterial>> TerrainMaterialCache;
 			std::unordered_map<AssetHandle, Ref<Model>> ModelCache;
 			std::unordered_map<AssetHandle, Ref<Shader>> ShaderCache;
 			std::unordered_map<AssetHandle, Ref<Cubemap>> CubemapCache;
@@ -52,6 +54,7 @@ namespace gl {
 				case AssetType::Model: return "Model";
 				case AssetType::Shader: return "Shader";
 				case AssetType::Material: return "Material";
+				case AssetType::TerrainMaterial: return "TerrainMaterial";
 				case AssetType::Cubemap: return "Cubemap";
 				default: return "None";
 			}
@@ -63,6 +66,7 @@ namespace gl {
 			if (type == "Model") return AssetType::Model;
 			if (type == "Shader") return AssetType::Shader;
 			if (type == "Material") return AssetType::Material;
+			if (type == "TerrainMaterial") return AssetType::TerrainMaterial;
 			if (type == "Cubemap") return AssetType::Cubemap;
 			return AssetType::None;
 		}
@@ -164,6 +168,7 @@ namespace gl {
 		std::scoped_lock lock(s_Data.Mutex);
 		s_Data.TextureCache.clear();
 		s_Data.MaterialCache.clear();
+		s_Data.TerrainMaterialCache.clear();
 		s_Data.ModelCache.clear();
 		s_Data.ShaderCache.clear();
 		s_Data.CubemapCache.clear();
@@ -320,6 +325,24 @@ namespace gl {
 			s_Data.MaterialCache.emplace(handle, material);
 		return material;
 	}
+	Ref<TerrainMaterial> AssetManager::GetTerrainMaterial(AssetHandle handle)
+	{
+		std::scoped_lock lock(s_Data.Mutex);
+		if (static_cast<uint64_t>(handle) == 0)
+			return nullptr;
+		auto cached = s_Data.TerrainMaterialCache.find(handle);
+		if (cached != s_Data.TerrainMaterialCache.end())
+			return cached->second;
+		auto metadata = s_Data.Registry.find(handle);
+		if (metadata == s_Data.Registry.end()
+			|| metadata->second.Type != AssetType::TerrainMaterial)
+			return nullptr;
+		Ref<TerrainMaterial> material = TerrainMaterial::Create(
+			s_Data.AssetDirectory / metadata->second.FilePath);
+		if (material)
+			s_Data.TerrainMaterialCache.emplace(handle, material);
+		return material;
+	}
 	Ref<Model> AssetManager::GetModel(AssetHandle handle)
 	{
 		std::scoped_lock lock(s_Data.Mutex);
@@ -400,6 +423,8 @@ namespace gl {
 			return AssetType::Shader;
 		if (extension == ".glmat")
 			return AssetType::Material;
+		if (extension == ".glterrainmat")
+			return AssetType::TerrainMaterial;
 		if (extension == ".glsky")
 			return AssetType::Cubemap;
 		return AssetType::None;

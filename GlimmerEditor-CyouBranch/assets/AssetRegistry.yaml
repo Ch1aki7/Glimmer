@@ -67,6 +67,64 @@ AssetRegistry:
   - Handle: 7633283146183385934
     Type: Shader
     FilePath: shaders/Terrain/DeriveTerrainMaps.comp
+  - Handle: 7633283146183385935
+    Type: TerrainMaterial
+    FilePath: materials/DefaultTerrain.glterrainmat
+  - Handle: 7633283146183385936
+    Type: Texture2D
+    FilePath: textures/pbr/grass/Grass001_1K-PNG_Color.png
+    ColorSpace: SRGB
+    Semantic: Color
+  - Handle: 7633283146183385937
+    Type: Texture2D
+    FilePath: textures/pbr/grass/Grass001_1K-PNG_NormalGL.png
+    ColorSpace: Linear
+    Semantic: Normal
+  - Handle: 7633283146183385938
+    Type: Texture2D
+    FilePath: textures/pbr/grass/Grass001_1K-PNG_AmbientOcclusion.png
+    ColorSpace: Linear
+    Semantic: Data
+  - Handle: 7633283146183385939
+    Type: Texture2D
+    FilePath: textures/pbr/ground/Ground054_1K-PNG_Color.png
+    ColorSpace: SRGB
+    Semantic: Color
+  - Handle: 7633283146183385940
+    Type: Texture2D
+    FilePath: textures/pbr/ground/Ground054_1K-PNG_NormalGL.png
+    ColorSpace: Linear
+    Semantic: Normal
+  - Handle: 7633283146183385941
+    Type: Texture2D
+    FilePath: textures/pbr/ground/Ground054_1K-PNG_AmbientOcclusion.png
+    ColorSpace: Linear
+    Semantic: Data
+  - Handle: 7633283146183385942
+    Type: Texture2D
+    FilePath: textures/pbr/rock/Rock027_1K-PNG_Color.png
+    ColorSpace: SRGB
+    Semantic: Color
+  - Handle: 7633283146183385943
+    Type: Texture2D
+    FilePath: textures/pbr/rock/Rock027_1K-PNG_NormalGL.png
+    ColorSpace: Linear
+    Semantic: Normal
+  - Handle: 7633283146183385944
+    Type: Texture2D
+    FilePath: textures/pbr/rock/Rock027_1K-PNG_AmbientOcclusion.png
+    ColorSpace: Linear
+    Semantic: Data
+  - Handle: 7633283146183385945
+    Type: Texture2D
+    FilePath: textures/pbr/snow/Snow005_1K-PNG_Color.png
+    ColorSpace: SRGB
+    Semantic: Color
+  - Handle: 7633283146183385946
+    Type: Texture2D
+    FilePath: textures/pbr/snow/Snow005_1K-PNG_NormalGL.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 7909942403015271490
     Type: Shader
     FilePath: shaders/BlinnPhong.glsl

@@ -216,6 +216,26 @@ f 1/1/1 4/4/1 3/3/1
 )") ? path : std::filesystem::path{};
 	}
 
+	std::filesystem::path EditorAssetFactory::CreateTerrainMaterial(
+		const std::filesystem::path& directory)
+	{
+		const auto path = GetUniquePath(directory, "New Terrain Material", ".glterrainmat");
+		return WriteTextFile(path, R"(TerrainMaterial:
+  Version: 1
+  TriplanarSharpness: 4.0
+  WeightContrast: 1.15
+  HeightInfluence: 0.65
+  SlopeInfluence: 1.0
+  CurvatureInfluence: 0.35
+  MoistureInfluence: 0.65
+  Layers:
+    - { Name: Grass, BaseColor: [0.18, 0.48, 0.12], AlbedoTexture: 0, NormalTexture: 0, AOTexture: 0, Tiling: 0.12, Metallic: 0.0, Roughness: 0.88, NormalScale: 1.0, AOStrength: 1.0 }
+    - { Name: Soil, BaseColor: [0.32, 0.20, 0.09], AlbedoTexture: 0, NormalTexture: 0, AOTexture: 0, Tiling: 0.12, Metallic: 0.0, Roughness: 0.92, NormalScale: 1.0, AOStrength: 1.0 }
+    - { Name: Rock, BaseColor: [0.42, 0.39, 0.35], AlbedoTexture: 0, NormalTexture: 0, AOTexture: 0, Tiling: 0.08, Metallic: 0.0, Roughness: 0.78, NormalScale: 1.0, AOStrength: 1.0 }
+    - { Name: Snow, BaseColor: [0.92, 0.94, 0.98], AlbedoTexture: 0, NormalTexture: 0, AOTexture: 0, Tiling: 0.10, Metallic: 0.0, Roughness: 0.55, NormalScale: 1.0, AOStrength: 1.0 }
+)" ) ? path : std::filesystem::path{};
+	}
+
 	std::filesystem::path EditorAssetFactory::CreateSkybox(
 		const std::filesystem::path& directory)
 	{

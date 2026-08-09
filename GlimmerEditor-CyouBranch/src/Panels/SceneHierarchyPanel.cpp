@@ -369,6 +369,36 @@ namespace gl {
 					}
 				}
 
+				const AssetMetadata terrainMaterialMetadata =
+					AssetManager::GetMetadata(spec.TerrainMaterialHandle);
+				const bool hasTerrainMaterial = terrainMaterialMetadata.IsValid()
+					&& terrainMaterialMetadata.Type == AssetType::TerrainMaterial;
+				ImGui::Text("Terrain Material: %s", hasTerrainMaterial
+					? terrainMaterialMetadata.FilePath.filename().string().c_str()
+					: "None (drag .glterrainmat here)");
+				ImGui::SameLine();
+				if (hasTerrainMaterial && ImGui::SmallButton("X##TerrainMaterial"))
+				{
+					TerrainComponent after = terrain;
+					after.Specification.TerrainMaterialHandle = AssetHandle(0);
+					ExecuteComponentEdit(entity, "Clear Terrain Material", terrain, after);
+				}
+				if (ImGui::BeginDragDropTarget())
+				{
+					if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+					{
+						std::string path((const char*)payload->Data, payload->DataSize - 1);
+						const AssetHandle handle = AssetManager::ImportAsset(path);
+						if (AssetManager::GetMetadata(handle).Type == AssetType::TerrainMaterial)
+						{
+							TerrainComponent after = terrain;
+							after.Specification.TerrainMaterialHandle = handle;
+							ExecuteComponentEdit(entity, "Set Terrain Material", terrain, after);
+						}
+					}
+					ImGui::EndDragDropTarget();
+				}
+
 				int heightResolution = static_cast<int>(spec.HeightMapResolution);
 				before = terrain;
 				if (ImGui::InputInt("Height Resolution", &heightResolution, 0))
@@ -1107,6 +1137,7 @@ namespace gl {
 			terrain.Specification.GenerationShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
 			terrain.Specification.ErosionShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/ThermalErosion.comp");
 			terrain.Specification.DerivationShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/DeriveTerrainMaps.comp");
+			terrain.Specification.TerrainMaterialHandle = AssetManager::ImportAsset("assets/materials/DefaultTerrain.glterrainmat");
 			AddComponent<TerrainComponent>(entity, "Terrain", terrain);
 		});
 		if (hasAvailableComponent)

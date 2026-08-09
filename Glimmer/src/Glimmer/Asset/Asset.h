@@ -16,6 +16,7 @@ namespace gl {
 		Model,
 		Shader,
 		Material,
+		TerrainMaterial,
 		Cubemap
 	};
 

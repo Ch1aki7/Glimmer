@@ -9,7 +9,7 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P8 TerrainMaterial 与分层 PBR
+- 当前主线：P9 方向光阴影与 CSM
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,30 +55,9 @@
 
 ## 当前主线
 
-### P8：TerrainMaterial 与分层 PBR
-
-**依赖**：P4、P7 已完成。
-
-**目标**
-
-- 明确 TerrainMaterial 的资产类型、注册表元数据、序列化和 Inspector 入口；
-- 建立 Grass、Soil、Rock、Snow 四层材质；
-- 按高度、坡度、曲率、湿度和权重混合；
-- 使用 Triplanar Mapping 避免陡坡 UV 拉伸。
-
-**验收**
-
-- 陡坡以岩石为主，高处平缓区域可积雪，湿润低地可驱动土壤/植被层；
-- 山壁无明显 UV 拉伸，材质计算保持 HDR 线性空间；
-- TerrainMaterial 可保存、重载、拖放且不污染普通 `.glmat` 布局。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P9：方向光阴影与 CSM
 
-**依赖**：P4 的直接光材质验证稳定；P8 可先使用单级阴影。
+**依赖**：P4、P8 已完成。
 
 **目标**
 
@@ -91,6 +70,26 @@
 - 山峰和模型遮挡关系稳定，无明显 Peter Panning 或大面积 Acne；
 - 级联切换不过度跳变，视锥外阴影对象不提交；
 - Shadow 资源不写入场景文件，只由可序列化设置重建。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
+
+### P8.1：TerrainMaterial 采样优化（P9 后）
+
+**依赖**：P8 四层 Triplanar PBR 已完成。
+
+**目标**
+
+- 按最终混合权重裁剪到贡献最高的两层，再执行具体纹理采样；
+- 评估 Normal/AO 仅采样主导层，以及按摄像机距离切换质量档位；
+- 保留无具体材质纹理的基础颜色路径作为性能对照。
+
+**验收**
+
+- RenderDoc/GPU Timer 证明 Terrain Pass 纹理读取量和 GPU 时间下降；
+- 四层过渡、法线、AO 与距离质量切换无明显接缝或跳变；
+- 优化前后在独显环境下使用相同场景、分辨率和相机进行比较。
 
 ### P10：IBL 环境光照
 
@@ -188,6 +187,20 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-09：P8 TerrainMaterial 与分层 PBR
+
+- 新增独立 `TerrainMaterial` 资产类型、`.glterrainmat` YAML、注册表类型与延迟缓存；格式固定包含 Grass、Soil、Rock、Snow 四层，各层保存 Albedo/Normal/AO Handle、颜色、Tiling、Metallic、Roughness、NormalScale 与 AOStrength，普通 `.glmat` 布局保持不变；
+- `TerrainSpecification` 新增 TerrainMaterialHandle 并完成 Scene YAML 往返；Content Browser 可创建该资产，Terrain Component 支持拖入/清除，Viewport 可把资产应用到选中 Terrain 或创建新 Terrain，Asset Inspector 支持四层贴图、PBR 和混合参数的编辑、保存及磁盘重载；
+- Terrain Shader 使用世界空间 Triplanar Mapping 混合三个投影，按派生权重叠加高度、坡度、曲率与 Flow/低地推导的湿度修正；陡坡增强 Rock、高处平地增强 Snow、湿润低地增强 Grass/Soil，并使用与 Model 一致的 Cook–Torrance 直接光、线性 HDR 输出；
+- Renderer 固定使用 4～15 号纹理单元绑定四层 Albedo/Normal/AO，并在加载时严格检查 sRGB Color、Linear Normal 和 Linear Data 语义；缺失贴图退回层颜色与几何法线；
+- 默认 TerrainMaterial 已接入 Grass001、Ground054、Rock027、Snow005 四套 ambientCG 1K PBR 资源；使用 OpenGL Normal，Color/AO 元数据符合采样契约，Snow 缺少 AO 时按 AO=1 回退，未支持的 Roughness/Displacement/NormalDX 保留但不注册；
+- 资源配置验证：11 个运行时纹理文件、注册表路径和 TerrainMaterial Handle 引用逐项一致；直接启动既有编辑器二进制，无需重新编译，四层纹理加载无报错且 Terrain GPU 验证继续 PASS；
+- 默认编辑器 Scene 恢复一个 Alpine 程序化 Terrain，但保持 `TerrainMaterialHandle = 0`；启动时会生成高度与派生图并使用 Terrain Shader 的内建四层颜色/PBR 参数，不解析 `DefaultTerrain.glterrainmat` 或加载 11 张具体材质纹理；用户主动分配 TerrainMaterial 后才进入完整纹理路径；
+- VS 启动时出现的撕裂/显示异常最终确认来自显卡切换与独显选择，不应归因于 Terrain Shader；完整四层 Triplanar 的采样成本仍作为独立性能问题登记到 P8.1；
+- 验证：VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案和独立测试目标构建成功；53 项无窗口断言全部 PASS；Intel Iris Xe/OpenGL 4.6 下 Terrain 图形 Shader 与三个 Compute Shader 编译成功，GPU 确定性哈希仍为 `4345498711584764525`、30 Dispatch；
+- README：新增“TerrainMaterial 四层 Triplanar PBR”；ARCHITECTURE：同步资产类型、场景引用、Renderer 数据流和编辑器入口；
+- 提交：待提交。
 
 ### 2026-08-09：P7 山脉生成、派生图与 Authoring Erosion
 
@@ -380,7 +393,7 @@
 ### 编辑器
 
 - Undo/Redo 已覆盖实体生命周期、组件增删重置、Transform、Material、Terrain、Light 与 Camera；Tag、SpriteRenderer、ModelRenderer 等部分属性仍有直接修改路径；
-- Material Asset 已具备保存、撤销和失败反馈；其它共享 Asset 仍缺少统一 Dirty、保存和退出提示；
+- Material Asset 已具备保存、撤销和失败反馈；TerrainMaterial 可显式保存/重载但尚未接入 Asset Command/Undo 和统一退出 Dirty 提示；其它共享 Asset 仍缺少统一保存协议；
 - 通用组件值事务目前位于 InspectorPanel；后续新增连续控件应复用激活快照/释放提交边界，避免逐帧命令。
 
 ### 渲染
@@ -390,7 +403,8 @@
 - PBRModel 已支持 Normal、AO 与 Emissive Texture；Metallic/Roughness 仍为标量，尚未定义独立贴图或 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
-- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights；仍缺少正式 TerrainMaterial 资产、Chunk/LOD 和固定步长 Runtime Erosion 调度；
+- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，并接入四层 Triplanar PBR；仍缺少 Chunk/LOD、阴影和固定步长 Runtime Erosion 调度；
+- 完整纹理 Terrain Fragment Shader 对四层 Albedo/Normal/AO 全量执行三平面采样，最坏接近 40 次纹理读取/像素；该成本尚待通过 GPU Timer 定量验证并按 P8.1 优化，但不再视为屏幕撕裂的根因；
 - SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。

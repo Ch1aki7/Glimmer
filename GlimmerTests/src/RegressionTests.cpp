@@ -1,4 +1,5 @@
 #include "Glimmer/Core/Log.h"
+#include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Scene/Components.h"
@@ -6,6 +7,7 @@
 #include "Glimmer/Scene/Scene.h"
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Terrain/Terrain.h"
+#include "Glimmer/Terrain/TerrainMaterial.h"
 #include "Editor/EditorCommand.h"
 
 #include <cmath>
@@ -70,6 +72,7 @@ namespace {
 			&& left.GenerationShaderHandle == right.GenerationShaderHandle
 			&& left.ErosionShaderHandle == right.ErosionShaderHandle
 			&& left.DerivationShaderHandle == right.DerivationShaderHandle
+			&& left.TerrainMaterialHandle == right.TerrainMaterialHandle
 			&& leftNoise.Seed == rightNoise.Seed
 			&& leftNoise.Octaves == rightNoise.Octaves
 			&& Near(leftNoise.Frequency, rightNoise.Frequency)
@@ -186,6 +189,66 @@ namespace {
 			"material emissive and alpha properties survive round trip");
 	}
 
+	void TestTerrainMaterialRoundTrip(TestContext& context,
+		const std::filesystem::path& directory)
+	{
+		const std::filesystem::path path = directory / "TerrainRoundTrip.glterrainmat";
+		{
+			std::ofstream output(path, std::ios::binary | std::ios::trunc);
+			output << "TerrainMaterial:\n  Version: 1\n  Layers: []\n";
+		}
+		gl::Ref<gl::TerrainMaterial> material = gl::TerrainMaterial::Create(path);
+		context.Check(static_cast<bool>(material),
+			"terrain material loads from its distinct TerrainMaterial root");
+		if (!material)
+			return;
+		auto properties = material->GetProperties();
+		properties.TriplanarSharpness = 7.0f;
+		properties.MoistureInfluence = 1.25f;
+		properties.Layers[2].AlbedoTexture = gl::AssetHandle(7101);
+		properties.Layers[2].NormalTexture = gl::AssetHandle(7102);
+		properties.Layers[2].AOTexture = gl::AssetHandle(7103);
+		properties.Layers[2].Tiling = 0.075f;
+		properties.Layers[2].Roughness = 0.63f;
+		material->SetProperties(properties);
+		context.Check(material->Save(), "terrain material saves atomically");
+		gl::Ref<gl::TerrainMaterial> restored = gl::TerrainMaterial::Create(path);
+		context.Check(restored && restored->GetProperties() == material->GetProperties(),
+			"all terrain layer textures and blend parameters survive round trip");
+		std::ifstream input(path);
+		const std::string contents((std::istreambuf_iterator<char>(input)), {});
+		context.Check(contents.find("TerrainMaterial:") != std::string::npos
+			&& contents.find("\nMaterial:") == std::string::npos,
+			"terrain material serialization does not reuse or pollute .glmat layout");
+	}
+
+	void TestTerrainMaterialRegistry(TestContext& context,
+		const std::filesystem::path& directory)
+	{
+		const auto regularPath = directory / "RegistryMaterial.glmat";
+		const auto terrainPath = directory / "RegistryTerrain.glterrainmat";
+		{
+			std::ofstream regular(regularPath);
+			regular << "Material:\n  Shader: 0\n";
+			std::ofstream terrain(terrainPath);
+			terrain << "TerrainMaterial:\n  Version: 1\n  Layers: []\n";
+		}
+		gl::AssetManager::Initialize(directory);
+		const gl::AssetHandle regular = gl::AssetManager::ImportAsset(regularPath);
+		const gl::AssetHandle terrain = gl::AssetManager::ImportAsset(terrainPath);
+		context.Check(static_cast<uint64_t>(regular) != 0
+			&& static_cast<uint64_t>(terrain) != 0 && regular != terrain,
+			"material and terrain material import as distinct handles");
+		context.Check(gl::AssetManager::GetMetadata(regular).Type == gl::AssetType::Material
+			&& gl::AssetManager::GetMetadata(terrain).Type == gl::AssetType::TerrainMaterial,
+			"asset registry preserves distinct material types");
+		context.Check(gl::AssetManager::GetMaterial(terrain) == nullptr
+			&& gl::AssetManager::GetTerrainMaterial(regular) == nullptr
+			&& gl::AssetManager::GetTerrainMaterial(terrain) != nullptr,
+			"typed caches reject cross-loading .glmat and .glterrainmat");
+		gl::AssetManager::Shutdown();
+	}
+
 	void TestMaterialOverrideMerge(TestContext& context, const std::filesystem::path& directory)
 	{
 		const std::filesystem::path path = directory / "OverrideBase.glmat";
@@ -275,6 +338,7 @@ namespace {
 		terrain.Specification.GenerationShaderHandle = gl::AssetHandle(6003);
 		terrain.Specification.ErosionShaderHandle = gl::AssetHandle(6004);
 		terrain.Specification.DerivationShaderHandle = gl::AssetHandle(6005);
+		terrain.Specification.TerrainMaterialHandle = gl::AssetHandle(6006);
 		terrain.Specification.Noise.Seed = 73;
 		terrain.Specification.Noise.Octaves = 7;
 		terrain.Specification.Noise.Frequency = 1.35f;
@@ -466,6 +530,8 @@ int main(int argc, char** argv)
 
 	std::cout << "Glimmer headless regression tests\n";
 	TestMaterialRoundTrip(context, temporaryDirectory.Path());
+	TestTerrainMaterialRoundTrip(context, temporaryDirectory.Path());
+	TestTerrainMaterialRegistry(context, temporaryDirectory.Path());
 	TestMaterialOverrideMerge(context, temporaryDirectory.Path());
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
 	TestTerrainCopyAndTransactions(context);

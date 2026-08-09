@@ -7,6 +7,7 @@ namespace gl {
 
 	class Texture2D;
 	class Material;
+	class TerrainMaterial;
 	class Model;
 	class Shader;
 	class Cubemap;
@@ -29,6 +30,7 @@ namespace gl {
 
 		static Ref<Texture2D> GetTexture2D(AssetHandle handle);
 		static Ref<Material> GetMaterial(AssetHandle handle);
+		static Ref<TerrainMaterial> GetTerrainMaterial(AssetHandle handle);
 		static Ref<Model> GetModel(AssetHandle handle);
 		static Ref<Shader> GetShader(AssetHandle handle);
 		static Ref<Cubemap> GetCubemap(AssetHandle handle);

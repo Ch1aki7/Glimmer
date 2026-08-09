@@ -1,6 +1,6 @@
 # Glimmer 项目架构说明
 
-> 本文最近于 2026-08-05 对照当前源码同步，只描述已经落地的结构与数据流。
+> 本文最近于 2026-08-09 对照当前源码同步，只描述已经落地的结构与数据流。
 > 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
 ## 1. 项目定位与当前边界
@@ -209,7 +209,11 @@ Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight �
 - 也可引用导入的高度图 Texture Asset；
 - `TerrainMesh` 生成规则网格；
 - `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
+- `TerrainSpecification::TerrainMaterialHandle` 引用独立 `.glterrainmat`；Handle 为 0 时 TerrainRenderer 使用内建四层颜色/PBR 参数且不加载具体层纹理，有效 Handle 才从 AssetManager 缓存解析四层参数，并使用纹理单元 4～15 绑定每层 Albedo/Normal/AO；
+- Terrain Shader 以世界坐标对 XY/XZ/YZ 三个平面采样并按法线方向混合，避免陡坡沿网格 UV 拉伸；派生权重再叠加高度、坡度、曲率和 Flow/低地湿度修正，最后进入 Cook–Torrance 直接光与线性 HDR 输出；
 - 参数、Compute Shader 或资源变化时通过 `Invalidate` 使 Runtime 失效。正常帧只采样缓存结果；生成、有限次侵蚀与派生只在 Dirty 或显式 Regenerate 时 Dispatch。
+
+`.glterrainmat` 与普通 `.glmat` 是两个注册表类型和两套 YAML 根。TerrainMaterial 固定拥有 Grass、Soil、Rock、Snow 四层；每层保存颜色、Albedo/Normal/AO Handle、Tiling、Metallic、Roughness、NormalScale 和 AOStrength，资产级参数控制三平面锐度与高度/坡度/曲率/湿度混合强度。缺失纹理时使用层颜色、几何法线和 AO=1；存在纹理必须分别满足 sRGB Color、Linear Normal、Linear Data 语义。TerrainMaterial 保存也采用临时文件替换，但不进入 MaterialInstance 或实体 MaterialOverrides 链路。
 
 ### 5.5 Shader、Compute 与数据读回
 
@@ -255,9 +259,10 @@ Scene 维护 `UUID -> entt::entity` 映射，提供按 UUID 和临时 EnTT ID �
 - Model；
 - Shader；
 - Material（`.glmat`）；
+- TerrainMaterial（`.glterrainmat`）；
 - Cubemap（`.glsky`）。
 
-AssetManager 按规范化相对路径去重导入，并分别维护 Texture、Model、Shader、Material、Cubemap 缓存。Texture 元数据区分 Linear/sRGB 与 Color/Normal/Data/Height 语义，修改元数据时清除对应缓存并重写注册表。PBR 约定 BaseColor/Emissive 为 sRGB Color，Normal 为 Linear Normal，AO 为 Linear Data（Height 也可作为线性单通道数据）；Renderer3D 只解析符合 slot 契约的 Texture Handle，不在绘制阶段改写注册表。
+AssetManager 按规范化相对路径去重导入，并分别维护 Texture、Model、Shader、Material、TerrainMaterial、Cubemap 缓存。Texture 元数据区分 Linear/sRGB 与 Color/Normal/Data/Height 语义，修改元数据时清除对应缓存并重写注册表。PBR 约定 BaseColor/Emissive 为 sRGB Color，Normal 为 Linear Normal，AO 为 Linear Data（Height 也可作为线性单通道数据）；Renderer3D 与 TerrainRenderer 只解析符合 slot 契约的 Texture Handle，不在绘制阶段改写注册表。
 
 ```mermaid
 flowchart LR
@@ -265,7 +270,7 @@ flowchart LR
     Import --> Registry["AssetRegistry.yaml"]
     Registry --> Handle["AssetHandle"]
     Handle --> Cache["按类型延迟缓存"]
-    Cache --> Runtime["Texture / Model / Shader / Material / Cubemap"]
+    Cache --> Runtime["Texture / Model / Shader / Material / TerrainMaterial / Cubemap"]
     Handle --> SceneFile[".glimmer 组件字段"]
 ```
 
@@ -291,14 +296,14 @@ flowchart LR
 
 - 资源引用一律保存 AssetHandle，不保存运行时指针或 OpenGL ID；
 - Material Overrides 保存 Mask 和 Values，使禁用字段仍可保留编辑值；
-- Terrain 只保存 Specification，包括 Preset、Noise、Authoring Erosion 与 Compute Shader Handle；Height 和三张派生纹理加载后按需重建，不写入 YAML；
+- Terrain 只保存 Specification，包括 Preset、Noise、Authoring Erosion、Compute Shader Handle 与 TerrainMaterialHandle；Height 和三张派生纹理加载后按需重建，不写入 YAML；
 - NativeScript 包含函数指针，当前不参与场景序列化；
 - 反序列化使用 `CreateEntityWithUUID` 恢复稳定身份；
 - Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例。
 
 ### 8.1 无窗口回归边界
 
-`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification 往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
 
 根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 
@@ -317,6 +322,8 @@ flowchart LR
 - `SelectionContext`、`EditorCommandHistory`；
 - Hierarchy、Inspector、ContentBrowser、ShaderPanel、DebugPanel。
 
+新建编辑器会话的默认内存 Scene 创建 Sun、Point Light、Sky Light 和一个 Alpine 程序化 Terrain。默认 Terrain 持有图形/Compute Shader Handle，但 `TerrainMaterialHandle` 为 0，因此会生成高度及派生 Runtime，而不解析 `.glterrainmat` 或加载四层具体材质纹理。Add Component、高度图拖入与 TerrainMaterial 拖入仍可创建其它 Terrain。
+
 进入 Play 时，EditorLayer 清理选择，复制 EditorScene 为 RuntimeScene，切换所有面板上下文并禁用编辑命令历史；停止时销毁运行时脚本，丢弃 RuntimeScene，再切回 EditorScene。运行时修改不会写回编辑场景。
 
 DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D Overview、`InstancingLabTool` 与 `PBRMaterialLabTool`。两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。
@@ -328,7 +335,7 @@ DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D Ove
 | 面板 | 当前职责 |
 | --- | --- |
 | `SceneHierarchyPanel` | 枚举 Scene 实体、选择、创建/复制/删除入口 |
-| `InspectorPanel` | 根据 SelectionType 绘制 Entity Components 或 Asset 属性 |
+| `InspectorPanel` | 根据 SelectionType 绘制 Entity Components 或 Asset 属性；TerrainMaterial 提供四层贴图/PBR/混合参数及显式保存/重载 |
 | `ContentBrowserPanel` | 目录树、文件网格、资产选择、拖放和双击打开 |
 | `ShaderPanel` | ShaderLibrary 自动/手动重载与结果显示 |
 | `DebugPanel` | 通用诊断入口；展示 Renderer3D 概览并托管可扩展的临时测试工具 |
@@ -348,6 +355,7 @@ Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入�
 - Transform 连续拖动压缩为单次 Undo；
 - Terrain、Directional/Point/Sky Light 与 Camera 连续属性按控件激活/释放压缩为单次 Undo；
 - Terrain HeightMap 与 SkyLight Cubemap 的离散替换；
+- TerrainMaterial 的组件拖入/清除；
 - MaterialHandle、MaterialOverrides 的开关、数值、纹理和 Reset；
 - 共享 Material Asset 的完整状态、磁盘保存和失败回滚；
 - Edit 模式快捷键 Undo/Redo。
@@ -356,6 +364,8 @@ Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入�
 
 - Tag、SpriteRenderer、ModelRenderer 等部分组件属性；
 - Material 以外 Asset 的统一 Dirty、保存失败反馈和退出提示。
+
+TerrainMaterial Asset 当前支持实时编辑、显式保存和磁盘重载，但资产字段尚未进入 CommandHistory；这仍属于上述统一 Asset Command 边界，而不是已具备的 Undo 保证。
 
 共享 Material 在 Play 模式下只读，避免运行时编辑写回磁盘；实体组件编辑发生在 RuntimeScene 副本中，停止播放后丢弃。以上未实现部分属于 `Documents/PROJECT_STATUS.md` 中的后续技术债，不应视为现有保证。
 
@@ -410,7 +420,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务，以及山脉生成/派生图/有限次 Authoring Erosion 已经落地；当前主线转入 TerrainMaterial 与分层 PBR。Metallic/Roughness Texture/ORM、正式 TerrainMaterial、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion，以及 TerrainMaterial 四层 Triplanar PBR 已经落地；当前主线转入方向光阴影与 CSM。Metallic/Roughness Texture/ORM、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

@@ -54,6 +54,7 @@ namespace gl {
 		AssetHandle GenerationShaderHandle{ 0 };
 		AssetHandle ErosionShaderHandle{ 0 };
 		AssetHandle DerivationShaderHandle{ 0 };
+		AssetHandle TerrainMaterialHandle{ 0 };
 		TerrainNoiseSettings Noise;
 		TerrainAuthoringSettings Authoring;
 	};

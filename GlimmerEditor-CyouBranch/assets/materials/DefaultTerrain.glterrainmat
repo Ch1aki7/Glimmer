@@ -1,0 +1,49 @@
+TerrainMaterial:
+  Version: 1
+  TriplanarSharpness: 4.0
+  WeightContrast: 1.15
+  HeightInfluence: 0.65
+  SlopeInfluence: 1.0
+  CurvatureInfluence: 0.35
+  MoistureInfluence: 0.65
+  Layers:
+    - Name: Grass
+      BaseColor: [1.0, 1.0, 1.0]
+      AlbedoTexture: 7633283146183385936
+      NormalTexture: 7633283146183385937
+      AOTexture: 7633283146183385938
+      Tiling: 0.7
+      Metallic: 0.0
+      Roughness: 0.88
+      NormalScale: 0.7
+      AOStrength: 0.7
+    - Name: Soil
+      BaseColor: [1.0, 1.0, 1.0]
+      AlbedoTexture: 7633283146183385939
+      NormalTexture: 7633283146183385940
+      AOTexture: 7633283146183385941
+      Tiling: 0.4
+      Metallic: 0.0
+      Roughness: 0.92
+      NormalScale: 0.8
+      AOStrength: 0.8
+    - Name: Rock
+      BaseColor: [1.0, 1.0, 1.0]
+      AlbedoTexture: 7633283146183385942
+      NormalTexture: 7633283146183385943
+      AOTexture: 7633283146183385944
+      Tiling: 0.35
+      Metallic: 0.0
+      Roughness: 0.78
+      NormalScale: 0.8
+      AOStrength: 0.8
+    - Name: Snow
+      BaseColor: [1.0, 1.0, 1.0]
+      AlbedoTexture: 7633283146183385945
+      NormalTexture: 7633283146183385946
+      AOTexture: 0
+      Tiling: 0.55
+      Metallic: 0.0
+      Roughness: 0.55
+      NormalScale: 0.5
+      AOStrength: 0.5
