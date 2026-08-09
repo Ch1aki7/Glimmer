@@ -4,6 +4,7 @@
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Buffer.h"
 #include "Glimmer/Renderer/FrameBuffer.h"
+#include "Glimmer/Renderer/GPUTimer.h"
 #include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Renderer/Mesh.h"
 #include "Glimmer/Renderer/Model.h"
@@ -77,6 +78,7 @@ namespace gl {
 			std::array<float, ShadowRenderer::MaxCascades> CascadeSplits{};
 			std::array<float, ShadowRenderer::MaxCascades> CascadeBlendWidths{};
 			Ref<Shader> DepthShader;
+			Ref<GPUTimer> Timer;
 			Ref<VertexBuffer> InstanceVertexBuffer;
 			std::vector<glm::mat4> InstanceBuffer;
 			std::vector<ShadowRenderItem> ModelQueue;
@@ -87,6 +89,8 @@ namespace gl {
 			uint32_t CascadeCount = 0;
 			uint32_t ActiveCascade = 0;
 			float Bias = 0.0015f;
+			float LastGpuMilliseconds = 0.0f;
+			bool HasGpuTiming = false;
 			ShadowRenderer::Statistics Stats;
 			bool PassActive = false;
 			bool Enabled = false;
@@ -353,6 +357,7 @@ namespace gl {
 		s_Data.InstanceBuffer.clear();
 		s_Data.ShadowVertexArrays.clear();
 		s_Data.InstanceVertexBuffer.reset();
+		s_Data.Timer.reset();
 		s_Data.DepthShader.reset();
 		for (Ref<Framebuffer>& framebuffer : s_Data.Framebuffers)
 			framebuffer.reset();
@@ -382,6 +387,17 @@ namespace gl {
 		if (!s_Data.DepthShader)
 			return false;
 		EnsureInstancingResources();
+		if (!s_Data.Timer)
+			s_Data.Timer = GPUTimer::Create();
+		float elapsedMilliseconds = 0.0f;
+		if (s_Data.Timer
+			&& s_Data.Timer->TryGetElapsedMilliseconds(elapsedMilliseconds))
+		{
+			s_Data.LastGpuMilliseconds = elapsedMilliseconds;
+			s_Data.HasGpuTiming = true;
+		}
+		s_Data.Stats.GpuMilliseconds = s_Data.LastGpuMilliseconds;
+		s_Data.Stats.GpuTimingAvailable = s_Data.HasGpuTiming;
 
 		resolution = std::clamp(resolution, 512u, 4096u);
 		cascadeCount = std::clamp(cascadeCount, 1u, MaxCascades);
@@ -458,6 +474,8 @@ namespace gl {
 		s_Data.CascadeCount = cascadeCount;
 		s_Data.Bias = std::clamp(bias, 0.00001f, 0.05f);
 		s_Data.DepthShader->ReloadIfChanged();
+		if (s_Data.Timer)
+			s_Data.Timer->Begin();
 		return true;
 	}
 
@@ -597,6 +615,18 @@ namespace gl {
 	{
 		if (s_Data.PassActive)
 			EndCascade();
+		if (s_Data.Timer)
+		{
+			s_Data.Timer->End();
+			float elapsedMilliseconds = 0.0f;
+			if (s_Data.Timer->TryGetElapsedMilliseconds(elapsedMilliseconds))
+			{
+				s_Data.LastGpuMilliseconds = elapsedMilliseconds;
+				s_Data.HasGpuTiming = true;
+				s_Data.Stats.GpuMilliseconds = elapsedMilliseconds;
+				s_Data.Stats.GpuTimingAvailable = true;
+			}
+		}
 		s_Data.Enabled = s_Data.CascadeCount > 0;
 	}
 

@@ -315,19 +315,22 @@ namespace gl {
 			&& statistics.RenderedItems == m_ExpectedItems
 			&& statistics.SkippedModels == 0)
 		{
-			GL_CORE_INFO("PBR Material Lab PASS: rendered {0}/{1} items with no skipped models.",
-				statistics.RenderedItems, m_ExpectedItems);
 			const ShadowRenderer::Statistics shadowStatistics =
 				ShadowRenderer::GetStatistics();
+			if (!shadowStatistics.GpuTimingAvailable)
+				return;
+			GL_CORE_INFO("PBR Material Lab PASS: rendered {0}/{1} items with no skipped models.",
+				statistics.RenderedItems, m_ExpectedItems);
 			GL_CORE_INFO(
-				"Shadow validation: {0} candidates, {1} rendered, {2} culled, {3} draw calls ({4} instanced), {5} saved across {6} cascades.",
+				"Shadow validation: {0} candidates, {1} rendered, {2} culled, {3} draw calls ({4} instanced), {5} saved across {6} cascades, {7:.3f} ms GPU.",
 				shadowStatistics.CandidateDraws,
 				shadowStatistics.RenderedDraws,
 				shadowStatistics.CulledDraws,
 				shadowStatistics.DrawCalls,
 				shadowStatistics.InstancedDrawCalls,
 				shadowStatistics.GetSavedDrawCalls(),
-				shadowStatistics.CascadePasses);
+				shadowStatistics.CascadePasses,
+				shadowStatistics.GpuMilliseconds);
 			m_ValidationLogged = true;
 		}
 	}

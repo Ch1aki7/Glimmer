@@ -73,6 +73,10 @@ namespace gl {
 				ImGui::Text("Instances / Saved Draws: %u / %u",
 					shadowStatistics.InstanceCount,
 					shadowStatistics.GetSavedDrawCalls());
+				if (shadowStatistics.GpuTimingAvailable)
+					ImGui::Text("GPU Time: %.3f ms", shadowStatistics.GpuMilliseconds);
+				else
+					ImGui::TextDisabled("GPU Time: pending");
 				bool visualizeCascades =
 					ShadowRenderer::IsCascadeDebugVisualizationEnabled();
 				if (ImGui::Checkbox("Visualize Cascades", &visualizeCascades))

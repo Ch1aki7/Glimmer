@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P9 方向光阴影与 CSM
-- 主线状态：进行中（CSM、剔除、调试可视化、Alpha Mask 与 Shadow Instancing 已落地，下一阶段为独显实机画质/性能验收）
+- 主线状态：进行中（CSM 完整链路与非阻塞 GPU 计时已落地，下一阶段为独显实机画质/性能验收）
 
 ## 使用与更新规则
 
@@ -81,9 +81,10 @@
 - Debug → Overview 新增纯运行时 `Visualize Cascades`：PBRModel 与 Terrain 以红、绿、蓝、黄标出第 1～4 级，并沿现有 Cascade Blend 权重渐变显示重叠区；调试色只覆盖最终线性颜色，不改写 Alpha、Entity ID、Shadow Depth 或场景 YAML；
 - Scene 将 Model 实体的 MaterialHandle 与实体级 Overrides 一并提交给 ShadowRenderer；Shadow Pass 通过 MaterialInstance 解析最终 BaseColor、BaseColorTexture、TilingFactor、AlphaMode 与 AlphaCutoff，Mask 材质按与 PBRModel 相同的 `BaseColor.a × Texture.a < AlphaCutoff` 规则 `discard`，因此镂空区域不再写入级联深度图；模型 UV 使用 location 3，Terrain Height UV 继续使用 location 1；
 - 每个级联先收集通过 Bounds 测试的 Model 子网格，再按 Mesh 与最终 Alpha Mask 状态排序；兼容项通过动态 Instance Buffer 和 `glDrawElementsInstanced` 合并，单次最多 1024 实例。Mask 只有 BaseColor Texture、BaseColor Alpha、AlphaCutoff 与 TilingFactor 全部一致时才合批；ShadowRenderer 为每个 Mesh 缓存独立 Shadow VAO，只复制逐顶点缓冲并将实例矩阵固定到 location 4～7，避免与 Renderer3D 的 Instance Buffer 相互污染；Terrain 保持独立 Draw；
+- 新增 Renderer 层 `GPUTimer` 资源与 OpenGL `GL_TIME_ELAPSED` 实现；四个 Query 组成非阻塞环，结果未就绪时继续使用上一份数据而不调用同步式等待。ShadowRenderer 在级联矩阵准备完成后 Begin、全部 Cascade Draw 完成后 End，因此 `GpuMilliseconds` 只覆盖整段 Shadow GPU 工作；Debug → Overview 与 PBR Lab 日志可直接读取；现有 Instancing Lab 可生成最多 100000 个临时实体作为独显压力场景；
 - `TerrainRenderer::Prepare` 将高度/派生 Runtime 准备与颜色绘制分开，使程序化地形首帧即可参与 Shadow Pass；Shadow Pass 完成后恢复当前 Scene Framebuffer 和 Viewport；
 - Directional Light Inspector 现提供 Cast Shadows、512～4096 Resolution、1～4 Cascade Count、Shadow Distance、Bias、Split Lambda 与 Cascade Blend；设置进入 Scene YAML，级联深度纹理、FBO、矩阵、Split 和 Blend Width 保持纯运行时；
-- 验证：VS2026 独立回归目标与最终编辑器目标构建成功；61 项断言及最终汇总全部 PASS，包含四类 Shadow Bounds 测试，以及 Instancing Saved Draw 正常计算和无符号下溢保护；Intel Iris Xe/OpenGL 4.6 下 ShadowDepth/PBRModel 编译成功，PBR Lab 渲染 6/6，24 个候选全部保留并合并为 4 次 Instanced Draw，节省 20 次；默认 Terrain 与三个 Compute Shader 编译运行正常；独显视觉/性能结果仍待最终验收；
+- 验证：Premake VS2026 工程重新生成成功，新增 GPU Timer 源文件已进入 Glimmer 项目；VS2026 独立回归目标与最终编辑器目标构建成功，61 项断言及最终汇总全部 PASS；Intel Iris Xe/OpenGL 4.6 下 PBR Lab 保持 `24 candidates / 4 instanced draws / 20 saved`，非阻塞 Query 成功返回四级 Shadow Pass `0.278 ms` 样本，默认 Terrain/Compute 路径正常；该样本只证明计时链路有效，RTX 4060 同条件视觉/性能结果仍待最终验收；
 - 尚未完成：独显下的级联覆盖/过渡、Mask 轮廓、Acne/Peter Panning 与 GPU 性能对照，以及 Blend 半透明阴影策略，因此 P9 继续保持进行中。
 
 ## 后续任务
