@@ -2,8 +2,15 @@ Material:
   Shader: 15365846500528399802
   BaseColor: [1, 1, 1, 1]
   BaseColorTexture: 0
+  NormalTexture: 0
+  AOTexture: 0
+  EmissiveTexture: 0
   TilingFactor: 1
   Metallic: 0.7
   Roughness: 0.223
+  NormalScale: 1
+  AOStrength: 1
+  EmissiveColor: [1, 1, 1]
+  EmissiveStrength: 0
   AlphaMode: Opaque
   AlphaCutoff: 0.5

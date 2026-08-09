@@ -15,9 +15,16 @@ namespace gl
 		{
 			return glm::all(glm::equal(left.BaseColor, right.BaseColor))
 				&& left.BaseColorTexture == right.BaseColorTexture
+				&& left.NormalTexture == right.NormalTexture
+				&& left.AOTexture == right.AOTexture
+				&& left.EmissiveTexture == right.EmissiveTexture
 				&& left.TilingFactor == right.TilingFactor
 				&& left.Metallic == right.Metallic
 				&& left.Roughness == right.Roughness
+				&& left.NormalScale == right.NormalScale
+				&& left.AOStrength == right.AOStrength
+				&& glm::all(glm::equal(left.EmissiveColor, right.EmissiveColor))
+				&& left.EmissiveStrength == right.EmissiveStrength
 				&& left.AlphaMode == right.AlphaMode
 				&& left.AlphaCutoff == right.AlphaCutoff;
 		}
@@ -238,40 +245,77 @@ namespace gl
 			material->MarkDirty();
 		trackContinuousEdit("Edit Material Roughness", beforeWidget);
 
-		const AssetMetadata textureMetadata =
-			AssetManager::GetMetadata(properties.BaseColorTexture);
-		const bool hasTexture = textureMetadata.IsValid()
-			&& textureMetadata.Type == AssetType::Texture2D;
-		const std::string textureName = hasTexture
-			? textureMetadata.FilePath.filename().string()
-			: "None (drag image here)";
-		ImGui::Text("Base Color Texture: %s", textureName.c_str());
-		ImGui::SameLine();
-		if (hasTexture && ImGui::SmallButton("X##AssetMaterialTexture"))
-		{
-			const MaterialState before = material->GetState();
-			MaterialState after = before;
-			after.Properties.BaseColorTexture = AssetHandle(0);
-			ExecuteMaterialAssetEdit(
-				material, "Clear Material Texture", before, after);
-		}
-		if (ImGui::BeginDragDropTarget())
-		{
-			if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+		beforeWidget = material->GetState();
+		if (ImGui::SliderFloat("Normal Scale", &properties.NormalScale, 0.0f, 2.0f))
+			material->MarkDirty();
+		trackContinuousEdit("Edit Material Normal Scale", beforeWidget);
+
+		beforeWidget = material->GetState();
+		if (ImGui::SliderFloat("AO Strength", &properties.AOStrength, 0.0f, 1.0f))
+			material->MarkDirty();
+		trackContinuousEdit("Edit Material AO Strength", beforeWidget);
+
+		beforeWidget = material->GetState();
+		if (ImGui::ColorEdit3("Emissive Color", glm::value_ptr(properties.EmissiveColor)))
+			material->MarkDirty();
+		trackContinuousEdit("Edit Material Emissive Color", beforeWidget);
+
+		beforeWidget = material->GetState();
+		if (ImGui::DragFloat("Emissive Strength", &properties.EmissiveStrength,
+			0.05f, 0.0f, 100.0f))
+			material->MarkDirty();
+		trackContinuousEdit("Edit Material Emissive Strength", beforeWidget);
+
+		auto drawTextureSlot = [this, material](const char* label, const char* commandName,
+			AssetHandle MaterialProperties::* field, TextureColorSpace colorSpace,
+			TextureSemantic semantic) {
+			auto& current = material->GetProperties().*field;
+			const AssetMetadata textureMetadata = AssetManager::GetMetadata(current);
+			const bool hasTexture = textureMetadata.IsValid()
+				&& textureMetadata.Type == AssetType::Texture2D;
+			const std::string textureName = hasTexture
+				? textureMetadata.FilePath.filename().string() : "None (drag image here)";
+			ImGui::PushID(label);
+			ImGui::Text("%s: %s", label, textureName.c_str());
+			ImGui::SameLine();
+			if (hasTexture && ImGui::SmallButton("X"))
 			{
-				std::string path((const char*)payload->Data, payload->DataSize - 1);
-				const AssetHandle textureHandle = AssetManager::ImportAsset(path);
-				if (AssetManager::GetMetadata(textureHandle).Type == AssetType::Texture2D)
-				{
-					const MaterialState before = material->GetState();
-					MaterialState after = before;
-					after.Properties.BaseColorTexture = textureHandle;
-					ExecuteMaterialAssetEdit(
-						material, "Set Material Texture", before, after);
-				}
+				const MaterialState before = material->GetState();
+				MaterialState after = before;
+				after.Properties.*field = AssetHandle(0);
+				ExecuteMaterialAssetEdit(material, commandName, before, after);
 			}
-			ImGui::EndDragDropTarget();
-		}
+			if (ImGui::BeginDragDropTarget())
+			{
+				if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+				{
+					std::string path((const char*)payload->Data, payload->DataSize - 1);
+					const AssetHandle textureHandle = AssetManager::ImportAsset(path);
+					if (AssetManager::GetMetadata(textureHandle).Type == AssetType::Texture2D)
+					{
+						AssetManager::SetTextureMetadata(textureHandle, colorSpace, semantic);
+						const MaterialState before = material->GetState();
+						MaterialState after = before;
+						after.Properties.*field = textureHandle;
+						ExecuteMaterialAssetEdit(material, commandName, before, after);
+					}
+				}
+				ImGui::EndDragDropTarget();
+			}
+			ImGui::PopID();
+		};
+		drawTextureSlot("Base Color Texture", "Edit Base Color Texture",
+			&MaterialProperties::BaseColorTexture,
+			TextureColorSpace::SRGB, TextureSemantic::Color);
+		drawTextureSlot("Normal Texture", "Edit Normal Texture",
+			&MaterialProperties::NormalTexture,
+			TextureColorSpace::Linear, TextureSemantic::Normal);
+		drawTextureSlot("AO Texture", "Edit AO Texture",
+			&MaterialProperties::AOTexture,
+			TextureColorSpace::Linear, TextureSemantic::Data);
+		drawTextureSlot("Emissive Texture", "Edit Emissive Texture",
+			&MaterialProperties::EmissiveTexture,
+			TextureColorSpace::SRGB, TextureSemantic::Color);
 		ImGui::EndDisabled();
 	}
 }

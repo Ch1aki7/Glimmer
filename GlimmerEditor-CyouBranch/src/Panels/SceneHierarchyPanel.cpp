@@ -17,9 +17,16 @@ namespace gl {
 		{
 			return glm::all(glm::equal(left.BaseColor, right.BaseColor))
 				&& left.BaseColorTexture == right.BaseColorTexture
+				&& left.NormalTexture == right.NormalTexture
+				&& left.AOTexture == right.AOTexture
+				&& left.EmissiveTexture == right.EmissiveTexture
 				&& left.TilingFactor == right.TilingFactor
 				&& left.Metallic == right.Metallic
 				&& left.Roughness == right.Roughness
+				&& left.NormalScale == right.NormalScale
+				&& left.AOStrength == right.AOStrength
+				&& glm::all(glm::equal(left.EmissiveColor, right.EmissiveColor))
+				&& left.EmissiveStrength == right.EmissiveStrength
 				&& left.AlphaMode == right.AlphaMode
 				&& left.AlphaCutoff == right.AlphaCutoff;
 		}
@@ -752,56 +759,122 @@ namespace gl {
 							"Edit Roughness Override", beforeWidget);
 					ImGui::EndDisabled();
 
-					bool overrideTexture = toggleOverride(
-						"##OverrideBaseColorTexture", MaterialOverride::BaseColorTexture,
-						[&](MaterialProperties& target) {
-							target.BaseColorTexture = base.BaseColorTexture;
-						});
+					bool overrideNormalScale = toggleOverride(
+						"##OverrideNormalScale", MaterialOverride::NormalScale,
+						[&](MaterialProperties& target) { target.NormalScale = base.NormalScale; });
 					ImGui::SameLine();
-					const AssetHandle effectiveTexture = overrideTexture
-						? values.BaseColorTexture : base.BaseColorTexture;
-					const AssetMetadata textureMetadata =
-						AssetManager::GetMetadata(effectiveTexture);
-					const bool hasBaseColorTexture = textureMetadata.IsValid()
-						&& textureMetadata.Type == AssetType::Texture2D;
-					const std::string textureName = hasBaseColorTexture
-						? textureMetadata.FilePath.filename().string()
-						: "None";
-					ImGui::Text("Base Color Texture: %s%s", textureName.c_str(),
-						overrideTexture ? "" : " (Inherited)");
-					ImGui::SameLine();
-					if (overrideTexture && hasBaseColorTexture
-						&& ImGui::SmallButton("X##MaterialTexture"))
-					{
-						const MaterialComponent before = component;
-						MaterialComponent after = before;
-						after.Overrides.Values.BaseColorTexture = AssetHandle(0);
-						after.Overrides.MarkDirty();
-						ExecuteMaterialComponentEdit(
-							entity, "Clear Texture Override", before, after);
-					}
+					float inheritedNormalScale = base.NormalScale;
+					ImGui::BeginDisabled(!overrideNormalScale);
+					beforeWidget = component;
+					if (ImGui::SliderFloat("Normal Scale",
+						overrideNormalScale ? &values.NormalScale : &inheritedNormalScale,
+						0.0f, 2.0f) && overrideNormalScale)
+						overrides.MarkDirty();
+					if (overrideNormalScale)
+						trackContinuousEdit("Edit Normal Scale Override", beforeWidget);
+					ImGui::EndDisabled();
 
-					if (ImGui::BeginDragDropTarget())
-					{
-						if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+					bool overrideAOStrength = toggleOverride(
+						"##OverrideAOStrength", MaterialOverride::AOStrength,
+						[&](MaterialProperties& target) { target.AOStrength = base.AOStrength; });
+					ImGui::SameLine();
+					float inheritedAOStrength = base.AOStrength;
+					ImGui::BeginDisabled(!overrideAOStrength);
+					beforeWidget = component;
+					if (ImGui::SliderFloat("AO Strength",
+						overrideAOStrength ? &values.AOStrength : &inheritedAOStrength,
+						0.0f, 1.0f) && overrideAOStrength)
+						overrides.MarkDirty();
+					if (overrideAOStrength)
+						trackContinuousEdit("Edit AO Strength Override", beforeWidget);
+					ImGui::EndDisabled();
+
+					bool overrideEmissiveColor = toggleOverride(
+						"##OverrideEmissiveColor", MaterialOverride::EmissiveColor,
+						[&](MaterialProperties& target) { target.EmissiveColor = base.EmissiveColor; });
+					ImGui::SameLine();
+					glm::vec3 inheritedEmissiveColor = base.EmissiveColor;
+					ImGui::BeginDisabled(!overrideEmissiveColor);
+					beforeWidget = component;
+					if (ImGui::ColorEdit3("Emissive Color", glm::value_ptr(
+						overrideEmissiveColor ? values.EmissiveColor : inheritedEmissiveColor))
+						&& overrideEmissiveColor)
+						overrides.MarkDirty();
+					if (overrideEmissiveColor)
+						trackContinuousEdit("Edit Emissive Color Override", beforeWidget);
+					ImGui::EndDisabled();
+
+					bool overrideEmissiveStrength = toggleOverride(
+						"##OverrideEmissiveStrength", MaterialOverride::EmissiveStrength,
+						[&](MaterialProperties& target) { target.EmissiveStrength = base.EmissiveStrength; });
+					ImGui::SameLine();
+					float inheritedEmissiveStrength = base.EmissiveStrength;
+					ImGui::BeginDisabled(!overrideEmissiveStrength);
+					beforeWidget = component;
+					if (ImGui::DragFloat("Emissive Strength",
+						overrideEmissiveStrength ? &values.EmissiveStrength : &inheritedEmissiveStrength,
+						0.05f, 0.0f, 100.0f) && overrideEmissiveStrength)
+						overrides.MarkDirty();
+					if (overrideEmissiveStrength)
+						trackContinuousEdit("Edit Emissive Strength Override", beforeWidget);
+					ImGui::EndDisabled();
+
+					auto drawTextureOverride = [&](const char* label, const char* id,
+						MaterialOverride property, AssetHandle MaterialProperties::* field,
+						TextureColorSpace colorSpace, TextureSemantic semantic) {
+						bool enabled = toggleOverride(id, property,
+							[&](MaterialProperties& target) { target.*field = base.*field; });
+						ImGui::SameLine();
+						const AssetHandle effective = enabled ? values.*field : base.*field;
+						const AssetMetadata metadata = AssetManager::GetMetadata(effective);
+						const bool hasTexture = metadata.IsValid()
+							&& metadata.Type == AssetType::Texture2D;
+						const std::string name = hasTexture
+							? metadata.FilePath.filename().string() : "None";
+						ImGui::PushID(label);
+						ImGui::Text("%s: %s%s", label, name.c_str(), enabled ? "" : " (Inherited)");
+						ImGui::SameLine();
+						if (enabled && hasTexture && ImGui::SmallButton("X"))
 						{
-							std::string path((const char*)payload->Data, payload->DataSize - 1);
-							AssetHandle textureHandle = AssetManager::ImportAsset(path);
-							AssetMetadata droppedMetadata = AssetManager::GetMetadata(textureHandle);
-							if (droppedMetadata.Type == AssetType::Texture2D)
-							{
-								const MaterialComponent before = component;
-								MaterialComponent after = before;
-							after.Overrides.Values.BaseColorTexture = textureHandle;
+							const MaterialComponent before = component;
+							MaterialComponent after = before;
+							after.Overrides.Values.*field = AssetHandle(0);
 							after.Overrides.MarkDirty();
-								after.Overrides.SetEnabled(
-									MaterialOverride::BaseColorTexture, true);
-								ExecuteMaterialComponentEdit(
-									entity, "Set Texture Override", before, after);
-							}
+							ExecuteMaterialComponentEdit(entity, "Clear Texture Override", before, after);
 						}
-						ImGui::EndDragDropTarget();
-					}
+						if (ImGui::BeginDragDropTarget())
+						{
+							if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE"))
+							{
+								std::string path((const char*)payload->Data, payload->DataSize - 1);
+								const AssetHandle textureHandle = AssetManager::ImportAsset(path);
+								if (AssetManager::GetMetadata(textureHandle).Type == AssetType::Texture2D)
+								{
+									AssetManager::SetTextureMetadata(textureHandle, colorSpace, semantic);
+									const MaterialComponent before = component;
+									MaterialComponent after = before;
+									after.Overrides.Values.*field = textureHandle;
+									after.Overrides.MarkDirty();
+									after.Overrides.SetEnabled(property, true);
+									ExecuteMaterialComponentEdit(entity, "Set Texture Override", before, after);
+								}
+							}
+							ImGui::EndDragDropTarget();
+						}
+						ImGui::PopID();
+					};
+					drawTextureOverride("Base Color Texture", "##OverrideBaseColorTexture",
+						MaterialOverride::BaseColorTexture, &MaterialProperties::BaseColorTexture,
+						TextureColorSpace::SRGB, TextureSemantic::Color);
+					drawTextureOverride("Normal Texture", "##OverrideNormalTexture",
+						MaterialOverride::NormalTexture, &MaterialProperties::NormalTexture,
+						TextureColorSpace::Linear, TextureSemantic::Normal);
+					drawTextureOverride("AO Texture", "##OverrideAOTexture",
+						MaterialOverride::AOTexture, &MaterialProperties::AOTexture,
+						TextureColorSpace::Linear, TextureSemantic::Data);
+					drawTextureOverride("Emissive Texture", "##OverrideEmissiveTexture",
+						MaterialOverride::EmissiveTexture, &MaterialProperties::EmissiveTexture,
+						TextureColorSpace::SRGB, TextureSemantic::Color);
 
 					if (!overrides.Empty() && ImGui::Button("Reset Overrides"))
 					{

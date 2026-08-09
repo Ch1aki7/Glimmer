@@ -8,8 +8,24 @@
 
 #include <array>
 #include <algorithm>
+#include <cstdlib>
 #include <vector>
 namespace gl {
+	namespace {
+		bool ShouldAutorunPBRLab()
+		{
+#ifdef GL_PLATFORM_WINDOWS
+			char* value = nullptr;
+			size_t length = 0;
+			const bool present = _dupenv_s(&value, &length,
+				"GLIMMER_PBR_LAB_AUTORUN") == 0 && value != nullptr;
+			std::free(value);
+			return present;
+#else
+			return std::getenv("GLIMMER_PBR_LAB_AUTORUN") != nullptr;
+#endif
+		}
+	}
 
 	EditorLayer::EditorLayer()
 		: Layer("EditorLayer"),
@@ -20,6 +36,8 @@ namespace gl {
 	void EditorLayer::SetEditorScene(const Ref<Scene>& scene)
 	{
 		GL_CORE_ASSERT(scene, "Editor scene cannot be null.");
+		if (m_DebugPanel.IsTemporarySceneActive())
+			m_DebugPanel.ExitTemporaryTools();
 		if (m_SceneState == SceneState::Play)
 			OnSceneStop();
 
@@ -35,10 +53,41 @@ namespace gl {
 		m_HierarchyPanel.SetSelectedEntity({});
 	}
 
+	bool EditorLayer::ActivateTemporaryDebugScene(const Ref<Scene>& scene)
+	{
+		if (!scene || m_SceneState != SceneState::Edit || !m_EditorScene)
+			return false;
+
+		m_ActiveScene = scene;
+		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_InspectorPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetCommandHistory(nullptr);
+		m_InspectorPanel.SetCommandHistory(nullptr);
+		m_HierarchyPanel.SetSelectedEntity({});
+		GL_CORE_INFO("Temporary debug scene activated.");
+		return true;
+	}
+
+	void EditorLayer::ExitTemporaryDebugScene()
+	{
+		if (!m_EditorScene || m_SceneState != SceneState::Edit)
+			return;
+
+		m_ActiveScene = m_EditorScene;
+		m_HierarchyPanel.SetContext(m_ActiveScene);
+		m_InspectorPanel.SetContext(m_ActiveScene);
+		m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
+		m_InspectorPanel.SetCommandHistory(&m_CommandHistory);
+		m_HierarchyPanel.SetSelectedEntity({});
+		GL_CORE_INFO("Temporary debug scene exited; editor scene restored.");
+	}
+
 	void EditorLayer::OnScenePlay()
 	{
 		if (m_SceneState != SceneState::Edit || !m_EditorScene)
 			return;
+		if (m_DebugPanel.IsTemporarySceneActive())
+			m_DebugPanel.ExitTemporaryTools();
 
 		UUID selectedUUID(0);
 		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
@@ -96,6 +145,20 @@ namespace gl {
 		m_ShaderLib.Load("assets/shaders/StarNest.glsl");
 		const AssetHandle defaultSkyboxHandle =
 			AssetManager::ImportAsset("assets/skyboxes/desert-evening.glsky");
+		const AssetHandle defaultInstancingModelHandle =
+			AssetManager::ImportAsset("assets/models/geos/Cube.obj");
+		const AssetHandle defaultInstancingMaterialHandle =
+			AssetManager::ImportAsset("assets/materials/DefaultPBR.glmat");
+		const AssetHandle defaultPbrSphereHandle =
+			AssetManager::ImportAsset("assets/models/geos/UV Sphere.obj");
+		const AssetHandle defaultNormalTextureHandle =
+			AssetManager::ImportAsset("assets/textures/NoiseTex.png");
+		const AssetHandle defaultAOTextureHandle =
+			AssetManager::ImportAsset("assets/textures/heightmap-example.png");
+		const AssetHandle defaultEmissiveTextureHandle =
+			AssetManager::ImportAsset("assets/textures/Henry.jpg");
+		AssetManager::SetTextureMetadata(defaultNormalTextureHandle,
+			TextureColorSpace::Linear, TextureSemantic::Normal);
 		m_SkyboxShader = m_ShaderLib.Load(
 			"Skybox", "assets/shaders/Skybox.glsl");
 
@@ -178,10 +241,33 @@ namespace gl {
 			m_SelectionContext.SelectAsset(handle);
 		};
 
+		m_DebugPanel.SetDefaultAssets(
+			defaultInstancingModelHandle,
+			defaultInstancingMaterialHandle,
+			defaultSkyboxHandle,
+			defaultPbrSphereHandle,
+			defaultNormalTextureHandle,
+			defaultAOTextureHandle,
+			defaultEmissiveTextureHandle);
+		m_DebugPanel.SetTemporarySceneCallbacks(
+			[this](const Ref<Scene>& scene) {
+				return ActivateTemporaryDebugScene(scene);
+			},
+			[this]() {
+				ExitTemporaryDebugScene();
+			},
+			[this](Entity entity) {
+				m_HierarchyPanel.SetSelectedEntity(entity);
+			});
+		if (ShouldAutorunPBRLab())
+			m_DebugPanel.GeneratePBRMaterialLabForValidation();
+
 
 	}
 	void EditorLayer::OnDetach() {
 		GL_PROFILE_FUNCTION();
+		if (m_DebugPanel.IsTemporarySceneActive())
+			m_DebugPanel.ExitTemporaryTools();
 		if (m_SceneState == SceneState::Play)
 			OnSceneStop();
 		AssetManager::Shutdown();
@@ -307,9 +393,11 @@ namespace gl {
 		// --- 全局快捷键 ---
 		auto& io = ImGui::GetIO();
 		if (m_SceneState == SceneState::Edit
+			&& !m_DebugPanel.IsTemporarySceneActive()
 			&& ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl))
 			m_CommandHistory.Undo();
 		if (m_SceneState == SceneState::Edit
+			&& !m_DebugPanel.IsTemporarySceneActive()
 			&& (ImGui::IsKeyChordPressed(ImGuiKey_Y | ImGuiMod_Ctrl)
 				|| ImGui::IsKeyChordPressed(ImGuiKey_Z | ImGuiMod_Ctrl | ImGuiMod_Shift)))
 			m_CommandHistory.Redo();
@@ -324,10 +412,15 @@ namespace gl {
 			SetEditorScene(CreateRef<Scene>());
 		}
 		if (ImGui::IsKeyChordPressed(ImGuiKey_S | ImGuiMod_Ctrl)) {
-			std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-			if (!path.empty()) {
-				SceneSerializer serializer(m_EditorScene);
-				serializer.Serialize(path);
+			if (m_DebugPanel.IsTemporarySceneActive())
+				GL_CORE_WARN("Exit the temporary Debug Lab before saving the editor scene.");
+			else
+			{
+				std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+				if (!path.empty()) {
+					SceneSerializer serializer(m_EditorScene);
+					serializer.Serialize(path);
+				}
 			}
 		}
 		if (ImGui::IsKeyChordPressed(ImGuiKey_O | ImGuiMod_Ctrl)) {
@@ -386,6 +479,7 @@ namespace gl {
 				{
 					SetEditorScene(CreateRef<Scene>());
 				}
+				ImGui::BeginDisabled(m_DebugPanel.IsTemporarySceneActive());
 				if (ImGui::MenuItem("Save As...", "Ctrl+S"))
 				{
 					std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
@@ -394,6 +488,7 @@ namespace gl {
 						serializer.Serialize(path);
 					}
 				}
+				ImGui::EndDisabled();
 				if (ImGui::MenuItem("Open...", "Ctrl+O"))
 				{
 					std::string path = FileDialog::OpenFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
@@ -407,6 +502,12 @@ namespace gl {
 				}
 				ImGui::Separator();
 				if (ImGui::MenuItem("Exit")) Application::Get().Close();
+				ImGui::EndMenu();
+			}
+			if (ImGui::BeginMenu("Window"))
+			{
+				if (ImGui::MenuItem("Debug", nullptr, m_DebugPanel.IsOpen()))
+					m_DebugPanel.SetOpen(!m_DebugPanel.IsOpen());
 				ImGui::EndMenu();
 			}
 			// 播放/停止按钮（菜单栏右侧）
@@ -431,7 +532,16 @@ namespace gl {
 		}
 
 		// --- Scene Hierarchy ---
-		m_HierarchyPanel.OnImGuiRender();
+		if (m_DebugPanel.IsTemporarySceneActive())
+		{
+			ImGui::Begin("Scene Hierarchy");
+			ImGui::TextDisabled("Instancing Lab is active.");
+			ImGui::TextWrapped(
+				"Hierarchy enumeration is disabled so thousands of debug entities do not distort the render stress test.");
+			ImGui::End();
+		}
+		else
+			m_HierarchyPanel.OnImGuiRender();
 		m_InspectorPanel.OnImGuiRender();
 
 		// --- Content Browser ---
@@ -466,6 +576,7 @@ namespace gl {
 		ImGui::Text("Texture Binds: %u (saved %u)",
 			stats3D.TextureBinds, stats3D.GetSavedTextureBinds());
 		ImGui::End();
+		m_DebugPanel.OnImGuiRender(stats3D);
 
 		// Settings
 		ImGui::Begin("Settings");

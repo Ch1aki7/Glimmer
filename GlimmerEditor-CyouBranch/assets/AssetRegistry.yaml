@@ -1,13 +1,38 @@
 AssetRegistry:
+  - Handle: 760354001728689454
+    Type: Texture2D
+    FilePath: textures/pbr/brick/factory_brick_ao_1k.jpg
+    ColorSpace: Linear
+    Semantic: Data
   - Handle: 801164346423064841
     Type: Model
     FilePath: models/geos/Plane.obj
+  - Handle: 2065354797702115295
+    Type: Texture2D
+    FilePath: textures/pbr/brick/brick_4_rough_1k.jpg
+    ColorSpace: Linear
+    Semantic: Normal
+  - Handle: 2471443246612340731
+    Type: Texture2D
+    FilePath: textures/NoiseTex.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 3179645585411309739
     Type: Model
     FilePath: models/New Folder/Cube.obj
   - Handle: 3528201362395488632
     Type: Shader
     FilePath: shaders/Hologram.glsl
+  - Handle: 3694092518017178816
+    Type: Texture2D
+    FilePath: textures/pbr/brick/factory_brick_disp_1k.png
+    ColorSpace: Linear
+    Semantic: Normal
+  - Handle: 3755312811041664516
+    Type: Texture2D
+    FilePath: textures/pbr/brick/brick_4_disp_1k.png
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 3818937180868702455
     Type: Model
     FilePath: models/dragon.obj
@@ -23,6 +48,11 @@ AssetRegistry:
   - Handle: 5637376273557172649
     Type: Shader
     FilePath: shaders/Phong.glsl
+  - Handle: 6250739528996233267
+    Type: Texture2D
+    FilePath: textures/pbr/lava/Lava_03_emissive-1K.png
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 7227538360213676180
     Type: Texture2D
     FilePath: textures/Checkerboard.png
@@ -57,22 +87,47 @@ AssetRegistry:
   - Handle: 9752225403836206364
     Type: Shader
     FilePath: shaders/FlatColor.glsl
+  - Handle: 9837497289713346387
+    Type: Texture2D
+    FilePath: textures/pbr/brick/brick_4_diff_1k.jpg
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 10096056566838588892
     Type: Texture2D
     FilePath: textures/STS.png
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 10352056206108810874
+    Type: Texture2D
+    FilePath: textures/pbr/lava/Lava_03_normal-1K.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 10520412357890499155
     Type: Shader
     FilePath: shaders/PostProcess.glsl
+  - Handle: 10985595076332161870
+    Type: Texture2D
+    FilePath: textures/pbr/lava/Lava_03_basecolor-1K.png
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 11108635257915747845
     Type: Texture2D
     FilePath: textures/heightmap-example.png
     ColorSpace: Linear
     Semantic: Height
+  - Handle: 11229150295333820520
+    Type: Texture2D
+    FilePath: textures/pbr/lava/Lava_03_ambientocclusion-1K.png
+    ColorSpace: Linear
+    Semantic: Data
   - Handle: 12085106509985387647
     Type: Model
     FilePath: models/spacecraft.obj
+  - Handle: 13472256562800029033
+    Type: Texture2D
+    FilePath: textures/pbr/brick/factory_brick_nor_dx_1k.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 13614654561704837220
     Type: Shader
     FilePath: shaders/Terrain.glsl
@@ -82,6 +137,11 @@ AssetRegistry:
   - Handle: 14395647676425568118
     Type: Cubemap
     FilePath: skyboxes/desert-evening.glsky
+  - Handle: 15261581679978376490
+    Type: Texture2D
+    FilePath: textures/pbr/brick/factory_brick_diff_1k.jpg
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 15365846500528399802
     Type: Shader
     FilePath: shaders/PBRModel.glsl

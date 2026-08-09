@@ -201,9 +201,18 @@ f 1/1/1 4/4/1 3/3/1
   Shader: 0
   BaseColor: [1.0, 1.0, 1.0, 1.0]
   BaseColorTexture: 0
+  NormalTexture: 0
+  AOTexture: 0
+  EmissiveTexture: 0
   TilingFactor: 1.0
   Metallic: 0.0
   Roughness: 0.5
+  NormalScale: 1.0
+  AOStrength: 1.0
+  EmissiveColor: [1.0, 1.0, 1.0]
+  EmissiveStrength: 0.0
+  AlphaMode: Opaque
+  AlphaCutoff: 0.5
 )") ? path : std::filesystem::path{};
 	}
 

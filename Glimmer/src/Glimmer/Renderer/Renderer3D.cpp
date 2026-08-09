@@ -22,6 +22,14 @@ namespace gl {
 
 	namespace {
 		constexpr uint32_t MaxInstancesPerDraw = 1024;
+		constexpr uint32_t MaterialTextureCount = 4;
+		enum MaterialTextureSlot : uint32_t
+		{
+			BaseColorSlot = 0,
+			NormalSlot,
+			AOSlot,
+			EmissiveSlot
+		};
 
 		uint32_t FloatBits(float value)
 		{
@@ -33,24 +41,29 @@ namespace gl {
 
 		struct MaterialSortKey
 		{
-			uint64_t BaseColorTexture = 0;
-			std::array<uint32_t, 9> Values{};
+			std::array<uint64_t, MaterialTextureCount> Textures{};
+			std::array<uint32_t, 15> Values{};
 
 			bool operator<(const MaterialSortKey& other) const
 			{
-				return std::tie(BaseColorTexture, Values)
-					< std::tie(other.BaseColorTexture, other.Values);
+				return std::tie(Textures, Values) < std::tie(other.Textures, other.Values);
 			}
 		};
 
 		MaterialSortKey MakeMaterialSortKey(const MaterialProperties& material)
 		{
 			return {
-				static_cast<uint64_t>(material.BaseColorTexture),
+				{ static_cast<uint64_t>(material.BaseColorTexture),
+				  static_cast<uint64_t>(material.NormalTexture),
+				  static_cast<uint64_t>(material.AOTexture),
+				  static_cast<uint64_t>(material.EmissiveTexture) },
 				{ FloatBits(material.BaseColor.x), FloatBits(material.BaseColor.y),
 				  FloatBits(material.BaseColor.z), FloatBits(material.BaseColor.w),
 				  FloatBits(material.TilingFactor), FloatBits(material.Metallic),
-				  FloatBits(material.Roughness),
+				  FloatBits(material.Roughness), FloatBits(material.NormalScale),
+				  FloatBits(material.AOStrength), FloatBits(material.EmissiveColor.x),
+				  FloatBits(material.EmissiveColor.y), FloatBits(material.EmissiveColor.z),
+				  FloatBits(material.EmissiveStrength),
 				  static_cast<uint32_t>(material.AlphaMode),
 				  FloatBits(material.AlphaCutoff) }
 			};
@@ -60,19 +73,19 @@ namespace gl {
 		{
 			uint64_t Shader = 0;
 			uint64_t Material = 0;
-			uint32_t Texture = 0;
+			std::array<uint32_t, MaterialTextureCount> Textures{};
 			uintptr_t Mesh = 0;
 			MaterialSortKey MaterialState;
-			bool HasBaseColorTexture = false;
+			std::array<bool, MaterialTextureCount> HasTextures{};
 			uint32_t Entity = 0;
 
 			bool operator<(const RenderKey& other) const
 			{
-				return std::tie(Shader, Material, Texture, Mesh, MaterialState,
-					HasBaseColorTexture, Entity)
-					< std::tie(other.Shader, other.Material, other.Texture,
+				return std::tie(Shader, Material, Textures, Mesh, MaterialState,
+					HasTextures, Entity)
+					< std::tie(other.Shader, other.Material, other.Textures,
 						other.Mesh, other.MaterialState,
-						other.HasBaseColorTexture, other.Entity);
+						other.HasTextures, other.Entity);
 			}
 		};
 
@@ -81,11 +94,11 @@ namespace gl {
 			RenderKey Key;
 			Ref<Mesh> MeshResource;
 			Ref<Shader> ShaderResource;
-			Ref<Texture2D> TextureResource;
+			std::array<Ref<Texture2D>, MaterialTextureCount> TextureResources;
 			MaterialProperties Material;
 			glm::mat4 Transform{ 1.0f };
 			int EntityID = -1;
-			bool HasBaseColorTexture = false;
+			std::array<bool, MaterialTextureCount> HasTextures{};
 			float CameraDistanceSquared = 0.0f;
 		};
 
@@ -153,10 +166,26 @@ namespace gl {
 		bool CanBatch(const RenderItem& left, const RenderItem& right)
 		{
 			return left.ShaderResource == right.ShaderResource
-				&& left.TextureResource == right.TextureResource
+				&& left.TextureResources == right.TextureResources
 				&& left.MeshResource == right.MeshResource
 				&& left.Material == right.Material
-				&& left.HasBaseColorTexture == right.HasBaseColorTexture;
+				&& left.HasTextures == right.HasTextures;
+		}
+
+		Ref<Texture2D> ResolveMaterialTexture(AssetHandle handle,
+			TextureColorSpace colorSpace, TextureSemantic semantic)
+		{
+			if (static_cast<uint64_t>(handle) == 0)
+				return nullptr;
+			const AssetMetadata metadata = AssetManager::GetMetadata(handle);
+			if (metadata.Type != AssetType::Texture2D)
+				return nullptr;
+			const bool semanticCompatible = metadata.Semantic == semantic
+				|| (semantic == TextureSemantic::Data
+					&& metadata.Semantic == TextureSemantic::Height);
+			if (metadata.ColorSpace != colorSpace || !semanticCompatible)
+				return nullptr;
+			return AssetManager::GetTexture2D(handle);
 		}
 
 		void EnsureInstanceInput(const Ref<VertexArray>& vertexArray)
@@ -172,9 +201,20 @@ namespace gl {
 			item.ShaderResource->UploadUniformFloat4("u_BaseColor", item.Material.BaseColor);
 			item.ShaderResource->UploadUniformFloat("u_Metallic", item.Material.Metallic);
 			item.ShaderResource->UploadUniformFloat("u_Roughness", item.Material.Roughness);
+			item.ShaderResource->UploadUniformFloat("u_NormalScale", item.Material.NormalScale);
+			item.ShaderResource->UploadUniformFloat("u_AOStrength", item.Material.AOStrength);
+			item.ShaderResource->UploadUniformFloat3("u_EmissiveColor", item.Material.EmissiveColor);
+			item.ShaderResource->UploadUniformFloat(
+				"u_EmissiveStrength", item.Material.EmissiveStrength);
 			item.ShaderResource->UploadUniformFloat("u_TilingFactor", item.Material.TilingFactor);
 			item.ShaderResource->UploadUniformInt(
-				"u_HasBaseColorTexture", item.HasBaseColorTexture ? 1 : 0);
+				"u_HasBaseColorTexture", item.HasTextures[BaseColorSlot] ? 1 : 0);
+			item.ShaderResource->UploadUniformInt(
+				"u_HasNormalTexture", item.HasTextures[NormalSlot] ? 1 : 0);
+			item.ShaderResource->UploadUniformInt(
+				"u_HasAOTexture", item.HasTextures[AOSlot] ? 1 : 0);
+			item.ShaderResource->UploadUniformInt(
+				"u_HasEmissiveTexture", item.HasTextures[EmissiveSlot] ? 1 : 0);
 			item.ShaderResource->UploadUniformInt(
 				"u_AlphaMode", static_cast<int>(item.Material.AlphaMode));
 			item.ShaderResource->UploadUniformFloat(
@@ -274,8 +314,16 @@ namespace gl {
 		}
 
 		const MaterialProperties properties = cached.Properties;
-		const Ref<Texture2D> materialTexture =
-			AssetManager::GetTexture2D(properties.BaseColorTexture);
+		std::array<Ref<Texture2D>, MaterialTextureCount> materialTextures{
+			ResolveMaterialTexture(properties.BaseColorTexture,
+				TextureColorSpace::SRGB, TextureSemantic::Color),
+			ResolveMaterialTexture(properties.NormalTexture,
+				TextureColorSpace::Linear, TextureSemantic::Normal),
+			ResolveMaterialTexture(properties.AOTexture,
+				TextureColorSpace::Linear, TextureSemantic::Data),
+			ResolveMaterialTexture(properties.EmissiveTexture,
+				TextureColorSpace::SRGB, TextureSemantic::Color)
+		};
 		s_Data.Stats.SubmittedModels++;
 		s_Data.Stats.ImmediateModeShaderBinds++;
 
@@ -284,28 +332,33 @@ namespace gl {
 			if (!mesh || !mesh->GetVertexArray() || mesh->GetIndexCount() == 0)
 				continue;
 
-			Ref<Texture2D> texture = materialTexture;
-			if (!texture)
-				texture = mesh->GetTexture();
-			const bool hasBaseColorTexture = static_cast<bool>(texture);
-			if (!texture)
-				texture = s_Data.WhiteTexture;
+			std::array<Ref<Texture2D>, MaterialTextureCount> textures = materialTextures;
+			if (!textures[BaseColorSlot])
+				textures[BaseColorSlot] = mesh->GetTexture();
+			std::array<bool, MaterialTextureCount> hasTextures{};
+			for (uint32_t slot = 0; slot < MaterialTextureCount; ++slot)
+			{
+				hasTextures[slot] = static_cast<bool>(textures[slot]);
+				if (!textures[slot])
+					textures[slot] = s_Data.WhiteTexture;
+			}
 
 			RenderItem item;
 			item.Key.Shader = static_cast<uint64_t>(shaderHandle);
 			item.Key.Material = static_cast<uint64_t>(materialHandle);
-			item.Key.Texture = texture->GetRendererID();
+			for (uint32_t slot = 0; slot < MaterialTextureCount; ++slot)
+				item.Key.Textures[slot] = textures[slot]->GetRendererID();
 			item.Key.Mesh = reinterpret_cast<uintptr_t>(mesh.get());
 			item.Key.MaterialState = MakeMaterialSortKey(properties);
-			item.Key.HasBaseColorTexture = hasBaseColorTexture;
+			item.Key.HasTextures = hasTextures;
 			item.Key.Entity = static_cast<uint32_t>(entityID);
 			item.MeshResource = mesh;
 			item.ShaderResource = shader;
-			item.TextureResource = texture;
+			item.TextureResources = textures;
 			item.Material = properties;
 			item.Transform = transform;
 			item.EntityID = entityID;
-			item.HasBaseColorTexture = hasBaseColorTexture;
+			item.HasTextures = hasTextures;
 			const glm::vec3 itemPosition = glm::vec3(transform[3]);
 			const glm::vec3 cameraOffset = itemPosition - s_Data.CameraPosition;
 			item.CameraDistanceSquared = glm::dot(cameraOffset, cameraOffset);
@@ -323,7 +376,7 @@ namespace gl {
 					s_Data.Stats.OpaqueItems++;
 			}
 			s_Data.Stats.SubmittedItems++;
-			s_Data.Stats.ImmediateModeTextureBinds++;
+			s_Data.Stats.ImmediateModeTextureBinds += MaterialTextureCount;
 		}
 	}
 
@@ -345,7 +398,8 @@ namespace gl {
 			}), "Renderer3D opaque queue sort invariant failed.");
 
 		Ref<Shader> boundShader;
-		uint32_t boundTexture = std::numeric_limits<uint32_t>::max();
+		std::array<uint32_t, MaterialTextureCount> boundTextures;
+		boundTextures.fill(std::numeric_limits<uint32_t>::max());
 
 		for (size_t itemIndex = 0; itemIndex < s_Data.OpaqueQueue.size();)
 		{
@@ -359,16 +413,22 @@ namespace gl {
 				item.ShaderResource->UploadUniformFloat3(
 					"u_CameraPos", s_Data.CameraPosition);
 				item.ShaderResource->UploadUniformInt("u_BaseColorTexture", 0);
+				item.ShaderResource->UploadUniformInt("u_NormalTexture", 1);
+				item.ShaderResource->UploadUniformInt("u_AOTexture", 2);
+				item.ShaderResource->UploadUniformInt("u_EmissiveTexture", 3);
 				boundShader = item.ShaderResource;
 				s_Data.Stats.ShaderBinds++;
 			}
 
-			const uint32_t textureID = item.TextureResource->GetRendererID();
-			if (textureID != boundTexture)
+			for (uint32_t slot = 0; slot < MaterialTextureCount; ++slot)
 			{
-				item.TextureResource->Bind(0);
-				boundTexture = textureID;
-				s_Data.Stats.TextureBinds++;
+				const uint32_t textureID = item.TextureResources[slot]->GetRendererID();
+				if (textureID != boundTextures[slot])
+				{
+					item.TextureResources[slot]->Bind(slot);
+					boundTextures[slot] = textureID;
+					s_Data.Stats.TextureBinds++;
+				}
 			}
 
 			size_t batchEnd = itemIndex + 1;
@@ -458,7 +518,8 @@ namespace gl {
 		RenderCommand::SetDepthFunction(DepthFunction::Less);
 
 		Ref<Shader> boundShader;
-		uint32_t boundTexture = std::numeric_limits<uint32_t>::max();
+		std::array<uint32_t, MaterialTextureCount> boundTextures;
+		boundTextures.fill(std::numeric_limits<uint32_t>::max());
 		for (const RenderItem& item : s_Data.TransparentQueue)
 		{
 			if (item.ShaderResource != boundShader)
@@ -470,16 +531,22 @@ namespace gl {
 				item.ShaderResource->UploadUniformFloat3(
 					"u_CameraPos", s_Data.CameraPosition);
 				item.ShaderResource->UploadUniformInt("u_BaseColorTexture", 0);
+				item.ShaderResource->UploadUniformInt("u_NormalTexture", 1);
+				item.ShaderResource->UploadUniformInt("u_AOTexture", 2);
+				item.ShaderResource->UploadUniformInt("u_EmissiveTexture", 3);
 				boundShader = item.ShaderResource;
 				s_Data.Stats.ShaderBinds++;
 			}
 
-			const uint32_t textureID = item.TextureResource->GetRendererID();
-			if (textureID != boundTexture)
+			for (uint32_t slot = 0; slot < MaterialTextureCount; ++slot)
 			{
-				item.TextureResource->Bind(0);
-				boundTexture = textureID;
-				s_Data.Stats.TextureBinds++;
+				const uint32_t textureID = item.TextureResources[slot]->GetRendererID();
+				if (textureID != boundTextures[slot])
+				{
+					item.TextureResources[slot]->Bind(slot);
+					boundTextures[slot] = textureID;
+					s_Data.Stats.TextureBinds++;
+				}
 			}
 
 			UploadMaterialState(item);

@@ -9,7 +9,7 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：PBR 材质通道扩展
+- 当前主线：P5 自动化回归测试与持续构建
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,55 +55,7 @@
 
 ## 当前主线
 
-### PBR 材质通道扩展
-
-**目的**
-
-在已稳定的 Material、Opaque/Transparent RenderQueue、AlphaMode 和基础 Cook–Torrance PBR 之上，补齐标准模型材质所需的纹理通道与颜色空间契约。
-
-**当前问题**
-
-- 当前只有 BaseColor、Metallic、Roughness，缺少 Normal、AO、Emissive 通道；
-- 颜色纹理和数据纹理需要明确区分 sRGB 与 Linear，避免重复 Gamma；
-- `.glmat`、MaterialOverrides、Inspector、缓存排序键和 Shader 必须保持同一字段契约；
-- 旧材质和旧场景必须继续按现有默认值加载。
-
-**实施范围**
-
-- [ ] 增加 Normal、AO、Emissive 纹理和必要强度参数；
-- [ ] 同步 `.glmat`、MaterialOverrides、Inspector、Undo/Redo、YAML 与 MaterialInstance 缓存；
-- [ ] 明确 BaseColor/Emissive 使用 sRGB，Normal/AO/Metallic/Roughness 使用 Linear；
-- [ ] 扩展 PBRModel Shader，并保持 Opaque、Mask、Blend 和 EntityID 语义；
-- [ ] 保持旧材质/场景兼容以及现有 Opaque Instancing 合批正确性；
-- [ ] 更新 README 和 ARCHITECTURE 对应章节。
-
-**暂不包含**
-
-- 阴影与 CSM；
-- IBL 环境卷积；
-- Height/Parallax Mapping；
-- 遮挡剔除；
-- GPU Driven Rendering；
-- Vulkan 后端。
-
-**验收条件**
-
-- [ ] 标准材质球可分别验证 Normal、AO、Emissive 和 Metallic-Roughness；
-- [ ] sRGB 颜色纹理与 Linear 数据纹理不发生重复 Gamma；
-- [ ] 旧 `.glmat` 和场景文件仍可加载；
-- [ ] Material Asset、MaterialOverrides、Inspector 与 YAML 往返一致；
-- [ ] Opaque/Mask/Blend、Instancing、EntityID 和统计不退化；
-- [ ] VS2026 `Debug | x64` 全量构建成功；
-- [ ] 编辑器启动并稳定渲染首帧；
-- [ ] `git diff --check` 通过。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P5：自动化回归测试与持续构建
-
-**依赖**：可以与任一功能阶段穿插，不依赖渲染架构全部完成。
 
 **目标**
 
@@ -117,6 +69,10 @@
 - 无窗口测试能稳定复现失败并返回非零退出码；
 - Premake、VS2026 `Debug | x64` 和最小场景往返有可重复执行入口；
 - 每个后续 Lab 场景独立运行，不向默认编辑场景永久写入测试实体。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P6：Terrain 现状复核与编辑事务收口
 
@@ -283,6 +239,28 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-08-09：PBR 材质通道与颜色空间契约
+
+- `MaterialProperties`、`.glmat` 与实体 `MaterialOverrides` 已同步加入 Normal/AO/Emissive Texture、NormalScale、AOStrength、EmissiveColor/Strength；旧文件缺字段时维持无贴图、Normal/AO 强度 1、Emissive 强度 0 的兼容默认值；
+- 共享 Material Inspector 与实体 Override Inspector 均支持新字段、贴图拖放、连续编辑事务和 Undo/Redo；场景 YAML 保存完整 Mask/Values，MaterialInstance 缓存比较最终完整状态；
+- Renderer3D 使用固定 0～3 纹理单元绑定 BaseColor、Normal、AO、Emissive，并把四纹理 GPU ID、存在状态和全部参数纳入排序/合批键；不透明 Instancing、Mask/Blend 和 EntityID 路径继续复用同一 PBR Shader；
+- PBRModel 使用切线空间 Normal Mapping，AO 仅调制环境项，Emissive 在线性 HDR 空间累加；BaseColor/Emissive 使用 sRGB 资产，Normal/AO 使用 Linear，Renderer 只读取符合语义契约的纹理且不在绘制阶段改写注册表；模型切线生成对退化 UV 增加稳定正交基回退；
+- Debug Rendering 新增独立 `PBRMaterialLabTool`，生成 6 个临时材质球对照 Normal、AO、Emissive、Dielectric/Metallic 与 Smooth/Rough；支持 `GLIMMER_PBR_LAB_AUTORUN=1` 自动生成并执行材质/场景 YAML 往返验证；
+- 验证：Premake VS2026 重新生成成功；VS2026 `Debug | x64` 全解决方案构建成功；自动 Lab 稳定运行 8 秒并记录 `6/6 items` 渲染 PASS、旧 `.glmat` 与全部新 Override YAML 往返 PASS；测试进程正常关闭，临时文件/日志已清理；`git diff --check` 通过；
+- 未覆盖：Metallic/Roughness 仍为标量，独立贴图或打包 ORM 通道、镜像 UV 的 Tangent Handedness、IBL 与阴影留给后续；
+- README：新增“PBR 材质纹理通道扩展与 Material Lab”；
+- 提交：待提交。
+
+### 2026-08-09：可扩展 Debug 面板与 GPU Instancing Lab
+
+- 当前完整编辑器新增独立 `Window → Debug` 面板，以 Overview/Rendering 页签承载长期诊断入口；首个独立工具 `InstancingLabTool` 不侵入 Renderer3D；
+- Instancing Lab 使用临时内存 Scene 创建真实 ECS 模型实体，退出、切换场景、进入 Play 或编辑器关闭时恢复原 EditorScene；Lab 不进入 Undo/Redo，不允许保存，默认暂停 Hierarchy 全量枚举以免大量 ImGui 行干扰渲染压力测试；
+- 默认 Cube/DefaultPBR 可生成 `50×1×50=2500` 个实体；支持 Maximum Instancing、双 Roughness Material Split 和 Blend Transparent Comparison，并可拖放替换 Model/Material；
+- 面板根据实体数、Submesh 数、1024 实例分块和预设计算理论 Items、DrawCall、Instanced/Individual Draw 与 InstanceCount，逐帧对照 Renderer3D Statistics 显示 Pending/PASS/FAIL，并提供首/中/末代表实体拾取入口；
+- 验证：重新生成 VS2026 工程后 `Debug | x64` 全解决方案构建成功；完整编辑器稳定运行 8 秒；`git diff --check` 通过；
+- README：新增“可扩展 Debug 面板与 GPU Instancing Lab”；
+- 提交：待提交。
+
 ### 2026-08-09：Transparent RenderQueue 与材质 AlphaMode
 
 - MaterialProperties 增加 `Opaque / Mask / Blend` 与 AlphaCutoff，并同步 `.glmat`、实体 MaterialOverrides、Inspector、Undo/Redo 完整状态和场景 YAML；旧文件缺字段时默认 Opaque/0.5；
@@ -428,6 +406,7 @@
 
 - Renderer3D 已有 Opaque/Mask/Transparent Queue、状态排序、Opaque Instancing 和 MaterialInstance 缓存；Transparent 首版仍按实体原点而不是 Mesh Bounds 中心排序，且不支持透明实例化或 OIT；
 - AlphaMode Shader 契约当前由 PBRModel 完整实现；自定义 3D Shader 若要正确支持 Mask/Blend，仍需自行声明并使用 `u_AlphaMode`、`u_AlphaCutoff`；
+- PBRModel 已支持 Normal、AO 与 Emissive Texture；Metallic/Roughness 仍为标量，尚未定义独立贴图或 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 仍缺少正式 TerrainMaterial 资产、派生图缓存、Chunk/LOD 和运行时侵蚀调度；

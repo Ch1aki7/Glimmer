@@ -12109,6 +12109,167 @@ Renderer3D 统计面板新增 Opaque、Mask、Transparent Item 数和 Transparen
 
 当前边界：透明排序使用实体原点而不是 Mesh Bounds 中心；尚不支持透明 Instancing、双面材质、Order Independent Transparency 或自定义 Shader 自动注入 Alpha 逻辑。
 
+## 可扩展 Debug 面板与 GPU Instancing Lab
+
+当前完整编辑器在 `Window → Debug` 提供独立诊断窗口。DebugPanel 是后续渲染、资源、Scene 和 Terrain 测试的统一宿主；首版包含 Renderer3D Overview 和 Rendering 页签下的 GPU Instancing Lab，测试逻辑由独立 `InstancingLabTool` 管理，不写入 Renderer3D 或默认编辑场景。
+
+### 临时场景边界
+
+点击 Generate 后，Lab 创建一个只存在于内存中的 Scene，并通过 EditorLayer 的受控回调临时切换 `m_ActiveScene`：
+
+```text
+EditorScene 保持引用
+  ↓
+InstancingLabTool 创建临时 Scene 和真实 ECS 实体
+  ↓
+EditorLayer 将 ActiveScene 指向 Lab
+  ↓
+Scene → Renderer3D 走正常收集、材质缓存、排序和绘制链路
+  ↓
+Exit / New / Open / Play / Editor Detach
+  ↓
+释放 Lab Scene，恢复 EditorScene
+```
+
+Lab 激活期间不会记录 Undo/Redo，并禁止场景保存；Scene Hierarchy 只显示 Lab 提示，不逐行枚举大量测试实体，避免 ImGui CPU 开销干扰 Renderer3D 压力结果。Debug 面板关闭只隐藏窗口，不隐式销毁测试；明确退出 Lab 或触发生命周期清理后才释放临时 Scene。
+
+### Instancing 预设
+
+- **Maximum Instancing**：全部实体强制 Opaque，并共享 Model、Material 和最终参数，验证最大合批以及 1024 实例分块；
+- **Material Split**：实体交替覆盖 Roughness 0.2/0.8，排序后形成两个兼容批次组，验证 MaterialOverrides 拆批；
+- **Transparent Comparison**：全部实体覆盖为 Blend，验证 TransparentQueue 保持普通 Draw、Instanced Draw 为 0。
+
+Model 和 Material 默认使用 `assets/models/geos/Cube.obj` 与 `assets/materials/DefaultPBR.glmat`，也可以从 Content Browser 拖入 Debug 面板替换。Count XYZ、Spacing 和 Origin 控制三维网格；总实体数有 100000 的安全上限。默认 `50×1×50` 生成 2500 个实体，单 Submesh 最大合批的理论值为：
+
+```text
+2500 Entities / Items
+→ 1024 + 1024 + 452
+→ 3 Instanced Draw Calls
+→ 2497 Saved Draw Calls
+```
+
+### 理论值与实际值
+
+Lab 按实体数、Model Submesh 数、预设分组和每批 1024 上限计算理论统计，并与当前帧 `Renderer3D::Statistics` 对照：
+
+- Submitted Items；
+- Draw Calls；
+- Instanced Draw Calls；
+- Individual Draw Calls；
+- Instance Count；
+- Material Cache Hit/Miss 与 Saved Draw Calls。
+
+生成后首个尚未完成渲染的 UI 帧显示 Pending；当前帧 Items 匹配后，全部统计一致且没有 Skipped Model 时显示 PASS，否则显示 FAIL。Select First/Middle/Last 可选择代表实体，并继续使用整数 EntityID 附件验证同一次 Instanced Draw 中的拾取差异。
+
+### 实现与验证
+
+DebugPanel 只负责窗口和分类，`InstancingLabTool` 拥有参数、临时 Scene、理论统计与代表 UUID；EditorLayer 只负责 ActiveScene、Hierarchy/Inspector Context 和 CommandHistory 边界。后续类似测试应作为独立 Tool 加入 Debug 面板，而不是扩张 EditorLayer 或把测试分支写进 Renderer3D。
+
+重新运行 VS2026 Premake 后，新 Debug/Panel 源文件已加入工程；VS2026、v145、`Debug | x64` 全解决方案构建成功，完整编辑器稳定运行 8 秒，`git diff --check` 通过。
+
+## PBR 材质纹理通道扩展与 Material Lab
+
+基础 Cook–Torrance PBR 原本只有 BaseColor Texture 与 Metallic/Roughness 标量。本阶段补齐模型材质常用的 Normal、AO 和 Emissive 纹理，并把同一字段契约贯通共享 `.glmat`、实体 MaterialOverrides、Inspector、Scene YAML、MaterialInstance 缓存、Renderer3D 排序/合批和 PBRModel Shader。
+
+### 材质字段与默认行为
+
+```cpp
+struct MaterialProperties
+{
+    glm::vec4 BaseColor{ 1.0f };
+    AssetHandle BaseColorTexture{ 0 };
+    AssetHandle NormalTexture{ 0 };
+    AssetHandle AOTexture{ 0 };
+    AssetHandle EmissiveTexture{ 0 };
+
+    float Metallic = 0.0f;
+    float Roughness = 0.5f;
+    float NormalScale = 1.0f;
+    float AOStrength = 1.0f;
+    glm::vec3 EmissiveColor{ 1.0f };
+    float EmissiveStrength = 0.0f;
+};
+```
+
+旧 `.glmat` 和旧 Scene 没有这些字段时仍可加载：新增 Texture Handle 默认为 0，Normal/AO 强度默认为 1，EmissiveStrength 默认为 0，因此旧材质不会自行发光，也不会改变原有法线和环境光结果。Metallic/Roughness 当前仍是标量；独立贴图或 ORM 打包通道尚未实现。
+
+### 颜色空间契约
+
+| 通道 | TextureColorSpace | 语义 | 原因 |
+| --- | --- | --- | --- |
+| BaseColor | sRGB | Color | 采样时由 GPU 解码为线性颜色，再进入 BRDF |
+| Normal | Linear | Normal | RGB 保存方向数据，不能执行 Gamma 解码 |
+| AO | Linear | Data/Height | 单通道遮蔽系数属于数值数据 |
+| Emissive | sRGB | Color | 发光贴图是颜色输入，解码后在线性 HDR 空间累加 |
+
+共享 Material Inspector 和实体 Override Inspector 在贴图拖放时写入对应元数据；元数据变化会使 AssetManager 清除该 Texture Handle 的 GPU 缓存。Renderer3D 绘制时只读取与 slot 契约兼容的纹理，不在渲染循环中修改 AssetRegistry，避免共享资产状态因 Draw Call 产生隐式变化。
+
+### Renderer3D 纹理与合批契约
+
+四类纹理使用固定纹理单元：
+
+```text
+slot 0 → BaseColor
+slot 1 → Normal
+slot 2 → AO
+slot 3 → Emissive
+```
+
+Renderer3D 将四个 Texture GPU ID、纹理存在状态以及所有最终材质参数写入 RenderKey/MaterialSortKey。只有 Mesh、Shader、四类纹理和最终 MaterialProperties 全部相同的连续项才能进入同一个 Opaque Instancing Batch；任一实体启用不同贴图或强度 Override 都会正确拆批。缺少纹理时绑定白纹理作为安全占位，但 `u_Has*Texture` 会阻止 Shader 采样该 slot。
+
+### Normal、AO 与 Emissive 计算
+
+顶点阶段向片元阶段传递 World Normal 与 World Tangent。片元阶段先执行 Gram–Schmidt 正交化并构造 TBN，将法线贴图从切线空间转换到世界空间：
+
+```glsl
+vec3 tangent = normalize(v_WorldTangent
+    - normal * dot(v_WorldTangent, normal));
+vec3 bitangent = normalize(cross(normal, tangent));
+vec3 tangentNormal = texture(u_NormalTexture, uv).xyz * 2.0 - 1.0;
+tangentNormal.xy *= u_NormalScale;
+normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
+```
+
+模型加载器对退化 UV 和零切线增加稳定正交基回退，避免 `normalize(vec3(0))` 产生 NaN。当前 Tangent 仍是 `vec3`，镜像 UV 所需的 Handedness 留待后续扩展。
+
+AO 只调制尚未包含遮挡信息的环境项，不重复压暗方向光和点光源的直接光：
+
+```glsl
+float ao = mix(1.0, texture(u_AOTexture, uv).r, u_AOStrength);
+vec3 result = albedo * ambientColor * ambientIntensity * ao;
+```
+
+Emissive 不参与 BRDF，也不受光源方向影响；EmissiveColor 与 sRGB 纹理解码后直接加入线性 HDR Radiance，再统一经过 Exposure 与 ACES Tone Mapping：
+
+```glsl
+result += linearEmissiveColor * emissiveSample * u_EmissiveStrength;
+```
+
+Opaque、Mask、Blend、透明 Alpha discard 和整数 EntityID 输出继续使用原有路径；Normal/AO/Emissive 不改变透明深度策略和拾取语义。
+
+### PBR Material Lab
+
+打开 `Window → Debug → Rendering → PBR Material Lab`，点击 Generate 后会创建隔离的临时 Scene，并排生成六个 UV Sphere：
+
+1. Normal Map；
+2. Ambient Occlusion；
+3. Emissive；
+4. Dielectric Smooth；
+5. Metal Smooth；
+6. Metal Rough。
+
+可以从 Content Browser 拖入 Sphere Model、Material 及三类测试纹理。数字按钮用于选择对应球体；面板会对比预期 RenderItem 与 Renderer3D 实际 `RenderedItems`，无跳过项时显示 PASS。PBR Lab 与 Instancing Lab 互斥，共享临时场景、禁止保存和退出恢复边界。
+
+自动回归可在启动编辑器前设置：
+
+```powershell
+$env:GLIMMER_PBR_LAB_AUTORUN = "1"
+```
+
+该入口会自动生成六球场景，并在系统临时目录执行两项往返验证：旧式最小 `.glmat` 加载后保存/重载全部新字段，以及包含新 MaterialOverrides Mask/Values 的 Scene YAML 保存/加载。临时文件在验证后删除。
+
+本次验证结果：Premake VS2026 生成成功；VS2026 v145 `Debug | x64` 全解决方案构建成功；自动 Lab 稳定运行 8 秒，日志记录 `PBR Material/YAML roundtrip PASS` 与 `PBR Material Lab PASS: rendered 6/6 items`，测试进程正常结束且无临时文件、日志或编辑器进程残留。
+
 ## KB
 
 ### 为什么不用动态库？

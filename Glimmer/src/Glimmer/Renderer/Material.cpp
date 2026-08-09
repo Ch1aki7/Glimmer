@@ -26,6 +26,19 @@ namespace gl {
 	}
 
 	namespace {
+		void SerializeVec3(YAML::Emitter& output, const glm::vec3& value)
+		{
+			output << YAML::Flow << YAML::BeginSeq
+				<< value.x << value.y << value.z << YAML::EndSeq;
+		}
+
+		bool DeserializeVec3(const YAML::Node& node, glm::vec3& value)
+		{
+			if (!node || !node.IsSequence() || node.size() < 3)
+				return false;
+			value = { node[0].as<float>(), node[1].as<float>(), node[2].as<float>() };
+			return true;
+		}
 
 		void SerializeVec4(YAML::Emitter& output, const glm::vec4& value)
 		{
@@ -174,12 +187,26 @@ namespace gl {
 			if (material["BaseColorTexture"])
 				properties.BaseColorTexture =
 					AssetHandle(material["BaseColorTexture"].as<uint64_t>());
+			if (material["NormalTexture"])
+				properties.NormalTexture = AssetHandle(material["NormalTexture"].as<uint64_t>());
+			if (material["AOTexture"])
+				properties.AOTexture = AssetHandle(material["AOTexture"].as<uint64_t>());
+			if (material["EmissiveTexture"])
+				properties.EmissiveTexture = AssetHandle(material["EmissiveTexture"].as<uint64_t>());
 			if (material["TilingFactor"])
 				properties.TilingFactor = material["TilingFactor"].as<float>();
 			if (material["Metallic"])
 				properties.Metallic = material["Metallic"].as<float>();
 			if (material["Roughness"])
 				properties.Roughness = material["Roughness"].as<float>();
+			if (material["NormalScale"])
+				properties.NormalScale = material["NormalScale"].as<float>();
+			if (material["AOStrength"])
+				properties.AOStrength = material["AOStrength"].as<float>();
+			if (material["EmissiveColor"])
+				DeserializeVec3(material["EmissiveColor"], properties.EmissiveColor);
+			if (material["EmissiveStrength"])
+				properties.EmissiveStrength = material["EmissiveStrength"].as<float>();
 			if (material["AlphaMode"])
 				properties.AlphaMode = MaterialAlphaModeFromString(
 					material["AlphaMode"].as<std::string>());
@@ -189,6 +216,10 @@ namespace gl {
 			properties.TilingFactor = glm::max(properties.TilingFactor, 0.01f);
 			properties.Metallic = glm::clamp(properties.Metallic, 0.0f, 1.0f);
 			properties.Roughness = glm::clamp(properties.Roughness, 0.04f, 1.0f);
+			properties.NormalScale = glm::clamp(properties.NormalScale, 0.0f, 2.0f);
+			properties.AOStrength = glm::clamp(properties.AOStrength, 0.0f, 1.0f);
+			properties.EmissiveColor = glm::max(properties.EmissiveColor, glm::vec3(0.0f));
+			properties.EmissiveStrength = glm::max(properties.EmissiveStrength, 0.0f);
 			properties.AlphaCutoff = glm::clamp(properties.AlphaCutoff, 0.0f, 1.0f);
 
 			const MaterialState loadedState{ shaderHandle, properties };
@@ -218,9 +249,21 @@ namespace gl {
 		SerializeVec4(output, m_Properties.BaseColor);
 		output << YAML::Key << "BaseColorTexture" << YAML::Value
 			<< static_cast<uint64_t>(m_Properties.BaseColorTexture);
+		output << YAML::Key << "NormalTexture" << YAML::Value
+			<< static_cast<uint64_t>(m_Properties.NormalTexture);
+		output << YAML::Key << "AOTexture" << YAML::Value
+			<< static_cast<uint64_t>(m_Properties.AOTexture);
+		output << YAML::Key << "EmissiveTexture" << YAML::Value
+			<< static_cast<uint64_t>(m_Properties.EmissiveTexture);
 		output << YAML::Key << "TilingFactor" << YAML::Value << m_Properties.TilingFactor;
 		output << YAML::Key << "Metallic" << YAML::Value << m_Properties.Metallic;
 		output << YAML::Key << "Roughness" << YAML::Value << m_Properties.Roughness;
+		output << YAML::Key << "NormalScale" << YAML::Value << m_Properties.NormalScale;
+		output << YAML::Key << "AOStrength" << YAML::Value << m_Properties.AOStrength;
+		output << YAML::Key << "EmissiveColor" << YAML::Value;
+		SerializeVec3(output, m_Properties.EmissiveColor);
+		output << YAML::Key << "EmissiveStrength" << YAML::Value
+			<< m_Properties.EmissiveStrength;
 		output << YAML::Key << "AlphaMode" << YAML::Value
 			<< MaterialAlphaModeToString(m_Properties.AlphaMode);
 		output << YAML::Key << "AlphaCutoff" << YAML::Value << m_Properties.AlphaCutoff;

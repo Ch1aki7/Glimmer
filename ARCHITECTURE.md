@@ -160,9 +160,9 @@ flowchart TD
 
 Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；每个 Batch 显式启用标准 Alpha 混合，EndScene 后恢复禁用，避免依赖 OpenGL 全局状态。完整编辑器调用 Scene Update 时传入 `deferSpritePass=true`，Scene 只保存 ViewProjection 和待执行标记，不开始 Renderer2D Batch，也不遍历 Sprite；EditorLayer 绘制 Skybox 后调用 `Scene::FlushSpritePass`，此时才完成 Sprite 遍历、Begin/Submit/End 和所有实际 Draw。这样即使纹理槽或索引容量在提交中耗尽，自动 Flush 也只能发生在 Skybox 之后。默认参数为 false，因此不拥有 Skybox 编排的旧宿主仍在 Scene Update 内立即完成 Sprite Pass。Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
 
-Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通过 `(EntityID, MaterialHandle)` 缓存最终 MaterialProperties。缓存保存基础 MaterialState、MaterialOverrides、版本与最后使用帧；完整状态未变化时复用结果，变化时重新构造 MaterialInstance，长期未使用项会被回收。每个有效 Mesh 再展开为一个 RenderItem；纹理优先级仍为 Material BaseColorTexture、Mesh 自带纹理、白纹理回退。
+Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通过 `(EntityID, MaterialHandle)` 缓存最终 MaterialProperties。缓存保存基础 MaterialState、MaterialOverrides、版本与最后使用帧；完整状态未变化时复用结果，变化时重新构造 MaterialInstance，长期未使用项会被回收。每个有效 Mesh 再展开为一个 RenderItem；BaseColor 纹理优先级为 Material、Mesh 自带纹理、白纹理回退，Normal/AO/Emissive 只使用 Material Handle，缺失时绑定白纹理但通过独立存在标记禁止采样。
 
-提交时，Opaque 和 Mask 进入 OpaqueQueue，Blend 进入 TransparentQueue。`FlushOpaqueAndMask` 按 ShaderHandle、MaterialHandle、Texture GPU ID、Mesh、完整最终材质位模式和 EntityID 排序；Mesh、Shader、纹理、最终 MaterialProperties 和纹理存在状态完全相同的连续项形成兼容 Batch。支持实例化契约且 Batch 大于一项时上传最多 1024 项的动态 Instance Buffer 并调用 `DrawIndexedInstanced`；不同 Override 结果会拆批，不支持实例属性的 Shader 自动执行普通 Draw。
+提交时，Opaque 和 Mask 进入 OpaqueQueue，Blend 进入 TransparentQueue。`FlushOpaqueAndMask` 按 ShaderHandle、MaterialHandle、四组 Texture GPU ID、Mesh、完整最终材质位模式和 EntityID 排序；Mesh、Shader、全部纹理、最终 MaterialProperties 和纹理存在状态完全相同的连续项形成兼容 Batch。BaseColor、Normal、AO、Emissive 固定使用纹理单元 0～3，切换状态按 slot 独立缓存。支持实例化契约且 Batch 大于一项时上传最多 1024 项的动态 Instance Buffer 并调用 `DrawIndexedInstanced`；不同 Override 结果会拆批，不支持实例属性的 Shader 自动执行普通 Draw。
 
 完整编辑器先完成 Opaque/Mask 和 Terrain，再绘制 Skybox，随后依次 Flush Sprite Batch 和调用 `Renderer3D::EndScene`。这保证 2D Alpha 与已经存在的 Skybox 颜色混合，而不是与 Scene Clear Color 混合。TransparentQueue 按实体 Transform 原点到相机的平方距离由远到近稳定排序，首版始终普通 Draw；它开启标准 SourceAlpha 混合、保留深度测试并关闭深度写入，结束后恢复 Blend 禁用、DepthWrite 启用和 Less 深度函数。较早编辑器宿主没有 Skybox 插入点，在 Scene 更新内立即 Flush Sprite，并在返回后结束透明队列。OpenGL `DrawIndexed` 不隐式解绑 Texture2D，纹理和 Pass 状态由上层渲染器维护。
 
@@ -196,7 +196,7 @@ Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite �
 
 Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight 构造 `LightEnvironment`。Renderer 将其转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO。
 
-当前 3D Material 参数包括 BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR，并以 BaseColor Alpha 与纹理 Alpha 的乘积驱动 Mask/Blend；场景先在线性 HDR 空间渲染，再由 ToneMapping Shader 应用曝光和 ACES 映射。
+当前 3D Material 参数包括 BaseColor/BaseColorTexture、NormalTexture/NormalScale、AOTexture/AOStrength、EmissiveTexture/EmissiveColor/EmissiveStrength、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR：切线空间 Normal 修改 BRDF 法线，AO 只调制环境光项，Emissive 在线性 HDR 结果中累加；BaseColor Alpha 与纹理 Alpha 的乘积继续驱动 Mask/Blend。模型加载阶段按 UV 梯度生成 Tangent，退化 UV 或无有效累积切线时建立稳定正交基，避免 Normal Mapping 产生 NaN。
 
 `SkyLightComponent` 引用 `.glsky` Cubemap 资产；描述文件保存六个面图路径，AssetManager 缓存解析后的 `Cubemap`，SkyboxRenderer 使用去除平移的视图方向绘制背景。
 
@@ -254,7 +254,7 @@ Scene 维护 `UUID -> entt::entity` 映射，提供按 UUID 和临时 EnTT ID �
 - Material（`.glmat`）；
 - Cubemap（`.glsky`）。
 
-AssetManager 按规范化相对路径去重导入，并分别维护 Texture、Model、Shader、Material、Cubemap 缓存。Texture 元数据区分 Linear/sRGB 与 Color/Data 语义，修改元数据时清除对应缓存并重写注册表。
+AssetManager 按规范化相对路径去重导入，并分别维护 Texture、Model、Shader、Material、Cubemap 缓存。Texture 元数据区分 Linear/sRGB 与 Color/Normal/Data/Height 语义，修改元数据时清除对应缓存并重写注册表。PBR 约定 BaseColor/Emissive 为 sRGB Color，Normal 为 Linear Normal，AO 为 Linear Data（Height 也可作为线性单通道数据）；Renderer3D 只解析符合 slot 契约的 Texture Handle，不在绘制阶段改写注册表。
 
 ```mermaid
 flowchart LR
@@ -278,7 +278,7 @@ flowchart LR
 最终属性 = MaterialProperties + MaterialOverrides(Mask, Values)
 ```
 
-这使多个实体可以继承同一 `.glmat`，同时覆盖 BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness、AlphaMode 或 AlphaCutoff。Material 和 MaterialOverrides 均维护运行期 version/Dirty；Inspector 的连续属性修改和离散开关都会推进版本。Renderer3D 缓存最终解析结果，同时比较完整基础状态与 Overrides，因此 Undo/Redo 恢复旧版本号或某条写入路径遗漏 Dirty 时也不会复用不匹配结果。旧 `.glmat` 或场景 Override 缺少 Alpha 字段时默认 Opaque/0.5。
+这使多个实体可以继承同一 `.glmat`，同时覆盖 BaseColor、四类纹理、TilingFactor、Metallic/Roughness、NormalScale、AOStrength、EmissiveColor/Strength、AlphaMode 或 AlphaCutoff。Material 和 MaterialOverrides 均维护运行期 version/Dirty；Inspector 的连续属性修改和离散开关都会推进版本。Renderer3D 缓存最终解析结果，同时比较完整基础状态与 Overrides，因此 Undo/Redo 恢复旧版本号或某条写入路径遗漏 Dirty 时也不会复用不匹配结果。旧 `.glmat` 或场景 Override 缺少扩展字段时使用结构默认值，仍默认 Opaque/0.5、无附加纹理和零 Emissive 输出。
 
 ## 8. 场景序列化
 
@@ -304,9 +304,11 @@ flowchart LR
 - `m_ActiveScene`：面板和渲染当前使用的场景；
 - `EditorCamera`、Scene/Display Framebuffer 和 Tone Mapping 参数；
 - `SelectionContext`、`EditorCommandHistory`；
-- Hierarchy、Inspector、ContentBrowser、ShaderPanel。
+- Hierarchy、Inspector、ContentBrowser、ShaderPanel、DebugPanel。
 
 进入 Play 时，EditorLayer 清理选择，复制 EditorScene 为 RuntimeScene，切换所有面板上下文并禁用编辑命令历史；停止时销毁运行时脚本，丢弃 RuntimeScene，再切回 EditorScene。运行时修改不会写回编辑场景。
+
+DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D Overview、`InstancingLabTool` 与 `PBRMaterialLabTool`。两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。
 
 ### 9.2 选择与面板职责
 
@@ -318,6 +320,9 @@ flowchart LR
 | `InspectorPanel` | 根据 SelectionType 绘制 Entity Components 或 Asset 属性 |
 | `ContentBrowserPanel` | 目录树、文件网格、资产选择、拖放和双击打开 |
 | `ShaderPanel` | ShaderLibrary 自动/手动重载与结果显示 |
+| `DebugPanel` | 通用诊断入口；展示 Renderer3D 概览并托管可扩展的临时测试工具 |
+| `InstancingLabTool` | 生成隔离 ECS 压力场景，对照理论批次与 Renderer3D 实际统计，管理代表实体选择和清理 |
+| `PBRMaterialLabTool` | 生成六球材质通道对照场景，验证 PBR 纹理语义、渲染项完整性及 Material/Scene YAML 往返 |
 | `TerrainPanel` | 保留的 TerrainGenerator 参数面板接口；正式场景地形主要由组件 Inspector 驱动 |
 
 Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入，不直接拥有编辑器 Scene 生命周期。
@@ -393,7 +398,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue 与 AlphaMode 已经落地；当前开始扩展 PBR 的 Normal、AO、Emissive 通道与颜色空间契约。TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode 以及 PBR Normal/AO/Emissive 通道已经落地；当前主线转入自动化回归与持续构建。Metallic/Roughness Texture/ORM、TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

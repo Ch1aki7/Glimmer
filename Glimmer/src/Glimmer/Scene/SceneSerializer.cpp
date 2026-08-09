@@ -117,9 +117,21 @@ namespace gl {
 			SerializeVec4(out, values.BaseColor);
 			out << YAML::Key << "BaseColorTexture" << YAML::Value
 				<< static_cast<uint64_t>(values.BaseColorTexture);
+			out << YAML::Key << "NormalTexture" << YAML::Value
+				<< static_cast<uint64_t>(values.NormalTexture);
+			out << YAML::Key << "AOTexture" << YAML::Value
+				<< static_cast<uint64_t>(values.AOTexture);
+			out << YAML::Key << "EmissiveTexture" << YAML::Value
+				<< static_cast<uint64_t>(values.EmissiveTexture);
 			out << YAML::Key << "TilingFactor" << YAML::Value << values.TilingFactor;
 			out << YAML::Key << "Metallic" << YAML::Value << values.Metallic;
 			out << YAML::Key << "Roughness" << YAML::Value << values.Roughness;
+			out << YAML::Key << "NormalScale" << YAML::Value << values.NormalScale;
+			out << YAML::Key << "AOStrength" << YAML::Value << values.AOStrength;
+			out << YAML::Key << "EmissiveColor" << YAML::Value;
+			SerializeVec3(out, values.EmissiveColor);
+			out << YAML::Key << "EmissiveStrength" << YAML::Value
+				<< values.EmissiveStrength;
 			out << YAML::Key << "AlphaMode" << YAML::Value
 				<< MaterialAlphaModeToString(values.AlphaMode);
 			out << YAML::Key << "AlphaCutoff" << YAML::Value << values.AlphaCutoff;
@@ -144,12 +156,33 @@ namespace gl {
 		if (overrides["BaseColorTexture"])
 			comp.Overrides.Values.BaseColorTexture =
 				AssetHandle(overrides["BaseColorTexture"].as<uint64_t>());
+		if (overrides["NormalTexture"])
+			comp.Overrides.Values.NormalTexture =
+				AssetHandle(overrides["NormalTexture"].as<uint64_t>());
+		if (overrides["AOTexture"])
+			comp.Overrides.Values.AOTexture =
+				AssetHandle(overrides["AOTexture"].as<uint64_t>());
+		if (overrides["EmissiveTexture"])
+			comp.Overrides.Values.EmissiveTexture =
+				AssetHandle(overrides["EmissiveTexture"].as<uint64_t>());
 		if (overrides["TilingFactor"])
 			comp.Overrides.Values.TilingFactor = overrides["TilingFactor"].as<float>();
 		if (overrides["Metallic"])
 			comp.Overrides.Values.Metallic = overrides["Metallic"].as<float>();
 		if (overrides["Roughness"])
 			comp.Overrides.Values.Roughness = overrides["Roughness"].as<float>();
+		if (overrides["NormalScale"])
+			comp.Overrides.Values.NormalScale = glm::clamp(
+				overrides["NormalScale"].as<float>(), 0.0f, 2.0f);
+		if (overrides["AOStrength"])
+			comp.Overrides.Values.AOStrength = glm::clamp(
+				overrides["AOStrength"].as<float>(), 0.0f, 1.0f);
+		if (overrides["EmissiveColor"])
+			DeserializeVec3(overrides["EmissiveColor"],
+				comp.Overrides.Values.EmissiveColor);
+		if (overrides["EmissiveStrength"])
+			comp.Overrides.Values.EmissiveStrength = glm::max(
+				overrides["EmissiveStrength"].as<float>(), 0.0f);
 		if (overrides["AlphaMode"])
 			comp.Overrides.Values.AlphaMode = MaterialAlphaModeFromString(
 				overrides["AlphaMode"].as<std::string>());

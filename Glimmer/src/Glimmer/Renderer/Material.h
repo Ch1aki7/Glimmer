@@ -23,9 +23,16 @@ namespace gl {
 	{
 		glm::vec4 BaseColor{ 1.0f };
 		AssetHandle BaseColorTexture{ 0 };
+		AssetHandle NormalTexture{ 0 };
+		AssetHandle AOTexture{ 0 };
+		AssetHandle EmissiveTexture{ 0 };
 		float TilingFactor = 1.0f;
 		float Metallic = 0.0f;
 		float Roughness = 0.5f;
+		float NormalScale = 1.0f;
+		float AOStrength = 1.0f;
+		glm::vec3 EmissiveColor{ 1.0f };
+		float EmissiveStrength = 0.0f;
 		MaterialAlphaMode AlphaMode = MaterialAlphaMode::Opaque;
 		float AlphaCutoff = 0.5f;
 
@@ -33,9 +40,16 @@ namespace gl {
 		{
 			return glm::all(glm::equal(BaseColor, other.BaseColor))
 				&& BaseColorTexture == other.BaseColorTexture
+				&& NormalTexture == other.NormalTexture
+				&& AOTexture == other.AOTexture
+				&& EmissiveTexture == other.EmissiveTexture
 				&& TilingFactor == other.TilingFactor
 				&& Metallic == other.Metallic
 				&& Roughness == other.Roughness
+				&& NormalScale == other.NormalScale
+				&& AOStrength == other.AOStrength
+				&& glm::all(glm::equal(EmissiveColor, other.EmissiveColor))
+				&& EmissiveStrength == other.EmissiveStrength
 				&& AlphaMode == other.AlphaMode
 				&& AlphaCutoff == other.AlphaCutoff;
 		}

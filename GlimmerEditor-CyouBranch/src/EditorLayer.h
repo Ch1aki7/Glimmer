@@ -4,6 +4,7 @@
 #include "Panels/InspectorPanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/ShaderPanel.h"
+#include "Panels/DebugPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
 #include "Editor/EditorCommand.h"
 
@@ -24,12 +25,15 @@ namespace gl {
 
 	private:
 		void SetEditorScene(const Ref<Scene>& scene);
+		bool ActivateTemporaryDebugScene(const Ref<Scene>& scene);
+		void ExitTemporaryDebugScene();
 		void OnScenePlay();
 		void OnSceneStop();
 
 	private:
 		ShaderLibrary m_ShaderLib;
 		ShaderPanel m_ShaderPanel;
+		DebugPanel m_DebugPanel;
 
 		EditorCamera m_EditorCamera;
 		Ref<Shader> m_SkyboxShader;

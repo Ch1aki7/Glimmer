@@ -18,7 +18,7 @@ namespace std {
 
 namespace gl {
 
-	// Mikktspace 兼容的切向量计算
+	// 按 UV 梯度生成切线；退化 UV 使用稳定正交基回退，避免 Normal Mapping 产生 NaN。
 	static void ComputeTangents(std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
 	{
 		if (indices.empty()) return;
@@ -36,8 +36,11 @@ namespace gl {
 			glm::vec2 deltaUV1 = v1.TexCoord - v0.TexCoord;
 			glm::vec2 deltaUV2 = v2.TexCoord - v0.TexCoord;
 
-			float f = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
-			if (std::isinf(f) || std::isnan(f)) continue;
+			const float determinant = deltaUV1.x * deltaUV2.y
+				- deltaUV2.x * deltaUV1.y;
+			if (glm::abs(determinant) <= 0.000001f)
+				continue;
+			const float f = 1.0f / determinant;
 
 			glm::vec3 tangent;
 			tangent.x = f * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x);
@@ -52,9 +55,19 @@ namespace gl {
 		// Gram-Schmidt 正交化：Tangent = normalize(T - N * dot(N, T))
 		for (size_t i = 0; i < vertices.size(); i++)
 		{
-			glm::vec3& n = vertices[i].Normal;
-			glm::vec3& t = tanAccum[i];
-			vertices[i].Tangent = glm::normalize(t - n * glm::dot(n, t));
+			const glm::vec3 normal = glm::dot(vertices[i].Normal, vertices[i].Normal) > 0.000001f
+				? glm::normalize(vertices[i].Normal) : glm::vec3(0.0f, 1.0f, 0.0f);
+			const glm::vec3 projected = tanAccum[i]
+				- normal * glm::dot(normal, tanAccum[i]);
+			if (glm::dot(projected, projected) > 0.000001f)
+				vertices[i].Tangent = glm::normalize(projected);
+			else
+			{
+				const glm::vec3 helper = glm::abs(normal.y) < 0.999f
+					? glm::vec3(0.0f, 1.0f, 0.0f)
+					: glm::vec3(1.0f, 0.0f, 0.0f);
+				vertices[i].Tangent = glm::normalize(glm::cross(helper, normal));
+			}
 		}
 	}
 

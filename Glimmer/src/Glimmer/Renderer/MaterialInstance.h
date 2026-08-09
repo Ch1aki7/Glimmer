@@ -14,7 +14,14 @@ namespace gl {
 		Metallic = 1u << 3,
 		Roughness = 1u << 4,
 		AlphaMode = 1u << 5,
-		AlphaCutoff = 1u << 6
+		AlphaCutoff = 1u << 6,
+		NormalTexture = 1u << 7,
+		AOTexture = 1u << 8,
+		EmissiveTexture = 1u << 9,
+		NormalScale = 1u << 10,
+		AOStrength = 1u << 11,
+		EmissiveColor = 1u << 12,
+		EmissiveStrength = 1u << 13
 	};
 
 	struct MaterialOverrides
