@@ -12722,17 +12722,19 @@ RenderCommand::DrawIndexedInstanced(
 
 1. 在 `Window → Debug → Rendering → GPU Instancing Lab` 选择 Model 与 Material；
 2. 使用 `Maximum Instancing`，从较小的 `Count XYZ` 开始生成，再逐步增加实体数；
-3. 回到 `Overview`，记录同一相机下的 Shadow `GPU Time`、Draw Calls、Instances 与 Saved Draws；
-4. 分别把 Directional Light 的 `Cascade Count` 设为 1、2、4，把 Resolution 设为 1024、2048、4096，等待数帧后记录稳定值；
-5. 开启 `Visualize Cascades` 检查覆盖与 Blend，再关闭调试色观察 Acne、Peter Panning 和移动相机时的级联跳变。
+3. 调整相机使待测实体处于稳定构图，设置 `Warmup Frames` 与 `Samples / Configuration`；默认值为每组预热 15 帧、采集 30 个新 GPU Query 结果；
+4. 点击 `Start Shadow Benchmark`。工具会自动测试 `1/2/4 Cascades × 1024/2048/4096 Resolution` 共 9 组配置，测试期间不要移动相机、缩放窗口或切换显卡设置；
+5. 在结果表读取每组 `Avg/Min/Max ms`、`Draws` 和 `Saved`；测试可随时取消，关闭 Debug 窗口或切换页签不会中断；
+6. 回到 `Overview` 开启 `Visualize Cascades` 检查覆盖与 Blend，再关闭调试色观察 Acne、Peter Panning 和移动相机时的级联跳变。
 
-测试时保持窗口分辨率、相机、模型数量、Shadow Distance 与驱动设置一致。GPU Time 只统计 Shadow Pass，不包含 Scene Color、Terrain Compute、Tone Mapping 或 ImGui，因此适合比较级联数、分辨率与实例数量对阴影本身的影响。
+每次配置切换后的预热会排空异步 Query 延迟；采样仅在 GPU 返回新结果时推进，不会重复使用面板中缓存的上一帧数值。结果只存在于当前临时 Lab，不写入场景或资产。测试时仍需保持窗口分辨率、相机、模型数量、Shadow Distance 与驱动设置一致。GPU Time 只统计 Shadow Pass，不包含 Scene Color、Terrain Compute、Tone Mapping 或 ImGui，因此适合比较级联数、分辨率与实例数量对阴影本身的影响。
 
 ### 当前边界与验证
 
 - 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap、可调重叠混合与运行时级联调试着色；
 - Mesh 在构造时缓存局部 AABB；每个级联会把 Model 子网格 Bounds 变换到 Light VP Clip Space，8 个角点全部位于同一平面外才剔除；Terrain 使用网格 XZ 范围与 HeightScale 构造保守 Bounds；
 - Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered、Frustum Culled、Draw Calls、Instanced/Individual、Instances、Saved Draws 与非阻塞 GPU Time；可通过移动相机或生成重复模型确认剔除、合批及耗时，也可启用 `Visualize Cascades` 检查分级和重叠过渡；
+- Debug → Rendering 的 Instancing Lab 可自动完成 9 组 CSM 性能采样并显示 Avg/Min/Max；计时样本带单调序号，只有新的异步 Query 结果才会被纳入统计；
 - Model Shadow Pass 已按每个级联独立合批；不同 Mesh 或不同最终 Mask 状态会正确拆批，Terrain 保持独立提交；
 - Alpha Mask 已按最终 MaterialInstance 的 BaseColor Alpha、纹理 Alpha、TilingFactor 与 AlphaCutoff 裁剪 ShadowDepth；Blend 仍投射完整实体轮廓，尚未实现抖动或透射式半透明阴影；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
@@ -12740,6 +12742,7 @@ RenderCommand::DrawIndexedInstanced(
 - 新增级联调试着色、Alpha Mask 与 Shadow Instancing 后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型，默认地形的 Height UV 与 Compute 路径正常。自动测试不判定颜色和投影轮廓，仍需手动勾选 `Visualize Cascades` 检查分区，并用带 Alpha 的 BaseColor Texture + Mask 材质确认透明区域不产生阴影。
 - PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 draw calls / 4 instanced / 20 saved / 4 cascades`：每个级联把 6 个相同 Mesh 合并为一次 Draw，并确认保守测试没有误删投影。把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
 - OpenGL Time Query 已在 Intel Iris Xe 上非阻塞返回，PBR Lab 四级 Shadow Pass 得到一次 `0.278 ms` 验证样本；该数字只验证计时范围和读取链路，正式性能结论必须按上面的固定场景步骤在 RTX 4060 上采集多组稳定值。
+- 自动 Shadow Benchmark 接入后，VS2026 `Debug | x64` 最终编辑器目标构建成功，61 项无窗口回归断言全部 PASS；既有 PBR Lab 自动入口稳定运行 30 秒且验证进程已清理。9 组结果表仍需在目标 RTX 4060 设备上实际点击运行后记录，不能用 Intel 的单次样本代替。
 
 ## Renderer2D 空批次残留修复
 

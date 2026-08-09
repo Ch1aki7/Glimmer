@@ -36,6 +36,9 @@ namespace gl {
 
 	void DebugPanel::OnImGuiRender(const Renderer3D::Statistics& statistics)
 	{
+		const ShadowRenderer::Statistics shadowStatistics =
+			ShadowRenderer::GetStatistics();
+		m_InstancingLab.UpdateShadowBenchmark(shadowStatistics);
 		m_PBRMaterialLab.UpdateValidation(statistics);
 		if (!m_Open)
 			return;
@@ -58,8 +61,6 @@ namespace gl {
 					statistics.InstanceCount, statistics.GetSavedDrawCalls());
 				ImGui::Text("Material Cache Hit / Miss: %u / %u",
 					statistics.MaterialCacheHits, statistics.MaterialCacheMisses);
-				const ShadowRenderer::Statistics shadowStatistics =
-					ShadowRenderer::GetStatistics();
 				ImGui::Separator();
 				ImGui::TextUnformatted("Directional Shadows");
 				ImGui::Text("Cascades: %u", shadowStatistics.CascadePasses);

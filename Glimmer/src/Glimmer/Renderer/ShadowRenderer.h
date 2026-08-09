@@ -25,6 +25,7 @@ namespace gl {
 			uint32_t InstanceCount = 0;
 			float GpuMilliseconds = 0.0f;
 			bool GpuTimingAvailable = false;
+			uint64_t GpuTimingSample = 0;
 
 			uint32_t GetSavedDrawCalls() const
 			{

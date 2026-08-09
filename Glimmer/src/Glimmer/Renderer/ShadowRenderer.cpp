@@ -91,6 +91,7 @@ namespace gl {
 			float Bias = 0.0015f;
 			float LastGpuMilliseconds = 0.0f;
 			bool HasGpuTiming = false;
+			uint64_t GpuTimingSample = 0;
 			ShadowRenderer::Statistics Stats;
 			bool PassActive = false;
 			bool Enabled = false;
@@ -395,9 +396,11 @@ namespace gl {
 		{
 			s_Data.LastGpuMilliseconds = elapsedMilliseconds;
 			s_Data.HasGpuTiming = true;
+			++s_Data.GpuTimingSample;
 		}
 		s_Data.Stats.GpuMilliseconds = s_Data.LastGpuMilliseconds;
 		s_Data.Stats.GpuTimingAvailable = s_Data.HasGpuTiming;
+		s_Data.Stats.GpuTimingSample = s_Data.GpuTimingSample;
 
 		resolution = std::clamp(resolution, 512u, 4096u);
 		cascadeCount = std::clamp(cascadeCount, 1u, MaxCascades);
@@ -623,8 +626,10 @@ namespace gl {
 			{
 				s_Data.LastGpuMilliseconds = elapsedMilliseconds;
 				s_Data.HasGpuTiming = true;
+				++s_Data.GpuTimingSample;
 				s_Data.Stats.GpuMilliseconds = elapsedMilliseconds;
 				s_Data.Stats.GpuTimingAvailable = true;
+				s_Data.Stats.GpuTimingSample = s_Data.GpuTimingSample;
 			}
 		}
 		s_Data.Enabled = s_Data.CascadeCount > 0;

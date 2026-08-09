@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <imgui.h>
+#include <limits>
 #include <utility>
 
 namespace gl {
@@ -14,6 +15,18 @@ namespace gl {
 
 		constexpr uint32_t MaxInstancesPerDraw = 1024;
 		constexpr uint32_t MaxLabEntities = 100000;
+		struct ShadowBenchmarkSetting
+		{
+			uint32_t Cascades;
+			uint32_t Resolution;
+		};
+
+		constexpr std::array<ShadowBenchmarkSetting, 9>
+			ShadowBenchmarkConfigurations = { {
+				{ 1, 1024 }, { 2, 1024 }, { 4, 1024 },
+				{ 1, 2048 }, { 2, 2048 }, { 4, 2048 },
+				{ 1, 4096 }, { 2, 4096 }, { 4, 4096 }
+			} };
 
 		uint32_t DivideRoundUp(uint32_t value, uint32_t divisor)
 		{
@@ -131,6 +144,7 @@ namespace gl {
 
 	bool InstancingLabTool::Generate()
 	{
+		CancelShadowBenchmark();
 		if (!m_ActivateScene)
 		{
 			m_Status = "The editor did not provide a temporary-scene callback.";
@@ -228,6 +242,7 @@ namespace gl {
 		}
 
 		m_Scene = std::move(scene);
+		m_SunEntity = sun.GetUUID();
 		m_RepresentativeEntities = std::move(representatives);
 		m_Expected = CalculateExpectedStatistics(
 			static_cast<uint32_t>(model->GetMeshes().size()));
@@ -244,6 +259,211 @@ namespace gl {
 		if (!m_Scene || !m_SelectEntity || index >= m_RepresentativeEntities.size())
 			return;
 		m_SelectEntity(m_Scene->FindEntityByUUID(m_RepresentativeEntities[index]));
+	}
+
+	bool InstancingLabTool::ApplyShadowBenchmarkConfiguration(size_t index)
+	{
+		if (!m_Scene || index >= ShadowBenchmarkConfigurations.size())
+			return false;
+		Entity sun = m_Scene->FindEntityByUUID(m_SunEntity);
+		if (!sun || !sun.HasComponent<DirectionalLightComponent>())
+			return false;
+
+		const ShadowBenchmarkSetting& configuration =
+			ShadowBenchmarkConfigurations[index];
+		auto& light = sun.GetComponent<DirectionalLightComponent>();
+		light.CastShadows = true;
+		light.ShadowCascadeCount = configuration.Cascades;
+		light.ShadowMapResolution = configuration.Resolution;
+		return true;
+	}
+
+	bool InstancingLabTool::StartShadowBenchmark()
+	{
+		if (!m_Active || !m_Scene)
+		{
+			m_ShadowBenchmarkStatus = "Generate an Instancing Lab scene first.";
+			return false;
+		}
+
+		m_ShadowBenchmarkWarmupFrames = std::clamp(
+			m_ShadowBenchmarkWarmupFrames, 4u, 120u);
+		m_ShadowBenchmarkSamplesPerConfiguration = std::clamp(
+			m_ShadowBenchmarkSamplesPerConfiguration, 5u, 300u);
+		m_ShadowBenchmarkResults.clear();
+		m_ShadowBenchmarkConfigurationIndex = 0;
+		m_ShadowBenchmarkWarmupRemaining = m_ShadowBenchmarkWarmupFrames;
+		m_ShadowBenchmarkSamplesCollected = 0;
+		m_ShadowBenchmarkSumMilliseconds = 0.0;
+		m_ShadowBenchmarkMinimumMilliseconds =
+			std::numeric_limits<float>::max();
+		m_ShadowBenchmarkMaximumMilliseconds = 0.0f;
+		m_LastShadowTimingSample = 0;
+		if (!ApplyShadowBenchmarkConfiguration(0))
+		{
+			m_ShadowBenchmarkState = ShadowBenchmarkState::Idle;
+			m_ShadowBenchmarkStatus = "The temporary directional light is unavailable.";
+			return false;
+		}
+
+		m_ShadowBenchmarkState = ShadowBenchmarkState::Warmup;
+		m_ShadowBenchmarkStatus =
+			"Benchmark running. Keep the camera and editor window unchanged.";
+		return true;
+	}
+
+	void InstancingLabTool::CancelShadowBenchmark(const char* status)
+	{
+		const bool wasRunning = m_ShadowBenchmarkState == ShadowBenchmarkState::Warmup
+			|| m_ShadowBenchmarkState == ShadowBenchmarkState::Sampling;
+		m_ShadowBenchmarkState = ShadowBenchmarkState::Idle;
+		m_ShadowBenchmarkWarmupRemaining = 0;
+		m_ShadowBenchmarkSamplesCollected = 0;
+		if (status)
+			m_ShadowBenchmarkStatus = status;
+		else if (wasRunning)
+			m_ShadowBenchmarkStatus = "Benchmark cancelled.";
+	}
+
+	void InstancingLabTool::FinishShadowBenchmarkConfiguration(
+		const ShadowRenderer::Statistics& statistics)
+	{
+		ShadowBenchmarkResult result;
+		const ShadowBenchmarkSetting& configuration =
+			ShadowBenchmarkConfigurations[m_ShadowBenchmarkConfigurationIndex];
+		result.Configuration = { configuration.Cascades, configuration.Resolution };
+		result.Samples = m_ShadowBenchmarkSamplesCollected;
+		result.AverageMilliseconds = static_cast<float>(
+			m_ShadowBenchmarkSumMilliseconds / m_ShadowBenchmarkSamplesCollected);
+		result.MinimumMilliseconds = m_ShadowBenchmarkMinimumMilliseconds;
+		result.MaximumMilliseconds = m_ShadowBenchmarkMaximumMilliseconds;
+		result.DrawCalls = statistics.DrawCalls;
+		result.SavedDrawCalls = statistics.GetSavedDrawCalls();
+		m_ShadowBenchmarkResults.push_back(result);
+
+		++m_ShadowBenchmarkConfigurationIndex;
+		if (m_ShadowBenchmarkConfigurationIndex >= ShadowBenchmarkConfigurations.size())
+		{
+			m_ShadowBenchmarkState = ShadowBenchmarkState::Complete;
+			m_ShadowBenchmarkStatus =
+				"Benchmark complete. Results are runtime-only and were not saved to the scene.";
+			return;
+		}
+
+		m_ShadowBenchmarkSamplesCollected = 0;
+		m_ShadowBenchmarkSumMilliseconds = 0.0;
+		m_ShadowBenchmarkMinimumMilliseconds =
+			std::numeric_limits<float>::max();
+		m_ShadowBenchmarkMaximumMilliseconds = 0.0f;
+		m_ShadowBenchmarkWarmupRemaining = m_ShadowBenchmarkWarmupFrames;
+		if (!ApplyShadowBenchmarkConfiguration(m_ShadowBenchmarkConfigurationIndex))
+		{
+			CancelShadowBenchmark("Benchmark stopped because the directional light disappeared.");
+			return;
+		}
+		m_ShadowBenchmarkState = ShadowBenchmarkState::Warmup;
+	}
+
+	void InstancingLabTool::UpdateShadowBenchmark(
+		const ShadowRenderer::Statistics& statistics)
+	{
+		if (m_ShadowBenchmarkState != ShadowBenchmarkState::Warmup
+			&& m_ShadowBenchmarkState != ShadowBenchmarkState::Sampling)
+			return;
+		if (!m_Active || !m_Scene)
+		{
+			CancelShadowBenchmark("Benchmark stopped because the lab is no longer active.");
+			return;
+		}
+
+		if (m_ShadowBenchmarkState == ShadowBenchmarkState::Warmup)
+		{
+			m_LastShadowTimingSample = statistics.GpuTimingSample;
+			if (m_ShadowBenchmarkWarmupRemaining > 0)
+				--m_ShadowBenchmarkWarmupRemaining;
+			if (m_ShadowBenchmarkWarmupRemaining == 0)
+				m_ShadowBenchmarkState = ShadowBenchmarkState::Sampling;
+			return;
+		}
+
+		if (!statistics.GpuTimingAvailable
+			|| statistics.GpuTimingSample == m_LastShadowTimingSample)
+			return;
+
+		m_LastShadowTimingSample = statistics.GpuTimingSample;
+		m_ShadowBenchmarkSumMilliseconds += statistics.GpuMilliseconds;
+		m_ShadowBenchmarkMinimumMilliseconds = std::min(
+			m_ShadowBenchmarkMinimumMilliseconds, statistics.GpuMilliseconds);
+		m_ShadowBenchmarkMaximumMilliseconds = std::max(
+			m_ShadowBenchmarkMaximumMilliseconds, statistics.GpuMilliseconds);
+		++m_ShadowBenchmarkSamplesCollected;
+		if (m_ShadowBenchmarkSamplesCollected
+			>= m_ShadowBenchmarkSamplesPerConfiguration)
+			FinishShadowBenchmarkConfiguration(statistics);
+	}
+
+	void InstancingLabTool::DrawShadowBenchmark()
+	{
+		ImGui::SeparatorText("Shadow Benchmark");
+		ImGui::TextWrapped(
+			"Measures 1/2/4 cascades at 1024/2048/4096 using unique asynchronous GPU timer samples. Frame the scene first and keep the camera and window unchanged.");
+		const bool running = m_ShadowBenchmarkState == ShadowBenchmarkState::Warmup
+			|| m_ShadowBenchmarkState == ShadowBenchmarkState::Sampling;
+		int warmupFrames = static_cast<int>(m_ShadowBenchmarkWarmupFrames);
+		int samples = static_cast<int>(m_ShadowBenchmarkSamplesPerConfiguration);
+		ImGui::BeginDisabled(running);
+		if (ImGui::DragInt("Warmup Frames", &warmupFrames, 1.0f, 4, 120))
+			m_ShadowBenchmarkWarmupFrames = static_cast<uint32_t>(warmupFrames);
+		if (ImGui::DragInt("Samples / Configuration", &samples, 1.0f, 5, 300))
+			m_ShadowBenchmarkSamplesPerConfiguration = static_cast<uint32_t>(samples);
+		if (ImGui::Button("Start Shadow Benchmark"))
+			StartShadowBenchmark();
+		ImGui::EndDisabled();
+		if (running)
+		{
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel Benchmark"))
+				CancelShadowBenchmark();
+		}
+
+		ImGui::TextWrapped("%s", m_ShadowBenchmarkStatus.c_str());
+		if (running)
+		{
+			const ShadowBenchmarkSetting& configuration =
+				ShadowBenchmarkConfigurations[m_ShadowBenchmarkConfigurationIndex];
+			ImGui::Text("Configuration %zu / %zu: %u cascades, %u px",
+				m_ShadowBenchmarkConfigurationIndex + 1,
+				ShadowBenchmarkConfigurations.size(),
+				configuration.Cascades, configuration.Resolution);
+			if (m_ShadowBenchmarkState == ShadowBenchmarkState::Warmup)
+				ImGui::Text("Warmup remaining: %u", m_ShadowBenchmarkWarmupRemaining);
+			else
+				ImGui::Text("Samples: %u / %u", m_ShadowBenchmarkSamplesCollected,
+					m_ShadowBenchmarkSamplesPerConfiguration);
+		}
+
+		if (m_ShadowBenchmarkResults.empty())
+			return;
+		ImGui::Columns(7, "ShadowBenchmarkResults", true);
+		ImGui::TextUnformatted("Cascades"); ImGui::NextColumn();
+		ImGui::TextUnformatted("Resolution"); ImGui::NextColumn();
+		ImGui::TextUnformatted("Avg ms"); ImGui::NextColumn();
+		ImGui::TextUnformatted("Min ms"); ImGui::NextColumn();
+		ImGui::TextUnformatted("Max ms"); ImGui::NextColumn();
+		ImGui::TextUnformatted("Draws"); ImGui::NextColumn();
+		ImGui::TextUnformatted("Saved"); ImGui::NextColumn();
+		ImGui::Separator();
+		for (const ShadowBenchmarkResult& result : m_ShadowBenchmarkResults)
+		{
+			ImGui::Text("%u", result.Configuration.Cascades); ImGui::NextColumn();
+			ImGui::Text("%u", result.Configuration.Resolution); ImGui::NextColumn();
+			ImGui::Text("%.3f", result.AverageMilliseconds); ImGui::NextColumn();
+			ImGui::Text("%.3f", result.MinimumMilliseconds); ImGui::NextColumn();
+			ImGui::Text("%.3f", result.MaximumMilliseconds); ImGui::NextColumn();
+			ImGui::Text("%u", result.DrawCalls); ImGui::NextColumn();
+			ImGui::Text("%u", result.SavedDrawCalls); ImGui::NextColumn();
+		}
+		ImGui::Columns(1);
 	}
 
 	void InstancingLabTool::DrawExpectedAndActual(
@@ -338,6 +558,7 @@ namespace gl {
 		ImGui::Text("Saved Draw Calls: %u", statistics.GetSavedDrawCalls());
 
 		DrawExpectedAndActual(statistics);
+		DrawShadowBenchmark();
 
 		ImGui::BeginDisabled(m_RepresentativeEntities.empty());
 		if (ImGui::Button("Select First"))
@@ -356,12 +577,14 @@ namespace gl {
 
 	void InstancingLabTool::Exit()
 	{
+		CancelShadowBenchmark();
 		if (!m_Active)
 			return;
 		if (m_ExitScene)
 			m_ExitScene();
 		m_Scene.reset();
 		m_RepresentativeEntities.clear();
+		m_SunEntity = UUID(0);
 		m_Expected = {};
 		m_Active = false;
 		m_Status = "Temporary lab exited; the editor scene was restored.";
