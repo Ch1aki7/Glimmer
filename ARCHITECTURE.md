@@ -158,7 +158,7 @@ flowchart TD
 - 运行模式先创建/更新 Native Script，再查找 `Primary` SceneCamera；没有主相机时不执行场景绘制；
 - `OnRuntimeStop()` 调用脚本 `OnDestroy()` 并释放运行时实例。
 
-Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；每个 Batch 显式启用标准 Alpha 混合，EndScene 后恢复禁用，避免依赖 OpenGL 全局状态。完整编辑器调用 Scene Update 时传入 `deferSpritePass=true`，Scene 只保存 ViewProjection 和待执行标记，不开始 Renderer2D Batch，也不遍历 Sprite；EditorLayer 绘制 Skybox 后调用 `Scene::FlushSpritePass`，此时才完成 Sprite 遍历、Begin/Submit/End 和所有实际 Draw。这样即使纹理槽或索引容量在提交中耗尽，自动 Flush 也只能发生在 Skybox 之后。默认参数为 false，因此不拥有 Skybox 编排的旧宿主仍在 Scene Update 内立即完成 Sprite Pass。Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
+Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；每个 Batch 显式启用标准 Alpha 混合，EndScene 后恢复禁用，避免依赖 OpenGL 全局状态。零索引 Batch 会在 `Renderer2D::Flush` 内直接结束，不能把 `DrawIndexed` 的零值“使用完整索引缓冲”语义误用于空 Sprite 帧。完整编辑器调用 Scene Update 时传入 `deferSpritePass=true`，Scene 只保存 ViewProjection 和待执行标记，不开始 Renderer2D Batch，也不遍历 Sprite；EditorLayer 绘制 Skybox 后调用 `Scene::FlushSpritePass`，此时才完成 Sprite 遍历、Begin/Submit/End 和所有实际 Draw。这样即使纹理槽或索引容量在提交中耗尽，自动 Flush 也只能发生在 Skybox 之后。默认参数为 false，因此不拥有 Skybox 编排的旧宿主仍在 Scene Update 内立即完成 Sprite Pass。Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
 
 Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通过 `(EntityID, MaterialHandle)` 缓存最终 MaterialProperties。缓存保存基础 MaterialState、MaterialOverrides、版本与最后使用帧；完整状态未变化时复用结果，变化时重新构造 MaterialInstance，长期未使用项会被回收。每个有效 Mesh 再展开为一个 RenderItem；BaseColor 纹理优先级为 Material、Mesh 自带纹理、白纹理回退，Normal/AO/Emissive 只使用 Material Handle，缺失时绑定白纹理但通过独立存在标记禁止采样。
 

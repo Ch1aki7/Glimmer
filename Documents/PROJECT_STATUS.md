@@ -197,6 +197,13 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-08-09：Renderer2D 空批次残留修复
+
+- 修复实体添加 `SpriteRendererComponent` 后再移除时，视口仍残留白色 Quad 的问题；根因是空 Batch 把 `indexCount = 0` 传入 `DrawIndexed`，而底层将 0 解释为绘制完整预生成索引缓冲，导致上一帧 VBO 残留被再次提交；
+- `Renderer2D::Flush` 现对零索引批次直接返回，不绑定纹理、不发起 Draw Call，也不增加统计；保留其他调用方使用 `DrawIndexed(0)` 绘制完整索引缓冲的既有语义；
+- 验证：VS2026 `Debug | x64` 完整编辑器目标构建成功；55 项无窗口断言及最终汇总全部 PASS；默认 Alpine 场景在 Intel Iris Xe/OpenGL 4.6 下稳定运行，Texture、ShadowDepth、Terrain 与三个 Terrain Compute Shader 均成功加载；
+- 提交：待提交。
+
 ### 2026-08-09：P8 TerrainMaterial 与分层 PBR
 
 - 新增独立 `TerrainMaterial` 资产类型、`.glterrainmat` YAML、注册表类型与延迟缓存；格式固定包含 Grass、Soil、Rock、Snow 四层，各层保存 Albedo/Normal/AO Handle、颜色、Tiling、Metallic、Roughness、NormalScale 与 AOStrength，普通 `.glmat` 布局保持不变；

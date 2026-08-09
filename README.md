@@ -12694,6 +12694,26 @@ shadow += currentDepth - slopeBias > closest ? 1.0 : 0.0;
 - VS2026 生成新版编辑器目标，独立回归目标构建成功；55 项断言与最终汇总全部 PASS，包含 Cascade Count 与 Split Lambda 的场景往返；
 - Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。
 
+## Renderer2D 空批次残留修复
+
+实体移除 `SpriteRendererComponent` 后，下一帧仍会正常执行空的 Sprite Pass。旧实现把此时的 `QuadIndexCount = 0` 继续传入 `DrawIndexed`，但渲染 API 中的零参数表示“使用 VertexArray 的完整 IndexBuffer”，因此上一帧留在动态 VBO 中的 Quad 会被预生成索引重新绘制，并使用 0 号白纹理槽显示为白块。
+
+修复后，空批次在 Renderer2D 边界直接跳过：
+
+```cpp
+void Renderer2D::Flush()
+{
+    if (s_Data.QuadIndexCount == 0)
+        return;
+
+    // Bind textures and issue the actual batch draw...
+}
+```
+
+这样不会改变 `DrawIndexed(0)` 对模型等其他调用方的既有行为，同时保证添加、移除或 Undo/Redo `SpriteRendererComponent` 后，空 Sprite 帧不提交 Draw Call，也不会重画上一帧的残留顶点。
+
+验证：VS2026 `Debug | x64` 编辑器目标构建成功；55 项无窗口断言及最终汇总全部 PASS；默认 Alpine 场景在 Intel Iris Xe/OpenGL 4.6 下稳定启动，未出现 OpenGL 或 Shader 错误。
+
 ## KB
 
 ### 为什么不用动态库？

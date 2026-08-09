@@ -224,6 +224,12 @@ namespace gl {
 
 	void Renderer2D::Flush()
 	{
+		// DrawIndexed uses indexCount == 0 to mean "draw the full index buffer".
+		// An empty sprite batch must therefore return before reaching the API,
+		// otherwise stale vertices from the previous frame are drawn as white quads.
+		if (s_Data.QuadIndexCount == 0)
+			return;
+
 		for (uint32_t i = 0; i < s_Data.TextureSlotIndex; i++)
 			s_Data.TextureSlots[i]->Bind(i);
 
