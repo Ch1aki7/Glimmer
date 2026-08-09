@@ -561,6 +561,15 @@ namespace {
 			{ -0.25f, -0.25f, -0.25f }, { 0.25f, 0.25f, 0.25f },
 			glm::translate(identity, glm::vec3(0.0f, 0.0f, 3.0f)), identity),
 			"shadow frustum applies entity transform before culling");
+
+		gl::ShadowRenderer::Statistics batchedStatistics;
+		batchedStatistics.RenderedDraws = 24;
+		batchedStatistics.DrawCalls = 4;
+		context.Check(batchedStatistics.GetSavedDrawCalls() == 20,
+			"shadow statistics report draw calls saved by instancing");
+		batchedStatistics.DrawCalls = 25;
+		context.Check(batchedStatistics.GetSavedDrawCalls() == 0,
+			"shadow saved draw count cannot underflow");
 	}
 
 }

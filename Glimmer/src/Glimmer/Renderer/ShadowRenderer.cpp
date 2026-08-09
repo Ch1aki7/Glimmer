@@ -2,6 +2,7 @@
 #include "ShadowRenderer.h"
 
 #include "Glimmer/Asset/AssetManager.h"
+#include "Glimmer/Renderer/Buffer.h"
 #include "Glimmer/Renderer/FrameBuffer.h"
 #include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Renderer/Mesh.h"
@@ -9,14 +10,66 @@
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/Texture.h"
+#include "Glimmer/Renderer/VertexArray.h"
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Terrain/Terrain.h"
 
 #include <array>
+#include <algorithm>
+#include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
 
 namespace gl {
 	namespace {
+		constexpr uint32_t MaxInstancesPerDraw = 1024;
+
+		uint32_t FloatBits(float value)
+		{
+			uint32_t bits = 0;
+			static_assert(sizeof(bits) == sizeof(value), "Unexpected float size.");
+			std::memcpy(&bits, &value, sizeof(bits));
+			return bits;
+		}
+
+		struct ShadowRenderKey
+		{
+			uintptr_t Mesh = 0;
+			uint32_t Texture = 0;
+			std::array<uint32_t, 4> MaterialState{};
+
+			bool operator<(const ShadowRenderKey& other) const
+			{
+				return std::tie(Mesh, Texture, MaterialState)
+					< std::tie(other.Mesh, other.Texture, other.MaterialState);
+			}
+			bool operator==(const ShadowRenderKey& other) const
+			{
+				return Mesh == other.Mesh && Texture == other.Texture
+					&& MaterialState == other.MaterialState;
+			}
+		};
+
+		struct ShadowRenderItem
+		{
+			ShadowRenderKey Key;
+			Ref<Mesh> MeshResource;
+			Ref<Texture2D> BaseColorTexture;
+			glm::mat4 Transform{ 1.0f };
+			bool AlphaMasked = false;
+			float BaseColorAlpha = 1.0f;
+			float AlphaCutoff = 0.5f;
+			float TilingFactor = 1.0f;
+		};
+
+		struct ShadowVertexArrayCacheEntry
+		{
+			std::weak_ptr<VertexArray> Source;
+			Ref<VertexArray> ShadowVertexArray;
+		};
+
 		struct ShadowRendererData
 		{
 			std::array<Ref<Framebuffer>, ShadowRenderer::MaxCascades> Framebuffers;
@@ -24,6 +77,11 @@ namespace gl {
 			std::array<float, ShadowRenderer::MaxCascades> CascadeSplits{};
 			std::array<float, ShadowRenderer::MaxCascades> CascadeBlendWidths{};
 			Ref<Shader> DepthShader;
+			Ref<VertexBuffer> InstanceVertexBuffer;
+			std::vector<glm::mat4> InstanceBuffer;
+			std::vector<ShadowRenderItem> ModelQueue;
+			std::unordered_map<const VertexArray*, ShadowVertexArrayCacheEntry>
+				ShadowVertexArrays;
 			glm::mat4 CameraView{ 1.0f };
 			uint32_t Resolution = 0;
 			uint32_t CascadeCount = 0;
@@ -37,6 +95,49 @@ namespace gl {
 
 		ShadowRendererData s_Data;
 
+		void EnsureInstancingResources()
+		{
+			if (s_Data.InstanceVertexBuffer)
+				return;
+			s_Data.InstanceVertexBuffer = VertexBuffer::Create(
+				MaxInstancesPerDraw * static_cast<uint32_t>(sizeof(glm::mat4)));
+			s_Data.InstanceVertexBuffer->SetLayout({
+				{ ShaderDataType::Mat4, "a_InstanceTransform", false,
+					BufferInputRate::PerInstance }
+			});
+			s_Data.InstanceBuffer.reserve(MaxInstancesPerDraw);
+			s_Data.ModelQueue.reserve(1024);
+		}
+
+		Ref<VertexArray> GetShadowVertexArray(const Ref<Mesh>& mesh)
+		{
+			const Ref<VertexArray>& source = mesh->GetVertexArray();
+			if (!source || !source->GetIndexBuffer())
+				return nullptr;
+			auto iterator = s_Data.ShadowVertexArrays.find(source.get());
+			if (iterator != s_Data.ShadowVertexArrays.end()
+				&& iterator->second.Source.lock() == source
+				&& iterator->second.ShadowVertexArray)
+				return iterator->second.ShadowVertexArray;
+
+			Ref<VertexArray> shadowVertexArray = VertexArray::Create();
+			for (const Ref<VertexBuffer>& vertexBuffer : source->GetVertexBuffers())
+			{
+				const auto& elements = vertexBuffer->GetLayout().GetElements();
+				const bool perVertex = !elements.empty() && std::all_of(
+					elements.begin(), elements.end(), [](const BufferElement& element) {
+						return element.InputRate == BufferInputRate::PerVertex;
+					});
+				if (perVertex)
+					shadowVertexArray->AddVertexBuffer(vertexBuffer);
+			}
+			shadowVertexArray->AddVertexBuffer(s_Data.InstanceVertexBuffer);
+			shadowVertexArray->SetIndexBuffer(source->GetIndexBuffer());
+			s_Data.ShadowVertexArrays[source.get()] = {
+				source, shadowVertexArray };
+			return shadowVertexArray;
+		}
+
 		Ref<Texture2D> ResolveBaseColorTexture(AssetHandle handle)
 		{
 			if (static_cast<uint64_t>(handle) == 0
@@ -48,6 +149,96 @@ namespace gl {
 				|| metadata.Semantic != TextureSemantic::Color)
 				return nullptr;
 			return AssetManager::GetTexture2D(handle);
+		}
+
+		void UploadShadowMaterialState(const ShadowRenderItem& item)
+		{
+			s_Data.DepthShader->UploadUniformInt(
+				"u_AlphaMaskEnabled", item.AlphaMasked ? 1 : 0);
+			if (!item.AlphaMasked)
+				return;
+			s_Data.DepthShader->UploadUniformInt(
+				"u_HasBaseColorTexture", item.BaseColorTexture ? 1 : 0);
+			s_Data.DepthShader->UploadUniformFloat(
+				"u_BaseColorAlpha", item.BaseColorAlpha);
+			s_Data.DepthShader->UploadUniformFloat(
+				"u_AlphaCutoff", item.AlphaCutoff);
+			s_Data.DepthShader->UploadUniformFloat(
+				"u_TilingFactor", item.TilingFactor);
+			if (item.BaseColorTexture)
+				item.BaseColorTexture->Bind(0);
+		}
+
+		void FlushModelQueue()
+		{
+			if (s_Data.ModelQueue.empty())
+				return;
+			std::sort(s_Data.ModelQueue.begin(), s_Data.ModelQueue.end(),
+				[](const ShadowRenderItem& left, const ShadowRenderItem& right) {
+					return left.Key < right.Key;
+				});
+			s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 0);
+
+			for (size_t itemIndex = 0; itemIndex < s_Data.ModelQueue.size();)
+			{
+				const ShadowRenderItem& item = s_Data.ModelQueue[itemIndex];
+				size_t batchEnd = itemIndex + 1;
+				while (batchEnd < s_Data.ModelQueue.size()
+					&& s_Data.ModelQueue[batchEnd].Key == item.Key)
+					batchEnd++;
+
+				UploadShadowMaterialState(item);
+				const size_t batchSize = batchEnd - itemIndex;
+				if (batchSize > 1)
+				{
+					const Ref<VertexArray> shadowVertexArray =
+						GetShadowVertexArray(item.MeshResource);
+					if (shadowVertexArray)
+					{
+						s_Data.DepthShader->UploadUniformInt("u_UseInstancing", 1);
+						for (size_t chunkBegin = itemIndex; chunkBegin < batchEnd;)
+						{
+							const size_t chunkEnd = std::min(
+								chunkBegin + static_cast<size_t>(MaxInstancesPerDraw),
+								batchEnd);
+							s_Data.InstanceBuffer.clear();
+							for (size_t index = chunkBegin; index < chunkEnd; ++index)
+								s_Data.InstanceBuffer.push_back(
+									s_Data.ModelQueue[index].Transform);
+							s_Data.InstanceVertexBuffer->SetData(
+								s_Data.InstanceBuffer.data(),
+								static_cast<uint32_t>(s_Data.InstanceBuffer.size()
+									* sizeof(glm::mat4)));
+							RenderCommand::DrawIndexedInstanced(
+								shadowVertexArray,
+								static_cast<uint32_t>(s_Data.InstanceBuffer.size()),
+								item.MeshResource->GetIndexCount());
+							s_Data.Stats.DrawCalls++;
+							s_Data.Stats.InstancedDrawCalls++;
+							s_Data.Stats.InstanceCount +=
+								static_cast<uint32_t>(s_Data.InstanceBuffer.size());
+							chunkBegin = chunkEnd;
+						}
+						itemIndex = batchEnd;
+						continue;
+					}
+				}
+
+				s_Data.DepthShader->UploadUniformInt("u_UseInstancing", 0);
+				for (size_t index = itemIndex; index < batchEnd; ++index)
+				{
+					const ShadowRenderItem& individual = s_Data.ModelQueue[index];
+					s_Data.DepthShader->UploadUniformMat4(
+						"u_Transform", individual.Transform);
+					RenderCommand::DrawIndexed(
+						individual.MeshResource->GetVertexArray(),
+						individual.MeshResource->GetIndexCount());
+					s_Data.Stats.DrawCalls++;
+					s_Data.Stats.IndividualDrawCalls++;
+				}
+				itemIndex = batchEnd;
+			}
+			s_Data.ModelQueue.clear();
 		}
 
 		std::array<glm::vec3, 8> GetFrustumCornersWorldSpace(
@@ -158,6 +349,10 @@ namespace gl {
 	{
 		s_Data.PassActive = false;
 		s_Data.Enabled = false;
+		s_Data.ModelQueue.clear();
+		s_Data.InstanceBuffer.clear();
+		s_Data.ShadowVertexArrays.clear();
+		s_Data.InstanceVertexBuffer.reset();
 		s_Data.DepthShader.reset();
 		for (Ref<Framebuffer>& framebuffer : s_Data.Framebuffers)
 			framebuffer.reset();
@@ -186,6 +381,7 @@ namespace gl {
 		s_Data.DepthShader = AssetManager::GetShader(shaderHandle);
 		if (!s_Data.DepthShader)
 			return false;
+		EnsureInstancingResources();
 
 		resolution = std::clamp(resolution, 512u, 4096u);
 		cascadeCount = std::clamp(cascadeCount, 1u, MaxCascades);
@@ -271,6 +467,7 @@ namespace gl {
 			|| !s_Data.Framebuffers[cascadeIndex])
 			return false;
 		s_Data.ActiveCascade = cascadeIndex;
+		s_Data.ModelQueue.clear();
 		s_Data.Framebuffers[cascadeIndex]->Bind();
 		RenderCommand::SetBlendEnabled(false);
 		RenderCommand::SetDepthWriteEnabled(true);
@@ -282,6 +479,7 @@ namespace gl {
 		s_Data.DepthShader->UploadUniformInt("u_HeightMap", 0);
 		s_Data.DepthShader->UploadUniformInt("u_BaseColorTexture", 0);
 		s_Data.DepthShader->UploadUniformInt("u_AlphaMaskEnabled", 0);
+		s_Data.DepthShader->UploadUniformInt("u_UseInstancing", 0);
 		s_Data.PassActive = true;
 		s_Data.Stats.CascadePasses++;
 		return true;
@@ -314,8 +512,6 @@ namespace gl {
 		const Ref<Texture2D> materialTexture =
 			ResolveBaseColorTexture(materialProperties.BaseColorTexture);
 
-		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 0);
-		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		for (const Ref<Mesh>& mesh : model->GetMeshes())
 		{
 			if (!mesh || !mesh->GetVertexArray() || mesh->GetIndexCount() == 0)
@@ -328,24 +524,29 @@ namespace gl {
 				s_Data.Stats.CulledDraws++;
 				continue;
 			}
-			const Ref<Texture2D> baseColorTexture = materialTexture
-				? materialTexture : mesh->GetTexture();
-			s_Data.DepthShader->UploadUniformInt(
-				"u_AlphaMaskEnabled", alphaMasked ? 1 : 0);
+			const Ref<Texture2D> baseColorTexture = alphaMasked
+				? (materialTexture ? materialTexture : mesh->GetTexture()) : nullptr;
+			ShadowRenderItem item;
+			item.MeshResource = mesh;
+			item.BaseColorTexture = baseColorTexture;
+			item.Transform = transform;
+			item.AlphaMasked = alphaMasked;
+			item.BaseColorAlpha = materialProperties.BaseColor.a;
+			item.AlphaCutoff = materialProperties.AlphaCutoff;
+			item.TilingFactor = materialProperties.TilingFactor;
+			item.Key.Mesh = reinterpret_cast<uintptr_t>(mesh.get());
 			if (alphaMasked)
 			{
-				s_Data.DepthShader->UploadUniformInt(
-					"u_HasBaseColorTexture", baseColorTexture ? 1 : 0);
-				s_Data.DepthShader->UploadUniformFloat(
-					"u_BaseColorAlpha", materialProperties.BaseColor.a);
-				s_Data.DepthShader->UploadUniformFloat(
-					"u_AlphaCutoff", materialProperties.AlphaCutoff);
-				s_Data.DepthShader->UploadUniformFloat(
-					"u_TilingFactor", materialProperties.TilingFactor);
-				if (baseColorTexture)
-					baseColorTexture->Bind(0);
+				item.Key.Texture = baseColorTexture
+					? baseColorTexture->GetRendererID() : 0;
+				item.Key.MaterialState = {
+					1u,
+					FloatBits(item.BaseColorAlpha),
+					FloatBits(item.AlphaCutoff),
+					FloatBits(item.TilingFactor)
+				};
 			}
-			RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
+			s_Data.ModelQueue.emplace_back(std::move(item));
 			s_Data.Stats.RenderedDraws++;
 		}
 	}
@@ -370,6 +571,7 @@ namespace gl {
 		}
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 1);
 		s_Data.DepthShader->UploadUniformInt("u_AlphaMaskEnabled", 0);
+		s_Data.DepthShader->UploadUniformInt("u_UseInstancing", 0);
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		s_Data.DepthShader->UploadUniformFloat(
 			"u_MaxHeight", terrain.Specification.HeightScale);
@@ -377,12 +579,15 @@ namespace gl {
 		RenderCommand::DrawIndexed(
 			terrain.Runtime->Mesh->GetVertexArray(), terrain.Runtime->Mesh->GetIndexCount());
 		s_Data.Stats.RenderedDraws++;
+		s_Data.Stats.DrawCalls++;
+		s_Data.Stats.IndividualDrawCalls++;
 	}
 
 	void ShadowRenderer::EndCascade()
 	{
 		if (!s_Data.PassActive)
 			return;
+		FlushModelQueue();
 		s_Data.DepthShader->Unbind();
 		s_Data.Framebuffers[s_Data.ActiveCascade]->Unbind();
 		s_Data.PassActive = false;
@@ -400,6 +605,7 @@ namespace gl {
 		s_Data.PassActive = false;
 		s_Data.Enabled = false;
 		s_Data.CascadeCount = 0;
+		s_Data.ModelQueue.clear();
 		s_Data.Stats = {};
 	}
 

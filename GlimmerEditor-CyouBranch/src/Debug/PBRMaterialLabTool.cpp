@@ -320,10 +320,13 @@ namespace gl {
 			const ShadowRenderer::Statistics shadowStatistics =
 				ShadowRenderer::GetStatistics();
 			GL_CORE_INFO(
-				"Shadow Frustum validation: {0} candidates, {1} rendered, {2} culled across {3} cascades.",
+				"Shadow validation: {0} candidates, {1} rendered, {2} culled, {3} draw calls ({4} instanced), {5} saved across {6} cascades.",
 				shadowStatistics.CandidateDraws,
 				shadowStatistics.RenderedDraws,
 				shadowStatistics.CulledDraws,
+				shadowStatistics.DrawCalls,
+				shadowStatistics.InstancedDrawCalls,
+				shadowStatistics.GetSavedDrawCalls(),
 				shadowStatistics.CascadePasses);
 			m_ValidationLogged = true;
 		}

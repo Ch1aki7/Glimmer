@@ -12667,7 +12667,8 @@ Scene 找到首个启用且 CastShadows 的 Directional Light
   → 每级执行包围球稳定化与 Shadow Texel Snap
   → 使用 Mesh/Terrain Bounds 对当前级联执行保守六平面剔除
   → 依次绑定各级 Depth32F Framebuffer
-  → ShadowDepth.glsl 逐级绘制 Model 与位移后的 Terrain
+  → Model 按 Mesh + Mask 状态排序并构造每级 Instancing Batch
+  → ShadowDepth.glsl 实例化绘制兼容 Model，独立绘制 Terrain
   → 恢复 Scene Framebuffer 与 Viewport
   → 正常 Opaque / Terrain / Skybox / Sprite / Transparent
   → PBRModel 与 Terrain 执行 3×3 PCF，并在 Split 重叠区混合相邻级联
@@ -12704,17 +12705,28 @@ if (clamp(u_BaseColorAlpha * textureAlpha, 0.0, 1.0) < u_AlphaCutoff)
 
 因此树叶、铁丝网或镂空贴图的透明区域不会写入 Shadow Map，接收面上会得到对应的镂空阴影。模型贴图优先使用最终 Material BaseColorTexture，未设置时沿用 Mesh 自带纹理；纹理语义仍必须是 sRGB Color。ShadowDepth 分别从 location 3 读取 Model UV、从 location 1 读取 Terrain Height UV，透明裁剪不会破坏地形顶点位移。
 
+每个级联不再逐模型立即 Draw。通过 Frustum 测试的子网格先进入 Shadow Queue，随后按 Mesh 和最终 Mask 状态排序；Opaque 只要求 Mesh 相同，Mask 还要求 BaseColor Texture、BaseColor Alpha、AlphaCutoff 与 TilingFactor 全部一致。兼容批次把 Transform 写入动态 Instance Buffer：
+
+```cpp
+RenderCommand::DrawIndexedInstanced(
+    shadowVertexArray,
+    static_cast<uint32_t>(instanceTransforms.size()),
+    mesh->GetIndexCount());
+```
+
+单次最多上传 1024 个实例，超出后自动分块。Shadow VAO 与主 Renderer3D VAO 分开缓存：它复用 Mesh 的逐顶点缓冲和索引缓冲，但挂载自己的 location 4～7 Transform Buffer，因此两个渲染器不会覆盖彼此的实例属性。单项批次自动回退普通 Draw，Terrain 继续保持独立深度 Draw。
+
 ### 当前边界与验证
 
 - 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap、可调重叠混合与运行时级联调试着色；
 - Mesh 在构造时缓存局部 AABB；每个级联会把 Model 子网格 Bounds 变换到 Light VP Clip Space，8 个角点全部位于同一平面外才剔除；Terrain 使用网格 XZ 范围与 HeightScale 构造保守 Bounds；
-- Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered 与 Frustum Culled；可通过移动相机或把模型移出视野确认 Draw 数下降，也可启用 `Visualize Cascades` 检查分级和重叠过渡；
-- Model Shadow Pass 当前逐实体提交，尚未复用 Renderer3D Instancing；
+- Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered、Frustum Culled、Draw Calls、Instanced/Individual、Instances 与 Saved Draws；可通过移动相机或生成重复模型确认剔除及合批结果，也可启用 `Visualize Cascades` 检查分级和重叠过渡；
+- Model Shadow Pass 已按每个级联独立合批；不同 Mesh 或不同最终 Mask 状态会正确拆批，Terrain 保持独立提交；
 - Alpha Mask 已按最终 MaterialInstance 的 BaseColor Alpha、纹理 Alpha、TilingFactor 与 AlphaCutoff 裁剪 ShadowDepth；Blend 仍投射完整实体轮廓，尚未实现抖动或透射式半透明阴影；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
-- VS2026 全解决方案与独立回归目标构建成功；59 项断言与最终汇总全部 PASS，包含阴影设置往返，以及 Bounds 完全内部、完全外部、跨平面相交和实体变换后外部四类剔除测试；
-- 新增级联调试着色与 Alpha Mask Shadow 后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型，默认地形的 Height UV 与 Compute 路径正常。自动测试不判定颜色和投影轮廓，仍需手动勾选 `Visualize Cascades` 检查分区，并用带 Alpha 的 BaseColor Texture + Mask 材质确认透明区域不产生阴影。
-- PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 cascades`，确认保守测试不会误删各级可见投影；把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
+- VS2026 独立回归目标构建成功；61 项断言与最终汇总全部 PASS，包含阴影设置往返、四类 Bounds 剔除测试，以及 Shadow Saved Draw 正常计算和下溢保护；
+- 新增级联调试着色、Alpha Mask 与 Shadow Instancing 后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型，默认地形的 Height UV 与 Compute 路径正常。自动测试不判定颜色和投影轮廓，仍需手动勾选 `Visualize Cascades` 检查分区，并用带 Alpha 的 BaseColor Texture + Mask 材质确认透明区域不产生阴影。
+- PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 draw calls / 4 instanced / 20 saved / 4 cascades`：每个级联把 6 个相同 Mesh 合并为一次 Draw，并确认保守测试没有误删投影。把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
 
 ## Renderer2D 空批次残留修复
 

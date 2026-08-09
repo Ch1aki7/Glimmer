@@ -19,6 +19,15 @@ namespace gl {
 			uint32_t CandidateDraws = 0;
 			uint32_t CulledDraws = 0;
 			uint32_t RenderedDraws = 0;
+			uint32_t DrawCalls = 0;
+			uint32_t InstancedDrawCalls = 0;
+			uint32_t IndividualDrawCalls = 0;
+			uint32_t InstanceCount = 0;
+
+			uint32_t GetSavedDrawCalls() const
+			{
+				return RenderedDraws > DrawCalls ? RenderedDraws - DrawCalls : 0;
+			}
 		};
 
 		static void Shutdown();

@@ -66,6 +66,13 @@ namespace gl {
 				ImGui::Text("Candidate / Rendered: %u / %u",
 					shadowStatistics.CandidateDraws, shadowStatistics.RenderedDraws);
 				ImGui::Text("Frustum Culled: %u", shadowStatistics.CulledDraws);
+				ImGui::Text("Draw Calls (Instanced / Individual): %u (%u / %u)",
+					shadowStatistics.DrawCalls,
+					shadowStatistics.InstancedDrawCalls,
+					shadowStatistics.IndividualDrawCalls);
+				ImGui::Text("Instances / Saved Draws: %u / %u",
+					shadowStatistics.InstanceCount,
+					shadowStatistics.GetSavedDrawCalls());
 				bool visualizeCascades =
 					ShadowRenderer::IsCascadeDebugVisualizationEnabled();
 				if (ImGui::Checkbox("Visualize Cascades", &visualizeCascades))
