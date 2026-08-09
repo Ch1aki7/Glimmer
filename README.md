@@ -12270,6 +12270,82 @@ $env:GLIMMER_PBR_LAB_AUTORUN = "1"
 
 本次验证结果：Premake VS2026 生成成功；VS2026 v145 `Debug | x64` 全解决方案构建成功；自动 Lab 稳定运行 8 秒，日志记录 `PBR Material/YAML roundtrip PASS` 与 `PBR Material Lab PASS: rendered 6/6 items`，测试进程正常结束且无临时文件、日志或编辑器进程残留。
 
+## 无窗口回归测试与 Windows 一键验证
+
+编辑器内的 Instancing/PBR Lab 适合验证真实 OpenGL 绘制，但依赖窗口、GPU 和完整资源环境。为了让新设备拉取仓库后能够先验证数据层和构建链，本阶段增加独立的 `GlimmerRegressionTests` 控制台目标。它不创建 Application、Window 或 Renderer Context，失败时直接返回非零进程退出码。
+
+### 当前测试范围
+
+测试文件统一创建在系统临时目录，并在进程退出时清理，不会修改 `assets` 或默认编辑场景。当前覆盖：
+
+- 旧式最小 `.glmat` 缺少新字段时恢复兼容默认值；
+- 完整 MaterialState 的 ShaderHandle、四类纹理、PBR 标量、Emissive 与 AlphaMode 保存/重载；
+- MaterialOverrides 只替换启用字段，并验证 Roughness、NormalScale、AOStrength、Emissive 和 AlphaCutoff 的运行时 Clamp；
+- 固定 UUID 的最小 Scene 保存/加载，验证 Tag、Transform、ModelHandle、MaterialHandle 和 Overrides Mask/Values；
+- 加载后的 `UUID → entt::entity` 索引能够通过 `FindEntityByUUID` 恢复稳定实体身份。
+
+正常执行任一断言失败都会返回退出码 1。测试程序还保留显式失败入口，用于验证脚本或 CI 是否正确传播失败：
+
+```powershell
+.\scripts\Verify-Windows.bat -SkipGenerate -SkipBuild -ForceTestFailure
+$LASTEXITCODE # 预期为 1
+```
+
+### 新设备标准流程
+
+首次拉取建议直接包含全部子模块：
+
+```powershell
+git clone --recurse-submodules <repository-url>
+cd Glimmer
+```
+
+如果仓库已经拉取，但依赖目录为空：
+
+```powershell
+git submodule update --init --recursive
+```
+
+安装 Visual Studio 2026 的“使用 C++ 的桌面开发”工作负载后，在仓库根目录运行：
+
+```powershell
+.\scripts\Verify-Windows.bat
+```
+
+脚本依次执行：
+
+```text
+检查递归 Git 子模块
+→ vendor/bin/premake/premake5.exe vs2026
+→ 生成 GlimmerEngine.slnx 与各 vcxproj
+→ MSBuild Debug | x64 全解决方案
+→ GlimmerRegressionTests.exe
+→ 以退出码报告最终结果
+```
+
+脚本优先从 PATH 或 Visual Studio Installer 的 `vswhere.exe` 查找 MSBuild。非标准安装位置可以显式传入：
+
+```powershell
+.\scripts\Verify-Windows.bat `
+    -MSBuildPath "D:\Microsoft Visual Studio\2026\MSBuild\Current\Bin\MSBuild.exe"
+```
+
+已经生成并构建过工程时，可以只运行回归：
+
+```powershell
+.\scripts\Verify-Windows.bat -SkipGenerate -SkipBuild
+```
+
+`.bat` 不包含 `pause`，会原样返回 PowerShell/测试进程的退出码，适合本地终端和后续 CI；它同时显式使用 `ExecutionPolicy Bypass`，避免新电脑默认策略阻止仓库内验证脚本。
+
+VS2026 Premake 当前生成的解决方案入口是 `GlimmerEngine.slnx`。仓库中的旧 `.sln` 可能由 VS2022 或更早版本产生，不应据此判断新测试目标是否已经进入解决方案。
+
+### 与 Debug Lab 的关系
+
+无窗口测试只覆盖确定性的状态、合并和 YAML 往返；Shader 编译、Framebuffer、DrawCall、Instancing 和纹理语义仍由 DebugPanel Lab 或完整编辑器验证。两种测试互补，但都遵守相同隔离原则：测试实体只存在于临时 Scene，不向 `m_EditorScene` 或默认 `.glimmer` 文件永久写入。
+
+本次验证使用统一脚本完成 Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和测试执行；23 项正常断言全部 PASS，`--force-failure` 返回退出码 1。
+
 ## KB
 
 ### 为什么不用动态库？

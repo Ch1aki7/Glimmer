@@ -9,7 +9,7 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P5 自动化回归测试与持续构建
+- 当前主线：P6 Terrain 现状复核与编辑事务收口
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,28 +55,7 @@
 
 ## 当前主线
 
-### P5：自动化回归测试与持续构建
-
-**目标**
-
-- 增加 Material 序列化、Override 合并、UUID 恢复等无窗口测试；
-- 增加 Premake 生成和 VS2026 Debug 构建检查；
-- 建立最小场景加载/保存往返测试；
-- 记录不同设备拉取子模块、生成工程和构建的标准流程。
-
-**验收**
-
-- 无窗口测试能稳定复现失败并返回非零退出码；
-- Premake、VS2026 `Debug | x64` 和最小场景往返有可重复执行入口；
-- 每个后续 Lab 场景独立运行，不向默认编辑场景永久写入测试实体。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P6：Terrain 现状复核与编辑事务收口
-
-**依赖**：当前主线完成；可与 P4 并行准备，但不得重建已经存在的 TerrainComponent/TerrainRenderer。
 
 **目标**
 
@@ -90,6 +69,10 @@
 - Terrain Entity 移动、复制、保存/加载、Edit → Play → Stop 结果一致；
 - 连续参数拖动只生成一条可逆命令；
 - EditorLayer 不持有 TerrainMesh、HeightMap 或 Terrain Shader 的业务状态。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P7：山脉生成、派生图与 Authoring Erosion
 
@@ -238,6 +221,16 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-09：P5 自动化回归测试与可重复构建验证
+
+- 新增独立 `GlimmerRegressionTests` ConsoleApp，不创建窗口、Application 或渲染上下文；覆盖旧 `.glmat` 默认兼容、完整 Material 保存/重载、MaterialOverrides 启用字段合并与数值 Clamp；
+- 最小内存 Scene 使用固定 UUID、Transform、ModelHandle 和完整 PBR MaterialOverrides 保存为临时 `.glimmer`，随后加载到新 Scene，并通过 `FindEntityByUUID` 验证稳定身份、组件和 Handle/Mask/Values 往返；测试临时目录位于系统 Temp，退出时递归清理，不写入默认编辑场景；
+- 测试程序逐项输出 PASS/FAIL，任一断言失败返回 1；`--force-failure` 已验证调用链能稳定传播非零退出码；
+- 新增 `scripts/Verify-Windows.bat` 无暂停入口及其 PowerShell 实现：绕过本机脚本执行策略后检查递归子模块是否初始化，调用仓库内 Premake 生成 VS2026 `.slnx`，自动查找或接收显式 MSBuild 路径，构建全解决方案 `Debug | x64`，最后运行无窗口测试；
+- 验证：统一脚本完整通过；Premake 成功生成 `GlimmerRegressionTests.vcxproj`，VS2026/MSBuild 18.8.2 全解决方案构建成功，23 项正常断言全部 PASS；强制失败运行返回退出码 1；测试临时目录自动清理；
+- README：新增“无窗口回归测试与 Windows 一键验证”，记录跨设备 Clone、子模块、生成、构建和测试流程；ARCHITECTURE：补充独立测试目标及其依赖/隔离边界；
+- 提交：待提交。
 
 ### 2026-08-09：PBR 材质通道与颜色空间契约
 
@@ -391,6 +384,7 @@
 ### 构建与依赖
 
 - 部分 Git 子模块包含 Premake 生成的未跟踪文件，可能使根仓库显示子模块为脏状态；不要在不确认内容的情况下清理或重置子模块；
+- VS2026 Premake 生成的主入口是 `GlimmerEngine.slnx`；旧 `GlimmerEngine.sln` 可能来自 VS2022 或早期生成，自动验证脚本优先构建 `.slnx`；
 - SPIRV-Cross 上游 Premake 会递归包含 samples/tests，根 Premake 当前通过 `removefiles` 排除；修改依赖生成逻辑时必须复验；
 - GLFW Premake 仍使用已弃用的 `flags`、`NoRuntimeChecks` 和 `NoIncrementalLink` 写法，会产生生成警告。
 - Model 资源已恢复 Cube、Plane、UV Sphere、bunny、planet、spacecraft、suzanne；注册表中的 `models/New Folder/Cube.obj`、`models/dragon.obj`、`models/UV Sphere.obj` 仍缺少源文件，需要从原设备恢复或移除失效条目。
@@ -418,9 +412,8 @@
 
 根据任务范围选择必要项；触及核心构建、场景、资产或渲染时应执行完整清单。
 
+- [ ] 运行 `scripts\Verify-Windows.bat`（统一执行子模块检查、Premake VS2026 生成、`Debug | x64` 全解决方案构建和无窗口回归）
 - [ ] `git diff --check`
-- [ ] 运行 `scripts\Win-GenerateProject-vs2026.bat`（Premake 或文件列表变化时）
-- [ ] VS2026 `Debug | x64` 全解决方案构建
 - [ ] 相关应用至少启动并保持运行到首帧
 - [ ] 场景保存 → 关闭/重载 → 状态一致
 - [ ] Edit → Play → Stop 后编辑场景恢复

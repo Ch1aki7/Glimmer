@@ -69,6 +69,7 @@ project "SPIRV-Cross"
 group ""
 
 include "Glimmer"
+include "GlimmerTests"
 include "Sandbox"
 include "GlimmerEditor"
 include "GlimmerEditor-CyouBranch"

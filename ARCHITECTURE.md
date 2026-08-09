@@ -293,6 +293,14 @@ flowchart LR
 - 反序列化使用 `CreateEntityWithUUID` 恢复稳定身份；
 - Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例。
 
+### 8.1 无窗口回归边界
+
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
+
+根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
+
+该目标不替代需要 GPU/窗口的 DebugPanel Lab。Instancing/PBR 等 Lab 继续验证真实渲染统计和 Shader 行为，并保持临时 Scene 不写入 `m_EditorScene`；无窗口目标只承担可确定、无需图形上下文的状态与序列化回归。
+
 ## 9. 当前编辑器架构
 
 ### 9.1 EditorLayer 编排
@@ -398,7 +406,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode 以及 PBR Normal/AO/Emissive 通道已经落地；当前主线转入自动化回归与持续构建。Metallic/Roughness Texture/ORM、TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道以及无窗口回归/可重复 Windows 构建入口已经落地；当前主线转入 Terrain 现状复核与编辑事务收口。Metallic/Roughness Texture/ORM、TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 
