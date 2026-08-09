@@ -12,6 +12,7 @@ namespace gl {
 		RED_INTEGER,        // 实体 ID 拾取
 		RGBA16F,            // HDR 半精度浮点
 		Depth24Stencil8,    // 深度/模板
+		Depth32F,           // 可采样阴影深度
 	};
 
 	// 单个附件规格

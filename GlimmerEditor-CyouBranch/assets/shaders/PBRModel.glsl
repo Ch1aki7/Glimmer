@@ -81,6 +81,11 @@ uniform int u_HasAOTexture;
 uniform int u_HasEmissiveTexture;
 uniform int u_AlphaMode;
 uniform float u_AlphaCutoff;
+uniform sampler2D u_ShadowMap;
+uniform mat4 u_LightViewProjection;
+uniform int u_ShadowEnabled;
+uniform float u_ShadowBias;
+uniform float u_ShadowTexelSize;
 
 const float PI = 3.14159265359;
 
@@ -132,6 +137,31 @@ vec3 EvaluateBRDF(vec3 normal, vec3 viewDirection, vec3 lightDirection,
     return (diffuseWeight * albedo / PI + specular) * radiance * normalDotLight;
 }
 
+float DirectionalShadowVisibility(
+    vec3 worldPosition, vec3 normal, vec3 lightDirection)
+{
+    if (u_ShadowEnabled == 0)
+        return 1.0;
+    vec4 lightClip = u_LightViewProjection * vec4(worldPosition, 1.0);
+    vec3 projected = lightClip.xyz / max(lightClip.w, 0.0001);
+    projected = projected * 0.5 + 0.5;
+    if (projected.z <= 0.0 || projected.z >= 1.0
+        || any(lessThan(projected.xy, vec2(0.0)))
+        || any(greaterThan(projected.xy, vec2(1.0))))
+        return 1.0;
+    float slopeBias = max(u_ShadowBias
+        * (1.0 - max(dot(normal, lightDirection), 0.0)), u_ShadowBias * 0.25);
+    float shadow = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+        {
+            float closest = texture(u_ShadowMap,
+                projected.xy + vec2(x, y) * u_ShadowTexelSize).r;
+            shadow += projected.z - slopeBias > closest ? 1.0 : 0.0;
+        }
+    return 1.0 - shadow / 9.0;
+}
+
 void main()
 {
     vec4 sampledColor = vec4(1.0);
@@ -178,8 +208,10 @@ void main()
         vec3 lightDirection = normalize(-u_DirectionalDirectionIntensity.xyz);
         vec3 radiance = u_DirectionalColor.rgb
             * u_DirectionalDirectionIntensity.w;
+        float visibility = DirectionalShadowVisibility(
+            v_WorldPosition, normal, lightDirection);
         result += EvaluateBRDF(normal, viewDirection, lightDirection,
-            radiance, albedo, metallic, roughness);
+            radiance, albedo, metallic, roughness) * visibility;
     }
 
     vec3 emissiveSample = vec3(1.0);

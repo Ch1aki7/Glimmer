@@ -196,6 +196,10 @@ Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite �
 
 Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight 构造 `LightEnvironment`。Renderer 将其转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO。
 
+第一个启用且开启 `CastShadows` 的 DirectionalLight 同时驱动单级 Shadow Pass。Scene 在主颜色 Pass 前调用 `ShadowRenderer`：后者按序列化的 Resolution、Distance 与 Bias 创建或复用纯运行时 `Depth32F` Framebuffer，以相机位置为中心构造正交 Light VP，并重新遍历 Model/Terrain 写入深度。Terrain 先经 `TerrainRenderer::Prepare` 生成或复用 Height/派生 Runtime，因此首帧即可参与投影；Shadow Pass 结束后由 `RenderPass::RebindCurrentTarget` 恢复 Scene Framebuffer 与 Viewport。
+
+PBRModel 与 Terrain 共用 `u_LightViewProjection/u_ShadowMap/u_ShadowBias` 接收契约和 `3×3 PCF`。模型材质占用 0～3 后将 Shadow Map 绑定到 slot 4；Terrain 已占用 0～15，Shadow Map 暂绑定到 slot 16。Shadow Framebuffer、深度纹理和 Light VP 不序列化，DirectionalLight 只持久化 CastShadows、Resolution、Distance 与 Bias。当前仍是单级、逐实体深度提交，尚未实现 CSM、Texel Snap、Shadow Frustum 剔除、Alpha Mask 投影或 Shadow Instancing。
+
 当前 3D Material 参数包括 BaseColor/BaseColorTexture、NormalTexture/NormalScale、AOTexture/AOStrength、EmissiveTexture/EmissiveColor/EmissiveStrength、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR：切线空间 Normal 修改 BRDF 法线，AO 只调制环境光项，Emissive 在线性 HDR 结果中累加；BaseColor Alpha 与纹理 Alpha 的乘积继续驱动 Mask/Blend。模型加载阶段按 UV 梯度生成 Tangent，退化 UV 或无有效累积切线时建立稳定正交基，避免 Normal Mapping 产生 NaN。
 
 `SkyLightComponent` 引用 `.glsky` Cubemap 资产；描述文件保存六个面图路径，AssetManager 缓存解析后的 `Cubemap`，SkyboxRenderer 使用去除平移的视图方向绘制背景。
@@ -420,7 +424,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion，以及 TerrainMaterial 四层 Triplanar PBR 已经落地；当前主线转入方向光阴影与 CSM。Metallic/Roughness Texture/ORM、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR，以及单级方向光 Shadow Map 已经落地；当前主线继续扩展 CSM。Metallic/Roughness Texture/ORM、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

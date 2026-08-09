@@ -23,6 +23,7 @@
 #include "Glimmer/Renderer/TextureCube.h"
 #include "Glimmer/Renderer/Cubemap.h"
 #include "Glimmer/Renderer/Renderer3D.h"
+#include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Buffer.h"
 #include "Glimmer/Renderer/Shader.h"

@@ -110,6 +110,10 @@ namespace gl {
 		float Intensity = 1.0f;
 		float AmbientIntensity = 0.05f;
 		bool Enabled = true;
+		bool CastShadows = true;
+		uint32_t ShadowMapResolution = 2048;
+		float ShadowDistance = 80.0f;
+		float ShadowBias = 0.0015f;
 
 		DirectionalLightComponent() = default;
 		DirectionalLightComponent(const DirectionalLightComponent&) = default;

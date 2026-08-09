@@ -4,6 +4,7 @@
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Shader.h"
+#include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Terrain/Terrain.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
 
@@ -61,8 +62,7 @@ namespace gl {
 		}
 	}
 
-	void TerrainRenderer::Draw(TerrainComponent& component, const glm::mat4& transform,
-		const glm::mat4& viewProjection, const glm::vec3& cameraPosition, int entityID)
+	bool TerrainRenderer::Prepare(TerrainComponent& component)
 	{
 		auto& specification = component.Specification;
 		if (!component.Runtime)
@@ -75,15 +75,11 @@ namespace gl {
 			runtime.LoadedMeshResolution = specification.MeshResolution;
 		}
 
-		const Ref<Shader> shader = AssetManager::GetShader(specification.RenderShaderHandle);
-		if (!shader)
-			return;
-
 		if (specification.Procedural)
 		{
 			const auto generationPath = AssetManager::GetFileSystemPath(specification.GenerationShaderHandle);
 			if (generationPath.empty())
-				return;
+				return false;
 			const auto erosionPath = ResolveComputePath(
 				specification.ErosionShaderHandle, generationPath,
 				"ThermalErosion.comp");
@@ -161,6 +157,19 @@ namespace gl {
 		}
 
 		if (!runtime.HeightMap)
+			return false;
+		return true;
+	}
+
+	void TerrainRenderer::Draw(TerrainComponent& component, const glm::mat4& transform,
+		const glm::mat4& viewProjection, const glm::vec3& cameraPosition, int entityID)
+	{
+		if (!Prepare(component))
+			return;
+		auto& specification = component.Specification;
+		auto& runtime = *component.Runtime;
+		const Ref<Shader> shader = AssetManager::GetShader(specification.RenderShaderHandle);
+		if (!shader)
 			return;
 
 		shader->ReloadIfChanged();
@@ -181,6 +190,7 @@ namespace gl {
 		shader->UploadUniformFloat("u_SampleSpacing", sampleSpacing);
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
+		ShadowRenderer::BindForLighting(shader, 16);
 		const bool hasDerivedMaps = runtime.NormalSlopeMap
 			&& runtime.AnalysisMap && runtime.MaterialWeightMap;
 		shader->UploadUniformInt("u_HasDerivedMaps", hasDerivedMaps ? 1 : 0);

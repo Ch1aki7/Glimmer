@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P9 方向光阴影与 CSM
-- 主线状态：待开始
+- 主线状态：进行中（单级 Directional Shadow Map 已落地，下一阶段为 CSM）
 
 ## 使用与更新规则
 
@@ -70,6 +70,15 @@
 - 山峰和模型遮挡关系稳定，无明显 Peter Panning 或大面积 Acne；
 - 级联切换不过度跳变，视锥外阴影对象不提交；
 - Shadow 资源不写入场景文件，只由可序列化设置重建。
+
+**阶段进展（2026-08-09）**
+
+- 已实现单级 Directional Shadow Map：`ShadowRenderer` 持有按需重建的 `Depth32F` 深度 Framebuffer，围绕相机位置建立方向光正交视锥，并在 Scene 主 Pass 前提交 Model 与 Terrain；
+- `TerrainRenderer::Prepare` 将高度/派生 Runtime 准备与颜色绘制分开，使程序化地形首帧即可参与 Shadow Pass；Shadow Pass 完成后恢复当前 Scene Framebuffer 和 Viewport；
+- PBRModel 与 Terrain 使用同一 Light VP、深度图和斜率 Bias 契约，并执行 `3×3 PCF`；模型使用纹理槽 4，Terrain 使用纹理槽 16；
+- Directional Light Inspector 新增 Cast Shadows、512～4096 Resolution、Shadow Distance 与 Bias，设置进入 Scene YAML，深度纹理和 FBO 保持纯运行时；
+- 验证：Premake VS2026 重新生成成功；全解决方案与独立回归目标构建成功；55 项断言及最终汇总全部 PASS，其中新增方向光阴影设置往返；Intel Iris Xe/OpenGL 4.6 下 `ShadowDepth`、PBRModel、Terrain 与三个 Terrain Compute Shader 均编译成功，PBR Lab 渲染 6/6 项且无跳过；
+- 尚未完成：3～4 级 CSM、级联稳定化与可视化、Shadow Frustum 剔除、Alpha Mask 投影契约和实机阴影画质调参，因此 P9 继续保持进行中。
 
 ## 后续任务
 
@@ -403,7 +412,8 @@
 - PBRModel 已支持 Normal、AO 与 Emissive Texture；Metallic/Roughness 仍为标量，尚未定义独立贴图或 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
-- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，并接入四层 Triplanar PBR；仍缺少 Chunk/LOD、阴影和固定步长 Runtime Erosion 调度；
+- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与单级方向光 Shadow Map；仍缺少 Chunk/LOD、CSM 稳定化和固定步长 Runtime Erosion 调度；
+- 单级 Shadow Map 当前围绕相机使用固定正交范围，尚无 Texel Snap、级联划分、Shadow Frustum 剔除和 Alpha Mask 投影；模型 Shadow Pass 也尚未复用 Instancing，均属于 P9 后续阶段；
 - 完整纹理 Terrain Fragment Shader 对四层 Albedo/Normal/AO 全量执行三平面采样，最坏接近 40 次纹理读取/像素；该成本尚待通过 GPU Timer 定量验证并按 P8.1 优化，但不再视为屏幕撕裂的根因；
 - SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；

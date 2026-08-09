@@ -104,6 +104,11 @@ uniform float u_HeightInfluence;
 uniform float u_SlopeInfluence;
 uniform float u_CurvatureInfluence;
 uniform float u_MoistureInfluence;
+uniform sampler2D u_ShadowMap;
+uniform mat4 u_LightViewProjection;
+uniform int u_ShadowEnabled;
+uniform float u_ShadowBias;
+uniform float u_ShadowTexelSize;
 
 const float PI = 3.14159265359;
 
@@ -183,6 +188,31 @@ vec3 EvaluateBRDF(vec3 n, vec3 v, vec3 l, vec3 radiance,
 	return (diffuse + specular) * radiance * max(dot(n, l), 0.0);
 }
 
+float DirectionalShadowVisibility(
+	vec3 worldPosition, vec3 normal, vec3 lightDirection)
+{
+	if (u_ShadowEnabled == 0)
+		return 1.0;
+	vec4 lightClip = u_LightViewProjection * vec4(worldPosition, 1.0);
+	vec3 projected = lightClip.xyz / max(lightClip.w, 0.0001);
+	projected = projected * 0.5 + 0.5;
+	if (projected.z <= 0.0 || projected.z >= 1.0
+		|| any(lessThan(projected.xy, vec2(0.0)))
+		|| any(greaterThan(projected.xy, vec2(1.0))))
+		return 1.0;
+	float slopeBias = max(u_ShadowBias
+		* (1.0 - max(dot(normal, lightDirection), 0.0)), u_ShadowBias * 0.25);
+	float shadow = 0.0;
+	for (int y = -1; y <= 1; ++y)
+		for (int x = -1; x <= 1; ++x)
+		{
+			float closest = texture(u_ShadowMap,
+				projected.xy + vec2(x, y) * u_ShadowTexelSize).r;
+			shadow += projected.z - slopeBias > closest ? 1.0 : 0.0;
+		}
+	return 1.0 - shadow / 9.0;
+}
+
 void main()
 {
 	vec3 geometricNormal = normalize(v_Normal);
@@ -223,8 +253,10 @@ void main()
 	{
 		vec3 direction = normalize(-u_DirectionalDirectionIntensity.xyz);
 		vec3 radiance = u_DirectionalColor.rgb * u_DirectionalDirectionIntensity.w;
+		float visibility = DirectionalShadowVisibility(
+			v_WorldPos, normal, direction);
 		result += EvaluateBRDF(normal, viewDirection, direction,
-			radiance, albedo, metallic, roughness);
+			radiance, albedo, metallic, roughness) * visibility;
 	}
 	uint count = min(u_LightCounts.x, 16u);
 	for (uint index = 0u; index < count; ++index)

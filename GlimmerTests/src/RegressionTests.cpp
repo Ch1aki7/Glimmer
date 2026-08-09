@@ -359,6 +359,11 @@ namespace {
 		terrain.Specification.Authoring.ThermalStrength = 0.27f;
 		terrain.Runtime = gl::CreateRef<gl::TerrainRuntime>();
 		terrain.Runtime->LoadedMeshResolution = 192;
+		auto& directionalLight = entity.AddComponent<gl::DirectionalLightComponent>();
+		directionalLight.CastShadows = true;
+		directionalLight.ShadowMapResolution = 4096;
+		directionalLight.ShadowDistance = 135.0f;
+		directionalLight.ShadowBias = 0.0025f;
 
 		gl::SceneSerializer(source).Serialize(path.string());
 		context.Check(std::filesystem::is_regular_file(path), "minimal scene is written");
@@ -407,6 +412,18 @@ namespace {
 				"terrain specification survives scene round trip");
 			context.Check(!restoredTerrain.Runtime,
 				"terrain runtime is not serialized");
+		}
+		context.Check(restored.HasComponent<gl::DirectionalLightComponent>(),
+			"directional light component survives scene round trip");
+		if (restored.HasComponent<gl::DirectionalLightComponent>())
+		{
+			const auto& restoredLight =
+				restored.GetComponent<gl::DirectionalLightComponent>();
+			context.Check(restoredLight.CastShadows
+				&& restoredLight.ShadowMapResolution == 4096
+				&& Near(restoredLight.ShadowDistance, 135.0f)
+				&& Near(restoredLight.ShadowBias, 0.0025f),
+				"directional shadow settings survive scene round trip");
 		}
 	}
 

@@ -12637,6 +12637,57 @@ Renderer 只绑定符合语义契约的 Texture Asset。贴图为空或语义不
 - 默认 Alpine Terrain 保持 `TerrainMaterialHandle = 0` 后，VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；RTX 4060/OpenGL 4.6 下 Terrain 与 Generate/Thermal Erosion/Derive Maps 均成功编译，启动代码不会导入默认 TerrainMaterial 或其 11 张运行时纹理。
 - VS 启动时的撕裂/显示异常最终确认来自显卡切换与独显选择，不是 Terrain Shader。完整纹理路径最坏约执行 36 次层纹理采样，加上 Height/派生图后接近 40 次/像素；该数字仅作为后续 Top-2 层裁剪和质量分级的性能优化基线。
 
+## 方向光单级 Shadow Map
+
+P9 第一阶段加入了 Model 与 Terrain 共用的 Directional Shadow Map。Scene 在正常 HDR 颜色 Pass 前，从第一个启用且勾选 `Cast Shadows` 的方向光生成一张纯深度图；PBRModel 和 Terrain 随后把世界坐标投影到该深度图，判断当前片元是否被遮挡。
+
+### 新增操作
+
+选择 Directional Light 后，Inspector 提供：
+
+- `Cast Shadows`：启用或关闭方向光阴影；
+- `Shadow Resolution`：512、1024、2048、4096；
+- `Shadow Distance`：以当前相机为中心的单级正交覆盖范围；
+- `Shadow Bias`：基础深度偏移，用于平衡 Shadow Acne 与 Peter Panning。
+
+这些设置会进入 Scene YAML。Shadow Framebuffer、Depth Texture 和 Light VP 只属于运行时资源，不会写入场景。
+
+### 渲染流程
+
+```text
+Scene 找到首个启用且 CastShadows 的 Directional Light
+  → TerrainRenderer::Prepare 生成/复用地形 Height 与派生图
+  → ShadowRenderer 绑定 Depth32F Framebuffer
+  → ShadowDepth.glsl 绘制 Model 与位移后的 Terrain
+  → 恢复 Scene Framebuffer 与 Viewport
+  → 正常 Opaque / Terrain / Skybox / Sprite / Transparent
+  → PBRModel 与 Terrain 对 Shadow Map 执行 3×3 PCF
+```
+
+Shadow 深度资源使用无颜色附件的 `Depth32F` Framebuffer；Framebuffer 后端会为 depth-only FBO 设置 `GL_NONE` Draw/Read Buffer。Shadow Pass 只清理深度，不污染主 Scene 的 HDR Color、Entity ID 或 Depth。
+
+接收阶段先把世界位置乘以 Light VP 并映射到 `[0, 1]`，随后比较当前深度和 Shadow Map：
+
+```glsl
+float slopeBias = max(
+    u_ShadowBias * (1.0 - max(dot(normal, lightDirection), 0.0)),
+    u_ShadowBias * 0.25);
+
+float closest = texture(u_ShadowMap, shadowUV + offset).r;
+shadow += currentDepth - slopeBias > closest ? 1.0 : 0.0;
+```
+
+对周围 `3×3` Texel 求平均得到软化后的可见度，仅调制方向光直接照明；Ambient、Emissive 和 Point Light 不会被错误乘上方向光阴影。
+
+### 当前边界与验证
+
+- 当前为单级正交 Shadow Map，还不是 CSM；相机移动稳定化、Texel Snap 和级联过渡属于下一阶段；
+- Model Shadow Pass 当前逐实体提交，尚未复用 Renderer3D Instancing；
+- Alpha Mask 材质尚未在 ShadowDepth 中采样 Alpha，透明投影契约后续收口；
+- Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
+- Premake VS2026 生成、全解决方案和独立回归目标构建成功；55 项断言与最终汇总全部 PASS；
+- Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。
+
 ## KB
 
 ### 为什么不用动态库？

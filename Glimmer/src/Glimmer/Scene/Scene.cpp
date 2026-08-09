@@ -6,6 +6,8 @@
 #include "Glimmer/Renderer/Renderer2D.h"
 #include "Glimmer/Renderer/Renderer3D.h"
 #include "Glimmer/Renderer/TerrainRenderer.h"
+#include "Glimmer/Renderer/ShadowRenderer.h"
+#include "Glimmer/Renderer/RenderPass.h"
 #include "Entity.h"
 
 #include <glm/glm.hpp>
@@ -267,6 +269,7 @@ namespace gl {
 		{
 			const glm::mat4 viewProjection = mainCamera->GetProjection() * glm::inverse(cameraTransform);
 			const glm::vec3 cameraPosition = glm::vec3(cameraTransform[3]);
+			RenderDirectionalShadowMap(cameraPosition);
 			Renderer3D::BeginScene(viewProjection, cameraPosition);
 			auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
 			for (auto entity : modelView)
@@ -299,6 +302,8 @@ namespace gl {
 			else
 				RenderSprites(viewProjection);
 		}
+		else
+			ShadowRenderer::Disable();
 	}
 
 	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection,
@@ -307,6 +312,7 @@ namespace gl {
 		GL_CORE_ASSERT(!m_SpritePassPending,
 			"Previous Scene sprite pass was not flushed by the render host.");
 		UploadLightEnvironment();
+		RenderDirectionalShadowMap(cameraPosition);
 		Renderer3D::BeginScene(viewProjection, cameraPosition);
 		auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
 		for (auto entity : modelView)
@@ -411,6 +417,51 @@ namespace gl {
 		}
 
 		Renderer::UploadLightEnvironment(environment);
+	}
+
+	void Scene::RenderDirectionalShadowMap(const glm::vec3& focusPosition)
+	{
+		bool rendered = false;
+		auto directionalView = m_Registry.view<TransformComponent, DirectionalLightComponent>();
+		for (auto entity : directionalView)
+		{
+			const auto& transform = directionalView.get<TransformComponent>(entity);
+			const auto& light = directionalView.get<DirectionalLightComponent>(entity);
+			if (!light.Enabled || !light.CastShadows)
+				continue;
+
+			const glm::vec3 forward = glm::mat3(transform.GetTransform())
+				* glm::vec3(0.0f, 0.0f, -1.0f);
+			const glm::vec3 direction = glm::length(forward) > 0.0001f
+				? glm::normalize(forward) : glm::vec3(0.0f, -1.0f, 0.0f);
+			if (!ShadowRenderer::BeginDirectional(direction, focusPosition,
+				light.ShadowMapResolution, light.ShadowDistance, light.ShadowBias))
+				break;
+
+			auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
+			for (auto modelEntity : modelView)
+			{
+				const auto& modelTransform = modelView.get<TransformComponent>(modelEntity);
+				const auto& model = modelView.get<ModelRendererComponent>(modelEntity);
+				ShadowRenderer::SubmitModel(model.ModelHandle, modelTransform.GetTransform());
+			}
+
+			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
+			for (auto terrainEntity : terrainView)
+			{
+				auto& terrainTransform = terrainView.get<TransformComponent>(terrainEntity);
+				auto& terrain = terrainView.get<TerrainComponent>(terrainEntity);
+				if (TerrainRenderer::Prepare(terrain))
+					ShadowRenderer::SubmitTerrain(
+						terrain, terrainTransform.GetTransform());
+			}
+			ShadowRenderer::EndDirectional();
+			rendered = true;
+			break;
+		}
+		if (!rendered)
+			ShadowRenderer::Disable();
+		RenderPass::RebindCurrentTarget();
 	}
 	void Scene::OnViewportResize(uint32_t width, uint32_t height)
 	{

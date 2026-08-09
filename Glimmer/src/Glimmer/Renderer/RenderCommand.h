@@ -21,6 +21,11 @@ namespace gl {
 			s_RendererAPI->Clear();
 		}
 
+		inline static void ClearDepth()
+		{
+			s_RendererAPI->ClearDepth();
+		}
+
 		inline static void SetDepthFunction(DepthFunction function)
 		{
 			s_RendererAPI->SetDepthFunction(function);

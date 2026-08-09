@@ -2,6 +2,7 @@
 #include "Renderer.h"
 #include "Renderer2D.h"
 #include "Renderer3D.h"
+#include "ShadowRenderer.h"
 #include "SkyboxRenderer.h"
 #include "UniformBuffer.h"
 namespace gl {
@@ -44,6 +45,7 @@ namespace gl {
 	}
 
 	void Renderer::Shutdown() {
+		ShadowRenderer::Shutdown();
 		s_LightUniformBuffer.reset();
 		Renderer3D::Shutdown();
 		SkyboxRenderer::Shutdown();

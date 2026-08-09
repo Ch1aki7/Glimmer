@@ -25,6 +25,8 @@ namespace gl {
 
 		// 获取当前活跃 Pass 的规格
 		static const RenderPassSpecification& GetCurrent() { return *s_Active; }
+		static bool IsActive() { return s_Active != nullptr; }
+		static void RebindCurrentTarget();
 
 	private:
 		static RenderPassSpecification* s_Active;

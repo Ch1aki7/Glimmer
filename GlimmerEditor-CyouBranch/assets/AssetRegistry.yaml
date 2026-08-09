@@ -195,6 +195,9 @@ AssetRegistry:
   - Handle: 13614654561704837220
     Type: Shader
     FilePath: shaders/Terrain.glsl
+  - Handle: 13614654561704837222
+    Type: Shader
+    FilePath: shaders/ShadowDepth.glsl
   - Handle: 13777784352782102236
     Type: Material
     FilePath: materials/DefaultSprite.glmat

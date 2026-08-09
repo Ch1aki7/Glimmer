@@ -12,7 +12,8 @@ namespace gl {
 
 	static bool IsDepthFormat(FramebufferTextureFormat format)
 	{
-		return format == FramebufferTextureFormat::Depth24Stencil8;
+		return format == FramebufferTextureFormat::Depth24Stencil8
+			|| format == FramebufferTextureFormat::Depth32F;
 	}
 
 	static GLenum TextureFormatToGL(FramebufferTextureFormat format)
@@ -23,6 +24,7 @@ namespace gl {
 		case FramebufferTextureFormat::RED_INTEGER:      return GL_RED_INTEGER;
 		case FramebufferTextureFormat::RGBA16F:           return GL_RGBA;
 		case FramebufferTextureFormat::Depth24Stencil8:   return GL_DEPTH_STENCIL;
+		case FramebufferTextureFormat::Depth32F:          return GL_DEPTH_COMPONENT;
 		}
 		return 0;
 	}
@@ -35,6 +37,7 @@ namespace gl {
 		case FramebufferTextureFormat::RED_INTEGER:      return GL_R32I;
 		case FramebufferTextureFormat::RGBA16F:           return GL_RGBA16F;
 		case FramebufferTextureFormat::Depth24Stencil8:   return GL_DEPTH24_STENCIL8;
+		case FramebufferTextureFormat::Depth32F:          return GL_DEPTH_COMPONENT32F;
 		}
 		return 0;
 	}
@@ -47,6 +50,7 @@ namespace gl {
 		case FramebufferTextureFormat::RED_INTEGER:      return GL_INT;
 		case FramebufferTextureFormat::RGBA16F:           return GL_FLOAT;
 		case FramebufferTextureFormat::Depth24Stencil8:   return GL_UNSIGNED_INT_24_8;
+		case FramebufferTextureFormat::Depth32F:          return GL_FLOAT;
 		}
 		return 0;
 	}
@@ -163,13 +167,23 @@ namespace gl {
 				{
 					glCreateTextures(GL_TEXTURE_2D, 1, &m_DepthAttachment.RendererID);
 					glBindTexture(GL_TEXTURE_2D, m_DepthAttachment.RendererID);
-					glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8, w, h);
+					glTexStorage2D(GL_TEXTURE_2D, 1,
+						TextureFormatToInternal(attSpec.Format), w, h);
 					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+					const GLenum wrap = attSpec.Format == FramebufferTextureFormat::Depth32F
+						? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE;
+					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+					if (attSpec.Format == FramebufferTextureFormat::Depth32F)
+					{
+						const float border[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+						glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+					}
 
-					glNamedFramebufferTexture(m_RendererID, GL_DEPTH_STENCIL_ATTACHMENT,
+					const GLenum attachment = attSpec.Format == FramebufferTextureFormat::Depth32F
+						? GL_DEPTH_ATTACHMENT : GL_DEPTH_STENCIL_ATTACHMENT;
+					glNamedFramebufferTexture(m_RendererID, attachment,
 						m_DepthAttachment.RendererID, 0);
 				}
 				break;
@@ -213,6 +227,11 @@ namespace gl {
 					drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + (GLenum)i);
 			if (!drawBuffers.empty())
 				glNamedFramebufferDrawBuffers(m_RendererID, (GLsizei)drawBuffers.size(), drawBuffers.data());
+			else
+			{
+				glNamedFramebufferDrawBuffer(m_RendererID, GL_NONE);
+				glNamedFramebufferReadBuffer(m_RendererID, GL_NONE);
+			}
 		}
 
 		// 完整性检查
@@ -263,12 +282,22 @@ namespace gl {
 				glDeleteTextures(1, &m_DepthAttachment.RendererID);
 				glCreateTextures(GL_TEXTURE_2D, 1, &m_DepthAttachment.RendererID);
 				glBindTexture(GL_TEXTURE_2D, m_DepthAttachment.RendererID);
-				glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8, w, h);
+				glTexStorage2D(GL_TEXTURE_2D, 1,
+					TextureFormatToInternal(m_DepthAttachment.Format), w, h);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-				glNamedFramebufferTexture(m_RendererID, GL_DEPTH_STENCIL_ATTACHMENT,
+				const GLenum wrap = m_DepthAttachment.Format == FramebufferTextureFormat::Depth32F
+					? GL_CLAMP_TO_BORDER : GL_CLAMP_TO_EDGE;
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+				glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+				if (m_DepthAttachment.Format == FramebufferTextureFormat::Depth32F)
+				{
+					const float border[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+					glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+				}
+				const GLenum attachment = m_DepthAttachment.Format == FramebufferTextureFormat::Depth32F
+					? GL_DEPTH_ATTACHMENT : GL_DEPTH_STENCIL_ATTACHMENT;
+				glNamedFramebufferTexture(m_RendererID, attachment,
 					m_DepthAttachment.RendererID, 0);
 			}
 		}

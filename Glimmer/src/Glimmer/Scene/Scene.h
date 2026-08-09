@@ -39,6 +39,7 @@ namespace gl {
 
 	private:
 		void UploadLightEnvironment();
+		void RenderDirectionalShadowMap(const glm::vec3& focusPosition);
 		void RenderSprites(const glm::mat4& viewProjection);
 
 		template<typename T>

@@ -10,6 +10,7 @@ namespace gl {
 
 		virtual void SetClearColor(const glm::vec4& color) override;
 		virtual void Clear() override;
+		virtual void ClearDepth() override;
 
 		virtual void SetBlendEnabled(bool enabled) override;
 		virtual void SetBlendFunction(BlendFactor source, BlendFactor destination) override;

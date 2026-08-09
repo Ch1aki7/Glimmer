@@ -565,6 +565,33 @@ namespace gl {
 					0.01f, 0.0f, 10.0f);
 				CommitComponentWidget(entity, "Edit Directional Light Ambient",
 					m_DirectionalLightEdit, before, light);
+				before = light;
+				ImGui::Checkbox("Cast Shadows##Directional", &light.CastShadows);
+				CommitComponentWidget(entity, "Edit Directional Shadow Enabled",
+					m_DirectionalLightEdit, before, light);
+				if (light.CastShadows)
+				{
+					before = light;
+					int resolutionIndex = light.ShadowMapResolution <= 512 ? 0
+						: light.ShadowMapResolution <= 1024 ? 1
+						: light.ShadowMapResolution <= 2048 ? 2 : 3;
+					if (ImGui::Combo("Shadow Resolution##Directional", &resolutionIndex,
+						"512\0 1024\0 2048\0 4096\0"))
+						light.ShadowMapResolution = 512u
+							<< static_cast<uint32_t>(resolutionIndex);
+					CommitComponentWidget(entity, "Edit Directional Shadow Resolution",
+						m_DirectionalLightEdit, before, light);
+					before = light;
+					ImGui::DragFloat("Shadow Distance##Directional", &light.ShadowDistance,
+						1.0f, 10.0f, 500.0f);
+					CommitComponentWidget(entity, "Edit Directional Shadow Distance",
+						m_DirectionalLightEdit, before, light);
+					before = light;
+					ImGui::DragFloat("Shadow Bias##Directional", &light.ShadowBias,
+						0.00005f, 0.00001f, 0.05f, "%.5f");
+					CommitComponentWidget(entity, "Edit Directional Shadow Bias",
+						m_DirectionalLightEdit, before, light);
+				}
 				ImGui::TextDisabled("Direction follows Transform rotation.");
 			});
 
