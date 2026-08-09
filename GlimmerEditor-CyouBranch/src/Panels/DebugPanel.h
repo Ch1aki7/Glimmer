@@ -14,7 +14,8 @@ namespace gl {
 		void SetTemporarySceneCallbacks(
 			InstancingLabTool::ActivateSceneCallback activateScene,
 			InstancingLabTool::ExitSceneCallback exitScene,
-			InstancingLabTool::SelectEntityCallback selectEntity);
+			InstancingLabTool::SelectEntityCallback selectEntity,
+			InstancingLabTool::FrameSceneCallback frameScene);
 		void SetDefaultAssets(
 			AssetHandle modelHandle,
 			AssetHandle materialHandle,

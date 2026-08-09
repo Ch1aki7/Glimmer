@@ -12727,6 +12727,20 @@ RenderCommand::DrawIndexedInstanced(
 5. 在结果表读取每组 `Avg/Min/Max ms`、`Draws` 和 `Saved`；测试可随时取消，关闭 Debug 窗口或切换页签不会中断；
 6. 回到 `Overview` 开启 `Visualize Cascades` 检查覆盖与 Blend，再关闭调试色观察 Acne、Peter Panning 和移动相机时的级联跳变。
 
+若要集中完成视觉检查，将 Preset 改为 `Shadow Visual Validation` 后点击 Generate。工具会忽略 Count/Spacing，固定生成 7 个模型实体：长距离地面、橙色 Opaque 对照板、使用 `balatro.png` Alpha 的 Mask 镂空板，以及沿相机深度分布的四个彩色标记。相机会自动框定测试区，也可点击 `Frame Validation Scene` 恢复构图。
+
+视觉面板提供以下纯运行时控制：
+
+- `Visualize Cascades`：用红、绿、蓝、黄显示实际级联与重叠过渡；
+- `Shadow Bias`：逐步降低直到出现表面条纹即为 Acne 边界，逐步升高并观察阴影是否脱离物体即为 Peter Panning；
+- `Split Lambda`：观察四个深度标记附近的级联覆盖重新分配；
+- `Cascade Blend`：从 0 增大，确认硬分界变为连续过渡；
+- `Shadow Distance`：确认超出距离的物体不再接收方向光阴影。
+
+该预设仍是临时内存 Scene，不进入场景保存、Undo/Redo 或资产文件；退出 Lab 后恢复原编辑场景。
+
+RTX 4060 实际窗口验证中，该预设成功生成 7/7 个模型并自动框定长地面；Opaque 板、四个深度标记和带 `balatro.png` 镂空的 Mask 板均正常着色，接收面出现对应模型阴影，证明 Visual Lab 的 Scene、相机、Material Override、ShadowDepth 与 PBRModel 链路已经连通。最终画质判定仍应由使用者移动相机并操作上述四项参数完成。
+
 每次配置切换后的预热会排空异步 Query 延迟；采样仅在 GPU 返回新结果时推进，不会重复使用面板中缓存的上一帧数值。结果只存在于当前临时 Lab，不写入场景或资产。测试时仍需保持窗口分辨率、相机、模型数量、Shadow Distance 与驱动设置一致。GPU Time 只统计 Shadow Pass，不包含 Scene Color、Terrain Compute、Tone Mapping 或 ImGui，因此适合比较级联数、分辨率与实例数量对阴影本身的影响。
 
 需要在固定机器上重复采样时，可从 `GlimmerEditor-CyouBranch` 工作目录启动无人值守入口：

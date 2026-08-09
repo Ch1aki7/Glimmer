@@ -27,6 +27,8 @@ namespace gl {
 
 		void SetInputEnabled(bool enabled) { m_InputEnabled = enabled; }
 		void SetViewportSize(float width, float height);
+		void SetView(const glm::vec3& focalPoint, float distance,
+			float pitchDegrees, float yawDegrees);
 
 	private:
 		void UpdateProjection();

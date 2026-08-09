@@ -16,11 +16,14 @@ namespace gl {
 		using ActivateSceneCallback = std::function<bool(const Ref<Scene>&)>;
 		using ExitSceneCallback = std::function<void()>;
 		using SelectEntityCallback = std::function<void(Entity)>;
+		using FrameSceneCallback = std::function<void(
+			const glm::vec3&, float, float, float)>;
 
 		void SetCallbacks(
 			ActivateSceneCallback activateScene,
 			ExitSceneCallback exitScene,
-			SelectEntityCallback selectEntity);
+			SelectEntityCallback selectEntity,
+			FrameSceneCallback frameScene);
 		void SetDefaultAssets(
 			AssetHandle modelHandle,
 			AssetHandle materialHandle,
@@ -43,7 +46,8 @@ namespace gl {
 		{
 			MaximumInstancing = 0,
 			MaterialSplit,
-			TransparentComparison
+			TransparentComparison,
+			ShadowVisualValidation
 		};
 
 		struct ExpectedStatistics
@@ -91,6 +95,7 @@ namespace gl {
 		void FinishShadowBenchmarkConfiguration(
 			const ShadowRenderer::Statistics& statistics);
 		void DrawShadowBenchmark();
+		void DrawShadowVisualControls();
 		ExpectedStatistics CalculateExpectedStatistics(uint32_t submeshCount) const;
 		uint32_t GetRequestedEntityCount() const;
 
@@ -98,6 +103,7 @@ namespace gl {
 		ActivateSceneCallback m_ActivateScene;
 		ExitSceneCallback m_ExitScene;
 		SelectEntityCallback m_SelectEntity;
+		FrameSceneCallback m_FrameScene;
 
 		Ref<Scene> m_Scene;
 		std::vector<UUID> m_RepresentativeEntities;

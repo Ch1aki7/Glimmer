@@ -334,7 +334,7 @@ flowchart LR
 
 DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D Overview、`InstancingLabTool` 与 `PBRMaterialLabTool`。两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。
 
-Instancing Lab 同时托管 Shadow Benchmark 状态机。它只修改 Lab 自己的 DirectionalLight，在固定的 9 组 Cascade/Resolution 配置间轮换，并在每次切换后先预热再采样。`ShadowRenderer::Statistics::GpuTimingSample` 是跨帧单调递增的 Query 结果序号；状态机仅在序号变化时接收耗时，因而不会把非阻塞计时器保留的上一结果重复计入平均值。DebugPanel 在窗口可见性判断之前推进状态机，使页签切换或关闭面板不会暂停测试；结果只保存在工具运行时内存中。
+Instancing Lab 同时托管 Shadow Benchmark 状态机和 Shadow Visual Validation 预设。Benchmark 只修改 Lab 自己的 DirectionalLight，在固定的 9 组 Cascade/Resolution 配置间轮换，并在每次切换后先预热再采样。`ShadowRenderer::Statistics::GpuTimingSample` 是跨帧单调递增的 Query 结果序号；状态机仅在序号变化时接收耗时，因而不会把非阻塞计时器保留的上一结果重复计入平均值。DebugPanel 在窗口可见性判断之前推进状态机，使页签切换或关闭面板不会暂停测试；结果只保存在工具运行时内存中。Visual Validation 复用相同临时 Scene 边界，通过 EditorLayer 提供的受控相机框选回调调用 `EditorCamera::SetView`，只调整临时方向光和纯运行时级联调试开关，不污染正式 Scene。
 
 EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel 的受控接口生成固定 2500 实体的 Maximum Instancing Lab 并启动相同状态机。完成时 InstancingLabTool 将 9 组统计写入日志，EditorLayer 再请求 Application 正常关闭；自动入口不绕过临时 Scene 隔离，也不另建第二套计时或批次逻辑。
 
@@ -349,7 +349,7 @@ EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel �
 | `ContentBrowserPanel` | 目录树、文件网格、资产选择、拖放和双击打开 |
 | `ShaderPanel` | ShaderLibrary 自动/手动重载与结果显示 |
 | `DebugPanel` | 通用诊断入口；展示 Renderer3D 概览并托管可扩展的临时测试工具 |
-| `InstancingLabTool` | 生成隔离 ECS 压力场景，对照理论批次与 Renderer3D 实际统计；自动轮换 CSM 配置并汇总唯一 GPU Timer 样本；管理代表实体选择和清理 |
+| `InstancingLabTool` | 生成隔离 ECS 压力/阴影视觉场景，对照 Renderer3D 统计；自动轮换 CSM 配置并汇总唯一 GPU Timer 样本；管理相机框选、代表实体选择和清理 |
 | `PBRMaterialLabTool` | 生成六球材质通道对照场景，验证 PBR 纹理语义、渲染项完整性及 Material/Scene YAML 往返 |
 
 Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入，不直接拥有编辑器 Scene 生命周期。

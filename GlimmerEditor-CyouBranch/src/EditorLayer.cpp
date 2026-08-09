@@ -276,6 +276,10 @@ namespace gl {
 			},
 			[this](Entity entity) {
 				m_HierarchyPanel.SetSelectedEntity(entity);
+			},
+			[this](const glm::vec3& focalPoint, float distance,
+				float pitch, float yaw) {
+				m_EditorCamera.SetView(focalPoint, distance, pitch, yaw);
 			});
 		if (ShouldAutorunPBRLab())
 			m_DebugPanel.GeneratePBRMaterialLabForValidation();

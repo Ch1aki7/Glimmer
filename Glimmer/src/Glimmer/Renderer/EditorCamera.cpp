@@ -98,6 +98,16 @@ namespace gl {
 		UpdateProjection();
 	}
 
+	void EditorCamera::SetView(const glm::vec3& focalPoint, float distance,
+		float pitchDegrees, float yawDegrees)
+	{
+		m_FocalPoint = focalPoint;
+		m_Distance = glm::clamp(distance, 0.5f, 500.0f);
+		m_Pitch = glm::clamp(pitchDegrees, -89.0f, 89.0f);
+		m_Yaw = yawDegrees;
+		UpdateView();
+	}
+
 	void EditorCamera::UpdateProjection()
 	{
 		m_ProjectionMatrix = glm::perspective(glm::radians(m_FOV), m_AspectRatio, m_NearClip, m_FarClip);

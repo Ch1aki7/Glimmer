@@ -48,11 +48,13 @@ namespace gl {
 	void InstancingLabTool::SetCallbacks(
 		ActivateSceneCallback activateScene,
 		ExitSceneCallback exitScene,
-		SelectEntityCallback selectEntity)
+		SelectEntityCallback selectEntity,
+		FrameSceneCallback frameScene)
 	{
 		m_ActivateScene = std::move(activateScene);
 		m_ExitScene = std::move(exitScene);
 		m_SelectEntity = std::move(selectEntity);
+		m_FrameScene = std::move(frameScene);
 	}
 
 	void InstancingLabTool::SetDefaultAssets(
@@ -95,6 +97,8 @@ namespace gl {
 
 	uint32_t InstancingLabTool::GetRequestedEntityCount() const
 	{
+		if (m_Preset == Preset::ShadowVisualValidation)
+			return 7;
 		uint64_t count = 1;
 		for (int dimension : m_Count)
 			count *= static_cast<uint64_t>(std::max(dimension, 1));
@@ -107,6 +111,12 @@ namespace gl {
 		ExpectedStatistics expected;
 		expected.Entities = GetRequestedEntityCount();
 		expected.Items = expected.Entities * submeshCount;
+		if (m_Preset == Preset::ShadowVisualValidation)
+		{
+			expected.DrawCalls = expected.Items;
+			expected.IndividualDrawCalls = expected.Items;
+			return expected;
+		}
 
 		if (m_Preset == Preset::TransparentComparison)
 		{
@@ -164,7 +174,8 @@ namespace gl {
 		for (int& dimension : m_Count)
 			dimension = std::clamp(dimension, 1, 1000);
 		const uint32_t entityCount = GetRequestedEntityCount();
-		if (static_cast<uint64_t>(m_Count[0]) * m_Count[1] * m_Count[2]
+		if (m_Preset != Preset::ShadowVisualValidation
+			&& static_cast<uint64_t>(m_Count[0]) * m_Count[1] * m_Count[2]
 			> MaxLabEntities)
 		{
 			m_Status = "Requested entity count exceeds the 100000 entity safety limit.";
@@ -188,48 +199,113 @@ namespace gl {
 
 		std::vector<UUID> representatives;
 		representatives.reserve(3);
-		const uint32_t middleIndex = entityCount / 2;
-		const glm::vec3 dimensions{
-			static_cast<float>(m_Count[0] - 1),
-			static_cast<float>(m_Count[1] - 1),
-			static_cast<float>(m_Count[2] - 1) };
-		const glm::vec3 firstPosition = m_Origin - dimensions * m_Spacing * 0.5f;
-
-		uint32_t instanceIndex = 0;
-		for (int z = 0; z < m_Count[2]; ++z)
+		if (m_Preset == Preset::ShadowVisualValidation)
 		{
-			for (int y = 0; y < m_Count[1]; ++y)
+			const AssetHandle alphaTexture =
+				AssetManager::ImportAsset("assets/textures/balatro.png");
+			if (AssetManager::GetMetadata(alphaTexture).Type != AssetType::Texture2D)
 			{
-				for (int x = 0; x < m_Count[0]; ++x, ++instanceIndex)
+				m_Status = "Shadow validation requires assets/textures/balatro.png.";
+				m_LastOperationSucceeded = false;
+				return false;
+			}
+			AssetManager::SetTextureMetadata(alphaTexture,
+				TextureColorSpace::SRGB, TextureSemantic::Color);
+
+			const auto addModel = [&](const char* name, const glm::vec3& position,
+				const glm::vec3& scale, const glm::vec4& color, bool mask) {
+				Entity entity = scene->CreateEntity(name);
+				auto& transform = entity.GetComponent<TransformComponent>();
+				transform.Translation = position;
+				transform.Scale = scale;
+				entity.AddComponent<ModelRendererComponent>(m_ModelHandle);
+				auto& component = entity.AddComponent<MaterialComponent>(m_MaterialHandle);
+				component.Overrides.Values.BaseColor = color;
+				component.Overrides.SetEnabled(MaterialOverride::BaseColor, true);
+				component.Overrides.Values.Roughness = 0.75f;
+				component.Overrides.SetEnabled(MaterialOverride::Roughness, true);
+				component.Overrides.Values.AlphaMode = mask
+					? MaterialAlphaMode::Mask : MaterialAlphaMode::Opaque;
+				component.Overrides.SetEnabled(MaterialOverride::AlphaMode, true);
+				if (mask)
 				{
-					Entity entity = scene->CreateEntity(
-						"Instancing Lab Entity " + std::to_string(instanceIndex));
-					auto& transform = entity.GetComponent<TransformComponent>();
-					transform.Translation = firstPosition + glm::vec3{
-						static_cast<float>(x) * m_Spacing.x,
-						static_cast<float>(y) * m_Spacing.y,
-						static_cast<float>(z) * m_Spacing.z };
-					entity.AddComponent<ModelRendererComponent>(m_ModelHandle);
-					auto& materialComponent =
-						entity.AddComponent<MaterialComponent>(m_MaterialHandle);
+					component.Overrides.Values.BaseColorTexture = alphaTexture;
+					component.Overrides.SetEnabled(
+						MaterialOverride::BaseColorTexture, true);
+					component.Overrides.Values.AlphaCutoff = 0.5f;
+					component.Overrides.SetEnabled(MaterialOverride::AlphaCutoff, true);
+				}
+				return entity;
+			};
 
-					materialComponent.Overrides.Values.AlphaMode =
-						m_Preset == Preset::TransparentComparison
-						? MaterialAlphaMode::Blend : MaterialAlphaMode::Opaque;
-					materialComponent.Overrides.SetEnabled(
-						MaterialOverride::AlphaMode, true);
+			Entity ground = addModel("Shadow Receiver Ground",
+				{ 0.0f, -1.5f, 25.0f }, { 18.0f, 1.0f, 35.0f },
+				{ 0.45f, 0.48f, 0.52f, 1.0f }, false);
+			Entity opaque = addModel("Opaque Shadow Reference",
+				{ 5.0f, 2.0f, 4.0f }, { 3.0f, 3.0f, 0.35f },
+				{ 0.95f, 0.55f, 0.18f, 1.0f }, false);
+			Entity masked = addModel("Alpha Mask Shadow Caster",
+				{ -5.0f, 2.0f, 4.0f }, { 3.0f, 3.0f, 0.35f },
+				{ 1.0f, 1.0f, 1.0f, 1.0f }, true);
+			const std::array<float, 4> markerDepths = { 10.0f, 24.0f, 42.0f, 64.0f };
+			const std::array<glm::vec4, 4> markerColors = {
+				glm::vec4{ 0.95f, 0.25f, 0.25f, 1.0f },
+				glm::vec4{ 0.25f, 0.85f, 0.35f, 1.0f },
+				glm::vec4{ 0.25f, 0.45f, 0.95f, 1.0f },
+				glm::vec4{ 0.95f, 0.85f, 0.20f, 1.0f }
+			};
+			for (size_t index = 0; index < markerDepths.size(); ++index)
+				addModel(("Cascade Depth Marker " + std::to_string(index + 1)).c_str(),
+					{ 0.0f, 0.0f, markerDepths[index] }, { 1.5f, 1.5f, 1.5f },
+					markerColors[index], false);
+			representatives = { ground.GetUUID(), opaque.GetUUID(), masked.GetUUID() };
+		}
+		else
+		{
+			const uint32_t middleIndex = entityCount / 2;
+			const glm::vec3 dimensions{
+				static_cast<float>(m_Count[0] - 1),
+				static_cast<float>(m_Count[1] - 1),
+				static_cast<float>(m_Count[2] - 1) };
+			const glm::vec3 firstPosition =
+				m_Origin - dimensions * m_Spacing * 0.5f;
 
-					if (m_Preset == Preset::MaterialSplit)
+			uint32_t instanceIndex = 0;
+			for (int z = 0; z < m_Count[2]; ++z)
+			{
+				for (int y = 0; y < m_Count[1]; ++y)
+				{
+					for (int x = 0; x < m_Count[0]; ++x, ++instanceIndex)
 					{
-						materialComponent.Overrides.Values.Roughness =
-							(instanceIndex & 1u) == 0 ? 0.2f : 0.8f;
-						materialComponent.Overrides.SetEnabled(
-							MaterialOverride::Roughness, true);
-					}
+						Entity entity = scene->CreateEntity(
+							"Instancing Lab Entity " + std::to_string(instanceIndex));
+						auto& transform = entity.GetComponent<TransformComponent>();
+						transform.Translation = firstPosition + glm::vec3{
+							static_cast<float>(x) * m_Spacing.x,
+							static_cast<float>(y) * m_Spacing.y,
+							static_cast<float>(z) * m_Spacing.z };
+						entity.AddComponent<ModelRendererComponent>(m_ModelHandle);
+						auto& materialComponent = entity.AddComponent<MaterialComponent>(
+							m_MaterialHandle);
 
-					if (instanceIndex == 0 || instanceIndex == middleIndex
-						|| instanceIndex + 1 == entityCount)
-						representatives.push_back(entity.GetUUID());
+						materialComponent.Overrides.Values.AlphaMode =
+							m_Preset == Preset::TransparentComparison
+							? MaterialAlphaMode::Blend : MaterialAlphaMode::Opaque;
+						materialComponent.Overrides.SetEnabled(
+							MaterialOverride::AlphaMode, true);
+
+						if (m_Preset == Preset::MaterialSplit)
+						{
+							materialComponent.Overrides.Values.Roughness =
+								(instanceIndex & 1u) == 0 ? 0.2f : 0.8f;
+							materialComponent.Overrides.SetEnabled(
+								MaterialOverride::Roughness, true);
+						}
+
+						if (instanceIndex == 0 || instanceIndex == middleIndex
+							|| instanceIndex + 1 == entityCount)
+							representatives.push_back(entity.GetUUID());
+					}
 				}
 			}
 		}
@@ -247,6 +323,8 @@ namespace gl {
 		m_Expected = CalculateExpectedStatistics(
 			static_cast<uint32_t>(model->GetMeshes().size()));
 		m_Active = true;
+		if (m_Preset == Preset::ShadowVisualValidation && m_FrameScene)
+			m_FrameScene({ 0.0f, 0.0f, 25.0f }, 48.0f, -24.0f, 0.0f);
 		m_LastGenerationMilliseconds = std::chrono::duration<float, std::milli>(
 			std::chrono::steady_clock::now() - start).count();
 		m_Status = "Temporary lab generated. Statistics validate after the next rendered frame.";
@@ -504,6 +582,34 @@ namespace gl {
 		ImGui::Columns(1);
 	}
 
+	void InstancingLabTool::DrawShadowVisualControls()
+	{
+		if (m_Preset != Preset::ShadowVisualValidation || !m_Scene)
+			return;
+		Entity sun = m_Scene->FindEntityByUUID(m_SunEntity);
+		if (!sun || !sun.HasComponent<DirectionalLightComponent>())
+			return;
+		auto& light = sun.GetComponent<DirectionalLightComponent>();
+		ImGui::SeparatorText("Shadow Visual Validation");
+		ImGui::TextWrapped(
+			"Compare the orange opaque caster with the alpha-mask caster, inspect their ground shadows, then enable cascade colors and move the camera through the four depth markers.");
+		bool visualize = ShadowRenderer::IsCascadeDebugVisualizationEnabled();
+		if (ImGui::Checkbox("Visualize Cascades##VisualLab", &visualize))
+			ShadowRenderer::SetCascadeDebugVisualization(visualize);
+		ImGui::DragFloat("Shadow Bias##VisualLab", &light.ShadowBias,
+			0.00005f, 0.0f, 0.02f, "%.5f");
+		ImGui::DragFloat("Split Lambda##VisualLab", &light.ShadowSplitLambda,
+			0.01f, 0.0f, 1.0f);
+		ImGui::DragFloat("Cascade Blend##VisualLab", &light.ShadowCascadeBlend,
+			0.01f, 0.0f, 0.3f);
+		ImGui::DragFloat("Shadow Distance##VisualLab", &light.ShadowDistance,
+			1.0f, 10.0f, 200.0f);
+		if (ImGui::Button("Frame Validation Scene") && m_FrameScene)
+			m_FrameScene({ 0.0f, 0.0f, 25.0f }, 48.0f, -24.0f, 0.0f);
+		ImGui::TextDisabled(
+			"Bias too low: surface acne. Bias too high: detached shadow (Peter Panning). Runtime-only controls.");
+	}
+
 	void InstancingLabTool::DrawExpectedAndActual(
 		const Renderer3D::Statistics& statistics) const
 	{
@@ -558,15 +664,18 @@ namespace gl {
 		const char* presets[] = {
 			"Maximum Instancing",
 			"Material Split",
-			"Transparent Comparison"
+			"Transparent Comparison",
+			"Shadow Visual Validation"
 		};
 		int preset = static_cast<int>(m_Preset);
 		if (ImGui::Combo("Preset", &preset, presets, IM_ARRAYSIZE(presets)))
 			m_Preset = static_cast<Preset>(preset);
 
+		ImGui::BeginDisabled(m_Preset == Preset::ShadowVisualValidation);
 		ImGui::DragInt3("Count XYZ", m_Count.data(), 1.0f, 1, 1000);
 		ImGui::DragFloat3("Spacing", &m_Spacing.x, 0.1f, 0.1f, 100.0f);
 		ImGui::DragFloat3("Origin", &m_Origin.x, 0.1f);
+		ImGui::EndDisabled();
 		ImGui::Text("Requested entities: %u / %u",
 			GetRequestedEntityCount(), MaxLabEntities);
 
@@ -596,6 +705,7 @@ namespace gl {
 		ImGui::Text("Saved Draw Calls: %u", statistics.GetSavedDrawCalls());
 
 		DrawExpectedAndActual(statistics);
+		DrawShadowVisualControls();
 		DrawShadowBenchmark();
 
 		ImGui::BeginDisabled(m_RepresentativeEntities.empty());

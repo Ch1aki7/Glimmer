@@ -10,10 +10,11 @@ namespace gl {
 	void DebugPanel::SetTemporarySceneCallbacks(
 		InstancingLabTool::ActivateSceneCallback activateScene,
 		InstancingLabTool::ExitSceneCallback exitScene,
-		InstancingLabTool::SelectEntityCallback selectEntity)
+		InstancingLabTool::SelectEntityCallback selectEntity,
+		InstancingLabTool::FrameSceneCallback frameScene)
 	{
 		m_InstancingLab.SetCallbacks(
-			activateScene, exitScene, selectEntity);
+			activateScene, exitScene, selectEntity, std::move(frameScene));
 		m_PBRMaterialLab.SetCallbacks(
 			std::move(activateScene), std::move(exitScene), std::move(selectEntity));
 	}
