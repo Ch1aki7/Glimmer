@@ -12663,6 +12663,7 @@ Scene 找到首个启用且 CastShadows 的 Directional Light
   → 根据 Camera Frustum 与 Practical Split 计算 1～4 个级联
   → 按 Cascade Blend 扩展相邻级联并建立重叠区
   → 每级执行包围球稳定化与 Shadow Texel Snap
+  → 使用 Mesh/Terrain Bounds 对当前级联执行保守六平面剔除
   → 依次绑定各级 Depth32F Framebuffer
   → ShadowDepth.glsl 逐级绘制 Model 与位移后的 Terrain
   → 恢复 Scene Framebuffer 与 Viewport
@@ -12691,12 +12692,14 @@ return mix(nearVisibility, farVisibility, blend);
 ### 当前边界与验证
 
 - 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap 与可调重叠混合；级联调试视图属于下一阶段；
-- Shadow Pass 尚未做视锥剔除，当前每个级联仍提交所有 Model 与 Terrain；
+- Mesh 在构造时缓存局部 AABB；每个级联会把 Model 子网格 Bounds 变换到 Light VP Clip Space，8 个角点全部位于同一平面外才剔除；Terrain 使用网格 XZ 范围与 HeightScale 构造保守 Bounds；
+- Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered 与 Frustum Culled，可通过移动相机或把模型移出视野确认 Draw 数下降；
 - Model Shadow Pass 当前逐实体提交，尚未复用 Renderer3D Instancing；
 - Alpha Mask 材质尚未在 ShadowDepth 中采样 Alpha，透明投影契约后续收口；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
-- VS2026 全解决方案与独立回归目标构建成功；55 项断言与最终汇总全部 PASS，包含 Cascade Count、Split Lambda 与 Cascade Blend 的场景往返；
+- VS2026 全解决方案与独立回归目标构建成功；59 项断言与最终汇总全部 PASS，包含阴影设置往返，以及 Bounds 完全内部、完全外部、跨平面相交和实体变换后外部四类剔除测试；
 - Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。
+- PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 cascades`，确认保守测试不会误删各级可见投影；把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
 
 ## Renderer2D 空批次残留修复
 

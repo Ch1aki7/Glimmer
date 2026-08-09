@@ -1,5 +1,7 @@
 #include "DebugPanel.h"
 
+#include "Glimmer/Renderer/ShadowRenderer.h"
+
 #include <imgui.h>
 #include <utility>
 
@@ -56,6 +58,14 @@ namespace gl {
 					statistics.InstanceCount, statistics.GetSavedDrawCalls());
 				ImGui::Text("Material Cache Hit / Miss: %u / %u",
 					statistics.MaterialCacheHits, statistics.MaterialCacheMisses);
+				const ShadowRenderer::Statistics shadowStatistics =
+					ShadowRenderer::GetStatistics();
+				ImGui::Separator();
+				ImGui::TextUnformatted("Directional Shadows");
+				ImGui::Text("Cascades: %u", shadowStatistics.CascadePasses);
+				ImGui::Text("Candidate / Rendered: %u / %u",
+					shadowStatistics.CandidateDraws, shadowStatistics.RenderedDraws);
+				ImGui::Text("Frustum Culled: %u", shadowStatistics.CulledDraws);
 				ImGui::EndTabItem();
 			}
 

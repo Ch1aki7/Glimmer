@@ -2,6 +2,7 @@
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/MaterialInstance.h"
+#include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Scene/Entity.h"
 #include "Glimmer/Scene/Scene.h"
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace {
 
@@ -543,6 +545,24 @@ namespace {
 			"unknown terrain preset falls back to Custom");
 	}
 
+	void TestShadowFrustumCulling(TestContext& context)
+	{
+		const glm::mat4 identity(1.0f);
+		context.Check(gl::ShadowRenderer::IntersectsClipFrustum(
+			{ -0.5f, -0.5f, -0.5f }, { 0.5f, 0.5f, 0.5f }, identity, identity),
+			"shadow frustum keeps bounds fully inside clip space");
+		context.Check(!gl::ShadowRenderer::IntersectsClipFrustum(
+			{ 2.0f, -0.5f, -0.5f }, { 3.0f, 0.5f, 0.5f }, identity, identity),
+			"shadow frustum culls bounds fully outside one clip plane");
+		context.Check(gl::ShadowRenderer::IntersectsClipFrustum(
+			{ 0.5f, -0.5f, -0.5f }, { 1.5f, 0.5f, 0.5f }, identity, identity),
+			"shadow frustum conservatively keeps bounds crossing a clip plane");
+		context.Check(!gl::ShadowRenderer::IntersectsClipFrustum(
+			{ -0.25f, -0.25f, -0.25f }, { 0.25f, 0.25f, 0.25f },
+			glm::translate(identity, glm::vec3(0.0f, 0.0f, 3.0f)), identity),
+			"shadow frustum applies entity transform before culling");
+	}
+
 }
 
 int main(int argc, char** argv)
@@ -559,6 +579,7 @@ int main(int argc, char** argv)
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
 	TestTerrainCopyAndTransactions(context);
 	TestTerrainPresets(context);
+	TestShadowFrustumCulling(context);
 
 	if (argc > 1 && std::string(argv[1]) == "--force-failure")
 		context.Check(false, "intentional failure verifies non-zero exit propagation");

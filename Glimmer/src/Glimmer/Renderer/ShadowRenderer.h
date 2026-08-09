@@ -12,6 +12,13 @@ namespace gl {
 	{
 	public:
 		static constexpr uint32_t MaxCascades = 4;
+		struct Statistics
+		{
+			uint32_t CascadePasses = 0;
+			uint32_t CandidateDraws = 0;
+			uint32_t CulledDraws = 0;
+			uint32_t RenderedDraws = 0;
+		};
 
 		static void Shutdown();
 		static bool BeginDirectional(
@@ -35,5 +42,11 @@ namespace gl {
 
 		static void BindForLighting(const Ref<Shader>& shader, uint32_t textureSlot);
 		static bool IsEnabled();
+		static Statistics GetStatistics();
+		static bool IntersectsClipFrustum(
+			const glm::vec3& boundsMin,
+			const glm::vec3& boundsMax,
+			const glm::mat4& transform,
+			const glm::mat4& viewProjection);
 	};
 }

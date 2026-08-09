@@ -27,6 +27,7 @@ namespace gl {
 			uint32_t CascadeCount = 0;
 			uint32_t ActiveCascade = 0;
 			float Bias = 0.0015f;
+			ShadowRenderer::Statistics Stats;
 			bool PassActive = false;
 			bool Enabled = false;
 		};
@@ -104,6 +105,39 @@ namespace gl {
 		}
 	}
 
+	bool ShadowRenderer::IntersectsClipFrustum(
+		const glm::vec3& boundsMin,
+		const glm::vec3& boundsMax,
+		const glm::mat4& transform,
+		const glm::mat4& viewProjection)
+	{
+		bool outsideLeft = true;
+		bool outsideRight = true;
+		bool outsideBottom = true;
+		bool outsideTop = true;
+		bool outsideNear = true;
+		bool outsideFar = true;
+		for (uint32_t z = 0; z < 2; ++z)
+			for (uint32_t y = 0; y < 2; ++y)
+				for (uint32_t x = 0; x < 2; ++x)
+				{
+					const glm::vec3 local(
+						x ? boundsMax.x : boundsMin.x,
+						y ? boundsMax.y : boundsMin.y,
+						z ? boundsMax.z : boundsMin.z);
+					const glm::vec4 clip = viewProjection * transform
+						* glm::vec4(local, 1.0f);
+					outsideLeft &= clip.x < -clip.w;
+					outsideRight &= clip.x > clip.w;
+					outsideBottom &= clip.y < -clip.w;
+					outsideTop &= clip.y > clip.w;
+					outsideNear &= clip.z < -clip.w;
+					outsideFar &= clip.z > clip.w;
+				}
+		return !(outsideLeft || outsideRight || outsideBottom
+			|| outsideTop || outsideNear || outsideFar);
+	}
+
 	void ShadowRenderer::Shutdown()
 	{
 		s_Data.PassActive = false;
@@ -129,6 +163,7 @@ namespace gl {
 		float cascadeBlend)
 	{
 		Disable();
+		s_Data.Stats = {};
 		const AssetHandle shaderHandle =
 			AssetManager::ImportAsset("assets/shaders/ShadowDepth.glsl");
 		s_Data.DepthShader = AssetManager::GetShader(shaderHandle);
@@ -229,6 +264,7 @@ namespace gl {
 			s_Data.LightViewProjections[cascadeIndex]);
 		s_Data.DepthShader->UploadUniformInt("u_HeightMap", 0);
 		s_Data.PassActive = true;
+		s_Data.Stats.CascadePasses++;
 		return true;
 	}
 
@@ -242,8 +278,20 @@ namespace gl {
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 0);
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		for (const Ref<Mesh>& mesh : model->GetMeshes())
-			if (mesh && mesh->GetVertexArray() && mesh->GetIndexCount() > 0)
-				RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
+		{
+			if (!mesh || !mesh->GetVertexArray() || mesh->GetIndexCount() == 0)
+				continue;
+			s_Data.Stats.CandidateDraws++;
+			if (mesh->HasBounds() && !IntersectsClipFrustum(
+				mesh->GetBoundsMin(), mesh->GetBoundsMax(), transform,
+				s_Data.LightViewProjections[s_Data.ActiveCascade]))
+			{
+				s_Data.Stats.CulledDraws++;
+				continue;
+			}
+			RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
+			s_Data.Stats.RenderedDraws++;
+		}
 	}
 
 	void ShadowRenderer::SubmitTerrain(TerrainComponent& terrain, const glm::mat4& transform)
@@ -251,6 +299,19 @@ namespace gl {
 		if (!s_Data.PassActive || !terrain.Runtime || !terrain.Runtime->Mesh
 			|| !terrain.Runtime->HeightMap)
 			return;
+		s_Data.Stats.CandidateDraws++;
+		const float halfSize = static_cast<float>(
+			terrain.Runtime->Mesh->GetGridSize()) * 0.5f;
+		const float minimumHeight = std::min(0.0f, terrain.Specification.HeightScale);
+		const float maximumHeight = std::max(0.0f, terrain.Specification.HeightScale);
+		if (!IntersectsClipFrustum(
+			{ -halfSize, minimumHeight, -halfSize },
+			{ halfSize, maximumHeight, halfSize },
+			transform, s_Data.LightViewProjections[s_Data.ActiveCascade]))
+		{
+			s_Data.Stats.CulledDraws++;
+			return;
+		}
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 1);
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		s_Data.DepthShader->UploadUniformFloat(
@@ -258,6 +319,7 @@ namespace gl {
 		terrain.Runtime->HeightMap->Bind(0);
 		RenderCommand::DrawIndexed(
 			terrain.Runtime->Mesh->GetVertexArray(), terrain.Runtime->Mesh->GetIndexCount());
+		s_Data.Stats.RenderedDraws++;
 	}
 
 	void ShadowRenderer::EndCascade()
@@ -281,6 +343,7 @@ namespace gl {
 		s_Data.PassActive = false;
 		s_Data.Enabled = false;
 		s_Data.CascadeCount = 0;
+		s_Data.Stats = {};
 	}
 
 	void ShadowRenderer::BindForLighting(const Ref<Shader>& shader, uint32_t textureSlot)
@@ -317,5 +380,10 @@ namespace gl {
 	bool ShadowRenderer::IsEnabled()
 	{
 		return s_Data.Enabled;
+	}
+
+	ShadowRenderer::Statistics ShadowRenderer::GetStatistics()
+	{
+		return s_Data.Stats;
 	}
 }

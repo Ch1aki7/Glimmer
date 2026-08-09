@@ -1,5 +1,7 @@
 #include "PBRMaterialLabTool.h"
 
+#include "Glimmer/Renderer/ShadowRenderer.h"
+
 #include "Glimmer/Renderer/Model.h"
 #include "Glimmer/Scene/SceneSerializer.h"
 
@@ -315,6 +317,14 @@ namespace gl {
 		{
 			GL_CORE_INFO("PBR Material Lab PASS: rendered {0}/{1} items with no skipped models.",
 				statistics.RenderedItems, m_ExpectedItems);
+			const ShadowRenderer::Statistics shadowStatistics =
+				ShadowRenderer::GetStatistics();
+			GL_CORE_INFO(
+				"Shadow Frustum validation: {0} candidates, {1} rendered, {2} culled across {3} cascades.",
+				shadowStatistics.CandidateDraws,
+				shadowStatistics.RenderedDraws,
+				shadowStatistics.CulledDraws,
+				shadowStatistics.CascadePasses);
 			m_ValidationLogged = true;
 		}
 	}
