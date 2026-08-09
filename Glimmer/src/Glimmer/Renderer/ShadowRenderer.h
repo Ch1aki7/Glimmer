@@ -42,6 +42,8 @@ namespace gl {
 
 		static void BindForLighting(const Ref<Shader>& shader, uint32_t textureSlot);
 		static bool IsEnabled();
+		static void SetCascadeDebugVisualization(bool enabled);
+		static bool IsCascadeDebugVisualizationEnabled();
 		static Statistics GetStatistics();
 		static bool IntersectsClipFrustum(
 			const glm::vec3& boundsMin,

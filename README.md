@@ -12653,6 +12653,8 @@ P9 已加入 Model 与 Terrain 共用的 Directional Shadow Map，并扩展为�
 - `Split Lambda`：0 为均匀分割，1 为对数分割；默认 0.65，在近景精度和远景覆盖之间折中。
 - `Cascade Blend`：0～0.30，控制相邻级联在 Split 两侧的重叠比例；默认 0.10，用于消除级联硬切换。
 
+打开 `Window → Debug → Overview`，在 `Directional Shadows` 下勾选 `Visualize Cascades`，可用固定颜色检查当前片元所属级联：第 1～4 级依次为红、绿、蓝、黄。Split 重叠区会按实际 `Cascade Blend` 权重在两种颜色之间渐变，因此可直接观察覆盖范围、分界位置和过渡宽度。该开关只在本次运行中生效，不保存到场景，也不改变阴影深度、透明度或实体拾取结果。
+
 这些设置会进入 Scene YAML。Shadow Framebuffer、Depth Texture 和 Light VP 只属于运行时资源，不会写入场景。
 
 ### 渲染流程
@@ -12691,14 +12693,14 @@ return mix(nearVisibility, farVisibility, blend);
 
 ### 当前边界与验证
 
-- 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap 与可调重叠混合；级联调试视图属于下一阶段；
+- 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap、可调重叠混合与运行时级联调试着色；
 - Mesh 在构造时缓存局部 AABB；每个级联会把 Model 子网格 Bounds 变换到 Light VP Clip Space，8 个角点全部位于同一平面外才剔除；Terrain 使用网格 XZ 范围与 HeightScale 构造保守 Bounds；
-- Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered 与 Frustum Culled，可通过移动相机或把模型移出视野确认 Draw 数下降；
+- Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered 与 Frustum Culled；可通过移动相机或把模型移出视野确认 Draw 数下降，也可启用 `Visualize Cascades` 检查分级和重叠过渡；
 - Model Shadow Pass 当前逐实体提交，尚未复用 Renderer3D Instancing；
 - Alpha Mask 材质尚未在 ShadowDepth 中采样 Alpha，透明投影契约后续收口；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
 - VS2026 全解决方案与独立回归目标构建成功；59 项断言与最终汇总全部 PASS，包含阴影设置往返，以及 Bounds 完全内部、完全外部、跨平面相交和实体变换后外部四类剔除测试；
-- Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。
+- 新增级联调试着色后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。自动测试不判定颜色观感，仍需手动勾选 `Visualize Cascades`，确认红/绿/蓝/黄分区及边界渐变符合预期。
 - PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 cascades`，确认保守测试不会误删各级可见投影；把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
 
 ## Renderer2D 空批次残留修复

@@ -111,6 +111,7 @@ uniform float u_ShadowCascadeBlendWidths[4];
 uniform mat4 u_ShadowCameraView;
 uniform int u_ShadowCascadeCount;
 uniform int u_ShadowEnabled;
+uniform int u_ShadowCascadeDebug;
 uniform float u_ShadowBias;
 uniform float u_ShadowTexelSize;
 
@@ -257,6 +258,39 @@ float DirectionalShadowVisibility(
 		cascadeIndex, worldPosition, normal, lightDirection);
 }
 
+vec3 CascadeDebugColor(int cascadeIndex)
+{
+	if (cascadeIndex == 0) return vec3(1.0, 0.12, 0.08);
+	if (cascadeIndex == 1) return vec3(0.12, 1.0, 0.18);
+	if (cascadeIndex == 2) return vec3(0.12, 0.28, 1.0);
+	return vec3(1.0, 0.78, 0.08);
+}
+
+vec3 ResolveCascadeDebugColor(vec3 worldPosition)
+{
+	float viewDepth = abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z);
+	int cascadeIndex = 0;
+	while (cascadeIndex < u_ShadowCascadeCount - 1
+		&& viewDepth > u_ShadowCascadeSplits[cascadeIndex])
+		cascadeIndex++;
+
+	for (int boundary = 0; boundary < 3; ++boundary)
+	{
+		if (boundary >= u_ShadowCascadeCount - 1)
+			break;
+		float width = u_ShadowCascadeBlendWidths[boundary];
+		float split = u_ShadowCascadeSplits[boundary];
+		if (width > 0.0 && viewDepth >= split - width
+			&& viewDepth <= split + width)
+		{
+			float blend = smoothstep(split - width, split + width, viewDepth);
+			return mix(CascadeDebugColor(boundary),
+				CascadeDebugColor(boundary + 1), blend);
+		}
+	}
+	return CascadeDebugColor(cascadeIndex);
+}
+
 void main()
 {
 	vec3 geometricNormal = normalize(v_Normal);
@@ -317,6 +351,8 @@ void main()
 		result += EvaluateBRDF(normal, viewDirection, toLight / max(distanceToLight, 0.0001),
 			radiance, albedo, metallic, roughness);
 	}
+	if (u_ShadowCascadeDebug != 0 && u_ShadowEnabled != 0)
+		result = mix(result, ResolveCascadeDebugColor(v_WorldPos), 0.65);
 	o_Color = vec4(max(result, vec3(0.0)), 1.0);
 	o_EntityID = v_EntityID;
 }

@@ -30,6 +30,7 @@ namespace gl {
 			ShadowRenderer::Statistics Stats;
 			bool PassActive = false;
 			bool Enabled = false;
+			bool CascadeDebugVisualization = false;
 		};
 
 		ShadowRendererData s_Data;
@@ -147,6 +148,7 @@ namespace gl {
 			framebuffer.reset();
 		s_Data.Resolution = 0;
 		s_Data.CascadeCount = 0;
+		s_Data.CascadeDebugVisualization = false;
 	}
 
 	bool ShadowRenderer::BeginDirectional(
@@ -351,6 +353,8 @@ namespace gl {
 		if (!shader)
 			return;
 		shader->UploadUniformInt("u_ShadowEnabled", s_Data.Enabled ? 1 : 0);
+		shader->UploadUniformInt("u_ShadowCascadeDebug",
+			s_Data.Enabled && s_Data.CascadeDebugVisualization ? 1 : 0);
 		if (!s_Data.Enabled)
 			return;
 		shader->UploadUniformInt("u_ShadowCascadeCount",
@@ -380,6 +384,16 @@ namespace gl {
 	bool ShadowRenderer::IsEnabled()
 	{
 		return s_Data.Enabled;
+	}
+
+	void ShadowRenderer::SetCascadeDebugVisualization(bool enabled)
+	{
+		s_Data.CascadeDebugVisualization = enabled;
+	}
+
+	bool ShadowRenderer::IsCascadeDebugVisualizationEnabled()
+	{
+		return s_Data.CascadeDebugVisualization;
 	}
 
 	ShadowRenderer::Statistics ShadowRenderer::GetStatistics()

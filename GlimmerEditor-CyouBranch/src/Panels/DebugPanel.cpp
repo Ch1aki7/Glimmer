@@ -66,6 +66,11 @@ namespace gl {
 				ImGui::Text("Candidate / Rendered: %u / %u",
 					shadowStatistics.CandidateDraws, shadowStatistics.RenderedDraws);
 				ImGui::Text("Frustum Culled: %u", shadowStatistics.CulledDraws);
+				bool visualizeCascades =
+					ShadowRenderer::IsCascadeDebugVisualizationEnabled();
+				if (ImGui::Checkbox("Visualize Cascades", &visualizeCascades))
+					ShadowRenderer::SetCascadeDebugVisualization(visualizeCascades);
+				ImGui::TextDisabled("1 Red, 2 Green, 3 Blue, 4 Yellow");
 				ImGui::EndTabItem();
 			}
 
