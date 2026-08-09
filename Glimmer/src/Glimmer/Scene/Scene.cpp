@@ -221,8 +221,10 @@ namespace gl {
 		}
 	}
 
-	void Scene::OnUpdateRuntime(Timestep ts)
+	void Scene::OnUpdateRuntime(Timestep ts, bool deferSpritePass)
 	{
+		GL_CORE_ASSERT(!m_SpritePassPending,
+			"Previous Scene sprite pass was not flushed by the render host.");
 		UploadLightEnvironment();
 		Camera* mainCamera = nullptr;
 		glm::mat4 cameraTransform;
@@ -278,7 +280,7 @@ namespace gl {
 					static_cast<int>(static_cast<uint32_t>(entity)),
 					material ? &material->Overrides : nullptr);
 			}
-			Renderer3D::EndScene();
+			Renderer3D::FlushOpaqueAndMask();
 
 			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 			for (auto entity : terrainView)
@@ -289,27 +291,21 @@ namespace gl {
 					cameraPosition, static_cast<int>(static_cast<uint32_t>(entity)));
 			}
 
-			Renderer2D::BeginScene(viewProjection);
-
-			auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
-			for (auto entity : group)
+			if (deferSpritePass)
 			{
-				auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entity);
-
-				// 提交渲染，直接使用组件里的 Transform 矩阵
-				const auto* material = m_Registry.try_get<MaterialComponent>(entity);
-				Renderer2D::DrawSprite(
-					transform.GetTransform(), sprite, (int)(uint32_t)entity,
-					material ? material->MaterialHandle : AssetHandle(0),
-					material ? &material->Overrides : nullptr);
+				m_DeferredSpriteViewProjection = viewProjection;
+				m_SpritePassPending = true;
 			}
-
-			Renderer2D::EndScene();
+			else
+				RenderSprites(viewProjection);
 		}
 	}
 
-	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection, const glm::vec3& cameraPosition)
+	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection,
+		const glm::vec3& cameraPosition, bool deferSpritePass)
 	{
+		GL_CORE_ASSERT(!m_SpritePassPending,
+			"Previous Scene sprite pass was not flushed by the render host.");
 		UploadLightEnvironment();
 		Renderer3D::BeginScene(viewProjection, cameraPosition);
 		auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
@@ -324,7 +320,7 @@ namespace gl {
 				static_cast<int>(static_cast<uint32_t>(entity)),
 				material ? &material->Overrides : nullptr);
 		}
-		Renderer3D::EndScene();
+		Renderer3D::FlushOpaqueAndMask();
 
 		auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 		for (auto entity : terrainView)
@@ -335,19 +331,38 @@ namespace gl {
 				cameraPosition, static_cast<int>(static_cast<uint32_t>(entity)));
 		}
 
-		Renderer2D::BeginScene(viewProjection);
-
-		auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
-		for (auto entityHandle : group)
+		if (deferSpritePass)
 		{
-			auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entityHandle);
-			const auto* material = m_Registry.try_get<MaterialComponent>(entityHandle);
+			m_DeferredSpriteViewProjection = viewProjection;
+			m_SpritePassPending = true;
+		}
+		else
+			RenderSprites(viewProjection);
+	}
+
+	void Scene::FlushSpritePass()
+	{
+		if (!m_SpritePassPending)
+			return;
+		RenderSprites(m_DeferredSpriteViewProjection);
+		m_SpritePassPending = false;
+	}
+
+	void Scene::RenderSprites(const glm::mat4& viewProjection)
+	{
+		Renderer2D::BeginScene(viewProjection);
+		auto group = m_Registry.group<TransformComponent>(
+			entt::get<SpriteRendererComponent>);
+		for (auto entity : group)
+		{
+			auto [transform, sprite] = group.get<
+				TransformComponent, SpriteRendererComponent>(entity);
+			const auto* material = m_Registry.try_get<MaterialComponent>(entity);
 			Renderer2D::DrawSprite(
-				transform.GetTransform(), sprite, (int)(uint32_t)entityHandle,
+				transform.GetTransform(), sprite, static_cast<int>(static_cast<uint32_t>(entity)),
 				material ? material->MaterialHandle : AssetHandle(0),
 				material ? &material->Overrides : nullptr);
 		}
-
 		Renderer2D::EndScene();
 	}
 

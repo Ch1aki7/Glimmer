@@ -8,6 +8,13 @@ namespace gl {
 		Less = 0,
 		LessEqual
 	};
+	enum class BlendFactor
+	{
+		Zero = 0,
+		One,
+		SourceAlpha,
+		OneMinusSourceAlpha
+	};
 
     class RendererAPI {
     public:
@@ -15,7 +22,10 @@ namespace gl {
     public:
         virtual void Init() = 0;
         virtual void SetClearColor(const glm::vec4& color) = 0;
-        virtual void Clear() = 0;
+		virtual void Clear() = 0;
+		virtual void SetBlendEnabled(bool enabled) = 0;
+		virtual void SetBlendFunction(BlendFactor source, BlendFactor destination) = 0;
+		virtual void SetDepthWriteEnabled(bool enabled) = 0;
 		virtual void SetDepthFunction(DepthFunction function) = 0;
 		virtual void DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount = 0) = 0;
 		virtual void DrawIndexedInstanced(const Ref<VertexArray>& vertexArray, uint32_t instanceCount,

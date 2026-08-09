@@ -5,11 +5,11 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-07
+- 最近更新：2026-08-09
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：Transparent RenderQueue 与材质 AlphaMode
+- 当前主线：PBR 材质通道扩展
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,47 +55,44 @@
 
 ## 当前主线
 
-### Transparent RenderQueue 与材质 AlphaMode
+### PBR 材质通道扩展
 
 **目的**
 
-在 PBR 材质通道继续扩展前固定 `Opaque / Mask / Blend` 分类、深度写入、排序、混合和拾取契约，解决透明 PNG 在 SkyLight 背景上显示 Scene Clear Color 的问题。
+在已稳定的 Material、Opaque/Transparent RenderQueue、AlphaMode 和基础 Cook–Torrance PBR 之上，补齐标准模型材质所需的纹理通道与颜色空间契约。
 
 **当前问题**
 
-- Material schema 尚无 AlphaMode 与 AlphaCutoff，PNG Alpha 不能表达 Mask/Blend 语义；
-- 当前 3D 模型统一进入 Opaque Queue，透明像素仍可能写入深度和 EntityID；
-- Blend 对象缺少相机距离反向排序和独立深度写入策略；
-- Skybox、透明对象、Gizmo/Overlay 之间尚无明确且可恢复的状态边界。
+- 当前只有 BaseColor、Metallic、Roughness，缺少 Normal、AO、Emissive 通道；
+- 颜色纹理和数据纹理需要明确区分 sRGB 与 Linear，避免重复 Gamma；
+- `.glmat`、MaterialOverrides、Inspector、缓存排序键和 Shader 必须保持同一字段契约；
+- 旧材质和旧场景必须继续按现有默认值加载。
 
 **实施范围**
 
-- [ ] 为 Material 增加 AlphaMode（Opaque、Mask、Blend）与 AlphaCutoff；
-- [ ] 同步 `.glmat`、MaterialOverrides、Inspector、Undo/Redo 和兼容读取；
-- [ ] Opaque/Mask 保持深度写入，Mask 在 Fragment 阶段按 Cutoff 丢弃；
-- [ ] 建立独立 Transparent Queue，按相机距离由远到近绘制；
-- [ ] 固定 Opaque/Mask → Skybox → Transparent 顺序，并完整恢复 Blend、DepthMask 和 DepthFunc；
-- [ ] 明确透明像素 EntityID 写入与拾取阈值；
-- [ ] Transparent 默认普通 Draw，不破坏现有 Opaque Instancing；
+- [ ] 增加 Normal、AO、Emissive 纹理和必要强度参数；
+- [ ] 同步 `.glmat`、MaterialOverrides、Inspector、Undo/Redo、YAML 与 MaterialInstance 缓存；
+- [ ] 明确 BaseColor/Emissive 使用 sRGB，Normal/AO/Metallic/Roughness 使用 Linear；
+- [ ] 扩展 PBRModel Shader，并保持 Opaque、Mask、Blend 和 EntityID 语义；
+- [ ] 保持旧材质/场景兼容以及现有 Opaque Instancing 合批正确性；
 - [ ] 更新 README 和 ARCHITECTURE 对应章节。
 
 **暂不包含**
 
-- Order Independent Transparency；
-- 透明对象 Instancing；
-- PBR Normal、AO、Emissive 通道扩展；
+- 阴影与 CSM；
+- IBL 环境卷积；
+- Height/Parallax Mapping；
 - 遮挡剔除；
 - GPU Driven Rendering；
 - Vulkan 后端。
 
 **验收条件**
 
-- [ ] PNG 全透明区域显示 SkyLight/Skybox，而不是 Scene Clear Color；
-- [ ] Mask 材质正确遮挡并写深度，透明区域不写颜色、深度或 EntityID；
-- [ ] 多层 Blend 对象由远到近稳定混合；
-- [ ] Opaque RenderQueue、Instancing、EntityID 和统计不退化；
-- [ ] Transparent Pass 后 OpenGL 状态完整恢复；
-- [ ] 旧 `.glmat` 默认按 Opaque 加载，保存/重载与 Undo/Redo 往返一致；
+- [ ] 标准材质球可分别验证 Normal、AO、Emissive 和 Metallic-Roughness；
+- [ ] sRGB 颜色纹理与 Linear 数据纹理不发生重复 Gamma；
+- [ ] 旧 `.glmat` 和场景文件仍可加载；
+- [ ] Material Asset、MaterialOverrides、Inspector 与 YAML 往返一致；
+- [ ] Opaque/Mask/Blend、Instancing、EntityID 和统计不退化；
 - [ ] VS2026 `Debug | x64` 全量构建成功；
 - [ ] 编辑器启动并稳定渲染首帧；
 - [ ] `git diff --check` 通过。
@@ -103,24 +100,6 @@
 ## 后续任务
 
 任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
-### P4：PBR 材质通道扩展
-
-**依赖**：材质事务、Opaque/Transparent RenderQueue 和 AlphaMode 完成。
-
-**目标**
-
-- 扩展 Normal、AO、Emissive 等纹理与参数；
-- 同步扩展 `.glmat`、MaterialOverrides、Inspector 和序列化；
-- 明确线性空间与 sRGB 纹理导入规则；
-- 保持旧材质文件向后兼容。
-
-**验收**
-
-- 标准材质球能够分别验证 Normal、AO、Emissive 和 Metallic-Roughness；
-- sRGB 颜色纹理与 Linear 数据纹理不发生重复 Gamma；
-- 旧 `.glmat` 和场景文件仍能加载；
-- Material Asset、MaterialOverrides、Inspector 与 YAML 往返一致。
 
 ### P5：自动化回归测试与持续构建
 
@@ -304,6 +283,20 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-08-09：Transparent RenderQueue 与材质 AlphaMode
+
+- MaterialProperties 增加 `Opaque / Mask / Blend` 与 AlphaCutoff，并同步 `.glmat`、实体 MaterialOverrides、Inspector、Undo/Redo 完整状态和场景 YAML；旧文件缺字段时默认 Opaque/0.5；
+- Renderer3D 拆分 Opaque/Mask 与 Transparent Queue：前者保留状态排序和 Instancing，后者按实体位置到相机的平方距离由远到近稳定排序并使用普通 Draw；
+- 完整编辑器固定 Opaque/Mask、Terrain、Skybox、Sprite、Transparent 的执行边界；Scene 在该宿主中延迟整个 Sprite 遍历与提交，由 EditorLayer 在 Skybox 后调用 `FlushSpritePass`；不编排 Skybox 的旧宿主仍默认立即渲染；
+- RendererAPI/OpenGL 增加 Blend、BlendFunc、DepthWrite 控制；Opaque 默认禁用混合，Transparent 使用标准 Alpha 混合和只读深度，Skybox 与 Transparent 结束后恢复默认状态；
+- PBRModel 按 BaseColor × Texture Alpha 执行 Mask Cutoff；Blend 的 Alpha 小于等于 `1/255` 时丢弃，避免全透明像素写颜色、深度或 EntityID；
+- Stats 增加 Opaque/Mask/Transparent 项数与 Transparent DrawCall；DefaultPBR 显式记录 Opaque/0.5；
+- 验证：使用 `assets/textures/balatro.png`（实际 Alpha 0～255）和真实 OpenGL 临时场景验证旧材质兼容、材质保存/重载、场景 Override YAML 往返及 Shader 编译；2 Opaque + 1 Mask + 2 Blend 得到 `5 Items / 4 Draws`，其中 1 次 Opaque Instanced Draw、2 次 Transparent Draw；
+- 顺序修复：RenderDoc 抓帧确认旧实现的 Renderer2D Draw 早于 Skybox，导致透明区域先与 Clear Color 混合；现已把实际 Renderer2D Draw 延迟到 Skybox Draw 之后、3D Transparent 之前；
+- 验证：VS2026 `Debug | x64` 全解决方案构建成功；顺序修复后完整编辑器稳定运行 8 秒；`git diff --check` 通过；测试场景、日志和后台进程无残留；
+- README：新增“Transparent RenderQueue 与材质 AlphaMode”；
+- 提交：待提交。
+
 ### 2026-08-07：3D Instancing 与 MaterialInstance 缓存
 
 - 扩展 BufferLayout、VertexArray、RendererAPI 和 OpenGL 后端，支持 PerInstance 输入、矩阵属性拆分、`glVertexAttribDivisor` 与 `DrawIndexedInstanced`；
@@ -315,7 +308,7 @@
 - 验证：VS2026 `Debug | x64` 全解决方案构建成功；相同命令二次增量构建约 3 秒且未重新编译源码；最终无测试注入编辑器稳定运行 8 秒；`git diff --check` 通过；未删除 `bin`/`bin-int`；
 - 构建修复：重新运行 VS2026 Premake，使既有 SPIRV-Cross samples/tests 排除规则同步到工程并恢复全解决方案构建；
 - README：新增“3D Instancing 与 MaterialInstance 缓存”；
-- 提交：待提交。
+- 提交：`9053c6a`。
 
 ### 2026-08-05：3D Opaque RenderQueue 与状态排序
 
@@ -326,7 +319,7 @@
 - 验证：临时真实 OpenGL 宿主以两种顺序提交 3 个相同模型，均得到 3 个 RenderItem/DrawCall，Shader 绑定由 3 降至 1、Texture 绑定由 3 降至 1，并安全跳过 1 个无效资源；VS2026 `Debug | x64` 全解决方案构建成功；完整编辑器稳定运行 8 秒；`git diff --check`；
 - 资产发现：当前仓库 AssetRegistry 的 Model 路径均缺少实际 `.obj` 文件；已修正 `.gitignore` 允许跟踪 `assets/**/*.obj`，源模型仍需从原设备或备份恢复；
 - README：新增“3D Opaque RenderQueue 与状态排序”；
-- 提交：待提交。
+- 提交：`a41df51`。
 
 ### 2026-08-05：材质编辑事务与 Undo/Redo
 
@@ -422,7 +415,7 @@
 - 部分 Git 子模块包含 Premake 生成的未跟踪文件，可能使根仓库显示子模块为脏状态；不要在不确认内容的情况下清理或重置子模块；
 - SPIRV-Cross 上游 Premake 会递归包含 samples/tests，根 Premake 当前通过 `removefiles` 排除；修改依赖生成逻辑时必须复验；
 - GLFW Premake 仍使用已弃用的 `flags`、`NoRuntimeChecks` 和 `NoIncrementalLink` 写法，会产生生成警告。
-- `GlimmerEditor-CyouBranch/assets/AssetRegistry.yaml` 保留多个 Model Handle，但当前检出缺少对应 `.obj`；`.gitignore` 已允许未来跟踪 `assets/**/*.obj`，仍需从原设备或备份恢复模型源文件并逐项复验注册表。
+- Model 资源已恢复 Cube、Plane、UV Sphere、bunny、planet、spacecraft、suzanne；注册表中的 `models/New Folder/Cube.obj`、`models/dragon.obj`、`models/UV Sphere.obj` 仍缺少源文件，需要从原设备恢复或移除失效条目。
 
 ### 编辑器
 
@@ -433,10 +426,10 @@
 
 ### 渲染
 
-- Renderer3D 已有不透明 RenderQueue、稳定排序和 Shader/Texture 状态缓存，但仍逐 RenderItem Draw，没有 3D Instancing；
-- 暂无透明队列、距离排序和显式材质 BlendMode；当前 Opaque Queue 假设参与项不透明；
-- MaterialInstance 当前按提交临时解析，没有 Dirty/version 缓存；
+- Renderer3D 已有 Opaque/Mask/Transparent Queue、状态排序、Opaque Instancing 和 MaterialInstance 缓存；Transparent 首版仍按实体原点而不是 Mesh Bounds 中心排序，且不支持透明实例化或 OIT；
+- AlphaMode Shader 契约当前由 PBRModel 完整实现；自定义 3D Shader 若要正确支持 Mask/Blend，仍需自行声明并使用 `u_AlphaMode`、`u_AlphaCutoff`；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
+- 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 仍缺少正式 TerrainMaterial 资产、派生图缓存、Chunk/LOD 和运行时侵蚀调度；
 - SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；

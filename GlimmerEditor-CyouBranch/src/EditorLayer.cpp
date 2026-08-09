@@ -148,6 +148,7 @@ namespace gl {
 		terrain.Specification.GenerationShaderHandle = terrainGenerationShaderHandle;
 		terrain.Specification.HeightMapHandle = defaultHeightMapHandle;
 
+
 		// --- 层级面板 ---
 		m_HierarchyPanel.SetContext(m_ActiveScene);
 		m_HierarchyPanel.OnEntitySelected = [&](Entity e) {
@@ -234,11 +235,12 @@ namespace gl {
 				skyboxProjection = m_EditorCamera.GetProjectionMatrix();
 				hasSkyboxCamera = true;
 				m_ActiveScene->OnUpdateEditor(
-					ts, skyboxProjection * skyboxView, m_EditorCamera.GetPosition());
+					ts, skyboxProjection * skyboxView,
+					m_EditorCamera.GetPosition(), true);
 			}
 			else
 			{
-				m_ActiveScene->OnUpdateRuntime(ts);
+				m_ActiveScene->OnUpdateRuntime(ts, true);
 				Entity cameraEntity = m_ActiveScene->GetPrimaryCameraEntity();
 				if (cameraEntity
 					&& cameraEntity.HasComponent<CameraComponent>()
@@ -268,6 +270,8 @@ namespace gl {
 						skyLight.Intensity);
 				}
 			}
+			m_ActiveScene->FlushSpritePass();
+			Renderer3D::EndScene();
 		}
 
 		RenderPass::End();
@@ -442,13 +446,16 @@ namespace gl {
 		ImGui::Text("Quads: %d", stats.QuadCount);
 		ImGui::Separator();
 		const auto stats3D = Renderer3D::GetStats();
-		ImGui::Text("Renderer3D Opaque Queue:");
+		ImGui::Text("Renderer3D Queues:");
 		ImGui::Text("Models / Items: %u / %u",
 			stats3D.SubmittedModels, stats3D.SubmittedItems);
+		ImGui::Text("Opaque / Mask / Transparent: %u / %u / %u",
+			stats3D.OpaqueItems, stats3D.MaskItems, stats3D.TransparentItems);
 		ImGui::Text("Skipped Models: %u", stats3D.SkippedModels);
 		ImGui::Text("Draw Calls: %u", stats3D.DrawCalls);
 		ImGui::Text("Instanced / Individual Draws: %u / %u",
 			stats3D.InstancedDrawCalls, stats3D.IndividualDrawCalls);
+		ImGui::Text("Transparent Draws: %u", stats3D.TransparentDrawCalls);
 		ImGui::Text("Batches / Instances: %u / %u",
 			stats3D.BatchCount, stats3D.InstanceCount);
 		ImGui::Text("Saved Draws: %u", stats3D.GetSavedDrawCalls());

@@ -34,7 +34,7 @@ namespace gl {
 		struct MaterialSortKey
 		{
 			uint64_t BaseColorTexture = 0;
-			std::array<uint32_t, 7> Values{};
+			std::array<uint32_t, 9> Values{};
 
 			bool operator<(const MaterialSortKey& other) const
 			{
@@ -50,7 +50,9 @@ namespace gl {
 				{ FloatBits(material.BaseColor.x), FloatBits(material.BaseColor.y),
 				  FloatBits(material.BaseColor.z), FloatBits(material.BaseColor.w),
 				  FloatBits(material.TilingFactor), FloatBits(material.Metallic),
-				  FloatBits(material.Roughness) }
+				  FloatBits(material.Roughness),
+				  static_cast<uint32_t>(material.AlphaMode),
+				  FloatBits(material.AlphaCutoff) }
 			};
 		}
 
@@ -84,6 +86,7 @@ namespace gl {
 			glm::mat4 Transform{ 1.0f };
 			int EntityID = -1;
 			bool HasBaseColorTexture = false;
+			float CameraDistanceSquared = 0.0f;
 		};
 
 		struct InstanceData
@@ -137,9 +140,11 @@ namespace gl {
 			Ref<VertexBuffer> InstanceVertexBuffer;
 			std::vector<InstanceData> InstanceBuffer;
 			std::vector<RenderItem> OpaqueQueue;
+			std::vector<RenderItem> TransparentQueue;
 			std::unordered_map<MaterialCacheKey, MaterialCacheEntry,
 				MaterialCacheKeyHash> MaterialCache;
 			uint64_t FrameIndex = 0;
+			bool SceneActive = false;
 			Renderer3D::Statistics Stats;
 		};
 
@@ -170,6 +175,10 @@ namespace gl {
 			item.ShaderResource->UploadUniformFloat("u_TilingFactor", item.Material.TilingFactor);
 			item.ShaderResource->UploadUniformInt(
 				"u_HasBaseColorTexture", item.HasBaseColorTexture ? 1 : 0);
+			item.ShaderResource->UploadUniformInt(
+				"u_AlphaMode", static_cast<int>(item.Material.AlphaMode));
+			item.ShaderResource->UploadUniformFloat(
+				"u_AlphaCutoff", item.Material.AlphaCutoff);
 		}
 
 	}
@@ -187,12 +196,14 @@ namespace gl {
 		});
 		s_Data.InstanceBuffer.reserve(MaxInstancesPerDraw);
 		s_Data.OpaqueQueue.reserve(1024);
+		s_Data.TransparentQueue.reserve(256);
 		s_Data.MaterialCache.reserve(1024);
 	}
 
 	void Renderer3D::Shutdown()
 	{
 		s_Data.OpaqueQueue.clear();
+		s_Data.TransparentQueue.clear();
 		s_Data.InstanceBuffer.clear();
 		s_Data.MaterialCache.clear();
 		s_Data.InstanceVertexBuffer.reset();
@@ -206,6 +217,8 @@ namespace gl {
 		s_Data.ViewProjection = viewProjection;
 		s_Data.CameraPosition = cameraPosition;
 		s_Data.OpaqueQueue.clear();
+		s_Data.TransparentQueue.clear();
+		s_Data.SceneActive = true;
 		++s_Data.FrameIndex;
 		ResetStats();
 	}
@@ -293,14 +306,34 @@ namespace gl {
 			item.Transform = transform;
 			item.EntityID = entityID;
 			item.HasBaseColorTexture = hasBaseColorTexture;
-			s_Data.OpaqueQueue.emplace_back(std::move(item));
+			const glm::vec3 itemPosition = glm::vec3(transform[3]);
+			const glm::vec3 cameraOffset = itemPosition - s_Data.CameraPosition;
+			item.CameraDistanceSquared = glm::dot(cameraOffset, cameraOffset);
+			if (properties.AlphaMode == MaterialAlphaMode::Blend)
+			{
+				s_Data.TransparentQueue.emplace_back(std::move(item));
+				s_Data.Stats.TransparentItems++;
+			}
+			else
+			{
+				s_Data.OpaqueQueue.emplace_back(std::move(item));
+				if (properties.AlphaMode == MaterialAlphaMode::Mask)
+					s_Data.Stats.MaskItems++;
+				else
+					s_Data.Stats.OpaqueItems++;
+			}
 			s_Data.Stats.SubmittedItems++;
 			s_Data.Stats.ImmediateModeTextureBinds++;
 		}
 	}
 
-	void Renderer3D::EndScene()
+	void Renderer3D::FlushOpaqueAndMask()
 	{
+		if (!s_Data.SceneActive)
+			return;
+		RenderCommand::SetBlendEnabled(false);
+		RenderCommand::SetDepthWriteEnabled(true);
+		RenderCommand::SetDepthFunction(DepthFunction::Less);
 		std::sort(s_Data.OpaqueQueue.begin(), s_Data.OpaqueQueue.end(),
 			[](const RenderItem& left, const RenderItem& right) {
 				return left.Key < right.Key;
@@ -398,6 +431,77 @@ namespace gl {
 			}
 			itemIndex = batchEnd;
 		}
+		s_Data.OpaqueQueue.clear();
+	}
+
+	void Renderer3D::EndScene()
+	{
+		if (!s_Data.SceneActive)
+			return;
+
+		FlushOpaqueAndMask();
+		auto transparentOrder = [](const RenderItem& left, const RenderItem& right) {
+			if (left.CameraDistanceSquared != right.CameraDistanceSquared)
+				return left.CameraDistanceSquared > right.CameraDistanceSquared;
+			return left.Key < right.Key;
+		};
+		std::stable_sort(s_Data.TransparentQueue.begin(),
+			s_Data.TransparentQueue.end(), transparentOrder);
+		GL_CORE_ASSERT(std::is_sorted(s_Data.TransparentQueue.begin(),
+			s_Data.TransparentQueue.end(), transparentOrder),
+			"Renderer3D transparent queue sort invariant failed.");
+
+		RenderCommand::SetBlendFunction(
+			BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha);
+		RenderCommand::SetBlendEnabled(true);
+		RenderCommand::SetDepthWriteEnabled(false);
+		RenderCommand::SetDepthFunction(DepthFunction::Less);
+
+		Ref<Shader> boundShader;
+		uint32_t boundTexture = std::numeric_limits<uint32_t>::max();
+		for (const RenderItem& item : s_Data.TransparentQueue)
+		{
+			if (item.ShaderResource != boundShader)
+			{
+				item.ShaderResource->ReloadIfChanged();
+				item.ShaderResource->Bind();
+				item.ShaderResource->UploadUniformMat4(
+					"u_ViewProjection", s_Data.ViewProjection);
+				item.ShaderResource->UploadUniformFloat3(
+					"u_CameraPos", s_Data.CameraPosition);
+				item.ShaderResource->UploadUniformInt("u_BaseColorTexture", 0);
+				boundShader = item.ShaderResource;
+				s_Data.Stats.ShaderBinds++;
+			}
+
+			const uint32_t textureID = item.TextureResource->GetRendererID();
+			if (textureID != boundTexture)
+			{
+				item.TextureResource->Bind(0);
+				boundTexture = textureID;
+				s_Data.Stats.TextureBinds++;
+			}
+
+			UploadMaterialState(item);
+			if (item.ShaderResource->SupportsInstancing())
+				item.ShaderResource->UploadUniformInt("u_UseInstancing", 0);
+			item.ShaderResource->UploadUniformMat4("u_Transform", item.Transform);
+			item.ShaderResource->UploadUniformInt("u_EntityID", item.EntityID);
+			RenderCommand::DrawIndexed(
+				item.MeshResource->GetVertexArray(), item.MeshResource->GetIndexCount());
+			s_Data.Stats.DrawCalls++;
+			s_Data.Stats.IndividualDrawCalls++;
+			s_Data.Stats.TransparentDrawCalls++;
+			s_Data.Stats.BatchCount++;
+			s_Data.Stats.RenderedItems++;
+		}
+
+		RenderCommand::SetBlendEnabled(false);
+		RenderCommand::SetBlendFunction(
+			BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha);
+		RenderCommand::SetDepthWriteEnabled(true);
+		RenderCommand::SetDepthFunction(DepthFunction::Less);
+
 		GL_CORE_ASSERT(s_Data.Stats.RenderedItems == s_Data.Stats.SubmittedItems,
 			"Renderer3D did not execute every submitted render item.");
 		GL_CORE_ASSERT(s_Data.Stats.ShaderBinds
@@ -406,7 +510,8 @@ namespace gl {
 		GL_CORE_ASSERT(s_Data.Stats.TextureBinds
 			<= s_Data.Stats.ImmediateModeTextureBinds,
 			"Renderer3D texture state cache regressed immediate-mode binds.");
-		s_Data.OpaqueQueue.clear();
+
+		s_Data.TransparentQueue.clear();
 		for (auto iterator = s_Data.MaterialCache.begin();
 			iterator != s_Data.MaterialCache.end();)
 		{
@@ -415,6 +520,7 @@ namespace gl {
 			else
 				++iterator;
 		}
+		s_Data.SceneActive = false;
 	}
 
 	void Renderer3D::ResetStats()

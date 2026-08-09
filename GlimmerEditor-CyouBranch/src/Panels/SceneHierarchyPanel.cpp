@@ -19,7 +19,9 @@ namespace gl {
 				&& left.BaseColorTexture == right.BaseColorTexture
 				&& left.TilingFactor == right.TilingFactor
 				&& left.Metallic == right.Metallic
-				&& left.Roughness == right.Roughness;
+				&& left.Roughness == right.Roughness
+				&& left.AlphaMode == right.AlphaMode
+				&& left.AlphaCutoff == right.AlphaCutoff;
 		}
 
 		bool SameMaterialComponent(
@@ -649,13 +651,50 @@ namespace gl {
 							CommitMaterialComponentWidget(entity, name, component);
 					};
 
+					bool overrideAlphaMode = toggleOverride(
+						"##OverrideAlphaMode", MaterialOverride::AlphaMode,
+						[&](MaterialProperties& target) { target.AlphaMode = base.AlphaMode; });
+					ImGui::SameLine();
+					static const char* alphaModes[] = { "Opaque", "Mask", "Blend" };
+					int alphaMode = static_cast<int>(overrideAlphaMode
+						? values.AlphaMode : base.AlphaMode);
+					ImGui::BeginDisabled(!overrideAlphaMode);
+					if (ImGui::Combo("Alpha Mode", &alphaMode, alphaModes, 3)
+						&& overrideAlphaMode)
+					{
+						const MaterialComponent before = component;
+						MaterialComponent after = before;
+						after.Overrides.Values.AlphaMode =
+							static_cast<MaterialAlphaMode>(alphaMode);
+						after.Overrides.MarkDirty();
+						ExecuteMaterialComponentEdit(
+							entity, "Set Alpha Mode Override", before, after);
+					}
+					ImGui::EndDisabled();
+
+					bool overrideAlphaCutoff = toggleOverride(
+						"##OverrideAlphaCutoff", MaterialOverride::AlphaCutoff,
+						[&](MaterialProperties& target) { target.AlphaCutoff = base.AlphaCutoff; });
+					ImGui::SameLine();
+					float inheritedAlphaCutoff = base.AlphaCutoff;
+					ImGui::BeginDisabled(!overrideAlphaCutoff);
+					MaterialComponent beforeWidget = component;
+					if (ImGui::SliderFloat("Alpha Cutoff",
+						overrideAlphaCutoff ? &values.AlphaCutoff : &inheritedAlphaCutoff,
+						0.0f, 1.0f) && overrideAlphaCutoff)
+						overrides.MarkDirty();
+					if (overrideAlphaCutoff)
+						trackContinuousEdit(
+							"Edit Alpha Cutoff Override", beforeWidget);
+					ImGui::EndDisabled();
+
 					bool overrideBaseColor = toggleOverride(
 						"##OverrideBaseColor", MaterialOverride::BaseColor,
 						[&](MaterialProperties& target) { target.BaseColor = base.BaseColor; });
 					ImGui::SameLine();
 					glm::vec4 inheritedBaseColor = base.BaseColor;
 					ImGui::BeginDisabled(!overrideBaseColor);
-					MaterialComponent beforeWidget = component;
+					beforeWidget = component;
 					if (ImGui::ColorEdit4("Base Color",
 						glm::value_ptr(overrideBaseColor ? values.BaseColor : inheritedBaseColor))
 						&& overrideBaseColor)

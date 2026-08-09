@@ -6,6 +6,25 @@
 
 namespace gl {
 
+	const char* MaterialAlphaModeToString(MaterialAlphaMode mode)
+	{
+		switch (mode)
+		{
+		case MaterialAlphaMode::Mask: return "Mask";
+		case MaterialAlphaMode::Blend: return "Blend";
+		default: return "Opaque";
+		}
+	}
+
+	MaterialAlphaMode MaterialAlphaModeFromString(const std::string& value)
+	{
+		if (value == "Mask")
+			return MaterialAlphaMode::Mask;
+		if (value == "Blend")
+			return MaterialAlphaMode::Blend;
+		return MaterialAlphaMode::Opaque;
+	}
+
 	namespace {
 
 		void SerializeVec4(YAML::Emitter& output, const glm::vec4& value)
@@ -161,10 +180,16 @@ namespace gl {
 				properties.Metallic = material["Metallic"].as<float>();
 			if (material["Roughness"])
 				properties.Roughness = material["Roughness"].as<float>();
+			if (material["AlphaMode"])
+				properties.AlphaMode = MaterialAlphaModeFromString(
+					material["AlphaMode"].as<std::string>());
+			if (material["AlphaCutoff"])
+				properties.AlphaCutoff = material["AlphaCutoff"].as<float>();
 
 			properties.TilingFactor = glm::max(properties.TilingFactor, 0.01f);
 			properties.Metallic = glm::clamp(properties.Metallic, 0.0f, 1.0f);
 			properties.Roughness = glm::clamp(properties.Roughness, 0.04f, 1.0f);
+			properties.AlphaCutoff = glm::clamp(properties.AlphaCutoff, 0.0f, 1.0f);
 
 			const MaterialState loadedState{ shaderHandle, properties };
 			if (GetState() != loadedState || m_Version == 0)
@@ -196,6 +221,9 @@ namespace gl {
 		output << YAML::Key << "TilingFactor" << YAML::Value << m_Properties.TilingFactor;
 		output << YAML::Key << "Metallic" << YAML::Value << m_Properties.Metallic;
 		output << YAML::Key << "Roughness" << YAML::Value << m_Properties.Roughness;
+		output << YAML::Key << "AlphaMode" << YAML::Value
+			<< MaterialAlphaModeToString(m_Properties.AlphaMode);
+		output << YAML::Key << "AlphaCutoff" << YAML::Value << m_Properties.AlphaCutoff;
 		output << YAML::EndMap;
 		output << YAML::EndMap;
 

@@ -5,8 +5,19 @@
 
 #include <glm/glm.hpp>
 #include <filesystem>
+#include <string>
 
 namespace gl {
+
+	enum class MaterialAlphaMode : uint8_t
+	{
+		Opaque = 0,
+		Mask,
+		Blend
+	};
+
+	const char* MaterialAlphaModeToString(MaterialAlphaMode mode);
+	MaterialAlphaMode MaterialAlphaModeFromString(const std::string& value);
 
 	struct MaterialProperties
 	{
@@ -15,6 +26,8 @@ namespace gl {
 		float TilingFactor = 1.0f;
 		float Metallic = 0.0f;
 		float Roughness = 0.5f;
+		MaterialAlphaMode AlphaMode = MaterialAlphaMode::Opaque;
+		float AlphaCutoff = 0.5f;
 
 		bool operator==(const MaterialProperties& other) const
 		{
@@ -22,7 +35,9 @@ namespace gl {
 				&& BaseColorTexture == other.BaseColorTexture
 				&& TilingFactor == other.TilingFactor
 				&& Metallic == other.Metallic
-				&& Roughness == other.Roughness;
+				&& Roughness == other.Roughness
+				&& AlphaMode == other.AlphaMode
+				&& AlphaCutoff == other.AlphaCutoff;
 		}
 		bool operator!=(const MaterialProperties& other) const { return !(*this == other); }
 	};

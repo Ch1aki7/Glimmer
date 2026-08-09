@@ -19,16 +19,21 @@ namespace gl {
 			AssetHandle materialHandle,
 			int entityID,
 			const MaterialOverrides* overrides = nullptr);
+		static void FlushOpaqueAndMask();
 		static void EndScene();
 
 		struct Statistics
 		{
 			uint32_t SubmittedModels = 0;
 			uint32_t SubmittedItems = 0;
+			uint32_t OpaqueItems = 0;
+			uint32_t MaskItems = 0;
+			uint32_t TransparentItems = 0;
 			uint32_t SkippedModels = 0;
 			uint32_t DrawCalls = 0;
 			uint32_t InstancedDrawCalls = 0;
 			uint32_t IndividualDrawCalls = 0;
+			uint32_t TransparentDrawCalls = 0;
 			uint32_t BatchCount = 0;
 			uint32_t RenderedItems = 0;
 			uint32_t InstanceCount = 0;

@@ -120,6 +120,9 @@ namespace gl {
 			out << YAML::Key << "TilingFactor" << YAML::Value << values.TilingFactor;
 			out << YAML::Key << "Metallic" << YAML::Value << values.Metallic;
 			out << YAML::Key << "Roughness" << YAML::Value << values.Roughness;
+			out << YAML::Key << "AlphaMode" << YAML::Value
+				<< MaterialAlphaModeToString(values.AlphaMode);
+			out << YAML::Key << "AlphaCutoff" << YAML::Value << values.AlphaCutoff;
 			out << YAML::EndMap;
 		}
 		out << YAML::EndMap;
@@ -147,6 +150,12 @@ namespace gl {
 			comp.Overrides.Values.Metallic = overrides["Metallic"].as<float>();
 		if (overrides["Roughness"])
 			comp.Overrides.Values.Roughness = overrides["Roughness"].as<float>();
+		if (overrides["AlphaMode"])
+			comp.Overrides.Values.AlphaMode = MaterialAlphaModeFromString(
+				overrides["AlphaMode"].as<std::string>());
+		if (overrides["AlphaCutoff"])
+			comp.Overrides.Values.AlphaCutoff = glm::clamp(
+				overrides["AlphaCutoff"].as<float>(), 0.0f, 1.0f);
 	}
 	static void SerializeComponent(YAML::Emitter& out, const TerrainComponent& comp)
 	{

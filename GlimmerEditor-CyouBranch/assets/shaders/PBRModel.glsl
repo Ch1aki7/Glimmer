@@ -66,6 +66,8 @@ uniform float u_Roughness;
 uniform float u_TilingFactor;
 uniform sampler2D u_BaseColorTexture;
 uniform int u_HasBaseColorTexture;
+uniform int u_AlphaMode;
+uniform float u_AlphaCutoff;
 
 const float PI = 3.14159265359;
 
@@ -123,6 +125,12 @@ void main()
     if (u_HasBaseColorTexture != 0)
         sampledColor = texture(u_BaseColorTexture, v_TexCoord * u_TilingFactor);
 
+    float effectiveAlpha = clamp(u_BaseColor.a * sampledColor.a, 0.0, 1.0);
+    if (u_AlphaMode == 1 && effectiveAlpha < u_AlphaCutoff)
+        discard;
+    if (u_AlphaMode == 2 && effectiveAlpha <= (1.0 / 255.0))
+        discard;
+
 	vec3 linearBaseColor = pow(max(u_BaseColor.rgb, vec3(0.0)), vec3(2.2));
 	vec3 albedo = linearBaseColor * sampledColor.rgb;
     float metallic = clamp(u_Metallic, 0.0, 1.0);
@@ -162,6 +170,7 @@ void main()
             radiance, albedo, metallic, roughness);
     }
 
-    o_Color = vec4(max(result, vec3(0.0)), u_BaseColor.a * sampledColor.a);
+    float outputAlpha = u_AlphaMode == 0 ? 1.0 : effectiveAlpha;
+    o_Color = vec4(max(result, vec3(0.0)), outputAlpha);
     o_EntityID = v_EntityID;
 }

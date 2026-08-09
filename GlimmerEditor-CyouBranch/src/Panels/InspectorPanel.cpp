@@ -17,7 +17,9 @@ namespace gl
 				&& left.BaseColorTexture == right.BaseColorTexture
 				&& left.TilingFactor == right.TilingFactor
 				&& left.Metallic == right.Metallic
-				&& left.Roughness == right.Roughness;
+				&& left.Roughness == right.Roughness
+				&& left.AlphaMode == right.AlphaMode
+				&& left.AlphaCutoff == right.AlphaCutoff;
 		}
 
 		bool SameMaterialState(const MaterialState& left, const MaterialState& right)
@@ -200,7 +202,22 @@ namespace gl
 		};
 
 		auto& properties = material->GetProperties();
+		static const char* alphaModes[] = { "Opaque", "Mask", "Blend" };
+		int alphaMode = static_cast<int>(properties.AlphaMode);
+		if (ImGui::Combo("Alpha Mode", &alphaMode, alphaModes, 3))
+		{
+			const MaterialState before = material->GetState();
+			MaterialState after = before;
+			after.Properties.AlphaMode = static_cast<MaterialAlphaMode>(alphaMode);
+			ExecuteMaterialAssetEdit(material, "Set Material Alpha Mode", before, after);
+		}
+
 		MaterialState beforeWidget = material->GetState();
+		if (ImGui::SliderFloat("Alpha Cutoff", &properties.AlphaCutoff, 0.0f, 1.0f))
+			material->MarkDirty();
+		trackContinuousEdit("Edit Material Alpha Cutoff", beforeWidget);
+
+		beforeWidget = material->GetState();
 		if (ImGui::ColorEdit4("Base Color", glm::value_ptr(properties.BaseColor)))
 			material->MarkDirty();
 		trackContinuousEdit("Edit Material Base Color", beforeWidget);

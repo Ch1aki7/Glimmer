@@ -12,7 +12,9 @@ namespace gl {
 		BaseColorTexture = 1u << 1,
 		TilingFactor = 1u << 2,
 		Metallic = 1u << 3,
-		Roughness = 1u << 4
+		Roughness = 1u << 4,
+		AlphaMode = 1u << 5,
+		AlphaCutoff = 1u << 6
 	};
 
 	struct MaterialOverrides

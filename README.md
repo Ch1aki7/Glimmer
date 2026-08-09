@@ -12033,6 +12033,82 @@ Stats 面板新增 Batch/Instance Count、Instanced/Individual Draws、Saved Dra
 - VS2026、v145、`Debug | x64` 全解决方案构建成功；相同命令二次增量构建约 3 秒且未重新编译源码；重新运行 VS2026 Premake 后，既有 SPIRV-Cross samples/tests 排除规则正确进入工程；
 - `git diff --check` 通过；测试实体和日志已移除，`bin` 与 `bin-int` 增量缓存保留。
 
+## Transparent RenderQueue 与材质 AlphaMode
+
+在 Opaque RenderQueue 和 3D Instancing 稳定后，模型材质现在可以明确选择 `Opaque`、`Mask` 或 `Blend`。RGBA 图片不再因为所有模型共用不透明执行路径而把全透明区域写入深度和 EntityID；完整编辑器会在 Skybox 之后单独绘制 Blend 对象。
+
+### 材质字段与编辑方式
+
+`.glmat` 新增两个可选字段：
+
+```yaml
+Material:
+  Shader: 15365846500528399802
+  BaseColor: [1, 1, 1, 1]
+  BaseColorTexture: 9195328290163695800
+  TilingFactor: 1
+  Metallic: 0
+  Roughness: 0.5
+  AlphaMode: Blend
+  AlphaCutoff: 0.5
+```
+
+- `Opaque`：忽略 BaseColor/Texture 的 Alpha 分类，参加状态排序和 3D Instancing；
+- `Mask`：有效 Alpha 小于 AlphaCutoff 时丢弃片元，保留不透明深度写入；
+- `Blend`：进入独立透明队列，开启标准 Alpha 混合、深度测试，关闭深度写入。
+
+旧 `.glmat` 没有这两个字段时按 `Opaque` 和 `0.5` 加载。共享 Material Inspector 可以直接修改 Alpha Mode/Cutoff；实体 MaterialComponent 也可以分别启用这两个 Override。两种入口都沿用完整状态 Undo/Redo，场景 YAML 会保存 Override Mask 和对应值。
+
+### 双队列与 Pass 顺序
+
+`Renderer3D::SubmitModel` 解析最终 MaterialInstance 后按 AlphaMode 分类：
+
+```text
+SubmitModel
+  ├─ Opaque / Mask → FlushOpaqueAndMask
+  │                   └─ 状态排序与兼容 Instancing
+  └─ Blend          → TransparentQueue
+                      └─ Skybox 后由 EndScene 远到近普通绘制
+```
+
+完整编辑器的场景 Pass 顺序为：
+
+```text
+Opaque/Mask Models → Terrain → Skybox → Sprite Batch → Transparent Models
+```
+
+完整编辑器调用 Scene Update 时延迟整个 Sprite Pass：Scene 只保存 ViewProjection 和待执行标记，不开始 Batch 或遍历 Sprite；EditorLayer 绘制 Skybox 后再调用 `Scene::FlushSpritePass`，此时才执行 Renderer2D 的 Begin、Sprite 遍历、Submit 和 End。这样纹理槽/索引容量触发的自动 Flush 也不可能发生在 Skybox 前。RenderDoc 曾确认旧顺序是 Sprite Draw 早于 Skybox，透明像素因此先与 Clear Color 混合；新的调用链让 Sprite Alpha 直接与 Skybox 颜色混合。没有 Skybox 编排的旧宿主继续使用默认的立即绘制行为。
+
+TransparentQueue 以实体 Transform 原点到相机的平方距离由远到近稳定排序；距离相同时以 RenderKey 保证确定顺序。透明对象首版不参与 Instancing，避免把需要排序的实例错误合并。结束透明 Pass 后会恢复 Blend 禁用、DepthWrite 启用、DepthFunc Less 和标准 BlendFunc。
+
+### Shader、Alpha 与拾取约定
+
+PBRModel 使用以下有效 Alpha：
+
+```text
+effectiveAlpha = BaseColor.a × BaseColorTexture.a
+```
+
+- Mask 在 `effectiveAlpha < AlphaCutoff` 时执行 `discard`，被裁剪区域不写颜色、深度或 EntityID；
+- Blend 在 `effectiveAlpha <= 1/255` 时执行 `discard`，避免完全透明像素覆盖拾取附件；
+- 其余 Blend 片元按远到近绘制，较近可见片元最终写入 EntityID；
+- 自定义 3D Shader 若要完整支持 AlphaMode，需要消费 `u_AlphaMode` 和 `u_AlphaCutoff` 并遵守相同约定。
+
+RendererAPI/RenderCommand 提供 Blend Enable、Blend Function、Depth Write 和 Depth Function 控制。OpenGL 初始化默认禁用混合并启用深度写入；Renderer2D 在自己的 Batch 内显式启用并恢复 Alpha 混合，Skybox 使用只读深度，Transparent 使用只读深度加 Alpha 混合，各阶段均恢复规范默认状态。
+
+### 统计与验证
+
+Renderer3D 统计面板新增 Opaque、Mask、Transparent Item 数和 Transparent DrawCall。真实 OpenGL 烟测使用 `GlimmerEditor-CyouBranch/assets/textures/balatro.png`，该 RGBA 图片实际包含 0～255 的 Alpha：
+
+- 旧材质缺少 Alpha 字段时成功按 Opaque/0.5 加载；
+- 新材质字段完成保存、重载，实体 AlphaMode/AlphaCutoff Override 完成场景 YAML 往返；
+- 2 个相同 Opaque、1 个 Mask、2 个不同距离 Blend 共得到 `5 Items / 4 Draws`；
+- 两个 Opaque 合并为 1 次 Instanced Draw，两个 Blend 保持 2 次普通 Draw；
+- PBRModel、Skybox、Terrain 和 Compute Shader 在 Intel Iris Xe / OpenGL 4.6 下完成真实驱动编译；
+- VS2026、v145、`Debug | x64` 全解决方案构建成功；移除测试注入后完整编辑器稳定运行 8 秒。
+
+当前边界：透明排序使用实体原点而不是 Mesh Bounds 中心；尚不支持透明 Instancing、双面材质、Order Independent Transparency 或自定义 Shader 自动注入 Alpha 逻辑。
+
 ## KB
 
 ### 为什么不用动态库？

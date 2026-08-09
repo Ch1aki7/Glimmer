@@ -56,6 +56,11 @@ namespace gl {
 			m_Properties.Metallic = glm::clamp(overrides.Values.Metallic, 0.0f, 1.0f);
 		if (overrides.IsEnabled(MaterialOverride::Roughness))
 			m_Properties.Roughness = glm::clamp(overrides.Values.Roughness, 0.04f, 1.0f);
+		if (overrides.IsEnabled(MaterialOverride::AlphaMode))
+			m_Properties.AlphaMode = overrides.Values.AlphaMode;
+		if (overrides.IsEnabled(MaterialOverride::AlphaCutoff))
+			m_Properties.AlphaCutoff = glm::clamp(
+				overrides.Values.AlphaCutoff, 0.0f, 1.0f);
 	}
 
 	AssetHandle MaterialInstance::GetShaderHandle() const

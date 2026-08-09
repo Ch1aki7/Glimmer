@@ -218,6 +218,7 @@ namespace gl {
 		s_Data.QuadVertexBuffer->SetData(s_Data.QuadVertexBufferBase, dataSize);
 
 		Flush();
+		RenderCommand::SetBlendEnabled(false);
 	}
 
 
@@ -232,6 +233,9 @@ namespace gl {
 
 	void Renderer2D::StartBatch()
 	{
+		RenderCommand::SetBlendFunction(
+			BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha);
+		RenderCommand::SetBlendEnabled(true);
 		s_Data.QuadIndexCount = 0;
 		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
 		s_Data.TextureSlotIndex = 1;

@@ -7,10 +7,11 @@ namespace gl {
 	{
 		GL_PROFILE_FUNCTION();
 
-		glEnable(GL_BLEND);
+		glDisable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
 		glEnable(GL_DEPTH_TEST);
+		glDepthMask(GL_TRUE);
 	}
 
 	void OpenGLRendererAPI::SetClearColor(const glm::vec4& color)
@@ -21,6 +22,35 @@ namespace gl {
 	void OpenGLRendererAPI::Clear()
 	{
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	}
+
+	void OpenGLRendererAPI::SetBlendEnabled(bool enabled)
+	{
+		if (enabled)
+			glEnable(GL_BLEND);
+		else
+			glDisable(GL_BLEND);
+	}
+
+	void OpenGLRendererAPI::SetBlendFunction(
+		BlendFactor source, BlendFactor destination)
+	{
+		auto toOpenGL = [](BlendFactor factor) {
+			switch (factor)
+			{
+			case BlendFactor::Zero: return GL_ZERO;
+			case BlendFactor::One: return GL_ONE;
+			case BlendFactor::SourceAlpha: return GL_SRC_ALPHA;
+			case BlendFactor::OneMinusSourceAlpha: return GL_ONE_MINUS_SRC_ALPHA;
+			default: return GL_ONE;
+			}
+		};
+		glBlendFunc(toOpenGL(source), toOpenGL(destination));
+	}
+
+	void OpenGLRendererAPI::SetDepthWriteEnabled(bool enabled)
+	{
+		glDepthMask(enabled ? GL_TRUE : GL_FALSE);
 	}
 
 	void OpenGLRendererAPI::SetDepthFunction(DepthFunction function)

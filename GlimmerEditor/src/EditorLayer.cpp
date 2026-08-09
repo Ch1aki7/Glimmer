@@ -181,6 +181,7 @@ namespace gl {
 
 			// Update scene
 			m_ActiveScene->OnUpdateRuntime(ts);
+			Renderer3D::EndScene();
 			m_Framebuffer->Unbind();
 
 			if (m_PostProcessEnabled)

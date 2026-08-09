@@ -31,12 +31,15 @@ namespace gl {
 
 		void OnRuntimeStart();
 		void OnRuntimeStop();
-		void OnUpdateRuntime(Timestep ts);
-		void OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection, const glm::vec3& cameraPosition);
+		void OnUpdateRuntime(Timestep ts, bool deferSpritePass = false);
+		void OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection,
+			const glm::vec3& cameraPosition, bool deferSpritePass = false);
+		void FlushSpritePass();
 		void OnViewportResize(uint32_t width, uint32_t height);
 
 	private:
 		void UploadLightEnvironment();
+		void RenderSprites(const glm::mat4& viewProjection);
 
 		template<typename T>
 		void OnComponentAdded(Entity entity, T& component);
@@ -45,6 +48,8 @@ namespace gl {
 		entt::registry m_Registry;
 		std::unordered_map<UUID, entt::entity> m_EntityMap;
 		uint32_t m_ViewportWidth = 0, m_ViewportHeight = 0;
+		bool m_SpritePassPending = false;
+		glm::mat4 m_DeferredSpriteViewProjection{ 1.0f };
 
 		friend class Entity;
 		friend class SceneHierarchyPanel;

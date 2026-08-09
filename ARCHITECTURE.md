@@ -14,7 +14,7 @@ Glimmer 是一个面向 Windows 的 C++17 图形/游戏引擎实验项目。核�
 - `GlimmerEditor` 保留较早的编辑器/渲染演示实现，不代表当前完整编辑器架构；
 - `Sandbox` 用于基础引擎与 Renderer2D 示例验证，也是 Premake 默认启动项目；
 - 场景和资产以 YAML 描述文件持久化，实体与资产分别使用稳定 UUID/AssetHandle；
-- 3D 模型使用不透明 RenderQueue 和状态排序；尚未实现透明队列与 Instancing。
+- 3D 模型按 Opaque/Mask/Blend 分类；Opaque/Mask 使用状态排序与 Instancing，Blend 在 Skybox 后按距离反向排序并普通绘制。
 
 ## 2. 仓库组成
 
@@ -141,9 +141,15 @@ flowchart TD
     Scene --> Models["Transform + ModelRenderer (+ Material)"]
     Scene --> Terrain["Transform + Terrain"]
     Scene --> Sprites["Transform + SpriteRenderer (+ Material)"]
-    Models --> R3D["Renderer3D::SubmitModel → Opaque Queue → EndScene"]
+    Models --> R3D["Renderer3D::SubmitModel → Opaque/Mask + Transparent Queue"]
+    R3D --> Opaque["FlushOpaqueAndMask（状态排序 / Instancing）"]
+    Opaque --> Skybox["EditorLayer / SkyboxRenderer"]
     Terrain --> TR["TerrainRenderer::Draw"]
-    Sprites --> R2D["Renderer2D 批处理"]
+    TR --> Skybox
+    Sprites --> R2DSubmit["记录 Sprite Pass（延迟遍历与提交）"]
+    Skybox --> R2DFlush["Scene::FlushSpritePass"]
+    R2DSubmit --> R2DFlush
+    R2DFlush --> Transparent["Renderer3D::EndScene（远到近 / 普通 Draw）"]
 ```
 
 运行模式和编辑模式共享模型、地形、Sprite 与光照上传路径，区别在相机和脚本：
@@ -152,15 +158,17 @@ flowchart TD
 - 运行模式先创建/更新 Native Script，再查找 `Primary` SceneCamera；没有主相机时不执行场景绘制；
 - `OnRuntimeStop()` 调用脚本 `OnDestroy()` 并释放运行时实例。
 
-Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
+Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；每个 Batch 显式启用标准 Alpha 混合，EndScene 后恢复禁用，避免依赖 OpenGL 全局状态。完整编辑器调用 Scene Update 时传入 `deferSpritePass=true`，Scene 只保存 ViewProjection 和待执行标记，不开始 Renderer2D Batch，也不遍历 Sprite；EditorLayer 绘制 Skybox 后调用 `Scene::FlushSpritePass`，此时才完成 Sprite 遍历、Begin/Submit/End 和所有实际 Draw。这样即使纹理槽或索引容量在提交中耗尽，自动 Flush 也只能发生在 Skybox 之后。默认参数为 false，因此不拥有 Skybox 编排的旧宿主仍在 Scene Update 内立即完成 Sprite Pass。Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
 
 Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通过 `(EntityID, MaterialHandle)` 缓存最终 MaterialProperties。缓存保存基础 MaterialState、MaterialOverrides、版本与最后使用帧；完整状态未变化时复用结果，变化时重新构造 MaterialInstance，长期未使用项会被回收。每个有效 Mesh 再展开为一个 RenderItem；纹理优先级仍为 Material BaseColorTexture、Mesh 自带纹理、白纹理回退。
 
-`EndScene` 按 ShaderHandle、MaterialHandle、Texture GPU ID、Mesh、最终材质位模式和 EntityID 排序 Opaque Queue。Mesh、Shader、纹理、最终 MaterialProperties 和纹理存在状态完全相同的连续项形成兼容 Batch。支持实例化契约且 Batch 大于一项时，Renderer3D 将 Transform 和 EntityID 上传到最多 1024 项的动态 Instance Buffer，并调用 `DrawIndexedInstanced`；不同 Override 结果会拆批，不支持实例属性的 Shader 自动执行普通 Draw。OpenGL `DrawIndexed` 不再隐式解绑 Texture2D，纹理状态由上层渲染器维护。
+提交时，Opaque 和 Mask 进入 OpaqueQueue，Blend 进入 TransparentQueue。`FlushOpaqueAndMask` 按 ShaderHandle、MaterialHandle、Texture GPU ID、Mesh、完整最终材质位模式和 EntityID 排序；Mesh、Shader、纹理、最终 MaterialProperties 和纹理存在状态完全相同的连续项形成兼容 Batch。支持实例化契约且 Batch 大于一项时上传最多 1024 项的动态 Instance Buffer 并调用 `DrawIndexedInstanced`；不同 Override 结果会拆批，不支持实例属性的 Shader 自动执行普通 Draw。
+
+完整编辑器先完成 Opaque/Mask 和 Terrain，再绘制 Skybox，随后依次 Flush Sprite Batch 和调用 `Renderer3D::EndScene`。这保证 2D Alpha 与已经存在的 Skybox 颜色混合，而不是与 Scene Clear Color 混合。TransparentQueue 按实体 Transform 原点到相机的平方距离由远到近稳定排序，首版始终普通 Draw；它开启标准 SourceAlpha 混合、保留深度测试并关闭深度写入，结束后恢复 Blend 禁用、DepthWrite 启用和 Less 深度函数。较早编辑器宿主没有 Skybox 插入点，在 Scene 更新内立即 Flush Sprite，并在返回后结束透明队列。OpenGL `DrawIndexed` 不隐式解绑 Texture2D，纹理和 Pass 状态由上层渲染器维护。
 
 BufferLayout 的元素带 `PerVertex / PerInstance` 输入频率；OpenGLVertexArray 持续分配属性位置，将 Mat3/Mat4 拆为列属性，并为实例元素设置 divisor 1。Shader 在初次链接和热重载后检查 `a_InstanceTransform`、`a_InstanceEntityData` 和 `u_UseInstancing`，由公共接口报告是否支持实例化，Renderer3D 不依赖 OpenGLShader 类型。
 
-Renderer3D Statistics 除提交、跳过、DrawCall 和状态绑定外，还记录 BatchCount、InstanceCount、InstancedDrawCalls、IndividualDrawCalls、SavedDrawCalls 以及 Material Cache Hit/Miss。RenderedItems 必须等于 SubmittedItems；一个实例化 DrawCall 可以对应多个 RenderItem。
+Renderer3D Statistics 除提交、跳过、DrawCall 和状态绑定外，还记录 Opaque/Mask/Transparent 项数、TransparentDrawCalls、BatchCount、InstanceCount、InstancedDrawCalls、IndividualDrawCalls、SavedDrawCalls 以及 Material Cache Hit/Miss。两个执行阶段结束后 RenderedItems 必须等于 SubmittedItems；一个实例化 DrawCall 可以对应多个 RenderItem。
 
 ### 5.3 Framebuffer、多 Pass 与拾取
 
@@ -182,13 +190,13 @@ flowchart LR
     Picking --> Selection["SelectionContext"]
 ```
 
-Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Skybox 使用深度测试在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
+Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Mask 被 `discard` 的像素不写颜色、深度或 EntityID；Blend 的有效 Alpha 小于等于 `1/255` 时同样丢弃，其余透明片元按远到近顺序写入 EntityID。Skybox 使用只读深度和 LessEqual 在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
 
 ### 5.4 光照、PBR、天空盒与地形
 
 Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight 构造 `LightEnvironment`。Renderer 将其转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO。
 
-当前 3D Material 参数包括 BaseColor、BaseColorTexture、TilingFactor、Metallic 和 Roughness，Shader 使用基础 Cook–Torrance PBR。场景先在线性 HDR 空间渲染，再由 ToneMapping Shader 应用曝光和 ACES 映射。
+当前 3D Material 参数包括 BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR，并以 BaseColor Alpha 与纹理 Alpha 的乘积驱动 Mask/Blend；场景先在线性 HDR 空间渲染，再由 ToneMapping Shader 应用曝光和 ACES 映射。
 
 `SkyLightComponent` 引用 `.glsky` Cubemap 资产；描述文件保存六个面图路径，AssetManager 缓存解析后的 `Cubemap`，SkyboxRenderer 使用去除平移的视图方向绘制背景。
 
@@ -270,7 +278,7 @@ flowchart LR
 最终属性 = MaterialProperties + MaterialOverrides(Mask, Values)
 ```
 
-这使多个实体可以继承同一 `.glmat`，同时覆盖 BaseColor、BaseColorTexture、TilingFactor、Metallic 或 Roughness。Material 和 MaterialOverrides 均维护运行期 version/Dirty；Inspector 的连续属性修改和离散开关都会推进版本。Renderer3D 缓存最终解析结果，同时比较完整基础状态与 Overrides，因此 Undo/Redo 恢复旧版本号或某条写入路径遗漏 Dirty 时也不会复用不匹配结果。
+这使多个实体可以继承同一 `.glmat`，同时覆盖 BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness、AlphaMode 或 AlphaCutoff。Material 和 MaterialOverrides 均维护运行期 version/Dirty；Inspector 的连续属性修改和离散开关都会推进版本。Renderer3D 缓存最终解析结果，同时比较完整基础状态与 Overrides，因此 Undo/Redo 恢复旧版本号或某条写入路径遗漏 Dirty 时也不会复用不匹配结果。旧 `.glmat` 或场景 Override 缺少 Alpha 字段时默认 Opaque/0.5。
 
 ## 8. 场景序列化
 
@@ -379,13 +387,13 @@ flowchart LR
 - 正式场景参数应组件化或资源化；编辑器面板通过上下文和命令接口修改数据，不拥有 Application/Scene 生命周期，独立测试 Panel 仅用于诊断；
 - `EditorLayer` 只负责 Scene、Framebuffer、Pass、Camera 和面板的生命周期编排，不承载 Terrain、IBL 或环境模拟算法及其正式业务状态；
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
-- 未来 Transparent RenderQueue 应建立明确的 `Opaque / Mask / Blend` 材质分类：Mask 通过 `discard` 保持深度写入，Blend 在 Skybox 之后按距离反向排序、开启深度测试并关闭深度写入；透明 Pass 必须恢复渲染状态，并保持 EntityID/拾取语义；这条约束不代表当前已经实现透明队列；
+- 新增 3D Shader 必须遵守 `Opaque / Mask / Blend` 契约；若声明支持 AlphaMode，需要消费 `u_AlphaMode`、`u_AlphaCutoff` 并保持 Mask/Blend 的深度和 EntityID 语义。透明对象仍不得进入现有 Opaque Instancing；
 - 地形有限次 Authoring Erosion 与固定步长 Runtime Erosion 必须分开调度、缓存和保存，不能共用隐式的每帧更新路径；
 - 未来 IBL 的 Irradiance、Prefilter 和 BRDF LUT 属于派生缓存，应按源环境 Handle、资源版本和生成参数失效，禁止逐帧卷积；这条约束不代表当前已经实现 IBL；
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing 与 MaterialInstance 缓存已经落地；当前在扩展 PBR 材质通道前完成 Transparent RenderQueue 与 AlphaMode，使材质分类和深度/排序契约先稳定。TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue 与 AlphaMode 已经落地；当前开始扩展 PBR 的 Normal、AO、Emissive 通道与颜色空间契约。TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

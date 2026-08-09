@@ -63,6 +63,8 @@ namespace gl {
         if (!cubemap || !shader || !s_SkyboxVertexArray)
             return;
 
+		RenderCommand::SetBlendEnabled(false);
+		RenderCommand::SetDepthWriteEnabled(false);
         RenderCommand::SetDepthFunction(DepthFunction::LessEqual);
         shader->Bind();
         shader->UploadUniformMat4("u_View", view);
@@ -72,6 +74,7 @@ namespace gl {
         shader->UploadUniformInt("u_Skybox", 0);
         RenderCommand::DrawIndexed(s_SkyboxVertexArray, 36);
         RenderCommand::SetDepthFunction(DepthFunction::Less);
+		RenderCommand::SetDepthWriteEnabled(true);
     }
 
 }
