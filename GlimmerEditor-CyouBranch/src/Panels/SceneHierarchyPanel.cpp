@@ -338,38 +338,85 @@ namespace gl {
 
 		// --- Terrain ---
 		DrawComponent<TerrainComponent>("Terrain", entity,
-			[](TerrainComponent& terrain) {
+			[this, entity](TerrainComponent& terrain) {
 				auto& spec = terrain.Specification;
-				bool regenerate = false;
-				regenerate |= ImGui::Checkbox("Procedural", &spec.Procedural);
+				auto commit = [this, entity, &terrain](
+					const char* name, const TerrainComponent& before) {
+					CommitComponentWidget(entity, name, m_TerrainEdit,
+						before, terrain);
+				};
+
+				TerrainComponent before = terrain;
+				if (ImGui::Checkbox("Procedural", &spec.Procedural))
+					terrain.Runtime.reset();
+				commit("Edit Terrain Procedural Mode", before);
+
 				int heightResolution = static_cast<int>(spec.HeightMapResolution);
+				before = terrain;
 				if (ImGui::InputInt("Height Resolution", &heightResolution, 0))
 				{
 					spec.HeightMapResolution = static_cast<uint32_t>(std::clamp(heightResolution, 64, 2048));
 					terrain.Runtime.reset();
 				}
+				commit("Edit Terrain Height Resolution", before);
+
 				int meshResolution = static_cast<int>(spec.MeshResolution);
+				before = terrain;
 				if (ImGui::InputInt("Mesh Resolution", &meshResolution, 0))
 				{
 					spec.MeshResolution = static_cast<uint32_t>(std::clamp(meshResolution, 16, 512));
 					terrain.Runtime.reset();
 				}
-				regenerate |= ImGui::DragFloat("Height Scale", &spec.HeightScale, 0.1f, 0.0f, 500.0f);
+				commit("Edit Terrain Mesh Resolution", before);
+
+				before = terrain;
+				ImGui::DragFloat("Height Scale", &spec.HeightScale, 0.1f, 0.0f, 500.0f);
+				commit("Edit Terrain Height Scale", before);
 
 				if (spec.Procedural)
 				{
 					auto& noise = spec.Noise;
-					regenerate |= ImGui::DragInt("Seed", &noise.Seed, 1.0f);
-					regenerate |= ImGui::SliderInt("Octaves", &noise.Octaves, 1, 12);
-					regenerate |= ImGui::DragFloat("Frequency", &noise.Frequency, 0.01f, 0.05f, 32.0f);
-					regenerate |= ImGui::DragFloat("Lacunarity", &noise.Lacunarity, 0.01f, 1.0f, 4.0f);
-					regenerate |= ImGui::DragFloat("Persistence", &noise.Persistence, 0.01f, 0.05f, 0.95f);
-					regenerate |= ImGui::DragFloat("Domain Warp", &noise.DomainWarp, 0.01f, 0.0f, 4.0f);
-					regenerate |= ImGui::SliderFloat("Ridge Strength", &noise.RidgeStrength, 0.0f, 1.0f);
-					regenerate |= ImGui::SliderFloat("Continent Scale", &noise.ContinentScale, 0.05f, 1.0f);
-					regenerate |= ImGui::SliderFloat("Erosion Strength", &noise.ErosionStrength, 0.0f, 0.5f);
-					regenerate |= ImGui::SliderFloat("Detail Strength", &noise.DetailStrength, 0.0f, 0.25f);
-					regenerate |= ImGui::DragFloat2("Offset", &noise.Offset.x, 0.005f);
+					auto drawNoise = [this, entity, &terrain, &commit](
+						const char* commandName, auto drawWidget) {
+						const TerrainComponent valueBeforeWidget = terrain;
+						if (drawWidget())
+							TerrainRenderer::Invalidate(terrain);
+						commit(commandName, valueBeforeWidget);
+					};
+
+					drawNoise("Edit Terrain Seed", [&]() {
+						return ImGui::DragInt("Seed", &noise.Seed, 1.0f);
+					});
+					drawNoise("Edit Terrain Octaves", [&]() {
+						return ImGui::SliderInt("Octaves", &noise.Octaves, 1, 12);
+					});
+					drawNoise("Edit Terrain Frequency", [&]() {
+						return ImGui::DragFloat("Frequency", &noise.Frequency, 0.01f, 0.05f, 32.0f);
+					});
+					drawNoise("Edit Terrain Lacunarity", [&]() {
+						return ImGui::DragFloat("Lacunarity", &noise.Lacunarity, 0.01f, 1.0f, 4.0f);
+					});
+					drawNoise("Edit Terrain Persistence", [&]() {
+						return ImGui::DragFloat("Persistence", &noise.Persistence, 0.01f, 0.05f, 0.95f);
+					});
+					drawNoise("Edit Terrain Domain Warp", [&]() {
+						return ImGui::DragFloat("Domain Warp", &noise.DomainWarp, 0.01f, 0.0f, 4.0f);
+					});
+					drawNoise("Edit Terrain Ridge Strength", [&]() {
+						return ImGui::SliderFloat("Ridge Strength", &noise.RidgeStrength, 0.0f, 1.0f);
+					});
+					drawNoise("Edit Terrain Continent Scale", [&]() {
+						return ImGui::SliderFloat("Continent Scale", &noise.ContinentScale, 0.05f, 1.0f);
+					});
+					drawNoise("Edit Terrain Erosion Strength", [&]() {
+						return ImGui::SliderFloat("Erosion Strength", &noise.ErosionStrength, 0.0f, 0.5f);
+					});
+					drawNoise("Edit Terrain Detail Strength", [&]() {
+						return ImGui::SliderFloat("Detail Strength", &noise.DetailStrength, 0.0f, 0.25f);
+					});
+					drawNoise("Edit Terrain Offset", [&]() {
+						return ImGui::DragFloat2("Offset", &noise.Offset.x, 0.005f);
+					});
 				}
 				else
 				{
@@ -384,45 +431,70 @@ namespace gl {
 							AssetHandle handle = AssetManager::ImportAsset(path);
 							if (AssetManager::GetMetadata(handle).Type == AssetType::Texture2D)
 							{
-								spec.HeightMapHandle = handle;
-								terrain.Runtime.reset();
+								const TerrainComponent beforeDrop = terrain;
+								TerrainComponent afterDrop = terrain;
+								afterDrop.Specification.HeightMapHandle = handle;
+								ExecuteComponentEdit(entity,
+									"Set Terrain Height Map", beforeDrop, afterDrop);
 							}
 						}
 						ImGui::EndDragDropTarget();
 					}
 				}
-				if (regenerate)
-					TerrainRenderer::Invalidate(terrain);
 				if (ImGui::Button("Regenerate"))
 					TerrainRenderer::Invalidate(terrain);
 			},
 			true, false);
 		// --- Directional Light ---
 		DrawComponent<DirectionalLightComponent>("Directional Light", entity,
-			[](DirectionalLightComponent& light) {
+			[this, entity](DirectionalLightComponent& light) {
+				DirectionalLightComponent before = light;
 				ImGui::Checkbox("Enabled##Directional", &light.Enabled);
+				CommitComponentWidget(entity, "Edit Directional Light Enabled",
+					m_DirectionalLightEdit, before, light);
+				before = light;
 				ImGui::ColorEdit3("Color##Directional", glm::value_ptr(light.Color));
+				CommitComponentWidget(entity, "Edit Directional Light Color",
+					m_DirectionalLightEdit, before, light);
+				before = light;
 				ImGui::DragFloat("Intensity##Directional", &light.Intensity,
 					0.05f, 0.0f, 100.0f);
+				CommitComponentWidget(entity, "Edit Directional Light Intensity",
+					m_DirectionalLightEdit, before, light);
+				before = light;
 				ImGui::DragFloat("Ambient##Directional", &light.AmbientIntensity,
 					0.01f, 0.0f, 10.0f);
+				CommitComponentWidget(entity, "Edit Directional Light Ambient",
+					m_DirectionalLightEdit, before, light);
 				ImGui::TextDisabled("Direction follows Transform rotation.");
 			});
 
 		// --- Point Light ---
 		DrawComponent<PointLightComponent>("Point Light", entity,
-			[](PointLightComponent& light) {
+			[this, entity](PointLightComponent& light) {
+				PointLightComponent before = light;
 				ImGui::Checkbox("Enabled##Point", &light.Enabled);
+				CommitComponentWidget(entity, "Edit Point Light Enabled",
+					m_PointLightEdit, before, light);
+				before = light;
 				ImGui::ColorEdit3("Color##Point", glm::value_ptr(light.Color));
+				CommitComponentWidget(entity, "Edit Point Light Color",
+					m_PointLightEdit, before, light);
+				before = light;
 				ImGui::DragFloat("Intensity##Point", &light.Intensity,
 					0.1f, 0.0f, 1000.0f);
+				CommitComponentWidget(entity, "Edit Point Light Intensity",
+					m_PointLightEdit, before, light);
+				before = light;
 				ImGui::DragFloat("Range##Point", &light.Range,
 					0.1f, 0.01f, 1000.0f);
+				CommitComponentWidget(entity, "Edit Point Light Range",
+					m_PointLightEdit, before, light);
 			});
 
 		// --- Sky Light ---
 		DrawComponent<SkyLightComponent>("Sky Light", entity,
-			[](SkyLightComponent& skyLight) {
+			[this, entity](SkyLightComponent& skyLight) {
 				const AssetMetadata metadata =
 					AssetManager::GetMetadata(skyLight.CubemapHandle);
 				const bool hasCubemap = metadata.IsValid()
@@ -431,13 +503,24 @@ namespace gl {
 					? metadata.FilePath.filename().string()
 					: "None (drag .glsky here)";
 
+				SkyLightComponent before = skyLight;
 				ImGui::Checkbox("Enabled##SkyLight", &skyLight.Enabled);
+				CommitComponentWidget(entity, "Edit Sky Light Enabled",
+					m_SkyLightEdit, before, skyLight);
+				before = skyLight;
 				ImGui::DragFloat("Intensity##SkyLight", &skyLight.Intensity,
 					0.05f, 0.0f, 20.0f);
+				CommitComponentWidget(entity, "Edit Sky Light Intensity",
+					m_SkyLightEdit, before, skyLight);
 				ImGui::Text("Cubemap: %s", assetName.c_str());
 				ImGui::SameLine();
 				if (hasCubemap && ImGui::SmallButton("X##SkyLight"))
-					skyLight.CubemapHandle = AssetHandle(0);
+				{
+					SkyLightComponent after = skyLight;
+					after.CubemapHandle = AssetHandle(0);
+					ExecuteComponentEdit(entity, "Clear Sky Light Cubemap",
+						skyLight, after);
+				}
 
 				if (ImGui::BeginDragDropTarget())
 				{
@@ -449,17 +532,25 @@ namespace gl {
 						AssetHandle handle = AssetManager::ImportAsset(path);
 						if (AssetManager::GetMetadata(handle).Type
 							== AssetType::Cubemap)
-							skyLight.CubemapHandle = handle;
+						{
+							SkyLightComponent after = skyLight;
+							after.CubemapHandle = handle;
+							ExecuteComponentEdit(entity, "Set Sky Light Cubemap",
+								skyLight, after);
+						}
 					}
 					ImGui::EndDragDropTarget();
 				}
 			});
 		// --- Camera ---
 		DrawComponent<CameraComponent>("Camera", entity,
-			[](CameraComponent& cameraComponent) {
+			[this, entity](CameraComponent& cameraComponent) {
 				auto& camera = cameraComponent.Camera;
 
+				CameraComponent before = cameraComponent;
 				ImGui::Checkbox("Primary", &cameraComponent.Primary);
+				CommitComponentWidget(entity, "Edit Camera Primary",
+					m_CameraEdit, before, cameraComponent);
 
 				const char* projectionTypeStrings[] = { "Perspective", "Orthographic" };
 				const char* currentProjectionTypeString = projectionTypeStrings[(int)camera.GetProjectionType()];
@@ -471,7 +562,10 @@ namespace gl {
 						if (ImGui::Selectable(projectionTypeStrings[i], isSelected))
 						{
 							currentProjectionTypeString = projectionTypeStrings[i];
-							camera.SetProjectionType((SceneCamera::ProjectionType)i);
+							CameraComponent after = cameraComponent;
+							after.Camera.SetProjectionType((SceneCamera::ProjectionType)i);
+							ExecuteComponentEdit(entity, "Edit Camera Projection",
+								cameraComponent, after);
 						}
 						if (isSelected)
 							ImGui::SetItemDefaultFocus();
@@ -482,33 +576,54 @@ namespace gl {
 				if (camera.GetProjectionType() == SceneCamera::ProjectionType::Perspective)
 				{
 					float perspectiveVerticalFov = glm::degrees(camera.GetPerspectiveVerticalFOV());
+					before = cameraComponent;
 					if (ImGui::DragFloat("Vertical FOV", &perspectiveVerticalFov, 0.5f, 1.0f, 179.0f))
 						camera.SetPerspectiveVerticalFOV(glm::radians(perspectiveVerticalFov));
+					CommitComponentWidget(entity, "Edit Camera Vertical FOV",
+						m_CameraEdit, before, cameraComponent);
 
 					float perspectiveNear = camera.GetPerspectiveNearClip();
+					before = cameraComponent;
 					if (ImGui::DragFloat("Near", &perspectiveNear, 0.01f, 0.001f))
 						camera.SetPerspectiveNearClip(perspectiveNear);
+					CommitComponentWidget(entity, "Edit Camera Near Clip",
+						m_CameraEdit, before, cameraComponent);
 
 					float perspectiveFar = camera.GetPerspectiveFarClip();
+					before = cameraComponent;
 					if (ImGui::DragFloat("Far", &perspectiveFar, 1.0f))
 						camera.SetPerspectiveFarClip(perspectiveFar);
+					CommitComponentWidget(entity, "Edit Camera Far Clip",
+						m_CameraEdit, before, cameraComponent);
 				}
 
 				if (camera.GetProjectionType() == SceneCamera::ProjectionType::Orthographic)
 				{
 					float orthoSize = camera.GetOrthographicSize();
+					before = cameraComponent;
 					if (ImGui::DragFloat("Size", &orthoSize, 0.1f, 0.1f))
 						camera.SetOrthographicSize(orthoSize);
+					CommitComponentWidget(entity, "Edit Camera Orthographic Size",
+						m_CameraEdit, before, cameraComponent);
 
 					float orthoNear = camera.GetOrthographicNearClip();
+					before = cameraComponent;
 					if (ImGui::DragFloat("Near", &orthoNear, 0.1f))
 						camera.SetOrthographicNearClip(orthoNear);
+					CommitComponentWidget(entity, "Edit Camera Near Clip",
+						m_CameraEdit, before, cameraComponent);
 
 					float orthoFar = camera.GetOrthographicFarClip();
+					before = cameraComponent;
 					if (ImGui::DragFloat("Far", &orthoFar, 0.1f))
 						camera.SetOrthographicFarClip(orthoFar);
+					CommitComponentWidget(entity, "Edit Camera Far Clip",
+						m_CameraEdit, before, cameraComponent);
 
+					before = cameraComponent;
 					ImGui::Checkbox("Fixed Aspect Ratio", &cameraComponent.FixedAspectRatio);
+					CommitComponentWidget(entity, "Edit Camera Fixed Aspect Ratio",
+						m_CameraEdit, before, cameraComponent);
 				}
 			});
 

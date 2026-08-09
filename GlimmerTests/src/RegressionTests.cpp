@@ -5,6 +5,8 @@
 #include "Glimmer/Scene/Entity.h"
 #include "Glimmer/Scene/Scene.h"
 #include "Glimmer/Scene/SceneSerializer.h"
+#include "Glimmer/Terrain/Terrain.h"
+#include "Editor/EditorCommand.h"
 
 #include <cmath>
 #include <filesystem>
@@ -50,6 +52,33 @@ namespace {
 	{
 		return Near(left.x, right.x) && Near(left.y, right.y)
 			&& Near(left.z, right.z) && Near(left.w, right.w);
+	}
+
+	bool SameTerrainSpecification(
+		const gl::TerrainSpecification& left,
+		const gl::TerrainSpecification& right)
+	{
+		const auto& leftNoise = left.Noise;
+		const auto& rightNoise = right.Noise;
+		return left.Procedural == right.Procedural
+			&& left.HeightMapResolution == right.HeightMapResolution
+			&& left.MeshResolution == right.MeshResolution
+			&& Near(left.HeightScale, right.HeightScale)
+			&& left.HeightMapHandle == right.HeightMapHandle
+			&& left.RenderShaderHandle == right.RenderShaderHandle
+			&& left.GenerationShaderHandle == right.GenerationShaderHandle
+			&& leftNoise.Seed == rightNoise.Seed
+			&& leftNoise.Octaves == rightNoise.Octaves
+			&& Near(leftNoise.Frequency, rightNoise.Frequency)
+			&& Near(leftNoise.Lacunarity, rightNoise.Lacunarity)
+			&& Near(leftNoise.Persistence, rightNoise.Persistence)
+			&& Near(leftNoise.DomainWarp, rightNoise.DomainWarp)
+			&& Near(leftNoise.RidgeStrength, rightNoise.RidgeStrength)
+			&& Near(leftNoise.ContinentScale, rightNoise.ContinentScale)
+			&& Near(leftNoise.ErosionStrength, rightNoise.ErosionStrength)
+			&& Near(leftNoise.DetailStrength, rightNoise.DetailStrength)
+			&& Near(leftNoise.Offset.x, rightNoise.Offset.x)
+			&& Near(leftNoise.Offset.y, rightNoise.Offset.y);
 	}
 
 	class TemporaryDirectory
@@ -223,6 +252,28 @@ namespace {
 		material.Overrides.SetEnabled(gl::MaterialOverride::EmissiveColor, true);
 		material.Overrides.SetEnabled(gl::MaterialOverride::EmissiveStrength, true);
 
+		auto& terrain = entity.AddComponent<gl::TerrainComponent>();
+		terrain.Specification.Procedural = true;
+		terrain.Specification.HeightMapResolution = 1024;
+		terrain.Specification.MeshResolution = 192;
+		terrain.Specification.HeightScale = 37.5f;
+		terrain.Specification.HeightMapHandle = gl::AssetHandle(6001);
+		terrain.Specification.RenderShaderHandle = gl::AssetHandle(6002);
+		terrain.Specification.GenerationShaderHandle = gl::AssetHandle(6003);
+		terrain.Specification.Noise.Seed = 73;
+		terrain.Specification.Noise.Octaves = 7;
+		terrain.Specification.Noise.Frequency = 1.35f;
+		terrain.Specification.Noise.Lacunarity = 2.4f;
+		terrain.Specification.Noise.Persistence = 0.42f;
+		terrain.Specification.Noise.DomainWarp = 0.8f;
+		terrain.Specification.Noise.RidgeStrength = 0.65f;
+		terrain.Specification.Noise.ContinentScale = 0.3f;
+		terrain.Specification.Noise.ErosionStrength = 0.17f;
+		terrain.Specification.Noise.DetailStrength = 0.09f;
+		terrain.Specification.Noise.Offset = { 4.0f, -2.0f };
+		terrain.Runtime = gl::CreateRef<gl::TerrainRuntime>();
+		terrain.Runtime->LoadedMeshResolution = 192;
+
 		gl::SceneSerializer(source).Serialize(path.string());
 		context.Check(std::filesystem::is_regular_file(path), "minimal scene is written");
 
@@ -260,6 +311,94 @@ namespace {
 			&& Near(restoredMaterial.Overrides.Values.EmissiveColor, glm::vec3(0.8f, 0.3f, 0.1f))
 			&& Near(restoredMaterial.Overrides.Values.EmissiveStrength, 3.0f),
 			"material channel overrides survive scene round trip");
+		context.Check(restored.HasComponent<gl::TerrainComponent>(),
+			"terrain component survives scene round trip");
+		if (restored.HasComponent<gl::TerrainComponent>())
+		{
+			const auto& restoredTerrain = restored.GetComponent<gl::TerrainComponent>();
+			context.Check(SameTerrainSpecification(
+				restoredTerrain.Specification, terrain.Specification),
+				"terrain specification survives scene round trip");
+			context.Check(!restoredTerrain.Runtime,
+				"terrain runtime is not serialized");
+		}
+	}
+
+	void TestTerrainCopyAndTransactions(TestContext& context)
+	{
+		gl::Ref<gl::Scene> source = gl::CreateRef<gl::Scene>();
+		gl::Entity terrainEntity = source->CreateEntity("Terrain Lifecycle");
+		terrainEntity.GetComponent<gl::TransformComponent>().Translation =
+			{ 12.0f, 3.0f, -8.0f };
+		auto& terrain = terrainEntity.AddComponent<gl::TerrainComponent>();
+		terrain.Specification.Noise.Seed = 19;
+		terrain.Specification.HeightScale = 28.0f;
+		terrain.Runtime = gl::CreateRef<gl::TerrainRuntime>();
+		terrain.Runtime->LoadedMeshResolution = 128;
+
+		gl::Entity duplicate = source->DuplicateEntity(terrainEntity);
+		auto& editorTerrain =
+			terrainEntity.GetComponent<gl::TerrainComponent>();
+		context.Check(duplicate.HasComponent<gl::TerrainComponent>()
+			&& !duplicate.GetComponent<gl::TerrainComponent>().Runtime,
+			"duplicating terrain copies specification without runtime state");
+		context.Check(Near(
+			duplicate.GetComponent<gl::TransformComponent>().Translation,
+			terrainEntity.GetComponent<gl::TransformComponent>().Translation),
+			"duplicating terrain preserves transform");
+
+		gl::Ref<gl::Scene> runtimeScene = gl::Scene::Copy(source);
+		gl::Entity runtimeTerrain = runtimeScene->FindEntityByUUID(
+			terrainEntity.GetUUID());
+		context.Check(runtimeTerrain
+			&& runtimeTerrain.HasComponent<gl::TerrainComponent>()
+			&& !runtimeTerrain.GetComponent<gl::TerrainComponent>().Runtime,
+			"Edit to Play scene copy rebuilds terrain runtime independently");
+		if (runtimeTerrain)
+		{
+			runtimeTerrain.GetComponent<gl::TerrainComponent>()
+				.Specification.HeightScale = 99.0f;
+			context.Check(Near(editorTerrain.Specification.HeightScale, 28.0f),
+				"runtime terrain edits do not contaminate the editor scene");
+		}
+
+		gl::TerrainComponent assigned;
+		assigned.Runtime = gl::CreateRef<gl::TerrainRuntime>();
+		assigned = editorTerrain;
+		context.Check(!assigned.Runtime
+			&& SameTerrainSpecification(
+				assigned.Specification, editorTerrain.Specification),
+			"terrain copy assignment invalidates runtime ownership");
+
+		gl::EditorCommandHistory history;
+		const gl::TerrainComponent before = editorTerrain;
+		gl::TerrainComponent after = editorTerrain;
+		after.Specification.HeightScale = 46.0f;
+		after.Specification.Noise.Frequency = 2.75f;
+		const gl::UUID uuid = terrainEntity.GetUUID();
+		auto apply = [source, uuid](const gl::TerrainComponent& value) {
+			gl::Entity target = source->FindEntityByUUID(uuid);
+			if (!target || !target.HasComponent<gl::TerrainComponent>())
+				return false;
+			target.GetComponent<gl::TerrainComponent>() = value;
+			return true;
+		};
+		history.Execute(std::make_unique<gl::ValueEditorCommand<gl::TerrainComponent>>(
+			"Edit Terrain Noise", before, after, apply));
+		context.Check(Near(editorTerrain.Specification.HeightScale, 46.0f)
+			&& Near(editorTerrain.Specification.Noise.Frequency, 2.75f)
+			&& !editorTerrain.Runtime,
+			"terrain edit command applies specification and invalidates runtime");
+		context.Check(history.Undo()
+			&& Near(editorTerrain.Specification.HeightScale, 28.0f)
+			&& Near(editorTerrain.Specification.Noise.Frequency,
+				before.Specification.Noise.Frequency),
+			"terrain edit command restores the activation snapshot");
+		context.Check(!history.Undo(),
+			"one continuous terrain edit produces exactly one undo command");
+		context.Check(history.Redo()
+			&& Near(editorTerrain.Specification.HeightScale, 46.0f),
+			"terrain edit command supports redo");
 	}
 
 }
@@ -274,6 +413,7 @@ int main(int argc, char** argv)
 	TestMaterialRoundTrip(context, temporaryDirectory.Path());
 	TestMaterialOverrideMerge(context, temporaryDirectory.Path());
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
+	TestTerrainCopyAndTransactions(context);
 
 	if (argc > 1 && std::string(argv[1]) == "--force-failure")
 		context.Check(false, "intentional failure verifies non-zero exit propagation");

@@ -33,6 +33,66 @@ namespace gl
 			const MaterialState& after, bool alreadyApplied = false);
 
 		template<typename T>
+		void ExecuteComponentEdit(Entity entity, const char* name,
+			const T& before, const T& after)
+		{
+			if (!entity)
+				return;
+
+			const Ref<Scene> scene = m_Context;
+			const UUID uuid = entity.GetUUID();
+			auto apply = [scene, uuid](const T& value) {
+				Entity target = scene ? scene->FindEntityByUUID(uuid) : Entity{};
+				if (!target || !target.HasComponent<T>())
+					return false;
+				target.GetComponent<T>() = value;
+				return true;
+			};
+
+			if (m_CommandHistory && scene)
+			{
+				m_CommandHistory->Execute(
+					std::make_unique<ValueEditorCommand<T>>(
+						name, before, after, apply));
+			}
+			else
+			{
+				apply(after);
+			}
+		}
+
+		template<typename T>
+		void CommitComponentWidget(Entity entity, const char* name,
+			EditorValueTransaction<T>& transaction,
+			const T& valueBeforeWidget, const T& valueAfterWidget)
+		{
+			if (ImGui::IsItemActivated())
+				transaction.Begin(valueBeforeWidget);
+
+			if (!ImGui::IsItemDeactivatedAfterEdit()
+				|| !transaction.IsActive())
+				return;
+
+			const T before = transaction.GetBefore();
+			transaction.Reset();
+			if (!m_CommandHistory || !m_Context || !entity)
+				return;
+
+			const Ref<Scene> scene = m_Context;
+			const UUID uuid = entity.GetUUID();
+			auto apply = [scene, uuid](const T& value) {
+				Entity target = scene->FindEntityByUUID(uuid);
+				if (!target || !target.HasComponent<T>())
+					return false;
+				target.GetComponent<T>() = value;
+				return true;
+			};
+			m_CommandHistory->PushExecuted(
+				std::make_unique<ValueEditorCommand<T>>(
+					name, before, valueAfterWidget, apply));
+		}
+
+		template<typename T>
 		void AddComponent(Entity entity, const char* name, const T& component = T{})
 		{
 			if (entity.HasComponent<T>())
@@ -153,6 +213,11 @@ namespace gl
 		SelectionContext* m_Selection = nullptr;
 		EditorCommandHistory* m_CommandHistory = nullptr;
 		EditorValueTransaction<TransformComponent> m_TransformEdit;
+		EditorValueTransaction<TerrainComponent> m_TerrainEdit;
+		EditorValueTransaction<DirectionalLightComponent> m_DirectionalLightEdit;
+		EditorValueTransaction<PointLightComponent> m_PointLightEdit;
+		EditorValueTransaction<SkyLightComponent> m_SkyLightEdit;
+		EditorValueTransaction<CameraComponent> m_CameraEdit;
 		EditorValueTransaction<MaterialComponent> m_MaterialComponentEdit;
 		EditorValueTransaction<MaterialState> m_MaterialAssetEdit;
 		std::string m_MaterialSaveError;

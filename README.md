@@ -9867,7 +9867,7 @@ height = pow(clamp(height, 0.0, 1.0), 1.18);
 
 ### 参数与编辑器控制
 
-`TerrainNoiseSettings` 是引擎侧的纯数据结构，`TerrainPanel` 只负责展示、编辑和触发重新生成，避免 UI 与 Compute 实现耦合。
+`TerrainNoiseSettings` 是引擎侧的纯数据结构，正式参数由实体 `TerrainComponent` 的 Inspector 展示和编辑；UI 只修改可序列化规格并触发 Runtime 失效，不直接持有 `TerrainGenerator`，避免编辑器面板与 Compute 实现耦合。
 
 | 参数 | 默认值 | 作用 |
 | --- | ---: | --- |
@@ -9888,7 +9888,7 @@ Terrain 面板提供 `256×256`、`512×512`、`1024×1024` 三档分辨率。�
 ### GPU 生成链路
 
 ```text
-TerrainPanel 参数变更 / Compute Shader 热重载
+TerrainComponent Inspector 参数变更 / Compute Shader 热重载
     → TerrainGenerator::Generate(settings)
         → UploadUniform(...)
         → BindImageTexture(WriteTexture)
@@ -9909,13 +9909,13 @@ Glimmer/src/Glimmer/
 
 GlimmerEditor-CyouBranch/
   assets/shaders/Terrain/GenerateFBM.comp       ← 梯度噪声、多尺度地貌与沟谷近似
-  src/Panels/TerrainPanel.h/.cpp                ← 编辑器参数、预览与重生成控制
+  src/Panels/SceneHierarchyPanel.cpp            ← Terrain Component Inspector 与事务控制
   assets/shaders/Terrain.glsl                    ← 高度图顶点位移、法线重建与基础地形着色
 ```
 
 ### 验证方式
 
-1. 运行编辑器并打开 `Terrain` 面板；
+1. 运行编辑器并在 Hierarchy 选中带有 `TerrainComponent` 的实体；
 2. 保持 `Use Procedural Terrain` 启用；
 3. 调整 `Seed` 或任一地貌参数，确认高度图预览和场景地形随之更新；
 4. 修改并保存 `GenerateFBM.comp`，确认日志出现 `Compute shader reloaded: GenerateFBM`，且地形自动重新生成；
@@ -11376,7 +11376,7 @@ public:
 3. `Redo` 重新执行命令，再将命令放回 Undo Stack；
 4. 打开新场景或替换编辑场景时清空历史，防止旧命令继续持有旧 Scene。
 
-对于 ImGui 拖动控件，属性会在拖动过程中实时更新，因此使用 `PushExecuted` 在控件结束编辑时记录“已发生”的操作，避免每一帧产生一条命令。当前 Transform 已采用该事务边界，后续 Terrain、Light 与 Material 属性将复用相同模式。
+对于 ImGui 拖动控件，属性会在拖动过程中实时更新，因此使用 `PushExecuted` 在控件结束编辑时记录“已发生”的操作，避免每一帧产生一条命令。Transform、Terrain、Directional/Point/Sky Light、Camera 与 Material 连续属性目前都采用该事务边界。
 
 快捷键如下：
 
@@ -11410,7 +11410,7 @@ Undo/Redo
   -> 重新同步 SelectionContext
 ```
 
-`TerrainComponent` 的复制构造只复制 `TerrainSpecification`，不会复用旧的 `TerrainRuntime` GPU 对象。地形恢复后由 `TerrainRenderer` 按需重新建立运行时资源。
+`TerrainComponent` 的复制构造与复制赋值都只复制 `TerrainSpecification`，不会复用旧的 `TerrainRuntime` GPU 对象。地形复制、场景切换或命令恢复后由 `TerrainRenderer` 按需重新建立运行时资源。
 
 Native Script 快照只保存脚本工厂绑定，不复制正在运行的 `ScriptableEntity::Instance`，避免两个实体共同持有同一个脚本实例。
 
@@ -11849,12 +11849,12 @@ MaterialInstance 已经区分共享 `.glmat` 与实体局部 Override，但此�
 - `git diff --check` 通过；
 - 构建仍包含项目既有的 C4244、C4267 和 `strncpy` C4996 警告，本次未扩大范围处理。
 
-### 当前边界与下一步
+### 后续演进结果
 
-1. Terrain、Light、Camera 等组件仍有未事务化的连续控件；后续可复用 `ValueEditorCommand` 和 `EditorValueTransaction` 逐步迁移；
+1. Terrain、Directional/Point/Sky Light 与 Camera 的连续控件已复用 `ValueEditorCommand` 和 `EditorValueTransaction` 完成迁移；
 2. Material 以外共享 Asset 尚无统一 Dirty 状态、退出保存提示或 Asset Command；
-3. 当前 MaterialInstance 仍在绘制提交时临时合并，缓存与版本管理留给 RenderQueue/Instancing 阶段；
-4. 下一主线是 3D RenderQueue 与状态排序，不在本次材质事务中提前实现。
+3. MaterialInstance 最终状态缓存、版本管理和完整状态比较已在 Renderer3D RenderQueue/Instancing 阶段落地；
+4. 3D Opaque/Mask/Transparent RenderQueue、状态排序与 Opaque Instancing 已在后续阶段实现。
 
 ## 3D Opaque RenderQueue 与状态排序
 
@@ -12342,9 +12342,92 @@ VS2026 Premake 当前生成的解决方案入口是 `GlimmerEngine.slnx`。仓�
 
 ### 与 Debug Lab 的关系
 
-无窗口测试只覆盖确定性的状态、合并和 YAML 往返；Shader 编译、Framebuffer、DrawCall、Instancing 和纹理语义仍由 DebugPanel Lab 或完整编辑器验证。两种测试互补，但都遵守相同隔离原则：测试实体只存在于临时 Scene，不向 `m_EditorScene` 或默认 `.glimmer` 文件永久写入。
+无窗口测试只覆盖确定性的状态、合并、YAML 往返和编辑命令状态迁移；Shader 编译、Framebuffer、DrawCall、Instancing 和纹理语义仍由 DebugPanel Lab 或完整编辑器验证。两种测试互补，但都遵守相同隔离原则：测试实体只存在于临时 Scene，不向 `m_EditorScene` 或默认 `.glimmer` 文件永久写入。
 
-本次验证使用统一脚本完成 Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和测试执行；23 项正常断言全部 PASS，`--force-failure` 返回退出码 1。
+初始测试目标验证使用统一脚本完成 Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和测试执行；后续 Terrain 生命周期回归将正常断言扩展到 35 项并保持全部 PASS，`--force-failure` 仍返回退出码 1。
+
+## Terrain 生命周期与 Inspector 编辑事务收口
+
+### 收口目标
+
+Terrain 的可保存配置与 GPU 运行时资源必须严格分离。实体复制、场景保存/加载、Edit → Play 或 Undo/Redo 只能传递 `TerrainSpecification`；`TerrainGenerator`、网格与高度纹理属于目标 Scene 自己的 `TerrainRuntime`，不得跨实体或跨 Scene 共享。
+
+同时，Terrain、Light 和 Camera 的连续参数需要与 Transform、Material 保持一致：拖动时实时看到结果，释放控件后只生成一条可逆命令，而不是每帧向 Undo Stack 写入一条记录。
+
+### Terrain 复制与运行时失效
+
+`TerrainComponent` 同时定义复制构造和复制赋值，二者只复制规格并清空 Runtime：
+
+```cpp
+TerrainComponent(const TerrainComponent& other)
+    : Specification(other.Specification) {}
+
+TerrainComponent& operator=(const TerrainComponent& other)
+{
+    if (this != &other)
+    {
+        Specification = other.Specification;
+        Runtime.reset();
+    }
+    return *this;
+}
+```
+
+这一约束覆盖四条路径：
+
+```text
+Duplicate Entity ─┐
+Scene::Copy       ├─> 复制 TerrainSpecification
+EntitySnapshot    ┤   清空 TerrainRuntime
+Undo / Redo       ┘   下一次 Draw 时按需重建 GPU 资源
+```
+
+场景 YAML 仍只保存 `TerrainSpecification`。反序列化完成后 `Runtime` 为空，`TerrainRenderer` 根据 HeightMapResolution、MeshResolution、资源 Handle 和 Dirty 状态延迟创建或重建资源，因此保存文件中不会出现 OpenGL ID、纹理对象或生成器指针。
+
+### 连续属性事务
+
+Inspector 使用 `EditorValueTransaction<T>` 记录控件激活瞬间的完整组件值；拖动期间组件继续直接更新以提供实时预览；控件释放后，通过 `PushExecuted` 写入一条已经发生的 `ValueEditorCommand<T>`：
+
+```cpp
+if (ImGui::IsItemActivated())
+    transaction.Begin(valueBeforeWidget);
+
+if (ImGui::IsItemDeactivatedAfterEdit())
+{
+    const T before = transaction.GetBefore();
+    transaction.Reset();
+
+    history.PushExecuted(
+        std::make_unique<ValueEditorCommand<T>>(
+            commandName, before, valueAfterWidget, apply));
+}
+```
+
+当前已覆盖：
+
+- Terrain 的生成模式、分辨率、高度、全部 Noise 参数和 Offset；
+- Directional Light 的启用、颜色、直接光强度与环境强度；
+- Point Light 的启用、颜色、强度与范围；
+- Sky Light 的启用、强度与 Cubemap 替换；
+- Camera 的 Primary、投影类型、FOV、裁剪面、正交尺寸与固定宽高比。
+
+高度图和 Cubemap 拖放属于离散操作，直接生成一条命令。Terrain 命令在 Apply/Undo/Redo 时会经过组件复制赋值，从而同时恢复完整规格并使旧 Runtime 失效。`Regenerate` 只刷新派生运行时数据，不改变可序列化状态，因此不进入 Undo Stack。
+
+### 面板所有权
+
+旧 `TerrainPanel` 从未接入当前 EditorLayer，并自行持有 `TerrainGenerator*`、Noise 设置和 Dirty 状态，会形成第二套参数来源，现已删除。正式 Terrain 参数唯一入口是组件 Inspector；长期 Debug 面板仍可以加入地形诊断工具，但只能观察或创建隔离测试场景，不能成为正式场景数据的所有者。
+
+EditorLayer 继续只编排 Editor/Runtime/Active Scene、Framebuffer、Render Pass、相机与面板生命周期，不持有 TerrainMesh、HeightMap 或 Terrain Shader 的业务状态。
+
+### 验证结果
+
+- `scripts\Verify-Windows.bat` 完整通过 VS2026 Premake 生成与 MSBuild 18.8.2 `Debug | x64` 全解决方案构建；
+- 35 项无窗口断言全部 PASS；
+- 完整 `GlimmerEditor-CyouBranch` 在项目工作目录下稳定运行 8 秒并完成 Shader/Compute 初始化；
+- Terrain Transform 与 Specification 在实体复制后保持一致，副本 Runtime 为空；
+- Scene YAML 往返保留全部 Terrain 规格且不持久化 Runtime；
+- Edit → Play 的 `Scene::Copy` 不共享 Runtime，运行场景修改不会污染编辑场景；
+- Terrain 值命令完成 Apply → Undo → Redo，且一次连续编辑只对应一次 Undo。
 
 ## KB
 

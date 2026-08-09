@@ -238,7 +238,7 @@ Compute Shader 提供 Dispatch、MemoryBarrier 和同样的文件轮询重载能
 | `CameraComponent` | SceneCamera、Primary、固定宽高比 |
 | `NativeScriptComponent` | C++ 脚本实例化/销毁函数指针与运行时实例 |
 
-Scene 维护 `UUID -> entt::entity` 映射，提供按 UUID 和临时 EnTT ID 查找。`Scene::Copy()` 保留 UUID 并复制所有已支持组件，用于 Edit/Play 隔离。`TerrainComponent` 的复制只保留 Specification，强制目标 Scene 重建 Runtime GPU 资源。
+Scene 维护 `UUID -> entt::entity` 映射，提供按 UUID 和临时 EnTT ID 查找。`Scene::Copy()` 保留 UUID 并复制所有已支持组件，用于 Edit/Play 隔离。`TerrainComponent` 的复制构造与复制赋值都只保留 Specification 并清空 Runtime，强制目标 Scene 或命令恢复后的组件独立重建 GPU 资源。
 
 ## 7. 资产系统与材质继承
 
@@ -295,7 +295,7 @@ flowchart LR
 
 ### 8.1 无窗口回归边界
 
-`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification 往返、Runtime 非持久化、实体/Scene 复制隔离和 CommandHistory Undo/Redo。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
 
 根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 
@@ -331,7 +331,6 @@ DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D Ove
 | `DebugPanel` | 通用诊断入口；展示 Renderer3D 概览并托管可扩展的临时测试工具 |
 | `InstancingLabTool` | 生成隔离 ECS 压力场景，对照理论批次与 Renderer3D 实际统计，管理代表实体选择和清理 |
 | `PBRMaterialLabTool` | 生成六球材质通道对照场景，验证 PBR 纹理语义、渲染项完整性及 Material/Scene YAML 往返 |
-| `TerrainPanel` | 保留的 TerrainGenerator 参数面板接口；正式场景地形主要由组件 Inspector 驱动 |
 
 Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入，不直接拥有编辑器 Scene 生命周期。
 
@@ -344,13 +343,15 @@ Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入�
 - 实体创建、删除、复制；
 - 组件添加、移除、重置；
 - Transform 连续拖动压缩为单次 Undo；
+- Terrain、Directional/Point/Sky Light 与 Camera 连续属性按控件激活/释放压缩为单次 Undo；
+- Terrain HeightMap 与 SkyLight Cubemap 的离散替换；
 - MaterialHandle、MaterialOverrides 的开关、数值、纹理和 Reset；
 - 共享 Material Asset 的完整状态、磁盘保存和失败回滚；
 - Edit 模式快捷键 Undo/Redo。
 
 当前尚未统一接入：
 
-- Terrain、Light、Camera 等全部连续属性编辑；
+- Tag、SpriteRenderer、ModelRenderer 等部分组件属性；
 - Material 以外 Asset 的统一 Dirty、保存失败反馈和退出提示。
 
 共享 Material 在 Play 模式下只读，避免运行时编辑写回磁盘；实体组件编辑发生在 RuntimeScene 副本中，停止播放后丢弃。以上未实现部分属于 `Documents/PROJECT_STATUS.md` 中的后续技术债，不应视为现有保证。
@@ -406,7 +407,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道以及无窗口回归/可重复 Windows 构建入口已经落地；当前主线转入 Terrain 现状复核与编辑事务收口。Metallic/Roughness Texture/ORM、TerrainMaterial、Authoring/Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口，以及 Terrain 生命周期/Inspector 事务收口已经落地；当前主线转入山脉生成、派生图与有限次 Authoring Erosion。Metallic/Roughness Texture/ORM、TerrainMaterial、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

@@ -9,7 +9,7 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P6 Terrain 现状复核与编辑事务收口
+- 当前主线：P7 山脉生成、派生图与 Authoring Erosion
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,28 +55,9 @@
 
 ## 当前主线
 
-### P6：Terrain 现状复核与编辑事务收口
-
-**目标**
-
-- 复核 Terrain Transform、Scene Copy、YAML 往返和 Runtime Invalidate；
-- 将 Terrain、Light、Camera 等剩余连续属性接入统一 Undo/Redo 事务；
-- 清除残余 EditorLayer 地形所有权和过时测试路径；
-- 正式参数保留在组件 Inspector，独立 Panel 只承担诊断。
-
-**验收**
-
-- Terrain Entity 移动、复制、保存/加载、Edit → Play → Stop 结果一致；
-- 连续参数拖动只生成一条可逆命令；
-- EditorLayer 不持有 TerrainMesh、HeightMap 或 Terrain Shader 的业务状态。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P7：山脉生成、派生图与 Authoring Erosion
 
-**依赖**：P6 完成，SimulationGrid、Compute 与 Terrain Runtime 边界稳定。
+**依赖**：P6 已完成，SimulationGrid、Compute 与 Terrain Runtime 边界稳定。
 
 **目标**
 
@@ -91,6 +72,10 @@
 - 只在 Dirty 或显式 Regenerate 时 Dispatch；
 - 所有 Compute Pass 无 NaN，且不存在无保护的同纹理读写；
 - Authoring Erosion 不进入每帧生态模拟循环。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P8：TerrainMaterial 与分层 PBR
 
@@ -221,6 +206,16 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-09：P6 Terrain 生命周期与编辑事务收口
+
+- `TerrainComponent` 的复制构造和复制赋值均只保留 `TerrainSpecification` 并清空 `TerrainRuntime`，关闭 Scene Copy、实体复制、快照恢复和属性命令通过赋值共享 GPU Runtime 的漏洞；
+- Terrain、Directional/Point/Sky Light 与 Camera Inspector 已统一接入 `EditorValueTransaction`：拖动期间实时预览，控件释放时只记录一条 `ValueEditorCommand`；Terrain Undo/Redo 会恢复完整规格并强制延迟重建 Runtime；高度图与 SkyLight Cubemap 的离散替换同样进入命令历史；
+- 删除从未接入当前 EditorLayer 的旧 `TerrainPanel`，正式地形参数只由 `TerrainComponent` Inspector 管理；EditorLayer 继续仅负责 Scene、Pass、Framebuffer 和面板编排，不持有 TerrainMesh、HeightMap 或 Terrain Shader 业务状态；
+- 无窗口回归扩展到 35 项，覆盖 Terrain Transform/实体复制、Specification YAML 往返、Runtime 非持久化、Edit → Play Scene Copy 隔离、复制赋值失效以及单条 Terrain 命令 Undo/Redo；测试目标复用编辑器 CommandHistory 实现但仍不创建窗口或图形上下文；
+- 验证：`scripts\Verify-Windows.bat` 完整通过，Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和 35 项断言全部成功；完整编辑器在正确项目工作目录下稳定运行 8 秒；已知 GLFW Premake 弃用警告仍保留；
+- README：新增“Terrain 生命周期与 Inspector 编辑事务收口”，并修正旧 TerrainPanel 说明；ARCHITECTURE：同步 Runtime 所有权、Inspector 事务覆盖和测试边界；
+- 提交：待提交。
 
 ### 2026-08-09：P5 自动化回归测试与可重复构建验证
 
@@ -391,10 +386,9 @@
 
 ### 编辑器
 
-- Undo/Redo 尚未覆盖所有组件属性；
+- Undo/Redo 已覆盖实体生命周期、组件增删重置、Transform、Material、Terrain、Light 与 Camera；Tag、SpriteRenderer、ModelRenderer 等部分属性仍有直接修改路径；
 - Material Asset 已具备保存、撤销和失败反馈；其它共享 Asset 仍缺少统一 Dirty、保存和退出提示；
-- Terrain、Light、Camera 等属性仍有直接修改路径；
-- 已有通用值事务辅助层，但 Terrain、Light、Camera 等连续控件尚未迁移。
+- 通用组件值事务目前位于 InspectorPanel；后续新增连续控件应复用激活快照/释放提交边界，避免逐帧命令。
 
 ### 渲染
 

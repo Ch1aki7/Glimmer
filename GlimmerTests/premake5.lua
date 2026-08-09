@@ -10,15 +10,19 @@ project "GlimmerRegressionTests"
 
     files {
         "src/**.h",
-        "src/**.cpp"
+        "src/**.cpp",
+        "../GlimmerEditor-CyouBranch/src/Editor/EditorCommand.cpp"
     }
 
     includedirs {
         "../Glimmer/src",
+		"../GlimmerEditor-CyouBranch/src",
         "../" .. IncludeDir["spdlog"],
+		"../" .. IncludeDir["ImGui"],
         "../" .. IncludeDir["glm"],
         "../" .. IncludeDir["entt"],
-        "../" .. IncludeDir["yaml-cpp"]
+		"../" .. IncludeDir["yaml-cpp"],
+		"../" .. IncludeDir["ImGuizmo"]
     }
 
     links {

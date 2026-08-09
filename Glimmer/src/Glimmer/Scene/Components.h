@@ -94,6 +94,15 @@ namespace gl {
 		TerrainComponent() = default;
 		TerrainComponent(const TerrainComponent& other)
 			: Specification(other.Specification) {}
+		TerrainComponent& operator=(const TerrainComponent& other)
+		{
+			if (this != &other)
+			{
+				Specification = other.Specification;
+				Runtime.reset();
+			}
+			return *this;
+		}
 	};
 	struct DirectionalLightComponent
 	{
