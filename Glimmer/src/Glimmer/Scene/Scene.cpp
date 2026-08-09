@@ -483,8 +483,13 @@ namespace gl {
 				{
 					const auto& modelTransform = modelView.get<TransformComponent>(modelEntity);
 					const auto& model = modelView.get<ModelRendererComponent>(modelEntity);
+					const auto* material =
+						m_Registry.try_get<MaterialComponent>(modelEntity);
 					ShadowRenderer::SubmitModel(
-						model.ModelHandle, modelTransform.GetTransform());
+						model.ModelHandle,
+						modelTransform.GetTransform(),
+						material ? material->MaterialHandle : AssetHandle(0),
+						material ? &material->Overrides : nullptr);
 				}
 				for (auto terrainEntity : terrainView)
 				{

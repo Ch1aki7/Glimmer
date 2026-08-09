@@ -6,6 +6,7 @@
 
 namespace gl {
 	class Shader;
+	struct MaterialOverrides;
 	struct TerrainComponent;
 
 	class ShadowRenderer
@@ -34,7 +35,11 @@ namespace gl {
 			float splitLambda,
 			float cascadeBlend);
 		static bool BeginCascade(uint32_t cascadeIndex);
-		static void SubmitModel(AssetHandle modelHandle, const glm::mat4& transform);
+		static void SubmitModel(
+			AssetHandle modelHandle,
+			const glm::mat4& transform,
+			AssetHandle materialHandle = AssetHandle(0),
+			const MaterialOverrides* overrides = nullptr);
 		static void SubmitTerrain(TerrainComponent& terrain, const glm::mat4& transform);
 		static void EndCascade();
 		static void EndDirectional();

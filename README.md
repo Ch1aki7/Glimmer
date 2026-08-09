@@ -12691,16 +12691,29 @@ return mix(nearVisibility, farVisibility, blend);
 
 对周围 `3×3` Texel 求平均得到软化后的可见度，仅调制方向光直接照明；Ambient、Emissive 和 Point Light 不会被错误乘上方向光阴影。
 
+Mask 材质进入 Shadow Pass 时不再按完整三角形轮廓写深度。Scene 会同时提交实体的 MaterialHandle 和 Overrides，ShadowRenderer 通过 `MaterialInstance` 得到最终材质，再让 ShadowDepth 使用和 PBRModel 一致的裁剪条件：
+
+```glsl
+float textureAlpha = u_HasBaseColorTexture != 0
+    ? texture(u_BaseColorTexture, v_TexCoord * u_TilingFactor).a
+    : 1.0;
+
+if (clamp(u_BaseColorAlpha * textureAlpha, 0.0, 1.0) < u_AlphaCutoff)
+    discard;
+```
+
+因此树叶、铁丝网或镂空贴图的透明区域不会写入 Shadow Map，接收面上会得到对应的镂空阴影。模型贴图优先使用最终 Material BaseColorTexture，未设置时沿用 Mesh 自带纹理；纹理语义仍必须是 sRGB Color。ShadowDepth 分别从 location 3 读取 Model UV、从 location 1 读取 Terrain Height UV，透明裁剪不会破坏地形顶点位移。
+
 ### 当前边界与验证
 
 - 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap、可调重叠混合与运行时级联调试着色；
 - Mesh 在构造时缓存局部 AABB；每个级联会把 Model 子网格 Bounds 变换到 Light VP Clip Space，8 个角点全部位于同一平面外才剔除；Terrain 使用网格 XZ 范围与 HeightScale 构造保守 Bounds；
 - Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered 与 Frustum Culled；可通过移动相机或把模型移出视野确认 Draw 数下降，也可启用 `Visualize Cascades` 检查分级和重叠过渡；
 - Model Shadow Pass 当前逐实体提交，尚未复用 Renderer3D Instancing；
-- Alpha Mask 材质尚未在 ShadowDepth 中采样 Alpha，透明投影契约后续收口；
+- Alpha Mask 已按最终 MaterialInstance 的 BaseColor Alpha、纹理 Alpha、TilingFactor 与 AlphaCutoff 裁剪 ShadowDepth；Blend 仍投射完整实体轮廓，尚未实现抖动或透射式半透明阴影；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
 - VS2026 全解决方案与独立回归目标构建成功；59 项断言与最终汇总全部 PASS，包含阴影设置往返，以及 Bounds 完全内部、完全外部、跨平面相交和实体变换后外部四类剔除测试；
-- 新增级联调试着色后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。自动测试不判定颜色观感，仍需手动勾选 `Visualize Cascades`，确认红/绿/蓝/黄分区及边界渐变符合预期。
+- 新增级联调试着色与 Alpha Mask Shadow 后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型，默认地形的 Height UV 与 Compute 路径正常。自动测试不判定颜色和投影轮廓，仍需手动勾选 `Visualize Cascades` 检查分区，并用带 Alpha 的 BaseColor Texture + Mask 材质确认透明区域不产生阴影。
 - PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 cascades`，确认保守测试不会误删各级可见投影；把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
 
 ## Renderer2D 空批次残留修复

@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P9 方向光阴影与 CSM
-- 主线状态：进行中（CSM、平滑过渡、Shadow Frustum 剔除与级联调试可视化已落地，下一阶段为 Alpha Mask 阴影投影契约）
+- 主线状态：进行中（CSM、剔除、调试可视化与 Alpha Mask 阴影投影已落地，下一阶段为 Shadow Instancing）
 
 ## 使用与更新规则
 
@@ -79,10 +79,11 @@
 - Mesh 在加载时缓存局部 AABB；Shadow Pass 将 Model 子网格 Bounds 以及由网格尺寸/HeightScale 构造的 Terrain Bounds 变换到当前级联 Clip Space，只有 8 个角点同时位于同一裁剪平面外侧时才保守剔除；
 - `ShadowRenderer::Statistics` 记录 Cascade Pass、候选 Draw、实际 Draw 和剔除 Draw；Debug → Overview 可直接查看每帧 Shadow Frustum 剔除结果，PBR Lab 自动验证日志也输出同组统计；
 - Debug → Overview 新增纯运行时 `Visualize Cascades`：PBRModel 与 Terrain 以红、绿、蓝、黄标出第 1～4 级，并沿现有 Cascade Blend 权重渐变显示重叠区；调试色只覆盖最终线性颜色，不改写 Alpha、Entity ID、Shadow Depth 或场景 YAML；
+- Scene 将 Model 实体的 MaterialHandle 与实体级 Overrides 一并提交给 ShadowRenderer；Shadow Pass 通过 MaterialInstance 解析最终 BaseColor、BaseColorTexture、TilingFactor、AlphaMode 与 AlphaCutoff，Mask 材质按与 PBRModel 相同的 `BaseColor.a × Texture.a < AlphaCutoff` 规则 `discard`，因此镂空区域不再写入级联深度图；模型 UV 使用 location 3，Terrain Height UV 继续使用 location 1；
 - `TerrainRenderer::Prepare` 将高度/派生 Runtime 准备与颜色绘制分开，使程序化地形首帧即可参与 Shadow Pass；Shadow Pass 完成后恢复当前 Scene Framebuffer 和 Viewport；
 - Directional Light Inspector 现提供 Cast Shadows、512～4096 Resolution、1～4 Cascade Count、Shadow Distance、Bias、Split Lambda 与 Cascade Blend；设置进入 Scene YAML，级联深度纹理、FBO、矩阵、Split 和 Blend Width 保持纯运行时；
-- 验证：VS2026 全解决方案、独立回归目标及最终编辑器目标构建成功；59 项断言及最终汇总全部 PASS，包含 Bounds 完全内部、完全外部、跨平面相交和实体变换后外部四类剔除测试；新增级联着色路径后，Intel Iris Xe/OpenGL 4.6 下 `ShadowDepth`、PBRModel、Terrain 与三个 Terrain Compute Shader 均重新编译成功，PBR Lab 渲染 6/6 项且无跳过；紧凑 Lab 的 24 个 Shadow 候选全部保守保留；级联颜色与重叠渐变仍需在编辑器中开启开关做人工视觉确认；
-- 尚未完成：Alpha Mask 投影契约、Shadow Instancing 和独显实机画质调参，因此 P9 继续保持进行中。
+- 验证：VS2026 全解决方案、独立回归目标及最终编辑器目标构建成功；59 项断言及最终汇总全部 PASS，包含 Bounds 完全内部、完全外部、跨平面相交和实体变换后外部四类剔除测试；新增级联着色与 Alpha Mask 路径后，Intel Iris Xe/OpenGL 4.6 下 `ShadowDepth`、PBRModel、Terrain 与三个 Terrain Compute Shader 均重新编译成功，PBR Lab 渲染 6/6 项且无跳过；紧凑 Lab 的 24 个 Shadow 候选全部保守保留，默认地形的 Height UV/Compute 路径正常；级联颜色、重叠渐变和具体透明纹理的投影轮廓仍需在编辑器中做人工视觉确认；
+- 尚未完成：Shadow Instancing、Blend 半透明阴影策略和独显实机画质调参，因此 P9 继续保持进行中。
 
 ## 后续任务
 
@@ -424,7 +425,7 @@
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；仍缺少 Chunk/LOD 和固定步长 Runtime Erosion 调度；
-- CSM 已有 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除和运行时级联着色视图，但仍没有 Alpha Mask 投影；模型 Shadow Pass 也尚未复用 Instancing，均属于 P9 后续阶段；
+- CSM 已有 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色视图和 Alpha Mask 投影；模型 Shadow Pass 尚未复用 Instancing，Blend 材质仍按完整实体轮廓投影，均属于 P9 后续阶段；
 - 完整纹理 Terrain Fragment Shader 对四层 Albedo/Normal/AO 全量执行三平面采样，最坏接近 40 次纹理读取/像素；该成本尚待通过 GPU Timer 定量验证并按 P8.1 优化，但不再视为屏幕撕裂的根因；
 - SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；

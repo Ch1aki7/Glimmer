@@ -3,10 +3,12 @@
 
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/FrameBuffer.h"
+#include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Renderer/Mesh.h"
 #include "Glimmer/Renderer/Model.h"
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Shader.h"
+#include "Glimmer/Renderer/Texture.h"
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Terrain/Terrain.h"
 
@@ -34,6 +36,19 @@ namespace gl {
 		};
 
 		ShadowRendererData s_Data;
+
+		Ref<Texture2D> ResolveBaseColorTexture(AssetHandle handle)
+		{
+			if (static_cast<uint64_t>(handle) == 0
+				|| !AssetManager::IsAssetHandleValid(handle))
+				return nullptr;
+			const AssetMetadata metadata = AssetManager::GetMetadata(handle);
+			if (metadata.Type != AssetType::Texture2D
+				|| metadata.ColorSpace != TextureColorSpace::SRGB
+				|| metadata.Semantic != TextureSemantic::Color)
+				return nullptr;
+			return AssetManager::GetTexture2D(handle);
+		}
 
 		std::array<glm::vec3, 8> GetFrustumCornersWorldSpace(
 			const glm::mat4& viewProjection)
@@ -265,18 +280,40 @@ namespace gl {
 		s_Data.DepthShader->UploadUniformMat4("u_LightViewProjection",
 			s_Data.LightViewProjections[cascadeIndex]);
 		s_Data.DepthShader->UploadUniformInt("u_HeightMap", 0);
+		s_Data.DepthShader->UploadUniformInt("u_BaseColorTexture", 0);
+		s_Data.DepthShader->UploadUniformInt("u_AlphaMaskEnabled", 0);
 		s_Data.PassActive = true;
 		s_Data.Stats.CascadePasses++;
 		return true;
 	}
 
-	void ShadowRenderer::SubmitModel(AssetHandle modelHandle, const glm::mat4& transform)
+	void ShadowRenderer::SubmitModel(
+		AssetHandle modelHandle,
+		const glm::mat4& transform,
+		AssetHandle materialHandle,
+		const MaterialOverrides* overrides)
 	{
 		if (!s_Data.PassActive)
 			return;
 		const Ref<Model> model = AssetManager::GetModel(modelHandle);
 		if (!model)
 			return;
+		MaterialProperties materialProperties;
+		if (static_cast<uint64_t>(materialHandle) != 0)
+		{
+			const Ref<Material> material = AssetManager::GetMaterial(materialHandle);
+			if (material)
+			{
+				const MaterialInstance instance(
+					material, overrides ? *overrides : MaterialOverrides{});
+				materialProperties = instance.GetProperties();
+			}
+		}
+		const bool alphaMasked =
+			materialProperties.AlphaMode == MaterialAlphaMode::Mask;
+		const Ref<Texture2D> materialTexture =
+			ResolveBaseColorTexture(materialProperties.BaseColorTexture);
+
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 0);
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		for (const Ref<Mesh>& mesh : model->GetMeshes())
@@ -290,6 +327,23 @@ namespace gl {
 			{
 				s_Data.Stats.CulledDraws++;
 				continue;
+			}
+			const Ref<Texture2D> baseColorTexture = materialTexture
+				? materialTexture : mesh->GetTexture();
+			s_Data.DepthShader->UploadUniformInt(
+				"u_AlphaMaskEnabled", alphaMasked ? 1 : 0);
+			if (alphaMasked)
+			{
+				s_Data.DepthShader->UploadUniformInt(
+					"u_HasBaseColorTexture", baseColorTexture ? 1 : 0);
+				s_Data.DepthShader->UploadUniformFloat(
+					"u_BaseColorAlpha", materialProperties.BaseColor.a);
+				s_Data.DepthShader->UploadUniformFloat(
+					"u_AlphaCutoff", materialProperties.AlphaCutoff);
+				s_Data.DepthShader->UploadUniformFloat(
+					"u_TilingFactor", materialProperties.TilingFactor);
+				if (baseColorTexture)
+					baseColorTexture->Bind(0);
 			}
 			RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
 			s_Data.Stats.RenderedDraws++;
@@ -315,6 +369,7 @@ namespace gl {
 			return;
 		}
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 1);
+		s_Data.DepthShader->UploadUniformInt("u_AlphaMaskEnabled", 0);
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		s_Data.DepthShader->UploadUniformFloat(
 			"u_MaxHeight", terrain.Specification.HeightScale);
