@@ -312,6 +312,29 @@ namespace gl {
 		return true;
 	}
 
+	bool InstancingLabTool::GenerateForShadowBenchmark()
+	{
+		m_Preset = Preset::MaximumInstancing;
+		m_Count = { 50, 1, 50 };
+		m_ShadowBenchmarkWarmupFrames = 15;
+		m_ShadowBenchmarkSamplesPerConfiguration = 30;
+		if (!Generate())
+		{
+			GL_CORE_ERROR("Shadow Benchmark autorun failed to generate the Instancing Lab: {0}",
+				m_Status);
+			return false;
+		}
+		if (!StartShadowBenchmark())
+		{
+			GL_CORE_ERROR("Shadow Benchmark autorun failed to start: {0}",
+				m_ShadowBenchmarkStatus);
+			return false;
+		}
+		GL_CORE_INFO(
+			"Shadow Benchmark autorun started: 2500 entities, 15 warmup frames and 30 samples per configuration.");
+		return true;
+	}
+
 	void InstancingLabTool::CancelShadowBenchmark(const char* status)
 	{
 		const bool wasRunning = m_ShadowBenchmarkState == ShadowBenchmarkState::Warmup
@@ -347,6 +370,21 @@ namespace gl {
 			m_ShadowBenchmarkState = ShadowBenchmarkState::Complete;
 			m_ShadowBenchmarkStatus =
 				"Benchmark complete. Results are runtime-only and were not saved to the scene.";
+			GL_CORE_INFO("Shadow Benchmark PASS: {0} configurations completed.",
+				m_ShadowBenchmarkResults.size());
+			for (const ShadowBenchmarkResult& completed : m_ShadowBenchmarkResults)
+			{
+				GL_CORE_INFO(
+					"Shadow Benchmark Result: cascades={0}, resolution={1}, samples={2}, avg={3:.3f} ms, min={4:.3f} ms, max={5:.3f} ms, draws={6}, saved={7}",
+					completed.Configuration.Cascades,
+					completed.Configuration.Resolution,
+					completed.Samples,
+					completed.AverageMilliseconds,
+					completed.MinimumMilliseconds,
+					completed.MaximumMilliseconds,
+					completed.DrawCalls,
+					completed.SavedDrawCalls);
+			}
 			return;
 		}
 

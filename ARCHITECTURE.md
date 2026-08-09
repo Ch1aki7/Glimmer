@@ -336,6 +336,8 @@ DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D Ove
 
 Instancing Lab 同时托管 Shadow Benchmark 状态机。它只修改 Lab 自己的 DirectionalLight，在固定的 9 组 Cascade/Resolution 配置间轮换，并在每次切换后先预热再采样。`ShadowRenderer::Statistics::GpuTimingSample` 是跨帧单调递增的 Query 结果序号；状态机仅在序号变化时接收耗时，因而不会把非阻塞计时器保留的上一结果重复计入平均值。DebugPanel 在窗口可见性判断之前推进状态机，使页签切换或关闭面板不会暂停测试；结果只保存在工具运行时内存中。
 
+EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel 的受控接口生成固定 2500 实体的 Maximum Instancing Lab 并启动相同状态机。完成时 InstancingLabTool 将 9 组统计写入日志，EditorLayer 再请求 Application 正常关闭；自动入口不绕过临时 Scene 隔离，也不另建第二套计时或批次逻辑。
+
 ### 9.2 选择与面板职责
 
 `SelectionContext` 是实体选择和资产选择的互斥联合状态：选择资产会清除实体，选择实体会清除资产。

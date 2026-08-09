@@ -12,18 +12,28 @@
 #include <vector>
 namespace gl {
 	namespace {
-		bool ShouldAutorunPBRLab()
+		bool HasEnvironmentVariable(const char* name)
 		{
 #ifdef GL_PLATFORM_WINDOWS
 			char* value = nullptr;
 			size_t length = 0;
-			const bool present = _dupenv_s(&value, &length,
-				"GLIMMER_PBR_LAB_AUTORUN") == 0 && value != nullptr;
+			const bool present = _dupenv_s(&value, &length, name) == 0
+				&& value != nullptr;
 			std::free(value);
 			return present;
 #else
-			return std::getenv("GLIMMER_PBR_LAB_AUTORUN") != nullptr;
+			return std::getenv(name) != nullptr;
 #endif
+		}
+
+		bool ShouldAutorunPBRLab()
+		{
+			return HasEnvironmentVariable("GLIMMER_PBR_LAB_AUTORUN");
+		}
+
+		bool ShouldAutorunShadowBenchmark()
+		{
+			return HasEnvironmentVariable("GLIMMER_SHADOW_BENCHMARK_AUTORUN");
 		}
 	}
 
@@ -269,6 +279,13 @@ namespace gl {
 			});
 		if (ShouldAutorunPBRLab())
 			m_DebugPanel.GeneratePBRMaterialLabForValidation();
+		m_ShadowBenchmarkAutorun = ShouldAutorunShadowBenchmark();
+		if (m_ShadowBenchmarkAutorun
+			&& !m_DebugPanel.GenerateInstancingLabForShadowBenchmark())
+		{
+			GL_CORE_ERROR("Shadow Benchmark autorun could not be initialized.");
+			Application::Get().Close();
+		}
 
 
 	}
@@ -586,6 +603,13 @@ namespace gl {
 			stats3D.TextureBinds, stats3D.GetSavedTextureBinds());
 		ImGui::End();
 		m_DebugPanel.OnImGuiRender(stats3D);
+		if (m_ShadowBenchmarkAutorun
+			&& m_DebugPanel.IsShadowBenchmarkComplete())
+		{
+			m_ShadowBenchmarkAutorun = false;
+			GL_CORE_INFO("Shadow Benchmark autorun finished; closing the editor.");
+			Application::Get().Close();
+		}
 
 		// Settings
 		ImGui::Begin("Settings");

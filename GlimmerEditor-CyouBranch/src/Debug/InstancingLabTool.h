@@ -28,9 +28,14 @@ namespace gl {
 
 		void OnImGuiRender(const Renderer3D::Statistics& statistics);
 		void UpdateShadowBenchmark(const ShadowRenderer::Statistics& statistics);
+		bool GenerateForShadowBenchmark();
 		void Exit();
 
 		bool IsActive() const { return m_Active; }
+		bool IsShadowBenchmarkComplete() const
+		{
+			return m_ShadowBenchmarkState == ShadowBenchmarkState::Complete;
+		}
 		const Ref<Scene>& GetScene() const { return m_Scene; }
 
 	private:

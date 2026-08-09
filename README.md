@@ -12729,6 +12729,15 @@ RenderCommand::DrawIndexedInstanced(
 
 每次配置切换后的预热会排空异步 Query 延迟；采样仅在 GPU 返回新结果时推进，不会重复使用面板中缓存的上一帧数值。结果只存在于当前临时 Lab，不写入场景或资产。测试时仍需保持窗口分辨率、相机、模型数量、Shadow Distance 与驱动设置一致。GPU Time 只统计 Shadow Pass，不包含 Scene Color、Terrain Compute、Tone Mapping 或 ImGui，因此适合比较级联数、分辨率与实例数量对阴影本身的影响。
 
+需要在固定机器上重复采样时，可从 `GlimmerEditor-CyouBranch` 工作目录启动无人值守入口：
+
+```powershell
+$env:GLIMMER_SHADOW_BENCHMARK_AUTORUN = '1'
+..\bin\Debug-windows-x86_64\GlimmerEditor-CyouBranch\GlimmerEditor-CyouBranch.exe
+```
+
+该入口固定使用 `50×1×50` Maximum Instancing 场景、15 帧预热和每组 30 个样本。OpenGL Context 启动日志会给出 Vendor、Renderer 和 Version；完成后日志依次输出 9 行 `Shadow Benchmark Result` 并正常关闭编辑器，便于确认实际使用的 GPU 并复制结果。不要同时设置 `GLIMMER_PBR_LAB_AUTORUN`。
+
 ### 当前边界与验证
 
 - 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap、可调重叠混合与运行时级联调试着色；
@@ -12742,7 +12751,21 @@ RenderCommand::DrawIndexedInstanced(
 - 新增级联调试着色、Alpha Mask 与 Shadow Instancing 后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型，默认地形的 Height UV 与 Compute 路径正常。自动测试不判定颜色和投影轮廓，仍需手动勾选 `Visualize Cascades` 检查分区，并用带 Alpha 的 BaseColor Texture + Mask 材质确认透明区域不产生阴影。
 - PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 draw calls / 4 instanced / 20 saved / 4 cascades`：每个级联把 6 个相同 Mesh 合并为一次 Draw，并确认保守测试没有误删投影。把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
 - OpenGL Time Query 已在 Intel Iris Xe 上非阻塞返回，PBR Lab 四级 Shadow Pass 得到一次 `0.278 ms` 验证样本；该数字只验证计时范围和读取链路，正式性能结论必须按上面的固定场景步骤在 RTX 4060 上采集多组稳定值。
-- 自动 Shadow Benchmark 接入后，VS2026 `Debug | x64` 最终编辑器目标构建成功，61 项无窗口回归断言全部 PASS；既有 PBR Lab 自动入口稳定运行 30 秒且验证进程已清理。9 组结果表仍需在目标 RTX 4060 设备上实际点击运行后记录，不能用 Intel 的单次样本代替。
+- 自动 Shadow Benchmark 接入后，VS2026 `Debug | x64` 最终编辑器目标构建成功，61 项无窗口回归断言全部 PASS。固定 2500 实体、15 帧预热、每组 30 样本的无人值守测试确认 OpenGL Renderer 为 `NVIDIA GeForce RTX 4060 Laptop GPU`，结果如下：
+
+| Cascades | Resolution | Avg ms | Min ms | Max ms | Draws | Saved |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1024 | 0.058 | 0.055 | 0.065 | 3 | 2260 |
+| 2 | 1024 | 0.665 | 0.580 | 0.682 | 4 | 2276 |
+| 4 | 1024 | 1.066 | 1.060 | 1.090 | 5 | 2563 |
+| 1 | 2048 | 0.965 | 0.961 | 0.980 | 3 | 2261 |
+| 2 | 2048 | 1.451 | 1.449 | 1.467 | 4 | 2277 |
+| 4 | 2048 | 2.414 | 2.400 | 2.444 | 5 | 2562 |
+| 1 | 4096 | 1.666 | 1.663 | 1.677 | 3 | 2260 |
+| 2 | 4096 | 3.182 | 3.178 | 3.194 | 4 | 2278 |
+| 4 | 4096 | 6.313 | 6.304 | 6.319 | 5 | 2562 |
+
+同场景 Iris Xe 的 `4096 × 4` 平均为 `11.224 ms`，RTX 4060 为 `6.313 ms`，最高档约快 1.78 倍；RTX 各组 Min/Max 也更集中。该结果只证明 Shadow Pass 的定量性能和自动采样链路，级联边界、Mask 轮廓、Acne 与 Peter Panning 仍需在视口中人工判断。
 
 ## Renderer2D 空批次残留修复
 
