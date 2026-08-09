@@ -196,12 +196,15 @@ namespace gl {
 		const auto& noise = spec.Noise;
 		out << YAML::Key << "TerrainComponent" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "Procedural" << YAML::Value << spec.Procedural;
+		out << YAML::Key << "Preset" << YAML::Value << TerrainPresetToString(spec.Preset);
 		out << YAML::Key << "HeightMapResolution" << YAML::Value << spec.HeightMapResolution;
 		out << YAML::Key << "MeshResolution" << YAML::Value << spec.MeshResolution;
 		out << YAML::Key << "HeightScale" << YAML::Value << spec.HeightScale;
 		out << YAML::Key << "HeightMap" << YAML::Value << static_cast<uint64_t>(spec.HeightMapHandle);
 		out << YAML::Key << "RenderShader" << YAML::Value << static_cast<uint64_t>(spec.RenderShaderHandle);
 		out << YAML::Key << "GenerationShader" << YAML::Value << static_cast<uint64_t>(spec.GenerationShaderHandle);
+		out << YAML::Key << "ErosionShader" << YAML::Value << static_cast<uint64_t>(spec.ErosionShaderHandle);
+		out << YAML::Key << "DerivationShader" << YAML::Value << static_cast<uint64_t>(spec.DerivationShaderHandle);
 		out << YAML::Key << "Noise" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "Seed" << YAML::Value << noise.Seed;
 		out << YAML::Key << "Octaves" << YAML::Value << noise.Octaves;
@@ -213,8 +216,20 @@ namespace gl {
 		out << YAML::Key << "ContinentScale" << YAML::Value << noise.ContinentScale;
 		out << YAML::Key << "ErosionStrength" << YAML::Value << noise.ErosionStrength;
 		out << YAML::Key << "DetailStrength" << YAML::Value << noise.DetailStrength;
+		out << YAML::Key << "MountainDirection" << YAML::Value << noise.MountainDirection;
+		out << YAML::Key << "MountainWidth" << YAML::Value << noise.MountainWidth;
+		out << YAML::Key << "PlateauStrength" << YAML::Value << noise.PlateauStrength;
 		out << YAML::Key << "Offset" << YAML::Value << YAML::Flow << YAML::BeginSeq
 			<< noise.Offset.x << noise.Offset.y << YAML::EndSeq;
+		out << YAML::EndMap;
+		out << YAML::Key << "Authoring" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "EnableThermalErosion" << YAML::Value
+			<< spec.Authoring.EnableThermalErosion;
+		out << YAML::Key << "ThermalIterations" << YAML::Value
+			<< spec.Authoring.ThermalIterations;
+		out << YAML::Key << "Talus" << YAML::Value << spec.Authoring.Talus;
+		out << YAML::Key << "ThermalStrength" << YAML::Value
+			<< spec.Authoring.ThermalStrength;
 		out << YAML::EndMap << YAML::EndMap;
 	}
 
@@ -222,12 +237,17 @@ namespace gl {
 	{
 		auto& spec = comp.Specification;
 		if (node["Procedural"]) spec.Procedural = node["Procedural"].as<bool>();
+		spec.Preset = node["Preset"]
+			? TerrainPresetFromString(node["Preset"].as<std::string>())
+			: TerrainPreset::Custom;
 		if (node["HeightMapResolution"]) spec.HeightMapResolution = node["HeightMapResolution"].as<uint32_t>();
 		if (node["MeshResolution"]) spec.MeshResolution = node["MeshResolution"].as<uint32_t>();
 		if (node["HeightScale"]) spec.HeightScale = node["HeightScale"].as<float>();
 		if (node["HeightMap"]) spec.HeightMapHandle = AssetHandle(node["HeightMap"].as<uint64_t>());
 		if (node["RenderShader"]) spec.RenderShaderHandle = AssetHandle(node["RenderShader"].as<uint64_t>());
 		if (node["GenerationShader"]) spec.GenerationShaderHandle = AssetHandle(node["GenerationShader"].as<uint64_t>());
+		if (node["ErosionShader"]) spec.ErosionShaderHandle = AssetHandle(node["ErosionShader"].as<uint64_t>());
+		if (node["DerivationShader"]) spec.DerivationShaderHandle = AssetHandle(node["DerivationShader"].as<uint64_t>());
 		if (const auto noiseNode = node["Noise"])
 		{
 			auto& noise = spec.Noise;
@@ -241,8 +261,25 @@ namespace gl {
 			if (noiseNode["ContinentScale"]) noise.ContinentScale = noiseNode["ContinentScale"].as<float>();
 			if (noiseNode["ErosionStrength"]) noise.ErosionStrength = noiseNode["ErosionStrength"].as<float>();
 			if (noiseNode["DetailStrength"]) noise.DetailStrength = noiseNode["DetailStrength"].as<float>();
+			if (noiseNode["MountainDirection"]) noise.MountainDirection = noiseNode["MountainDirection"].as<float>();
+			if (noiseNode["MountainWidth"]) noise.MountainWidth = noiseNode["MountainWidth"].as<float>();
+			if (noiseNode["PlateauStrength"]) noise.PlateauStrength = noiseNode["PlateauStrength"].as<float>();
 			if (const auto offset = noiseNode["Offset"]; offset && offset.size() >= 2)
 				noise.Offset = { offset[0].as<float>(), offset[1].as<float>() };
+		}
+		if (const auto authoringNode = node["Authoring"])
+		{
+			auto& authoring = spec.Authoring;
+			if (authoringNode["EnableThermalErosion"])
+				authoring.EnableThermalErosion = authoringNode["EnableThermalErosion"].as<bool>();
+			if (authoringNode["ThermalIterations"])
+				authoring.ThermalIterations = std::min(
+					authoringNode["ThermalIterations"].as<uint32_t>(), 128u);
+			if (authoringNode["Talus"])
+				authoring.Talus = glm::clamp(authoringNode["Talus"].as<float>(), 0.0001f, 0.25f);
+			if (authoringNode["ThermalStrength"])
+				authoring.ThermalStrength = glm::clamp(
+					authoringNode["ThermalStrength"].as<float>(), 0.0f, 0.5f);
 		}
 		comp.Runtime.reset();
 	}

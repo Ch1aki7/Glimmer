@@ -166,6 +166,10 @@ namespace gl {
 			AssetManager::ImportAsset("assets/shaders/Terrain.glsl");
 		const AssetHandle terrainGenerationShaderHandle =
 			AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
+		const AssetHandle terrainErosionShaderHandle =
+			AssetManager::ImportAsset("assets/shaders/Terrain/ThermalErosion.comp");
+		const AssetHandle terrainDerivationShaderHandle =
+			AssetManager::ImportAsset("assets/shaders/Terrain/DeriveTerrainMaps.comp");
 		const AssetHandle defaultHeightMapHandle =
 			AssetManager::ImportAsset("assets/textures/heightmap-example.png");
 		FramebufferSpecification sceneFramebufferSpec;
@@ -207,8 +211,11 @@ namespace gl {
 		skyLightEntity.AddComponent<SkyLightComponent>(defaultSkyboxHandle);
 		auto terrainEntity = m_ActiveScene->CreateEntity("Terrain");
 		auto& terrain = terrainEntity.AddComponent<TerrainComponent>();
+		ApplyTerrainPreset(terrain.Specification, TerrainPreset::Alpine);
 		terrain.Specification.RenderShaderHandle = terrainShaderHandle;
 		terrain.Specification.GenerationShaderHandle = terrainGenerationShaderHandle;
+		terrain.Specification.ErosionShaderHandle = terrainErosionShaderHandle;
+		terrain.Specification.DerivationShaderHandle = terrainDerivationShaderHandle;
 		terrain.Specification.HeightMapHandle = defaultHeightMapHandle;
 
 
@@ -655,6 +662,10 @@ namespace gl {
 							AssetManager::ImportAsset("assets/shaders/Terrain.glsl");
 						terrain.Specification.GenerationShaderHandle =
 							AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
+						terrain.Specification.ErosionShaderHandle =
+							AssetManager::ImportAsset("assets/shaders/Terrain/ThermalErosion.comp");
+						terrain.Specification.DerivationShaderHandle =
+							AssetManager::ImportAsset("assets/shaders/Terrain/DeriveTerrainMaps.comp");
 						m_HierarchyPanel.SetSelectedEntity(terrainEntity);
 					}
 				}

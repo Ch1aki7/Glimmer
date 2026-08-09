@@ -3,6 +3,7 @@
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/TerrainRenderer.h"
+#include "Glimmer/Terrain/Terrain.h"
 #include <glm/gtc/type_ptr.hpp>
 #include <filesystem>
 #include <algorithm>
@@ -351,6 +352,23 @@ namespace gl {
 					terrain.Runtime.reset();
 				commit("Edit Terrain Procedural Mode", before);
 
+				if (spec.Procedural)
+				{
+					const char* presetNames[] = {
+						"Custom", "Alpine", "Plateau", "Rolling Hills",
+						"Volcanic", "Eroded Valley" };
+					int presetIndex = static_cast<int>(spec.Preset);
+					if (ImGui::Combo("Preset", &presetIndex, presetNames,
+						IM_ARRAYSIZE(presetNames)))
+					{
+						TerrainComponent after = terrain;
+						ApplyTerrainPreset(after.Specification,
+							static_cast<TerrainPreset>(presetIndex));
+						ExecuteComponentEdit(entity, "Apply Terrain Preset",
+							terrain, after);
+					}
+				}
+
 				int heightResolution = static_cast<int>(spec.HeightMapResolution);
 				before = terrain;
 				if (ImGui::InputInt("Height Resolution", &heightResolution, 0))
@@ -370,7 +388,11 @@ namespace gl {
 				commit("Edit Terrain Mesh Resolution", before);
 
 				before = terrain;
-				ImGui::DragFloat("Height Scale", &spec.HeightScale, 0.1f, 0.0f, 500.0f);
+				if (ImGui::DragFloat("Height Scale", &spec.HeightScale, 0.1f, 0.0f, 500.0f))
+				{
+					spec.Preset = TerrainPreset::Custom;
+					TerrainRenderer::Invalidate(terrain);
+				}
 				commit("Edit Terrain Height Scale", before);
 
 				if (spec.Procedural)
@@ -380,7 +402,10 @@ namespace gl {
 						const char* commandName, auto drawWidget) {
 						const TerrainComponent valueBeforeWidget = terrain;
 						if (drawWidget())
+						{
+							terrain.Specification.Preset = TerrainPreset::Custom;
 							TerrainRenderer::Invalidate(terrain);
+						}
 						commit(commandName, valueBeforeWidget);
 					};
 
@@ -408,14 +433,51 @@ namespace gl {
 					drawNoise("Edit Terrain Continent Scale", [&]() {
 						return ImGui::SliderFloat("Continent Scale", &noise.ContinentScale, 0.05f, 1.0f);
 					});
-					drawNoise("Edit Terrain Erosion Strength", [&]() {
-						return ImGui::SliderFloat("Erosion Strength", &noise.ErosionStrength, 0.0f, 0.5f);
+					drawNoise("Edit Terrain Channel Erosion", [&]() {
+						return ImGui::SliderFloat("Channel Erosion", &noise.ErosionStrength, 0.0f, 0.5f);
 					});
 					drawNoise("Edit Terrain Detail Strength", [&]() {
 						return ImGui::SliderFloat("Detail Strength", &noise.DetailStrength, 0.0f, 0.25f);
 					});
+					drawNoise("Edit Terrain Mountain Direction", [&]() {
+						return ImGui::SliderAngle("Mountain Direction",
+							&noise.MountainDirection, -180.0f, 180.0f);
+					});
+					drawNoise("Edit Terrain Mountain Width", [&]() {
+						return ImGui::SliderFloat("Mountain Width",
+							&noise.MountainWidth, 0.05f, 1.0f);
+					});
+					drawNoise("Edit Terrain Plateau Strength", [&]() {
+						return ImGui::SliderFloat("Plateau Strength",
+							&noise.PlateauStrength, 0.0f, 1.0f);
+					});
 					drawNoise("Edit Terrain Offset", [&]() {
 						return ImGui::DragFloat2("Offset", &noise.Offset.x, 0.005f);
+					});
+
+					ImGui::SeparatorText("Authoring Erosion");
+					auto& authoring = spec.Authoring;
+					drawNoise("Edit Terrain Thermal Erosion Enabled", [&]() {
+						return ImGui::Checkbox("Enable Thermal Erosion",
+							&authoring.EnableThermalErosion);
+					});
+					int thermalIterations =
+						static_cast<int>(authoring.ThermalIterations);
+					drawNoise("Edit Terrain Thermal Iterations", [&]() {
+						const bool changed = ImGui::InputInt(
+							"Thermal Iterations", &thermalIterations);
+						if (changed)
+							authoring.ThermalIterations = static_cast<uint32_t>(
+								std::clamp(thermalIterations, 0, 128));
+						return changed;
+					});
+					drawNoise("Edit Terrain Talus", [&]() {
+						return ImGui::DragFloat("Talus", &authoring.Talus,
+							0.0005f, 0.0001f, 0.25f, "%.4f");
+					});
+					drawNoise("Edit Terrain Thermal Strength", [&]() {
+						return ImGui::SliderFloat("Thermal Strength",
+							&authoring.ThermalStrength, 0.0f, 0.5f);
 					});
 				}
 				else
@@ -443,6 +505,13 @@ namespace gl {
 				}
 				if (ImGui::Button("Regenerate"))
 					TerrainRenderer::Invalidate(terrain);
+				if (terrain.Runtime && terrain.Runtime->GenerationVersion > 0)
+				{
+					ImGui::TextDisabled("Generation v%llu | %u compute dispatches",
+						static_cast<unsigned long long>(terrain.Runtime->GenerationVersion),
+						terrain.Runtime->LastGenerationDispatchCount);
+					ImGui::TextDisabled("Derived: Normal/Slope, Curvature/Flow, Weights");
+				}
 			},
 			true, false);
 		// --- Directional Light ---
@@ -1033,8 +1102,11 @@ namespace gl {
 		addMenuItem("Material", entity.HasComponent<MaterialComponent>(), [&]() { AddComponent<MaterialComponent>(entity, "Material"); });
 		addMenuItem("Terrain", entity.HasComponent<TerrainComponent>(), [&]() {
 			TerrainComponent terrain;
+			ApplyTerrainPreset(terrain.Specification, TerrainPreset::Alpine);
 			terrain.Specification.RenderShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain.glsl");
 			terrain.Specification.GenerationShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/GenerateFBM.comp");
+			terrain.Specification.ErosionShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/ThermalErosion.comp");
+			terrain.Specification.DerivationShaderHandle = AssetManager::ImportAsset("assets/shaders/Terrain/DeriveTerrainMaps.comp");
 			AddComponent<TerrainComponent>(entity, "Terrain", terrain);
 		});
 		if (hasAvailableComponent)

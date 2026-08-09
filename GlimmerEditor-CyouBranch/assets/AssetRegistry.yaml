@@ -61,6 +61,12 @@ AssetRegistry:
   - Handle: 7633283146183385932
     Type: Shader
     FilePath: shaders/Terrain/GenerateFBM.comp
+  - Handle: 7633283146183385933
+    Type: Shader
+    FilePath: shaders/Terrain/ThermalErosion.comp
+  - Handle: 7633283146183385934
+    Type: Shader
+    FilePath: shaders/Terrain/DeriveTerrainMaps.comp
   - Handle: 7909942403015271490
     Type: Shader
     FilePath: shaders/BlinnPhong.glsl

@@ -202,11 +202,14 @@ Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight �
 
 地形实体由 `TerrainComponent` 保存可序列化的 `TerrainSpecification`，运行时 GPU 对象放在不持久化的 `TerrainRuntime` 中：
 
-- `TerrainGenerator` 使用 Compute Shader 和 `SimulationGrid` 生成高度纹理；
+- `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion 与 Derive Maps；
+- Height 使用 R32F `SimulationGrid` Ping-Pong；侵蚀每轮只读 ReadTexture、只写 WriteTexture，Barrier 后交换，禁止同纹理读写；
+- 派生阶段从最终 Height 生成三张 RGBA16F Runtime 纹理：Normal/Slope、Curvature/Flow Potential、Grass/Soil/Rock/Snow Material Weights；
+- Custom、Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 预设属于可序列化规格，手动修改预设参数后转为 Custom；
 - 也可引用导入的高度图 Texture Asset；
 - `TerrainMesh` 生成规则网格；
-- `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；
-- 参数或资源变化时通过 `Invalidate` 使 Runtime 失效。
+- `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
+- 参数、Compute Shader 或资源变化时通过 `Invalidate` 使 Runtime 失效。正常帧只采样缓存结果；生成、有限次侵蚀与派生只在 Dirty 或显式 Regenerate 时 Dispatch。
 
 ### 5.5 Shader、Compute 与数据读回
 
@@ -288,14 +291,14 @@ flowchart LR
 
 - 资源引用一律保存 AssetHandle，不保存运行时指针或 OpenGL ID；
 - Material Overrides 保存 Mask 和 Values，使禁用字段仍可保留编辑值；
-- Terrain 只保存 Specification，加载后按需重建 Runtime；
+- Terrain 只保存 Specification，包括 Preset、Noise、Authoring Erosion 与 Compute Shader Handle；Height 和三张派生纹理加载后按需重建，不写入 YAML；
 - NativeScript 包含函数指针，当前不参与场景序列化；
 - 反序列化使用 `CreateEntityWithUUID` 恢复稳定身份；
 - Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例。
 
 ### 8.1 无窗口回归边界
 
-`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification 往返、Runtime 非持久化、实体/Scene 复制隔离和 CommandHistory Undo/Redo。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification 往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
 
 根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 
@@ -402,12 +405,12 @@ flowchart LR
 - `EditorLayer` 只负责 Scene、Framebuffer、Pass、Camera 和面板的生命周期编排，不承载 Terrain、IBL 或环境模拟算法及其正式业务状态；
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - 新增 3D Shader 必须遵守 `Opaque / Mask / Blend` 契约；若声明支持 AlphaMode，需要消费 `u_AlphaMode`、`u_AlphaCutoff` 并保持 Mask/Blend 的深度和 EntityID 语义。透明对象仍不得进入现有 Opaque Instancing；
-- 地形有限次 Authoring Erosion 与固定步长 Runtime Erosion 必须分开调度、缓存和保存，不能共用隐式的每帧更新路径；
+- 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；未来固定步长 Runtime Erosion 必须使用独立状态集和调度器，不能复用或隐式推进 Authoring 管线；
 - 未来 IBL 的 Irradiance、Prefilter 和 BRDF LUT 属于派生缓存，应按源环境 Handle、资源版本和生成参数失效，禁止逐帧卷积；这条约束不代表当前已经实现 IBL；
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口，以及 Terrain 生命周期/Inspector 事务收口已经落地；当前主线转入山脉生成、派生图与有限次 Authoring Erosion。Metallic/Roughness Texture/ORM、TerrainMaterial、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务，以及山脉生成/派生图/有限次 Authoring Erosion 已经落地；当前主线转入 TerrainMaterial 与分层 PBR。Metallic/Roughness Texture/ORM、正式 TerrainMaterial、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

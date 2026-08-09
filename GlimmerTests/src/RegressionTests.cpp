@@ -61,12 +61,15 @@ namespace {
 		const auto& leftNoise = left.Noise;
 		const auto& rightNoise = right.Noise;
 		return left.Procedural == right.Procedural
+			&& left.Preset == right.Preset
 			&& left.HeightMapResolution == right.HeightMapResolution
 			&& left.MeshResolution == right.MeshResolution
 			&& Near(left.HeightScale, right.HeightScale)
 			&& left.HeightMapHandle == right.HeightMapHandle
 			&& left.RenderShaderHandle == right.RenderShaderHandle
 			&& left.GenerationShaderHandle == right.GenerationShaderHandle
+			&& left.ErosionShaderHandle == right.ErosionShaderHandle
+			&& left.DerivationShaderHandle == right.DerivationShaderHandle
 			&& leftNoise.Seed == rightNoise.Seed
 			&& leftNoise.Octaves == rightNoise.Octaves
 			&& Near(leftNoise.Frequency, rightNoise.Frequency)
@@ -77,8 +80,18 @@ namespace {
 			&& Near(leftNoise.ContinentScale, rightNoise.ContinentScale)
 			&& Near(leftNoise.ErosionStrength, rightNoise.ErosionStrength)
 			&& Near(leftNoise.DetailStrength, rightNoise.DetailStrength)
+			&& Near(leftNoise.MountainDirection, rightNoise.MountainDirection)
+			&& Near(leftNoise.MountainWidth, rightNoise.MountainWidth)
+			&& Near(leftNoise.PlateauStrength, rightNoise.PlateauStrength)
 			&& Near(leftNoise.Offset.x, rightNoise.Offset.x)
-			&& Near(leftNoise.Offset.y, rightNoise.Offset.y);
+			&& Near(leftNoise.Offset.y, rightNoise.Offset.y)
+			&& left.Authoring.EnableThermalErosion
+				== right.Authoring.EnableThermalErosion
+			&& left.Authoring.ThermalIterations
+				== right.Authoring.ThermalIterations
+			&& Near(left.Authoring.Talus, right.Authoring.Talus)
+			&& Near(left.Authoring.ThermalStrength,
+				right.Authoring.ThermalStrength);
 	}
 
 	class TemporaryDirectory
@@ -260,6 +273,8 @@ namespace {
 		terrain.Specification.HeightMapHandle = gl::AssetHandle(6001);
 		terrain.Specification.RenderShaderHandle = gl::AssetHandle(6002);
 		terrain.Specification.GenerationShaderHandle = gl::AssetHandle(6003);
+		terrain.Specification.ErosionShaderHandle = gl::AssetHandle(6004);
+		terrain.Specification.DerivationShaderHandle = gl::AssetHandle(6005);
 		terrain.Specification.Noise.Seed = 73;
 		terrain.Specification.Noise.Octaves = 7;
 		terrain.Specification.Noise.Frequency = 1.35f;
@@ -270,7 +285,14 @@ namespace {
 		terrain.Specification.Noise.ContinentScale = 0.3f;
 		terrain.Specification.Noise.ErosionStrength = 0.17f;
 		terrain.Specification.Noise.DetailStrength = 0.09f;
+		terrain.Specification.Noise.MountainDirection = -0.45f;
+		terrain.Specification.Noise.MountainWidth = 0.21f;
+		terrain.Specification.Noise.PlateauStrength = 0.31f;
 		terrain.Specification.Noise.Offset = { 4.0f, -2.0f };
+		terrain.Specification.Authoring.EnableThermalErosion = true;
+		terrain.Specification.Authoring.ThermalIterations = 31;
+		terrain.Specification.Authoring.Talus = 0.014f;
+		terrain.Specification.Authoring.ThermalStrength = 0.27f;
 		terrain.Runtime = gl::CreateRef<gl::TerrainRuntime>();
 		terrain.Runtime->LoadedMeshResolution = 192;
 
@@ -401,6 +423,39 @@ namespace {
 			"terrain edit command supports redo");
 	}
 
+	void TestTerrainPresets(TestContext& context)
+	{
+		const gl::TerrainPreset presets[] = {
+			gl::TerrainPreset::Alpine,
+			gl::TerrainPreset::Plateau,
+			gl::TerrainPreset::RollingHills,
+			gl::TerrainPreset::Volcanic,
+			gl::TerrainPreset::ErodedValley
+		};
+		int previousSeed = 0;
+		for (gl::TerrainPreset preset : presets)
+		{
+			gl::TerrainSpecification first;
+			gl::TerrainSpecification second;
+			gl::ApplyTerrainPreset(first, preset);
+			gl::ApplyTerrainPreset(second, preset);
+			context.Check(SameTerrainSpecification(first, second),
+				std::string("terrain preset is deterministic: ")
+				+ gl::TerrainPresetToString(preset));
+			context.Check(first.Preset == preset
+				&& first.Noise.Seed != previousSeed
+				&& first.Authoring.ThermalIterations <= 128
+				&& first.Authoring.ThermalStrength >= 0.0f
+				&& first.Authoring.ThermalStrength <= 0.5f,
+				std::string("terrain preset has bounded authoring settings: ")
+				+ gl::TerrainPresetToString(preset));
+			previousSeed = first.Noise.Seed;
+		}
+		context.Check(gl::TerrainPresetFromString("unknown")
+			== gl::TerrainPreset::Custom,
+			"unknown terrain preset falls back to Custom");
+	}
+
 }
 
 int main(int argc, char** argv)
@@ -414,6 +469,7 @@ int main(int argc, char** argv)
 	TestMaterialOverrideMerge(context, temporaryDirectory.Path());
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
 	TestTerrainCopyAndTransactions(context);
+	TestTerrainPresets(context);
 
 	if (argc > 1 && std::string(argv[1]) == "--force-failure")
 		context.Check(false, "intentional failure verifies non-zero exit propagation");

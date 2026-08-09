@@ -1,0 +1,66 @@
+#version 430 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(r32f, binding = 0) readonly uniform image2D u_Source;
+layout(r32f, binding = 1) writeonly uniform image2D u_Destination;
+
+uniform float u_Talus;
+uniform float u_Strength;
+
+const ivec2 Neighbours[8] = ivec2[](
+	ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1),
+	ivec2(-1,  0),                  ivec2(1,  0),
+	ivec2(-1,  1), ivec2(0,  1), ivec2(1,  1));
+
+ivec2 ClampPixel(ivec2 pixel, ivec2 size)
+{
+	return clamp(pixel, ivec2(0), size - ivec2(1));
+}
+
+float HeightAt(ivec2 pixel, ivec2 size)
+{
+	return imageLoad(u_Source, ClampPixel(pixel, size)).r;
+}
+
+float Outflow(ivec2 sourcePixel, ivec2 destinationPixel, ivec2 size)
+{
+	float sourceHeight = HeightAt(sourcePixel, size);
+	float destinationHeight = HeightAt(destinationPixel, size);
+	float destinationExcess = max(sourceHeight - destinationHeight - u_Talus, 0.0);
+	if (destinationExcess <= 0.0)
+		return 0.0;
+
+	float totalExcess = 0.0;
+	float maximumExcess = 0.0;
+	for (int index = 0; index < 8; ++index)
+	{
+		ivec2 neighbour = ClampPixel(sourcePixel + Neighbours[index], size);
+		float excess = max(sourceHeight - HeightAt(neighbour, size) - u_Talus, 0.0);
+		totalExcess += excess;
+		maximumExcess = max(maximumExcess, excess);
+	}
+	if (totalExcess <= 0.0000001)
+		return 0.0;
+	return clamp(u_Strength, 0.0, 0.5) * maximumExcess
+		* destinationExcess / totalExcess;
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_Source);
+	if (any(greaterThanEqual(pixel, size)))
+		return;
+
+	float outgoing = 0.0;
+	float incoming = 0.0;
+	for (int index = 0; index < 8; ++index)
+	{
+		ivec2 neighbour = ClampPixel(pixel + Neighbours[index], size);
+		outgoing += Outflow(pixel, neighbour, size);
+		incoming += Outflow(neighbour, pixel, size);
+	}
+
+	float height = HeightAt(pixel, size) + incoming - outgoing;
+	imageStore(u_Destination, pixel, vec4(clamp(height, 0.0, 1.0)));
+}

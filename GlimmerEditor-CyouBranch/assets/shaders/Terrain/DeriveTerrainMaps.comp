@@ -1,0 +1,53 @@
+#version 430 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(r32f, binding = 0) readonly uniform image2D u_HeightMap;
+layout(rgba16f, binding = 1) writeonly uniform image2D u_NormalSlope;
+layout(rgba16f, binding = 2) writeonly uniform image2D u_Analysis;
+layout(rgba16f, binding = 3) writeonly uniform image2D u_MaterialWeights;
+
+uniform float u_HeightScale;
+uniform float u_WorldSize;
+
+float HeightAt(ivec2 pixel, ivec2 size)
+{
+	return imageLoad(u_HeightMap,
+		clamp(pixel, ivec2(0), size - ivec2(1))).r;
+}
+
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_HeightMap);
+	if (any(greaterThanEqual(pixel, size)))
+		return;
+
+	float center = HeightAt(pixel, size);
+	float left = HeightAt(pixel + ivec2(-1, 0), size);
+	float right = HeightAt(pixel + ivec2(1, 0), size);
+	float down = HeightAt(pixel + ivec2(0, -1), size);
+	float up = HeightAt(pixel + ivec2(0, 1), size);
+	float spacing = max(u_WorldSize / float(max(size.x - 1, 1)), 0.0001);
+	vec3 normal = normalize(vec3(
+		(left - right) * u_HeightScale / (2.0 * spacing),
+		1.0,
+		(down - up) * u_HeightScale / (2.0 * spacing)));
+	float slope = clamp(1.0 - normal.y, 0.0, 1.0);
+
+	float laplacian = left + right + down + up - 4.0 * center;
+	float curvature = clamp(0.5 + laplacian * 12.0, 0.0, 1.0);
+	float lowestNeighbour = min(min(left, right), min(down, up));
+	float flowPotential = clamp((center - lowestNeighbour) * 24.0, 0.0, 1.0);
+
+	float snow = smoothstep(0.68, 0.88, center) * (1.0 - smoothstep(0.32, 0.72, slope));
+	float rock = smoothstep(0.16, 0.56, slope) + smoothstep(0.76, 0.96, center) * 0.35;
+	float grass = smoothstep(0.10, 0.28, center) * (1.0 - smoothstep(0.18, 0.48, slope))
+		* (1.0 - snow);
+	float soil = max(0.08, (1.0 - rock) * (1.0 - snow) * (0.55 + curvature * 0.45));
+	vec4 weights = max(vec4(grass, soil, rock, snow), vec4(0.0));
+	weights /= max(dot(weights, vec4(1.0)), 0.0001);
+
+	imageStore(u_NormalSlope, pixel, vec4(normal * 0.5 + 0.5, slope));
+	imageStore(u_Analysis, pixel, vec4(curvature, flowPotential, center, 1.0));
+	imageStore(u_MaterialWeights, pixel, weights);
+}

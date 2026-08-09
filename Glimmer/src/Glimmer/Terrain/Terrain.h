@@ -10,10 +10,18 @@ namespace gl {
 		Scope<TerrainGenerator> Generator;
 		Ref<TerrainMesh> Mesh;
 		Ref<Texture2D> HeightMap;
+		Ref<Texture2D> NormalSlopeMap;
+		Ref<Texture2D> AnalysisMap;
+		Ref<Texture2D> MaterialWeightMap;
 		AssetHandle LoadedHeightMapHandle{ 0 };
 		AssetHandle LoadedGenerationShaderHandle{ 0 };
+		AssetHandle LoadedErosionShaderHandle{ 0 };
+		AssetHandle LoadedDerivationShaderHandle{ 0 };
 		uint32_t LoadedHeightMapResolution = 0;
 		uint32_t LoadedMeshResolution = 0;
+		uint32_t LastGenerationDispatchCount = 0;
+		uint64_t GenerationVersion = 0;
+		bool ValidationComplete = false;
 		bool Dirty = true;
 	};
 }

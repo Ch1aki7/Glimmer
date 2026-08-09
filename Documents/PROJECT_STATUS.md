@@ -9,7 +9,7 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P7 山脉生成、派生图与 Authoring Erosion
+- 当前主线：P8 TerrainMaterial 与分层 PBR
 - 主线状态：待开始
 
 ## 使用与更新规则
@@ -55,31 +55,9 @@
 
 ## 当前主线
 
-### P7：山脉生成、派生图与 Authoring Erosion
-
-**依赖**：P6 已完成，SimulationGrid、Compute 与 Terrain Runtime 边界稳定。
-
-**目标**
-
-- 形成连续山脉走向而非均匀随机尖峰；
-- 加入有限次 Thermal/Authoring Erosion；
-- 生成 Height、Normal、Slope、Curvature、Flow 与 Material Weights；
-- 提供 Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 等稳定预设。
-
-**验收**
-
-- 同一 Seed 和参数生成结果确定；
-- 只在 Dirty 或显式 Regenerate 时 Dispatch；
-- 所有 Compute Pass 无 NaN，且不存在无保护的同纹理读写；
-- Authoring Erosion 不进入每帧生态模拟循环。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P8：TerrainMaterial 与分层 PBR
 
-**依赖**：P4、P7 完成。
+**依赖**：P4、P7 已完成。
 
 **目标**
 
@@ -93,6 +71,10 @@
 - 陡坡以岩石为主，高处平缓区域可积雪，湿润低地可驱动土壤/植被层；
 - 山壁无明显 UV 拉伸，材质计算保持 HDR 线性空间；
 - TerrainMaterial 可保存、重载、拖放且不污染普通 `.glmat` 布局。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P9：方向光阴影与 CSM
 
@@ -206,6 +188,17 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-09：P7 山脉生成、派生图与 Authoring Erosion
+
+- `TerrainSpecification` 新增 Custom、Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 六种状态，预设统一设置确定性 Seed、地貌参数、HeightScale 和有限次侵蚀参数；方向、宽度和台地强度支持继续手调，任一手调自动转为 Custom；
+- `GenerateFBM.comp` 增加旋转后的各向异性 Ridged FBM 与双山链组合，使 Alpine/Eroded Valley 形成连续山脉走向；Plateau、Rolling Hills 和 Volcanic 使用各自稳定地貌分支；
+- 新增 `ThermalErosion.comp`，每轮只读 HeightGrid ReadTexture、只写 WriteTexture，Barrier 后 Swap；最多 128 次，仅在 Dirty、Shader 热重载或显式 Regenerate 时执行，不进入每帧生态模拟；
+- 新增 `DeriveTerrainMaps.comp`，一次 Dispatch 从最终 Height 生成 RGBA16F Normal/Slope、Curvature/Flow Potential 和 Grass/Soil/Rock/Snow Material Weights；权重归一化，Terrain Shader 已使用派生法线和权重进行基础可视化；所有派生纹理仅属于 `TerrainRuntime`；
+- Scene YAML 保存 Preset、三项新增地貌参数、Authoring Erosion 和两个 Compute Shader Handle；旧场景缺 Preset 时按 Custom 读取。Inspector 提供预设、Mountain、Authoring Erosion 控件、生成版本和 Dispatch 数，全部复用 P6 的单命令事务；
+- 验证：`scripts\Verify-Windows.bat` 完整通过，VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功且 46 项无窗口断言全部 PASS；Intel Iris Xe/OpenGL 4.6 下三个 Compute Shader 编译成功，默认 Alpine 每次执行 30 Dispatch；相同参数两次 GPU 输出哈希均为 `4345498711584764525`，高度与派生图无 NaN/Inf、范围合法且材质权重归一化；
+- README：新增“山脉生成、派生图与 Authoring Erosion”；ARCHITECTURE：同步 Terrain 三段式 Compute 数据流和 Runtime 所有权；
+- 提交：待提交。
 
 ### 2026-08-09：P6 Terrain 生命周期与编辑事务收口
 
@@ -397,7 +390,7 @@
 - PBRModel 已支持 Normal、AO 与 Emissive Texture；Metallic/Roughness 仍为标量，尚未定义独立贴图或 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
-- Terrain 仍缺少正式 TerrainMaterial 资产、派生图缓存、Chunk/LOD 和运行时侵蚀调度；
+- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights；仍缺少正式 TerrainMaterial 资产、Chunk/LOD 和固定步长 Runtime Erosion 调度；
 - SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。

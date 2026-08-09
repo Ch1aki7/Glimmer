@@ -8,6 +8,10 @@ uniform mat4 u_ViewProjection;
 uniform mat4 u_Transform;
 uniform int u_EntityID;
 uniform sampler2D u_HeightMap;
+uniform sampler2D u_NormalSlopeMap;
+uniform sampler2D u_TerrainAnalysisMap;
+uniform sampler2D u_MaterialWeightMap;
+uniform int u_HasDerivedMaps;
 uniform float u_MaxHeight;
 uniform float u_UVScale;
 uniform vec2 u_TexelSize;
@@ -16,6 +20,8 @@ uniform float u_SampleSpacing;
 out vec3 v_WorldPos;
 out vec3 v_Normal;
 out float v_Height;
+out vec2 v_TerrainAnalysis;
+out vec4 v_MaterialWeights;
 flat out int v_EntityID;
 
 float SampleHeight(vec2 uv)
@@ -37,15 +43,21 @@ void main()
 	worldPosition.y = height * u_MaxHeight;
 
 	float sampleSpacing = max(u_SampleSpacing, 0.0001);
-	vec3 normal = normalize(vec3(
-		(heightLeft - heightRight) * u_MaxHeight / (2.0 * sampleSpacing),
-		1.0,
-		(heightDown - heightUp) * u_MaxHeight / (2.0 * sampleSpacing)));
+	vec3 normal = u_HasDerivedMaps != 0
+		? normalize(texture(u_NormalSlopeMap, uv).xyz * 2.0 - 1.0)
+		: normalize(vec3(
+			(heightLeft - heightRight) * u_MaxHeight / (2.0 * sampleSpacing),
+			1.0,
+			(heightDown - heightUp) * u_MaxHeight / (2.0 * sampleSpacing)));
 
 	vec4 transformedPosition = u_Transform * vec4(worldPosition, 1.0);
 	v_WorldPos = transformedPosition.xyz;
 	v_Normal = normalize(transpose(inverse(mat3(u_Transform))) * normal);
 	v_Height = height;
+	v_TerrainAnalysis = u_HasDerivedMaps != 0
+		? texture(u_TerrainAnalysisMap, uv).rg : vec2(0.5, 0.0);
+	v_MaterialWeights = u_HasDerivedMaps != 0
+		? texture(u_MaterialWeightMap, uv) : vec4(0.0);
 	v_EntityID = u_EntityID;
 	gl_Position = u_ViewProjection * transformedPosition;
 }
@@ -59,9 +71,12 @@ layout(location = 1) out int entityID;
 in vec3 v_WorldPos;
 in vec3 v_Normal;
 in float v_Height;
+in vec2 v_TerrainAnalysis;
+in vec4 v_MaterialWeights;
 flat in int v_EntityID;
 
 uniform vec3 u_CameraPos;
+uniform int u_HasDerivedMaps;
 
 struct PointLightData
 {
@@ -90,13 +105,26 @@ vec3 EvaluateLight(vec3 normal, vec3 viewDirection, vec3 lightDirection,
 void main()
 {
 	vec3 grass = vec3(0.15, 0.55, 0.15);
+	vec3 soil = vec3(0.30, 0.20, 0.10);
 	vec3 rock = vec3(0.45, 0.40, 0.35);
 	vec3 snow = vec3(0.92, 0.92, 0.96);
 
-	float rockBlend = smoothstep(0.05, 0.35, v_Height);
-	float snowBlend = smoothstep(0.55, 0.80, v_Height);
-	vec3 baseColor = mix(grass, rock, rockBlend);
-	baseColor = mix(baseColor, snow, snowBlend);
+	vec3 baseColor;
+	if (u_HasDerivedMaps != 0)
+	{
+		vec4 weights = max(v_MaterialWeights, vec4(0.0));
+		weights /= max(dot(weights, vec4(1.0)), 0.0001);
+		baseColor = grass * weights.x + soil * weights.y
+			+ rock * weights.z + snow * weights.w;
+		baseColor *= mix(1.0, 0.82, clamp(v_TerrainAnalysis.y, 0.0, 1.0) * 0.35);
+	}
+	else
+	{
+		float rockBlend = smoothstep(0.05, 0.35, v_Height);
+		float snowBlend = smoothstep(0.55, 0.80, v_Height);
+		baseColor = mix(grass, rock, rockBlend);
+		baseColor = mix(baseColor, snow, snowBlend);
+	}
 	baseColor = pow(max(baseColor, vec3(0.0)), vec3(2.2));
 
 	vec3 normal = normalize(v_Normal);

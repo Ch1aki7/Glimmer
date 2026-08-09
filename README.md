@@ -9923,12 +9923,12 @@ GlimmerEditor-CyouBranch/
 
 ### 当前边界与后续方向
 
-当前系统在一张固定尺寸的高度图上生成静态地貌，适合编辑器验证、参数探索和后续模拟的初始地形。它尚不包含：
+当前系统在一张固定尺寸的高度图上生成静态地貌，并已加入有限次 Thermal Authoring Erosion 与派生图。它尚不包含：
 
 1. 真实水力侵蚀：降雨、水量、流速、沉积与蒸发；
 2. Chunk、LOD、无缝分块与大世界流送；
-3. 按坡度、高度、湿度驱动的 PBR 地形材质；
-4. 地形参数、生成结果和材质的场景序列化；
+3. 正式 TerrainMaterial 资产与按湿度驱动的分层 PBR 材质；
+4. 生成结果的磁盘烘焙、派生缓存导入与版本管理；
 5. GPU 统计/直方图，用于自动归一化不同 Seed 的高度范围。
 
 下一阶段若实现环境模拟，应优先在 `SimulationGrid` 上增加显式的多字段 Simulation Set（高度、水量、沉积、湿度）和固定时间步调度器，再接入水力侵蚀 Compute Pass，避免把模拟状态继续堆叠到 `EditorLayer`。
@@ -12344,7 +12344,7 @@ VS2026 Premake 当前生成的解决方案入口是 `GlimmerEngine.slnx`。仓�
 
 无窗口测试只覆盖确定性的状态、合并、YAML 往返和编辑命令状态迁移；Shader 编译、Framebuffer、DrawCall、Instancing 和纹理语义仍由 DebugPanel Lab 或完整编辑器验证。两种测试互补，但都遵守相同隔离原则：测试实体只存在于临时 Scene，不向 `m_EditorScene` 或默认 `.glimmer` 文件永久写入。
 
-初始测试目标验证使用统一脚本完成 Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和测试执行；后续 Terrain 生命周期回归将正常断言扩展到 35 项并保持全部 PASS，`--force-failure` 仍返回退出码 1。
+初始测试目标验证使用统一脚本完成 Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和测试执行；Terrain 生命周期与预设回归随后将正常断言扩展到 46 项并保持全部 PASS，`--force-failure` 仍返回退出码 1。
 
 ## Terrain 生命周期与 Inspector 编辑事务收口
 
@@ -12422,12 +12422,97 @@ EditorLayer 继续只编排 Editor/Runtime/Active Scene、Framebuffer、Render P
 ### 验证结果
 
 - `scripts\Verify-Windows.bat` 完整通过 VS2026 Premake 生成与 MSBuild 18.8.2 `Debug | x64` 全解决方案构建；
-- 35 项无窗口断言全部 PASS；
+- P6 完成时 35 项无窗口断言全部 PASS；P7 加入预设测试后扩展为 46 项；
 - 完整 `GlimmerEditor-CyouBranch` 在项目工作目录下稳定运行 8 秒并完成 Shader/Compute 初始化；
 - Terrain Transform 与 Specification 在实体复制后保持一致，副本 Runtime 为空；
 - Scene YAML 往返保留全部 Terrain 规格且不持久化 Runtime；
 - Edit → Play 的 `Scene::Copy` 不共享 Runtime，运行场景修改不会污染编辑场景；
 - Terrain 值命令完成 Apply → Undo → Redo，且一次连续编辑只对应一次 Undo。
+
+## 山脉生成、派生图与 Authoring Erosion
+
+### 新增操作
+
+选中 Terrain 实体后，Inspector 的 `Preset` 可以直接切换以下地貌：
+
+- `Alpine`：方向明确、连续分布的高山山链；
+- `Plateau`：具有阶地和宽阔顶部的高原；
+- `Rolling Hills`：低起伏、适合植被场景的丘陵；
+- `Volcanic`：带主锥体和火山口的中心地貌；
+- `Eroded Valley`：沟谷更强、侵蚀轮次更多的山谷地貌；
+- `Custom`：保留当前全部手调参数。
+
+选择预设会一次性更新 Seed、Noise、HeightScale 和 Authoring Erosion，并作为一条命令支持 Undo/Redo。继续调整任一地貌参数后，Preset 自动变为 `Custom`。
+
+新增参数包括：
+
+| 参数 | 作用 |
+| --- | --- |
+| `Mountain Direction` | 旋转各向异性山链的主方向 |
+| `Mountain Width` | 控制山链横向宽度与延展比例 |
+| `Plateau Strength` | 将连续高度向稳定台地过渡 |
+| `Enable Thermal Erosion` | 是否在基础高度生成后运行有限次热侵蚀 |
+| `Thermal Iterations` | Authoring 阶段迭代次数，范围 0～128 |
+| `Talus` | 允许保留的局部坡差阈值 |
+| `Thermal Strength` | 每轮搬运强度，上限 0.5 |
+| `Channel Erosion` | 基础生成阶段的沟谷刻蚀强度，不等同于 Thermal Erosion |
+
+`Regenerate` 会显式使当前 Terrain Runtime 失效。Inspector 底部显示 Generation Version 和本次 Compute Dispatch 数；默认 Alpine 为 `1 + 28 + 1 = 30` 次 Dispatch。
+
+### 三段式 Compute 管线
+
+```text
+Terrain Dirty / Regenerate / Compute Shader 热重载
+  ↓
+GenerateFBM.comp
+  └─ 大陆、丘陵、方向性山链、台地/火山/沟谷预设
+  ↓
+ThermalErosion.comp × N
+  └─ ReadTexture → WriteTexture → Barrier → Swap
+  ↓
+DeriveTerrainMaps.comp
+  ├─ Normal.xyz + Slope
+  ├─ Curvature + Flow Potential
+  └─ Grass + Soil + Rock + Snow Weights
+  ↓
+Terrain Shader 采样 Height、派生法线和四层权重
+```
+
+生成高度使用 R32F `SimulationGrid`。Thermal Erosion 的每轮 Dispatch 都严格只读当前纹理、只写另一张纹理，之后执行 Memory Barrier 并交换读写索引，因此不存在同纹理无保护读写。
+
+侵蚀属于有限次 Authoring 操作：只有 Terrain 为 Dirty、Compute Shader 热重载成功或用户点击 `Regenerate` 时才运行。普通渲染帧只采样上次生成结果，不会隐式继续改变地形。未来固定时间步 Runtime Erosion 必须使用另一套状态与调度器。
+
+### 派生图布局
+
+派生图均为 `RGBA16F` 运行时纹理：
+
+| 纹理 | 通道布局 | 当前用途 |
+| --- | --- | --- |
+| Normal/Slope | RGB 为编码后的对象空间法线，A 为坡度 | Terrain 顶点法线与后续分层材质 |
+| Analysis | R 为曲率，G 为局部 Flow Potential，B 为高度 | 后续湿度、积雪和侵蚀可视化 |
+| Material Weights | RGBA 为 Grass、Soil、Rock、Snow | 当前基础颜色混合及下一阶段 TerrainMaterial |
+
+四层权重在 Compute 阶段归一化。派生图只存在于 `TerrainRuntime`，不写入场景 YAML；场景只保存 Preset、Noise、Authoring 参数以及三个 Compute Shader Handle，加载后按需重建。
+
+### Shader 热重载与失效
+
+`TerrainGenerator` 同时监听：
+
+- `GenerateFBM.comp`；
+- `ThermalErosion.comp`；
+- `DeriveTerrainMaps.comp`。
+
+任一 Shader 成功热重载都会把 Terrain 标记为 Dirty，并重新执行完整三段管线；编译失败继续保留上一有效 Program，不替换现有地形结果。
+
+### 验证结果
+
+- VS2026 / MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；
+- 46 项无窗口断言全部 PASS，五类预设重复应用结果一致且参数处于安全范围；
+- Intel Iris Xe、OpenGL 4.6 下 Generate、Thermal Erosion、Derive Maps 三个 Compute Shader 均成功编译；
+- 默认 Alpine 每次生成执行 30 次 Dispatch；
+- 相同 Seed 与参数连续生成两次，Height 与全部派生图组合哈希均为 `4345498711584764525`；
+- GPU 读回确认全部值无 NaN/Inf、Height/派生通道范围合法，Grass/Soil/Rock/Snow 权重和为 1；
+- 显式验证入口为环境变量 `GLIMMER_TERRAIN_VALIDATE=1`，仅验证模式执行第二次生成与同步读回，正常编辑流程没有额外 Dispatch 或 Readback。
 
 ## KB
 

@@ -5,6 +5,7 @@ layout(r32f, binding = 0) writeonly uniform image2D u_Output;
 
 uniform int u_Seed;
 uniform int u_Octaves;
+uniform int u_Preset;
 uniform float u_Frequency;
 uniform float u_Lacunarity;
 uniform float u_Persistence;
@@ -13,6 +14,9 @@ uniform float u_RidgeStrength;
 uniform float u_ContinentScale;
 uniform float u_ErosionStrength;
 uniform float u_DetailStrength;
+uniform float u_MountainDirection;
+uniform float u_MountainWidth;
+uniform float u_PlateauStrength;
 uniform vec2 u_Offset;
 
 uint Hash(uint value)
@@ -96,6 +100,13 @@ float RidgedFBM(vec2 position)
 	return amplitudeSum > 0.0 ? value / amplitudeSum : 0.0;
 }
 
+mat2 Rotation(float angle)
+{
+	float cosine = cos(angle);
+	float sine = sin(angle);
+	return mat2(cosine, -sine, sine, cosine);
+}
+
 void main()
 {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -123,16 +134,58 @@ void main()
 	float ridges = RidgedFBM(warpedPosition * 1.15 + vec2(11.3, 2.8));
 	ridges = pow(clamp(ridges, 0.0, 1.0), 1.35);
 
+	// Anisotropic ridged noise produces long connected mountain chains instead
+	// of distributing equally sharp peaks over the complete height field.
+	vec2 chainPosition = Rotation(u_MountainDirection) * warpedPosition;
+	float chainWidth = clamp(u_MountainWidth, 0.05, 1.0);
+	vec2 chainScale = vec2(mix(0.22, 0.62, chainWidth), mix(3.2, 1.25, chainWidth));
+	float primaryChain = RidgedFBM(chainPosition * chainScale + vec2(27.1, 8.7));
+	vec2 secondaryPosition = Rotation(u_MountainDirection + 1.07) * warpedPosition;
+	float secondaryChain = RidgedFBM(
+		secondaryPosition * vec2(chainScale.x * 0.8, chainScale.y * 0.72)
+		+ vec2(61.3, 17.9));
+	float rangeRidges = pow(clamp(max(primaryChain, secondaryChain * 0.72), 0.0, 1.0), 1.6);
+
 	float channelNoise = 1.0 - abs(
 		FBM(warpedPosition * 1.9 + vec2(97.1, 43.2)) * 2.0 - 1.0);
 	float channels = pow(clamp(channelNoise, 0.0, 1.0), 6.0);
 	float fineDetail = FBM(warpedPosition * 4.5 + vec2(7.7, 61.3)) - 0.5;
 
-	float foothills = mix(rollingHills * 0.20, ridges * 0.38, mountainMask);
-	float mountains = ridges * mountainMask * clamp(u_RidgeStrength, 0.0, 1.0);
+	float ridgeSignal = u_Preset == 3 ? ridges * 0.25
+		: mix(ridges, rangeRidges, u_Preset == 0 ? 0.55 : 0.82);
+	float foothills = mix(rollingHills * 0.20, ridgeSignal * 0.38, mountainMask);
+	float mountains = ridgeSignal * mountainMask * clamp(u_RidgeStrength, 0.0, 1.0);
 	float height = 0.04 + broadLand * 0.20 + continental * foothills + mountains * 0.42;
 	height += fineDetail * u_DetailStrength * smoothstep(0.12, 0.45, height);
 	height -= channels * u_ErosionStrength * continental * (0.30 + mountainMask * 0.70);
+
+	if (u_Preset == 2)
+	{
+		float terraceCount = 5.0;
+		float terraced = floor(height * terraceCount + 0.5) / terraceCount;
+		height = mix(height, smoothstep(terraced - 0.035, terraced + 0.035, height)
+			* (1.0 / terraceCount) + terraced - 0.5 / terraceCount,
+			clamp(u_PlateauStrength, 0.0, 1.0));
+	}
+	else if (u_Preset == 3)
+	{
+		height = 0.08 + broadLand * (0.16 + rollingHills * 0.38)
+			+ fineDetail * u_DetailStrength;
+	}
+	else if (u_Preset == 4)
+	{
+		vec2 craterOffset = warp * 0.10;
+		float radial = length((uv - 0.5) + craterOffset);
+		float cone = smoothstep(0.52, 0.07, radial);
+		float crater = exp(-pow((radial - 0.085) / 0.035, 2.0));
+		height = max(height * 0.55, 0.06 + cone * 0.78 - crater * 0.42
+			+ fineDetail * 0.08);
+	}
+	else if (u_Preset == 5)
+	{
+		height -= channels * clamp(u_ErosionStrength * 1.45, 0.0, 0.65)
+			* smoothstep(0.12, 0.65, height);
+	}
 
 	// Preserve broad plains while giving mountain ranges additional relief.
 	height = pow(clamp(height, 0.0, 1.0), 1.18);
