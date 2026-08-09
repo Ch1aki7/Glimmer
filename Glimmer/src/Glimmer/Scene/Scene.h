@@ -32,14 +32,16 @@ namespace gl {
 		void OnRuntimeStart();
 		void OnRuntimeStop();
 		void OnUpdateRuntime(Timestep ts, bool deferSpritePass = false);
-		void OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection,
-			const glm::vec3& cameraPosition, bool deferSpritePass = false);
+		void OnUpdateEditor(Timestep ts, const glm::mat4& view,
+			const glm::mat4& projection, const glm::vec3& cameraPosition,
+			float cameraNear, float cameraFar, bool deferSpritePass = false);
 		void FlushSpritePass();
 		void OnViewportResize(uint32_t width, uint32_t height);
 
 	private:
 		void UploadLightEnvironment();
-		void RenderDirectionalShadowMap(const glm::vec3& focusPosition);
+		void RenderDirectionalShadowMap(const glm::mat4& cameraView,
+			const glm::mat4& cameraProjection, float cameraNear, float cameraFar);
 		void RenderSprites(const glm::mat4& viewProjection);
 
 		template<typename T>

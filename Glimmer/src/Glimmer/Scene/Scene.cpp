@@ -267,9 +267,29 @@ namespace gl {
 		// 执行渲染
 		if (mainCamera)
 		{
-			const glm::mat4 viewProjection = mainCamera->GetProjection() * glm::inverse(cameraTransform);
+			const glm::mat4 cameraView = glm::inverse(cameraTransform);
+			const glm::mat4 cameraProjection = mainCamera->GetProjection();
+			const glm::mat4 viewProjection = cameraProjection * cameraView;
 			const glm::vec3 cameraPosition = glm::vec3(cameraTransform[3]);
-			RenderDirectionalShadowMap(cameraPosition);
+			const SceneCamera* sceneCamera = dynamic_cast<const SceneCamera*>(mainCamera);
+			float cameraNear = 0.01f;
+			float cameraFar = 1000.0f;
+			if (sceneCamera)
+			{
+				if (sceneCamera->GetProjectionType() == SceneCamera::ProjectionType::Perspective)
+				{
+					cameraNear = sceneCamera->GetPerspectiveNearClip();
+					cameraFar = sceneCamera->GetPerspectiveFarClip();
+				}
+				else
+				{
+					cameraNear = std::max(0.01f, sceneCamera->GetOrthographicNearClip());
+					cameraFar = std::max(cameraNear + 0.01f,
+						sceneCamera->GetOrthographicFarClip());
+				}
+			}
+			RenderDirectionalShadowMap(
+				cameraView, cameraProjection, cameraNear, cameraFar);
 			Renderer3D::BeginScene(viewProjection, cameraPosition);
 			auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
 			for (auto entity : modelView)
@@ -306,13 +326,15 @@ namespace gl {
 			ShadowRenderer::Disable();
 	}
 
-	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& viewProjection,
-		const glm::vec3& cameraPosition, bool deferSpritePass)
+	void Scene::OnUpdateEditor(Timestep ts, const glm::mat4& view,
+		const glm::mat4& projection, const glm::vec3& cameraPosition,
+		float cameraNear, float cameraFar, bool deferSpritePass)
 	{
 		GL_CORE_ASSERT(!m_SpritePassPending,
 			"Previous Scene sprite pass was not flushed by the render host.");
 		UploadLightEnvironment();
-		RenderDirectionalShadowMap(cameraPosition);
+		RenderDirectionalShadowMap(view, projection, cameraNear, cameraFar);
+		const glm::mat4 viewProjection = projection * view;
 		Renderer3D::BeginScene(viewProjection, cameraPosition);
 		auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
 		for (auto entity : modelView)
@@ -419,7 +441,8 @@ namespace gl {
 		Renderer::UploadLightEnvironment(environment);
 	}
 
-	void Scene::RenderDirectionalShadowMap(const glm::vec3& focusPosition)
+	void Scene::RenderDirectionalShadowMap(const glm::mat4& cameraView,
+		const glm::mat4& cameraProjection, float cameraNear, float cameraFar)
 	{
 		bool rendered = false;
 		auto directionalView = m_Registry.view<TransformComponent, DirectionalLightComponent>();
@@ -434,26 +457,42 @@ namespace gl {
 				* glm::vec3(0.0f, 0.0f, -1.0f);
 			const glm::vec3 direction = glm::length(forward) > 0.0001f
 				? glm::normalize(forward) : glm::vec3(0.0f, -1.0f, 0.0f);
-			if (!ShadowRenderer::BeginDirectional(direction, focusPosition,
-				light.ShadowMapResolution, light.ShadowDistance, light.ShadowBias))
+			if (!ShadowRenderer::BeginDirectional(direction, cameraView,
+				cameraProjection, cameraNear, cameraFar,
+				light.ShadowMapResolution, light.ShadowDistance, light.ShadowBias,
+				light.ShadowCascadeCount, light.ShadowSplitLambda))
 				break;
-
-			auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
-			for (auto modelEntity : modelView)
-			{
-				const auto& modelTransform = modelView.get<TransformComponent>(modelEntity);
-				const auto& model = modelView.get<ModelRendererComponent>(modelEntity);
-				ShadowRenderer::SubmitModel(model.ModelHandle, modelTransform.GetTransform());
-			}
 
 			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 			for (auto terrainEntity : terrainView)
 			{
-				auto& terrainTransform = terrainView.get<TransformComponent>(terrainEntity);
 				auto& terrain = terrainView.get<TerrainComponent>(terrainEntity);
-				if (TerrainRenderer::Prepare(terrain))
+				TerrainRenderer::Prepare(terrain);
+			}
+
+			const uint32_t cascadeCount = std::clamp(
+				light.ShadowCascadeCount, 1u, ShadowRenderer::MaxCascades);
+			for (uint32_t cascadeIndex = 0;
+				cascadeIndex < cascadeCount; ++cascadeIndex)
+			{
+				if (!ShadowRenderer::BeginCascade(cascadeIndex))
+					continue;
+				auto modelView = m_Registry.view<TransformComponent, ModelRendererComponent>();
+				for (auto modelEntity : modelView)
+				{
+					const auto& modelTransform = modelView.get<TransformComponent>(modelEntity);
+					const auto& model = modelView.get<ModelRendererComponent>(modelEntity);
+					ShadowRenderer::SubmitModel(
+						model.ModelHandle, modelTransform.GetTransform());
+				}
+				for (auto terrainEntity : terrainView)
+				{
+					auto& terrainTransform = terrainView.get<TransformComponent>(terrainEntity);
+					auto& terrain = terrainView.get<TerrainComponent>(terrainEntity);
 					ShadowRenderer::SubmitTerrain(
 						terrain, terrainTransform.GetTransform());
+				}
+				ShadowRenderer::EndCascade();
 			}
 			ShadowRenderer::EndDirectional();
 			rendered = true;

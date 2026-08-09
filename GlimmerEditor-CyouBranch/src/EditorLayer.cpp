@@ -329,8 +329,9 @@ namespace gl {
 				skyboxProjection = m_EditorCamera.GetProjectionMatrix();
 				hasSkyboxCamera = true;
 				m_ActiveScene->OnUpdateEditor(
-					ts, skyboxProjection * skyboxView,
-					m_EditorCamera.GetPosition(), true);
+					ts, skyboxView, skyboxProjection,
+					m_EditorCamera.GetPosition(),
+					m_EditorCamera.GetNearClip(), m_EditorCamera.GetFarClip(), true);
 			}
 			else
 			{

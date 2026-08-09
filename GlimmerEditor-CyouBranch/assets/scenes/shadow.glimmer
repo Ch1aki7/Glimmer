@@ -1,0 +1,110 @@
+Scene: Untitled
+Version: 6
+Entities:
+  - Entity: 12367775380227524232
+    Components:
+      TagComponent: Entity
+      TransformComponent:
+        Translation: [0, 29.866825, 0]
+        Rotation: [0, 0, 0]
+        Scale: [7.06, 7.06, 7.06]
+      ModelRendererComponent:
+        Model: 8631387498429252298
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 9090
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 10985595076332161870
+          NormalTexture: 10352056206108810874
+          AOTexture: 11229150295333820520
+          EmissiveTexture: 6250739528996233267
+          TilingFactor: 1
+          Metallic: 0
+          Roughness: 0.5
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 1.1
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5
+  - Entity: 13293744710207134542
+    Components:
+      TagComponent: Terrain
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      TerrainComponent:
+        Procedural: true
+        Preset: Alpine
+        HeightMapResolution: 512
+        MeshResolution: 256
+        HeightScale: 42
+        HeightMap: 0
+        RenderShader: 13614654561704837220
+        GenerationShader: 7633283146183385932
+        ErosionShader: 7633283146183385933
+        DerivationShader: 7633283146183385934
+        TerrainMaterial: 0
+        Noise:
+          Seed: 11
+          Octaves: 7
+          Frequency: 2.4
+          Lacunarity: 2
+          Persistence: 0.48
+          DomainWarp: 0.82
+          RidgeStrength: 0.82
+          ContinentScale: 0.3
+          ErosionStrength: 0.16
+          DetailStrength: 0.08
+          MountainDirection: 0.35
+          MountainWidth: 0.24
+          PlateauStrength: 0
+          Offset: [0, 0]
+        Authoring:
+          EnableThermalErosion: true
+          ThermalIterations: 28
+          Talus: 0.01
+          ThermalStrength: 0.3
+  - Entity: 9646425177755893702
+    Components:
+      TagComponent: Sky Light
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      SkyLightComponent:
+        Cubemap: 14395647676425568118
+        Intensity: 1
+        Enabled: true
+  - Entity: 10531764604856214381
+    Components:
+      TagComponent: Point Light
+      TransformComponent:
+        Translation: [0, 12, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      PointLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 80
+        Range: 40
+        Enabled: true
+  - Entity: 10089689136813781898
+    Components:
+      TagComponent: Sun
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [-50, 30, 0]
+        Scale: [1, 1, 1]
+      DirectionalLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 5.05
+        AmbientIntensity: 0.05
+        Enabled: true
+        CastShadows: true
+        ShadowMapResolution: 2048
+        ShadowCascadeCount: 4
+        ShadowDistance: 237
+        ShadowBias: 0.0015
+        ShadowSplitLambda: 0.74

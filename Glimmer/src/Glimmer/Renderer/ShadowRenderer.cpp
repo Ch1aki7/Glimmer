@@ -10,22 +10,97 @@
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Terrain/Terrain.h"
 
+#include <array>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace gl {
 	namespace {
 		struct ShadowRendererData
 		{
-			Ref<Framebuffer> Framebuffer;
+			std::array<Ref<Framebuffer>, ShadowRenderer::MaxCascades> Framebuffers;
+			std::array<glm::mat4, ShadowRenderer::MaxCascades> LightViewProjections{};
+			std::array<float, ShadowRenderer::MaxCascades> CascadeSplits{};
 			Ref<Shader> DepthShader;
-			glm::mat4 LightViewProjection{ 1.0f };
+			glm::mat4 CameraView{ 1.0f };
 			uint32_t Resolution = 0;
+			uint32_t CascadeCount = 0;
+			uint32_t ActiveCascade = 0;
 			float Bias = 0.0015f;
 			bool PassActive = false;
 			bool Enabled = false;
 		};
 
 		ShadowRendererData s_Data;
+
+		std::array<glm::vec3, 8> GetFrustumCornersWorldSpace(
+			const glm::mat4& viewProjection)
+		{
+			const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+			std::array<glm::vec3, 8> corners{};
+			uint32_t index = 0;
+			for (uint32_t z = 0; z < 2; ++z)
+				for (uint32_t y = 0; y < 2; ++y)
+					for (uint32_t x = 0; x < 2; ++x)
+					{
+						const glm::vec4 clip(
+							x ? 1.0f : -1.0f,
+							y ? 1.0f : -1.0f,
+							z ? 1.0f : -1.0f,
+							1.0f);
+						const glm::vec4 world = inverseViewProjection * clip;
+						corners[index++] = glm::vec3(world) / world.w;
+					}
+			return corners;
+		}
+
+		glm::mat4 BuildCascadeMatrix(
+			const std::array<glm::vec3, 8>& fullFrustumCorners,
+			float previousSplitRatio,
+			float splitRatio,
+			const glm::vec3& lightDirection,
+			uint32_t resolution)
+		{
+			std::array<glm::vec3, 8> cascadeCorners{};
+			for (uint32_t index = 0; index < 4; ++index)
+			{
+				const glm::vec3 nearCorner = fullFrustumCorners[index];
+				const glm::vec3 farCorner = fullFrustumCorners[index + 4];
+				const glm::vec3 range = farCorner - nearCorner;
+				cascadeCorners[index] = nearCorner + range * previousSplitRatio;
+				cascadeCorners[index + 4] = nearCorner + range * splitRatio;
+			}
+
+			glm::vec3 center(0.0f);
+			for (const glm::vec3& corner : cascadeCorners)
+				center += corner;
+			center /= static_cast<float>(cascadeCorners.size());
+
+			float radius = 0.0f;
+			for (const glm::vec3& corner : cascadeCorners)
+				radius = std::max(radius, glm::length(corner - center));
+			radius = std::ceil(radius * 16.0f) / 16.0f;
+			radius = std::max(radius, 1.0f);
+
+			const glm::vec3 up = std::abs(glm::dot(
+				lightDirection, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.98f
+				? glm::vec3(0.0f, 0.0f, 1.0f)
+				: glm::vec3(0.0f, 1.0f, 0.0f);
+			const glm::mat4 lightView = glm::lookAt(
+				center - lightDirection * radius * 2.0f, center, up);
+			glm::mat4 lightProjection = glm::ortho(
+				-radius, radius, -radius, radius, 0.1f, radius * 4.0f);
+
+			// Snap the projected origin to a shadow texel to reduce shimmering.
+			glm::vec4 shadowOrigin = lightProjection * lightView
+				* glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+			shadowOrigin *= static_cast<float>(resolution) * 0.5f;
+			const glm::vec4 roundedOrigin = glm::round(shadowOrigin);
+			glm::vec4 roundOffset = roundedOrigin - shadowOrigin;
+			roundOffset *= 2.0f / static_cast<float>(resolution);
+			lightProjection[3][0] += roundOffset.x;
+			lightProjection[3][1] += roundOffset.y;
+			return lightProjection * lightView;
+		}
 	}
 
 	void ShadowRenderer::Shutdown()
@@ -33,16 +108,23 @@ namespace gl {
 		s_Data.PassActive = false;
 		s_Data.Enabled = false;
 		s_Data.DepthShader.reset();
-		s_Data.Framebuffer.reset();
+		for (Ref<Framebuffer>& framebuffer : s_Data.Framebuffers)
+			framebuffer.reset();
 		s_Data.Resolution = 0;
+		s_Data.CascadeCount = 0;
 	}
 
 	bool ShadowRenderer::BeginDirectional(
 		const glm::vec3& lightDirection,
-		const glm::vec3& focusPosition,
+		const glm::mat4& cameraView,
+		const glm::mat4& cameraProjection,
+		float cameraNear,
+		float cameraFar,
 		uint32_t resolution,
 		float distance,
-		float bias)
+		float bias,
+		uint32_t cascadeCount,
+		float splitLambda)
 	{
 		Disable();
 		const AssetHandle shaderHandle =
@@ -52,37 +134,73 @@ namespace gl {
 			return false;
 
 		resolution = std::clamp(resolution, 512u, 4096u);
-		if (!s_Data.Framebuffer || s_Data.Resolution != resolution)
+		cascadeCount = std::clamp(cascadeCount, 1u, MaxCascades);
+		if (s_Data.Resolution != resolution)
 		{
+			for (Ref<Framebuffer>& framebuffer : s_Data.Framebuffers)
+				framebuffer.reset();
+			s_Data.Resolution = resolution;
+		}
+		for (uint32_t index = 0; index < cascadeCount; ++index)
+		{
+			if (s_Data.Framebuffers[index])
+				continue;
 			FramebufferSpecification specification;
 			specification.Width = resolution;
 			specification.Height = resolution;
 			specification.Attachments = { { FramebufferTextureFormat::Depth32F } };
-			s_Data.Framebuffer = Framebuffer::Create(specification);
-			s_Data.Resolution = resolution;
+			s_Data.Framebuffers[index] = Framebuffer::Create(specification);
 		}
 
 		const glm::vec3 direction = glm::length(lightDirection) > 0.0001f
 			? glm::normalize(lightDirection) : glm::vec3(0.0f, -1.0f, 0.0f);
-		distance = std::clamp(distance, 10.0f, 500.0f);
-		const glm::vec3 up = std::abs(glm::dot(direction, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.98f
-			? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
-		const glm::mat4 lightView = glm::lookAt(
-			focusPosition - direction * distance, focusPosition, up);
-		const glm::mat4 lightProjection = glm::ortho(
-			-distance, distance, -distance, distance, 0.1f, distance * 2.5f);
-		s_Data.LightViewProjection = lightProjection * lightView;
-		s_Data.Bias = std::clamp(bias, 0.00001f, 0.05f);
+		cameraNear = std::max(cameraNear, 0.001f);
+		cameraFar = std::max(cameraFar, cameraNear + 0.01f);
+		const float shadowFar = std::max(cameraNear + 0.01f,
+			std::min(cameraFar, std::clamp(distance, 10.0f, 500.0f)));
+		const float clipRange = cameraFar - cameraNear;
+		const float shadowRange = shadowFar - cameraNear;
+		splitLambda = std::clamp(splitLambda, 0.0f, 1.0f);
+		const auto frustumCorners = GetFrustumCornersWorldSpace(
+			cameraProjection * cameraView);
 
-		s_Data.Framebuffer->Bind();
+		float previousSplitRatio = 0.0f;
+		for (uint32_t index = 0; index < cascadeCount; ++index)
+		{
+			const float ratio = static_cast<float>(index + 1)
+				/ static_cast<float>(cascadeCount);
+			const float logarithmic = cameraNear
+				* std::pow(shadowFar / cameraNear, ratio);
+			const float uniform = cameraNear + shadowRange * ratio;
+			const float splitDepth = glm::mix(uniform, logarithmic, splitLambda);
+			const float splitRatio = (splitDepth - cameraNear) / clipRange;
+			s_Data.CascadeSplits[index] = splitDepth;
+			s_Data.LightViewProjections[index] = BuildCascadeMatrix(
+				frustumCorners, previousSplitRatio, splitRatio, direction, resolution);
+			previousSplitRatio = splitRatio;
+		}
+
+		s_Data.CameraView = cameraView;
+		s_Data.CascadeCount = cascadeCount;
+		s_Data.Bias = std::clamp(bias, 0.00001f, 0.05f);
+		s_Data.DepthShader->ReloadIfChanged();
+		return true;
+	}
+
+	bool ShadowRenderer::BeginCascade(uint32_t cascadeIndex)
+	{
+		if (!s_Data.DepthShader || cascadeIndex >= s_Data.CascadeCount
+			|| !s_Data.Framebuffers[cascadeIndex])
+			return false;
+		s_Data.ActiveCascade = cascadeIndex;
+		s_Data.Framebuffers[cascadeIndex]->Bind();
 		RenderCommand::SetBlendEnabled(false);
 		RenderCommand::SetDepthWriteEnabled(true);
 		RenderCommand::SetDepthFunction(DepthFunction::Less);
 		RenderCommand::ClearDepth();
-		s_Data.DepthShader->ReloadIfChanged();
 		s_Data.DepthShader->Bind();
-		s_Data.DepthShader->UploadUniformMat4(
-			"u_LightViewProjection", s_Data.LightViewProjection);
+		s_Data.DepthShader->UploadUniformMat4("u_LightViewProjection",
+			s_Data.LightViewProjections[cascadeIndex]);
 		s_Data.DepthShader->UploadUniformInt("u_HeightMap", 0);
 		s_Data.PassActive = true;
 		return true;
@@ -98,10 +216,8 @@ namespace gl {
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 0);
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		for (const Ref<Mesh>& mesh : model->GetMeshes())
-		{
 			if (mesh && mesh->GetVertexArray() && mesh->GetIndexCount() > 0)
 				RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
-		}
 	}
 
 	void ShadowRenderer::SubmitTerrain(TerrainComponent& terrain, const glm::mat4& transform)
@@ -118,20 +234,27 @@ namespace gl {
 			terrain.Runtime->Mesh->GetVertexArray(), terrain.Runtime->Mesh->GetIndexCount());
 	}
 
-	void ShadowRenderer::EndDirectional()
+	void ShadowRenderer::EndCascade()
 	{
 		if (!s_Data.PassActive)
 			return;
 		s_Data.DepthShader->Unbind();
-		s_Data.Framebuffer->Unbind();
+		s_Data.Framebuffers[s_Data.ActiveCascade]->Unbind();
 		s_Data.PassActive = false;
-		s_Data.Enabled = true;
+	}
+
+	void ShadowRenderer::EndDirectional()
+	{
+		if (s_Data.PassActive)
+			EndCascade();
+		s_Data.Enabled = s_Data.CascadeCount > 0;
 	}
 
 	void ShadowRenderer::Disable()
 	{
 		s_Data.PassActive = false;
 		s_Data.Enabled = false;
+		s_Data.CascadeCount = 0;
 	}
 
 	void ShadowRenderer::BindForLighting(const Ref<Shader>& shader, uint32_t textureSlot)
@@ -139,14 +262,27 @@ namespace gl {
 		if (!shader)
 			return;
 		shader->UploadUniformInt("u_ShadowEnabled", s_Data.Enabled ? 1 : 0);
-		if (!s_Data.Enabled || !s_Data.Framebuffer)
+		if (!s_Data.Enabled)
 			return;
-		shader->UploadUniformMat4("u_LightViewProjection", s_Data.LightViewProjection);
+		shader->UploadUniformInt("u_ShadowCascadeCount",
+			static_cast<int>(s_Data.CascadeCount));
+		shader->UploadUniformMat4("u_ShadowCameraView", s_Data.CameraView);
 		shader->UploadUniformFloat("u_ShadowBias", s_Data.Bias);
 		shader->UploadUniformFloat("u_ShadowTexelSize",
 			1.0f / static_cast<float>(s_Data.Resolution));
-		shader->BindTexture("u_ShadowMap", textureSlot,
-			s_Data.Framebuffer->GetDepthAttachmentRendererID());
+		for (uint32_t index = 0; index < s_Data.CascadeCount; ++index)
+		{
+			shader->UploadUniformMat4(
+				"u_LightViewProjections[" + std::to_string(index) + "]",
+				s_Data.LightViewProjections[index]);
+			shader->UploadUniformFloat(
+				"u_ShadowCascadeSplits[" + std::to_string(index) + "]",
+				s_Data.CascadeSplits[index]);
+			shader->BindTexture(
+				"u_ShadowMaps[" + std::to_string(index) + "]",
+				textureSlot + index,
+				s_Data.Framebuffers[index]->GetDepthAttachmentRendererID());
+		}
 	}
 
 	bool ShadowRenderer::IsEnabled()

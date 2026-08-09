@@ -104,8 +104,11 @@ uniform float u_HeightInfluence;
 uniform float u_SlopeInfluence;
 uniform float u_CurvatureInfluence;
 uniform float u_MoistureInfluence;
-uniform sampler2D u_ShadowMap;
-uniform mat4 u_LightViewProjection;
+uniform sampler2D u_ShadowMaps[4];
+uniform mat4 u_LightViewProjections[4];
+uniform float u_ShadowCascadeSplits[4];
+uniform mat4 u_ShadowCameraView;
+uniform int u_ShadowCascadeCount;
 uniform int u_ShadowEnabled;
 uniform float u_ShadowBias;
 uniform float u_ShadowTexelSize;
@@ -188,12 +191,26 @@ vec3 EvaluateBRDF(vec3 n, vec3 v, vec3 l, vec3 radiance,
 	return (diffuse + specular) * radiance * max(dot(n, l), 0.0);
 }
 
+float SampleCascadeDepth(int cascadeIndex, vec2 uv)
+{
+	if (cascadeIndex == 0) return texture(u_ShadowMaps[0], uv).r;
+	if (cascadeIndex == 1) return texture(u_ShadowMaps[1], uv).r;
+	if (cascadeIndex == 2) return texture(u_ShadowMaps[2], uv).r;
+	return texture(u_ShadowMaps[3], uv).r;
+}
+
 float DirectionalShadowVisibility(
 	vec3 worldPosition, vec3 normal, vec3 lightDirection)
 {
 	if (u_ShadowEnabled == 0)
 		return 1.0;
-	vec4 lightClip = u_LightViewProjection * vec4(worldPosition, 1.0);
+	float viewDepth = abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z);
+	int cascadeIndex = 0;
+	while (cascadeIndex < u_ShadowCascadeCount - 1
+		&& viewDepth > u_ShadowCascadeSplits[cascadeIndex])
+		cascadeIndex++;
+	vec4 lightClip = u_LightViewProjections[cascadeIndex]
+		* vec4(worldPosition, 1.0);
 	vec3 projected = lightClip.xyz / max(lightClip.w, 0.0001);
 	projected = projected * 0.5 + 0.5;
 	if (projected.z <= 0.0 || projected.z >= 1.0
@@ -206,8 +223,8 @@ float DirectionalShadowVisibility(
 	for (int y = -1; y <= 1; ++y)
 		for (int x = -1; x <= 1; ++x)
 		{
-			float closest = texture(u_ShadowMap,
-				projected.xy + vec2(x, y) * u_ShadowTexelSize).r;
+			float closest = SampleCascadeDepth(cascadeIndex,
+				projected.xy + vec2(x, y) * u_ShadowTexelSize);
 			shadow += projected.z - slopeBias > closest ? 1.0 : 0.0;
 		}
 	return 1.0 - shadow / 9.0;

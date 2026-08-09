@@ -83,8 +83,8 @@ AssetRegistry:
   - Handle: 7633283146183385938
     Type: Texture2D
     FilePath: textures/pbr/grass/Grass001_1K-PNG_AmbientOcclusion.png
-    ColorSpace: Linear
-    Semantic: Data
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 7633283146183385939
     Type: Texture2D
     FilePath: textures/pbr/ground/Ground054_1K-PNG_Color.png
@@ -204,6 +204,11 @@ AssetRegistry:
   - Handle: 14395647676425568118
     Type: Cubemap
     FilePath: skyboxes/desert-evening.glsky
+  - Handle: 15224388513069551945
+    Type: Texture2D
+    FilePath: textures/pbr/snow/Snow005_1K-PNG_NormalDX.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 15261581679978376490
     Type: Texture2D
     FilePath: textures/pbr/brick/factory_brick_diff_1k.jpg
@@ -215,6 +220,11 @@ AssetRegistry:
   - Handle: 16046880885886658744
     Type: Shader
     FilePath: shaders/Skybox.glsl
+  - Handle: 17809713698357427010
+    Type: Texture2D
+    FilePath: textures/pbr/rock/Rock027_1K-PNG_NormalDX.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 18188504540743061743
     Type: Model
     FilePath: models/geos/UV Sphere.obj

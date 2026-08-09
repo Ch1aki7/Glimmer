@@ -294,8 +294,10 @@ namespace gl {
 		out << YAML::Key << "Enabled" << YAML::Value << comp.Enabled;
 		out << YAML::Key << "CastShadows" << YAML::Value << comp.CastShadows;
 		out << YAML::Key << "ShadowMapResolution" << YAML::Value << comp.ShadowMapResolution;
+		out << YAML::Key << "ShadowCascadeCount" << YAML::Value << comp.ShadowCascadeCount;
 		out << YAML::Key << "ShadowDistance" << YAML::Value << comp.ShadowDistance;
 		out << YAML::Key << "ShadowBias" << YAML::Value << comp.ShadowBias;
+		out << YAML::Key << "ShadowSplitLambda" << YAML::Value << comp.ShadowSplitLambda;
 		out << YAML::EndMap;
 	}
 
@@ -309,12 +311,18 @@ namespace gl {
 		if (node["ShadowMapResolution"])
 			comp.ShadowMapResolution = glm::clamp(
 				node["ShadowMapResolution"].as<uint32_t>(), 512u, 4096u);
+		if (node["ShadowCascadeCount"])
+			comp.ShadowCascadeCount = glm::clamp(
+				node["ShadowCascadeCount"].as<uint32_t>(), 1u, 4u);
 		if (node["ShadowDistance"])
 			comp.ShadowDistance = glm::clamp(
 				node["ShadowDistance"].as<float>(), 10.0f, 500.0f);
 		if (node["ShadowBias"])
 			comp.ShadowBias = glm::clamp(
 				node["ShadowBias"].as<float>(), 0.00001f, 0.05f);
+		if (node["ShadowSplitLambda"])
+			comp.ShadowSplitLambda = glm::clamp(
+				node["ShadowSplitLambda"].as<float>(), 0.0f, 1.0f);
 	}
 
 	static void SerializeComponent(YAML::Emitter& out, const PointLightComponent& comp)

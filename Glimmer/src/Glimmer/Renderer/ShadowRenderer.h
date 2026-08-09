@@ -11,15 +11,24 @@ namespace gl {
 	class ShadowRenderer
 	{
 	public:
+		static constexpr uint32_t MaxCascades = 4;
+
 		static void Shutdown();
 		static bool BeginDirectional(
 			const glm::vec3& lightDirection,
-			const glm::vec3& focusPosition,
+			const glm::mat4& cameraView,
+			const glm::mat4& cameraProjection,
+			float cameraNear,
+			float cameraFar,
 			uint32_t resolution,
 			float distance,
-			float bias);
+			float bias,
+			uint32_t cascadeCount,
+			float splitLambda);
+		static bool BeginCascade(uint32_t cascadeIndex);
 		static void SubmitModel(AssetHandle modelHandle, const glm::mat4& transform);
 		static void SubmitTerrain(TerrainComponent& terrain, const glm::mat4& transform);
+		static void EndCascade();
 		static void EndDirectional();
 		static void Disable();
 

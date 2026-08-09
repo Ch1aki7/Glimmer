@@ -582,6 +582,12 @@ namespace gl {
 					CommitComponentWidget(entity, "Edit Directional Shadow Resolution",
 						m_DirectionalLightEdit, before, light);
 					before = light;
+					int cascadeCount = static_cast<int>(light.ShadowCascadeCount);
+					if (ImGui::SliderInt("Cascade Count##Directional", &cascadeCount, 1, 4))
+						light.ShadowCascadeCount = static_cast<uint32_t>(cascadeCount);
+					CommitComponentWidget(entity, "Edit Directional Shadow Cascade Count",
+						m_DirectionalLightEdit, before, light);
+					before = light;
 					ImGui::DragFloat("Shadow Distance##Directional", &light.ShadowDistance,
 						1.0f, 10.0f, 500.0f);
 					CommitComponentWidget(entity, "Edit Directional Shadow Distance",
@@ -590,6 +596,11 @@ namespace gl {
 					ImGui::DragFloat("Shadow Bias##Directional", &light.ShadowBias,
 						0.00005f, 0.00001f, 0.05f, "%.5f");
 					CommitComponentWidget(entity, "Edit Directional Shadow Bias",
+						m_DirectionalLightEdit, before, light);
+					before = light;
+					ImGui::SliderFloat("Split Lambda##Directional", &light.ShadowSplitLambda,
+						0.0f, 1.0f, "%.2f");
+					CommitComponentWidget(entity, "Edit Directional Shadow Split Lambda",
 						m_DirectionalLightEdit, before, light);
 				}
 				ImGui::TextDisabled("Direction follows Transform rotation.");

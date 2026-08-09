@@ -22,6 +22,8 @@ namespace gl {
 		const glm::mat4& GetProjectionMatrix() const { return m_ProjectionMatrix; }
 		const glm::vec3& GetPosition()         const { return m_Position; }
 		float GetDistance()                    const { return m_Distance; }
+		float GetNearClip()                    const { return m_NearClip; }
+		float GetFarClip()                     const { return m_FarClip; }
 
 		void SetInputEnabled(bool enabled) { m_InputEnabled = enabled; }
 		void SetViewportSize(float width, float height);

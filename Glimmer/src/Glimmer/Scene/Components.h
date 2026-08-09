@@ -112,8 +112,10 @@ namespace gl {
 		bool Enabled = true;
 		bool CastShadows = true;
 		uint32_t ShadowMapResolution = 2048;
+		uint32_t ShadowCascadeCount = 4;
 		float ShadowDistance = 80.0f;
 		float ShadowBias = 0.0015f;
+		float ShadowSplitLambda = 0.65f;
 
 		DirectionalLightComponent() = default;
 		DirectionalLightComponent(const DirectionalLightComponent&) = default;

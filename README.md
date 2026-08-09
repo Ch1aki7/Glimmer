@@ -12637,9 +12637,9 @@ Renderer 只绑定符合语义契约的 Texture Asset。贴图为空或语义不
 - 默认 Alpine Terrain 保持 `TerrainMaterialHandle = 0` 后，VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；RTX 4060/OpenGL 4.6 下 Terrain 与 Generate/Thermal Erosion/Derive Maps 均成功编译，启动代码不会导入默认 TerrainMaterial 或其 11 张运行时纹理。
 - VS 启动时的撕裂/显示异常最终确认来自显卡切换与独显选择，不是 Terrain Shader。完整纹理路径最坏约执行 36 次层纹理采样，加上 Height/派生图后接近 40 次/像素；该数字仅作为后续 Top-2 层裁剪和质量分级的性能优化基线。
 
-## 方向光单级 Shadow Map
+## 方向光 Shadow Map 与 CSM
 
-P9 第一阶段加入了 Model 与 Terrain 共用的 Directional Shadow Map。Scene 在正常 HDR 颜色 Pass 前，从第一个启用且勾选 `Cast Shadows` 的方向光生成一张纯深度图；PBRModel 和 Terrain 随后把世界坐标投影到该深度图，判断当前片元是否被遮挡。
+P9 已加入 Model 与 Terrain 共用的 Directional Shadow Map，并扩展为最多四级 CSM。Scene 在正常 HDR 颜色 Pass 前，从第一个启用且勾选 `Cast Shadows` 的方向光生成多张纯深度图；PBRModel 和 Terrain 随后根据片元的视空间深度选择级联，判断当前片元是否被遮挡。
 
 ### 新增操作
 
@@ -12647,8 +12647,10 @@ P9 第一阶段加入了 Model 与 Terrain 共用的 Directional Shadow Map。Sc
 
 - `Cast Shadows`：启用或关闭方向光阴影；
 - `Shadow Resolution`：512、1024、2048、4096；
-- `Shadow Distance`：以当前相机为中心的单级正交覆盖范围；
+- `Cascade Count`：1～4，级联越多，近景有效阴影分辨率越高，但深度 Draw Call 也会增加；
+- `Shadow Distance`：阴影覆盖到相机前方的最远距离；
 - `Shadow Bias`：基础深度偏移，用于平衡 Shadow Acne 与 Peter Panning。
+- `Split Lambda`：0 为均匀分割，1 为对数分割；默认 0.65，在近景精度和远景覆盖之间折中。
 
 这些设置会进入 Scene YAML。Shadow Framebuffer、Depth Texture 和 Light VP 只属于运行时资源，不会写入场景。
 
@@ -12657,23 +12659,26 @@ P9 第一阶段加入了 Model 与 Terrain 共用的 Directional Shadow Map。Sc
 ```text
 Scene 找到首个启用且 CastShadows 的 Directional Light
   → TerrainRenderer::Prepare 生成/复用地形 Height 与派生图
-  → ShadowRenderer 绑定 Depth32F Framebuffer
-  → ShadowDepth.glsl 绘制 Model 与位移后的 Terrain
+  → 根据 Camera Frustum 与 Practical Split 计算 1～4 个级联
+  → 每级执行包围球稳定化与 Shadow Texel Snap
+  → 依次绑定各级 Depth32F Framebuffer
+  → ShadowDepth.glsl 逐级绘制 Model 与位移后的 Terrain
   → 恢复 Scene Framebuffer 与 Viewport
   → 正常 Opaque / Terrain / Skybox / Sprite / Transparent
-  → PBRModel 与 Terrain 对 Shadow Map 执行 3×3 PCF
+  → PBRModel 与 Terrain 按视空间深度选择级联并执行 3×3 PCF
 ```
 
 Shadow 深度资源使用无颜色附件的 `Depth32F` Framebuffer；Framebuffer 后端会为 depth-only FBO 设置 `GL_NONE` Draw/Read Buffer。Shadow Pass 只清理深度，不污染主 Scene 的 HDR Color、Entity ID 或 Depth。
 
-接收阶段先把世界位置乘以 Light VP 并映射到 `[0, 1]`，随后比较当前深度和 Shadow Map：
+接收阶段先根据视空间深度选择级联，再把世界位置乘以对应 Light VP 并映射到 `[0, 1]`，随后比较当前深度和对应 Shadow Map：
 
 ```glsl
 float slopeBias = max(
     u_ShadowBias * (1.0 - max(dot(normal, lightDirection), 0.0)),
     u_ShadowBias * 0.25);
 
-float closest = texture(u_ShadowMap, shadowUV + offset).r;
+int cascadeIndex = SelectCascade(abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z));
+float closest = SampleCascadeDepth(cascadeIndex, shadowUV + offset);
 shadow += currentDepth - slopeBias > closest ? 1.0 : 0.0;
 ```
 
@@ -12681,11 +12686,12 @@ shadow += currentDepth - slopeBias > closest ? 1.0 : 0.0;
 
 ### 当前边界与验证
 
-- 当前为单级正交 Shadow Map，还不是 CSM；相机移动稳定化、Texel Snap 和级联过渡属于下一阶段；
+- 当前支持 1～4 级 CSM、Practical Split 与 Shadow Texel Snap；级联边界仍为硬切换，边界混合和级联调试视图属于下一阶段；
+- Shadow Pass 尚未做视锥剔除，当前每个级联仍提交所有 Model 与 Terrain；
 - Model Shadow Pass 当前逐实体提交，尚未复用 Renderer3D Instancing；
 - Alpha Mask 材质尚未在 ShadowDepth 中采样 Alpha，透明投影契约后续收口；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
-- Premake VS2026 生成、全解决方案和独立回归目标构建成功；55 项断言与最终汇总全部 PASS；
+- VS2026 生成新版编辑器目标，独立回归目标构建成功；55 项断言与最终汇总全部 PASS，包含 Cascade Count 与 Split Lambda 的场景往返；
 - Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。
 
 ## KB
