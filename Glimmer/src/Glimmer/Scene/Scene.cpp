@@ -460,7 +460,8 @@ namespace gl {
 			if (!ShadowRenderer::BeginDirectional(direction, cameraView,
 				cameraProjection, cameraNear, cameraFar,
 				light.ShadowMapResolution, light.ShadowDistance, light.ShadowBias,
-				light.ShadowCascadeCount, light.ShadowSplitLambda))
+				light.ShadowCascadeCount, light.ShadowSplitLambda,
+				light.ShadowCascadeBlend))
 				break;
 
 			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();

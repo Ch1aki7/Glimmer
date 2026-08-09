@@ -116,6 +116,7 @@ namespace gl {
 		float ShadowDistance = 80.0f;
 		float ShadowBias = 0.0015f;
 		float ShadowSplitLambda = 0.65f;
+		float ShadowCascadeBlend = 0.10f;
 
 		DirectionalLightComponent() = default;
 		DirectionalLightComponent(const DirectionalLightComponent&) = default;

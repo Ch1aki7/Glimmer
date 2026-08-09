@@ -600,6 +600,8 @@ namespace gl {
 					before = light;
 					ImGui::SliderFloat("Split Lambda##Directional", &light.ShadowSplitLambda,
 						0.0f, 1.0f, "%.2f");
+					ImGui::SliderFloat("Cascade Blend##Directional", &light.ShadowCascadeBlend,
+						0.0f, 0.30f, "%.2f");
 					CommitComponentWidget(entity, "Edit Directional Shadow Split Lambda",
 						m_DirectionalLightEdit, before, light);
 				}

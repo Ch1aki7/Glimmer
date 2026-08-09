@@ -12651,6 +12651,7 @@ P9 已加入 Model 与 Terrain 共用的 Directional Shadow Map，并扩展为�
 - `Shadow Distance`：阴影覆盖到相机前方的最远距离；
 - `Shadow Bias`：基础深度偏移，用于平衡 Shadow Acne 与 Peter Panning。
 - `Split Lambda`：0 为均匀分割，1 为对数分割；默认 0.65，在近景精度和远景覆盖之间折中。
+- `Cascade Blend`：0～0.30，控制相邻级联在 Split 两侧的重叠比例；默认 0.10，用于消除级联硬切换。
 
 这些设置会进入 Scene YAML。Shadow Framebuffer、Depth Texture 和 Light VP 只属于运行时资源，不会写入场景。
 
@@ -12660,17 +12661,18 @@ P9 已加入 Model 与 Terrain 共用的 Directional Shadow Map，并扩展为�
 Scene 找到首个启用且 CastShadows 的 Directional Light
   → TerrainRenderer::Prepare 生成/复用地形 Height 与派生图
   → 根据 Camera Frustum 与 Practical Split 计算 1～4 个级联
+  → 按 Cascade Blend 扩展相邻级联并建立重叠区
   → 每级执行包围球稳定化与 Shadow Texel Snap
   → 依次绑定各级 Depth32F Framebuffer
   → ShadowDepth.glsl 逐级绘制 Model 与位移后的 Terrain
   → 恢复 Scene Framebuffer 与 Viewport
   → 正常 Opaque / Terrain / Skybox / Sprite / Transparent
-  → PBRModel 与 Terrain 按视空间深度选择级联并执行 3×3 PCF
+  → PBRModel 与 Terrain 执行 3×3 PCF，并在 Split 重叠区混合相邻级联
 ```
 
 Shadow 深度资源使用无颜色附件的 `Depth32F` Framebuffer；Framebuffer 后端会为 depth-only FBO 设置 `GL_NONE` Draw/Read Buffer。Shadow Pass 只清理深度，不污染主 Scene 的 HDR Color、Entity ID 或 Depth。
 
-接收阶段先根据视空间深度选择级联，再把世界位置乘以对应 Light VP 并映射到 `[0, 1]`，随后比较当前深度和对应 Shadow Map：
+接收阶段先根据视空间深度选择级联，再把世界位置乘以对应 Light VP 并映射到 `[0, 1]`，随后比较当前深度和对应 Shadow Map。进入 Split 两侧的重叠区时，两级各执行一次 PCF，并用 `smoothstep` 从近级平滑过渡到远级：
 
 ```glsl
 float slopeBias = max(
@@ -12678,20 +12680,22 @@ float slopeBias = max(
     u_ShadowBias * 0.25);
 
 int cascadeIndex = SelectCascade(abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z));
-float closest = SampleCascadeDepth(cascadeIndex, shadowUV + offset);
-shadow += currentDepth - slopeBias > closest ? 1.0 : 0.0;
+float nearVisibility = SampleCascadeVisibility(boundary, worldPosition, normal, lightDirection);
+float farVisibility = SampleCascadeVisibility(boundary + 1, worldPosition, normal, lightDirection);
+float blend = smoothstep(split - width, split + width, viewDepth);
+return mix(nearVisibility, farVisibility, blend);
 ```
 
 对周围 `3×3` Texel 求平均得到软化后的可见度，仅调制方向光直接照明；Ambient、Emissive 和 Point Light 不会被错误乘上方向光阴影。
 
 ### 当前边界与验证
 
-- 当前支持 1～4 级 CSM、Practical Split 与 Shadow Texel Snap；级联边界仍为硬切换，边界混合和级联调试视图属于下一阶段；
+- 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap 与可调重叠混合；级联调试视图属于下一阶段；
 - Shadow Pass 尚未做视锥剔除，当前每个级联仍提交所有 Model 与 Terrain；
 - Model Shadow Pass 当前逐实体提交，尚未复用 Renderer3D Instancing；
 - Alpha Mask 材质尚未在 ShadowDepth 中采样 Alpha，透明投影契约后续收口；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
-- VS2026 生成新版编辑器目标，独立回归目标构建成功；55 项断言与最终汇总全部 PASS，包含 Cascade Count 与 Split Lambda 的场景往返；
+- VS2026 全解决方案与独立回归目标构建成功；55 项断言与最终汇总全部 PASS，包含 Cascade Count、Split Lambda 与 Cascade Blend 的场景往返；
 - Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型。
 
 ## Renderer2D 空批次残留修复

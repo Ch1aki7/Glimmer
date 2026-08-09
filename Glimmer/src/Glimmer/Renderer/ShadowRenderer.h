@@ -24,7 +24,8 @@ namespace gl {
 			float distance,
 			float bias,
 			uint32_t cascadeCount,
-			float splitLambda);
+			float splitLambda,
+			float cascadeBlend);
 		static bool BeginCascade(uint32_t cascadeIndex);
 		static void SubmitModel(AssetHandle modelHandle, const glm::mat4& transform);
 		static void SubmitTerrain(TerrainComponent& terrain, const glm::mat4& transform);

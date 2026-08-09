@@ -196,9 +196,9 @@ Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite �
 
 Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight 构造 `LightEnvironment`。Renderer 将其转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO。
 
-第一个启用且开启 `CastShadows` 的 DirectionalLight 同时驱动 CSM Shadow Pass。Scene 在主颜色 Pass 前调用 `ShadowRenderer`：后者按序列化的 Resolution、Distance、Bias、Cascade Count 与 Split Lambda 创建或复用最多四个纯运行时 `Depth32F` Framebuffer，从 Camera View/Projection 重建世界空间视锥，并以 Practical Split 划分各级覆盖范围。每级使用包围球确定稳定正交范围并执行 Shadow Texel Snap，再重新遍历 Model/Terrain 写入深度。Terrain 先经 `TerrainRenderer::Prepare` 生成或复用 Height/派生 Runtime，因此首帧即可参与投影；全部级联完成后由 `RenderPass::RebindCurrentTarget` 恢复 Scene Framebuffer 与 Viewport。
+第一个启用且开启 `CastShadows` 的 DirectionalLight 同时驱动 CSM Shadow Pass。Scene 在主颜色 Pass 前调用 `ShadowRenderer`：后者按序列化的 Resolution、Distance、Bias、Cascade Count、Split Lambda 与 Cascade Blend 创建或复用最多四个纯运行时 `Depth32F` Framebuffer，从 Camera View/Projection 重建世界空间视锥，并以 Practical Split 划分各级覆盖范围。每级使用包围球确定稳定正交范围并执行 Shadow Texel Snap；相邻级联再按较短区间的一定比例向 Split 两侧扩展，形成共同可采样的重叠区域。Scene 重新遍历 Model/Terrain 写入各级深度；Terrain 先经 `TerrainRenderer::Prepare` 生成或复用 Height/派生 Runtime，因此首帧即可参与投影；全部级联完成后由 `RenderPass::RebindCurrentTarget` 恢复 Scene Framebuffer 与 Viewport。
 
-PBRModel 与 Terrain 共用四组 Light VP、Cascade Split、Camera View、Bias 和 `3×3 PCF` 接收契约，并按片元视空间深度选择级联。模型材质占用 0～3 后将级联图绑定到 slot 4～7；Terrain 已占用 0～15，级联图绑定到 slot 16～19。Shadow Framebuffer、深度纹理、Light VP 与 Split 不序列化，DirectionalLight 只持久化重建所需设置。当前级联边界为硬切换，Shadow Pass 仍逐实体提交；尚未实现边界混合、Shadow Frustum 剔除、Alpha Mask 投影或 Shadow Instancing。
+PBRModel 与 Terrain 共用四组 Light VP、Cascade Split/Blend Width、Camera View、Bias 和 `3×3 PCF` 接收契约，并按片元视空间深度选择级联。Split 过渡区同时采样相邻级联并以 `smoothstep` 混合，区间外只采样当前级联。模型材质占用 0～3 后将级联图绑定到 slot 4～7；Terrain 已占用 0～15，级联图绑定到 slot 16～19。Shadow Framebuffer、深度纹理、Light VP、Split 与 Blend Width 不序列化，DirectionalLight 只持久化重建所需设置。Shadow Pass 仍逐实体提交；尚未实现 Shadow Frustum 剔除、Alpha Mask 投影或 Shadow Instancing。
 
 当前 3D Material 参数包括 BaseColor/BaseColorTexture、NormalTexture/NormalScale、AOTexture/AOStrength、EmissiveTexture/EmissiveColor/EmissiveStrength、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR：切线空间 Normal 修改 BRDF 法线，AO 只调制环境光项，Emissive 在线性 HDR 结果中累加；BaseColor Alpha 与纹理 Alpha 的乘积继续驱动 Mask/Blend。模型加载阶段按 UV 梯度生成 Tangent，退化 UV 或无有效累积切线时建立稳定正交基，避免 Normal Mapping 产生 NaN。
 

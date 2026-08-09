@@ -366,6 +366,7 @@ namespace {
 		directionalLight.ShadowBias = 0.0025f;
 		directionalLight.ShadowCascadeCount = 3;
 		directionalLight.ShadowSplitLambda = 0.72f;
+		directionalLight.ShadowCascadeBlend = 0.18f;
 
 		gl::SceneSerializer(source).Serialize(path.string());
 		context.Check(std::filesystem::is_regular_file(path), "minimal scene is written");
@@ -426,7 +427,8 @@ namespace {
 				&& Near(restoredLight.ShadowDistance, 135.0f)
 				&& Near(restoredLight.ShadowBias, 0.0025f)
 				&& restoredLight.ShadowCascadeCount == 3
-				&& Near(restoredLight.ShadowSplitLambda, 0.72f),
+				&& Near(restoredLight.ShadowSplitLambda, 0.72f)
+				&& Near(restoredLight.ShadowCascadeBlend, 0.18f),
 				"directional shadow settings survive scene round trip");
 		}
 	}

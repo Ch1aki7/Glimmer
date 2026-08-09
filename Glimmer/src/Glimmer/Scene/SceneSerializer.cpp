@@ -298,6 +298,7 @@ namespace gl {
 		out << YAML::Key << "ShadowDistance" << YAML::Value << comp.ShadowDistance;
 		out << YAML::Key << "ShadowBias" << YAML::Value << comp.ShadowBias;
 		out << YAML::Key << "ShadowSplitLambda" << YAML::Value << comp.ShadowSplitLambda;
+		out << YAML::Key << "ShadowCascadeBlend" << YAML::Value << comp.ShadowCascadeBlend;
 		out << YAML::EndMap;
 	}
 
@@ -323,6 +324,9 @@ namespace gl {
 		if (node["ShadowSplitLambda"])
 			comp.ShadowSplitLambda = glm::clamp(
 				node["ShadowSplitLambda"].as<float>(), 0.0f, 1.0f);
+		if (node["ShadowCascadeBlend"])
+			comp.ShadowCascadeBlend = glm::clamp(
+				node["ShadowCascadeBlend"].as<float>(), 0.0f, 0.30f);
 	}
 
 	static void SerializeComponent(YAML::Emitter& out, const PointLightComponent& comp)

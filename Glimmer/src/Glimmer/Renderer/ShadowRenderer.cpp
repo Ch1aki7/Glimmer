@@ -20,6 +20,7 @@ namespace gl {
 			std::array<Ref<Framebuffer>, ShadowRenderer::MaxCascades> Framebuffers;
 			std::array<glm::mat4, ShadowRenderer::MaxCascades> LightViewProjections{};
 			std::array<float, ShadowRenderer::MaxCascades> CascadeSplits{};
+			std::array<float, ShadowRenderer::MaxCascades> CascadeBlendWidths{};
 			Ref<Shader> DepthShader;
 			glm::mat4 CameraView{ 1.0f };
 			uint32_t Resolution = 0;
@@ -124,7 +125,8 @@ namespace gl {
 		float distance,
 		float bias,
 		uint32_t cascadeCount,
-		float splitLambda)
+		float splitLambda,
+		float cascadeBlend)
 	{
 		Disable();
 		const AssetHandle shaderHandle =
@@ -161,10 +163,12 @@ namespace gl {
 		const float clipRange = cameraFar - cameraNear;
 		const float shadowRange = shadowFar - cameraNear;
 		splitLambda = std::clamp(splitLambda, 0.0f, 1.0f);
+		cascadeBlend = std::clamp(cascadeBlend, 0.0f, 0.30f);
 		const auto frustumCorners = GetFrustumCornersWorldSpace(
 			cameraProjection * cameraView);
 
-		float previousSplitRatio = 0.0f;
+		std::array<float, MaxCascades + 1> splitDepths{};
+		splitDepths[0] = cameraNear;
 		for (uint32_t index = 0; index < cascadeCount; ++index)
 		{
 			const float ratio = static_cast<float>(index + 1)
@@ -173,11 +177,33 @@ namespace gl {
 				* std::pow(shadowFar / cameraNear, ratio);
 			const float uniform = cameraNear + shadowRange * ratio;
 			const float splitDepth = glm::mix(uniform, logarithmic, splitLambda);
-			const float splitRatio = (splitDepth - cameraNear) / clipRange;
+			splitDepths[index + 1] = splitDepth;
 			s_Data.CascadeSplits[index] = splitDepth;
+		}
+
+		s_Data.CascadeBlendWidths.fill(0.0f);
+		for (uint32_t index = 0; index + 1 < cascadeCount; ++index)
+		{
+			const float currentRange = splitDepths[index + 1] - splitDepths[index];
+			const float nextRange = splitDepths[index + 2] - splitDepths[index + 1];
+			s_Data.CascadeBlendWidths[index] =
+				std::min(currentRange, nextRange) * cascadeBlend;
+		}
+
+		for (uint32_t index = 0; index < cascadeCount; ++index)
+		{
+			const float nearExtension = index > 0
+				? s_Data.CascadeBlendWidths[index - 1] : 0.0f;
+			const float farExtension = index + 1 < cascadeCount
+				? s_Data.CascadeBlendWidths[index] : 0.0f;
+			const float cascadeNear = std::max(
+				cameraNear, splitDepths[index] - nearExtension);
+			const float cascadeFar = std::min(
+				shadowFar, splitDepths[index + 1] + farExtension);
+			const float nearRatio = (cascadeNear - cameraNear) / clipRange;
+			const float farRatio = (cascadeFar - cameraNear) / clipRange;
 			s_Data.LightViewProjections[index] = BuildCascadeMatrix(
-				frustumCorners, previousSplitRatio, splitRatio, direction, resolution);
-			previousSplitRatio = splitRatio;
+				frustumCorners, nearRatio, farRatio, direction, resolution);
 		}
 
 		s_Data.CameraView = cameraView;
@@ -278,6 +304,9 @@ namespace gl {
 			shader->UploadUniformFloat(
 				"u_ShadowCascadeSplits[" + std::to_string(index) + "]",
 				s_Data.CascadeSplits[index]);
+			shader->UploadUniformFloat(
+				"u_ShadowCascadeBlendWidths[" + std::to_string(index) + "]",
+				s_Data.CascadeBlendWidths[index]);
 			shader->BindTexture(
 				"u_ShadowMaps[" + std::to_string(index) + "]",
 				textureSlot + index,

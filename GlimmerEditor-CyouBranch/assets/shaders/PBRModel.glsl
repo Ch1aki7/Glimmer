@@ -84,6 +84,7 @@ uniform float u_AlphaCutoff;
 uniform sampler2D u_ShadowMaps[4];
 uniform mat4 u_LightViewProjections[4];
 uniform float u_ShadowCascadeSplits[4];
+uniform float u_ShadowCascadeBlendWidths[4];
 uniform mat4 u_ShadowCameraView;
 uniform int u_ShadowCascadeCount;
 uniform int u_ShadowEnabled;
@@ -148,16 +149,9 @@ float SampleCascadeDepth(int cascadeIndex, vec2 uv)
     return texture(u_ShadowMaps[3], uv).r;
 }
 
-float DirectionalShadowVisibility(
+float SampleCascadeVisibility(int cascadeIndex,
     vec3 worldPosition, vec3 normal, vec3 lightDirection)
 {
-    if (u_ShadowEnabled == 0)
-        return 1.0;
-    float viewDepth = abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z);
-    int cascadeIndex = 0;
-    while (cascadeIndex < u_ShadowCascadeCount - 1
-        && viewDepth > u_ShadowCascadeSplits[cascadeIndex])
-        cascadeIndex++;
     vec4 lightClip = u_LightViewProjections[cascadeIndex]
         * vec4(worldPosition, 1.0);
     vec3 projected = lightClip.xyz / max(lightClip.w, 0.0001);
@@ -177,6 +171,39 @@ float DirectionalShadowVisibility(
             shadow += projected.z - slopeBias > closest ? 1.0 : 0.0;
         }
     return 1.0 - shadow / 9.0;
+}
+
+float DirectionalShadowVisibility(
+    vec3 worldPosition, vec3 normal, vec3 lightDirection)
+{
+    if (u_ShadowEnabled == 0)
+        return 1.0;
+    float viewDepth = abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z);
+    int cascadeIndex = 0;
+    while (cascadeIndex < u_ShadowCascadeCount - 1
+        && viewDepth > u_ShadowCascadeSplits[cascadeIndex])
+        cascadeIndex++;
+
+    for (int boundary = 0; boundary < 3; ++boundary)
+    {
+        if (boundary >= u_ShadowCascadeCount - 1)
+            break;
+        float width = u_ShadowCascadeBlendWidths[boundary];
+        float split = u_ShadowCascadeSplits[boundary];
+        if (width > 0.0 && viewDepth >= split - width
+            && viewDepth <= split + width)
+        {
+            float nearVisibility = SampleCascadeVisibility(
+                boundary, worldPosition, normal, lightDirection);
+            float farVisibility = SampleCascadeVisibility(
+                boundary + 1, worldPosition, normal, lightDirection);
+            float blend = smoothstep(split - width, split + width, viewDepth);
+            return mix(nearVisibility, farVisibility, blend);
+        }
+    }
+
+    return SampleCascadeVisibility(
+        cascadeIndex, worldPosition, normal, lightDirection);
 }
 
 void main()
