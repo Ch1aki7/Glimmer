@@ -8,7 +8,8 @@
 namespace gl {
 
 	// 编辑器自由相机 —— 非 ECS 实体，独立驱动
-	// 控制: 右键拖拽=旋转, 中键拖拽=平移, 滚轮=Dolly缩放
+		// 控制: 右键拖拽=旋转, 右键+WASD/QE=平移/升降,
+		// 中键拖拽=平移, 滚轮=Dolly缩放
 	class EditorCamera {
 	public:
 		EditorCamera(float fov = 45.0f, float aspectRatio = 1.777f,
@@ -29,6 +30,7 @@ namespace gl {
 		void SetViewportSize(float width, float height);
 		void SetView(const glm::vec3& focalPoint, float distance,
 			float pitchDegrees, float yawDegrees);
+		void Focus(const glm::vec3& focalPoint, float distance);
 
 	private:
 		void UpdateProjection();

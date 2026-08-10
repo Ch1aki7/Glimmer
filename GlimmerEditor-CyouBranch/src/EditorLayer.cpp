@@ -9,6 +9,8 @@
 #include <array>
 #include <algorithm>
 #include <cstdlib>
+#include <cmath>
+#include <limits>
 #include <vector>
 namespace gl {
 	namespace {
@@ -34,6 +36,32 @@ namespace gl {
 		bool ShouldAutorunShadowBenchmark()
 		{
 			return HasEnvironmentVariable("GLIMMER_SHADOW_BENCHMARK_AUTORUN");
+		}
+
+		void EncapsulateTransformedBounds(
+			const glm::vec3& boundsMin,
+			const glm::vec3& boundsMax,
+			const glm::mat4& transform,
+			glm::vec3& worldMin,
+			glm::vec3& worldMax)
+		{
+			for (uint32_t x = 0; x < 2; ++x)
+			{
+				for (uint32_t y = 0; y < 2; ++y)
+				{
+					for (uint32_t z = 0; z < 2; ++z)
+					{
+						const glm::vec3 corner{
+							x ? boundsMax.x : boundsMin.x,
+							y ? boundsMax.y : boundsMin.y,
+							z ? boundsMax.z : boundsMin.z };
+						const glm::vec3 worldCorner =
+							glm::vec3(transform * glm::vec4(corner, 1.0f));
+						worldMin = glm::min(worldMin, worldCorner);
+						worldMax = glm::max(worldMax, worldCorner);
+					}
+				}
+			}
 		}
 	}
 
@@ -147,6 +175,74 @@ namespace gl {
 				? m_ActiveScene->FindEntityByUUID(selectedUUID)
 				: Entity{});
 	}
+
+	void EditorLayer::FocusSelectedEntity()
+	{
+		Entity selectedEntity = m_HierarchyPanel.GetSelectedEntity();
+		if (!selectedEntity || !selectedEntity.HasComponent<TransformComponent>())
+			return;
+
+		const auto& transformComponent =
+			selectedEntity.GetComponent<TransformComponent>();
+		const glm::mat4 transform = transformComponent.GetTransform();
+		glm::vec3 boundsMin(std::numeric_limits<float>::max());
+		glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+		bool hasBounds = false;
+
+		if (selectedEntity.HasComponent<ModelRendererComponent>())
+		{
+			const auto& modelRenderer =
+				selectedEntity.GetComponent<ModelRendererComponent>();
+			if (Ref<Model> model = AssetManager::GetModel(modelRenderer.ModelHandle))
+			{
+				for (const Ref<Mesh>& mesh : model->GetMeshes())
+				{
+					if (!mesh || !mesh->HasBounds())
+						continue;
+					EncapsulateTransformedBounds(
+						mesh->GetBoundsMin(), mesh->GetBoundsMax(),
+						transform, boundsMin, boundsMax);
+					hasBounds = true;
+				}
+			}
+		}
+
+		if (selectedEntity.HasComponent<TerrainComponent>())
+		{
+			const auto& terrain =
+				selectedEntity.GetComponent<TerrainComponent>();
+			const float halfSize =
+				static_cast<float>(std::max(terrain.Specification.MeshResolution, 1u))
+				* 0.5f;
+			const float minimumHeight =
+				std::min(0.0f, terrain.Specification.HeightScale);
+			const float maximumHeight =
+				std::max(0.0f, terrain.Specification.HeightScale);
+			EncapsulateTransformedBounds(
+				{ -halfSize, minimumHeight, -halfSize },
+				{ halfSize, maximumHeight, halfSize },
+				transform, boundsMin, boundsMax);
+			hasBounds = true;
+		}
+
+		if (!hasBounds)
+		{
+			const glm::vec3 halfExtents =
+				glm::max(glm::abs(transformComponent.Scale) * 0.5f,
+					glm::vec3(0.5f));
+			boundsMin = transformComponent.Translation - halfExtents;
+			boundsMax = transformComponent.Translation + halfExtents;
+		}
+
+		const glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
+		const glm::vec3 extents = (boundsMax - boundsMin) * 0.5f;
+		float radius = glm::length(extents);
+		if (!std::isfinite(radius) || radius < 0.5f)
+			radius = 0.5f;
+
+		m_EditorCamera.Focus(center, radius * 2.5f);
+	}
+
 	void EditorLayer::OnAttach() {
 		GL_PROFILE_FUNCTION();
 		AssetManager::Initialize("assets");
@@ -467,6 +563,10 @@ namespace gl {
 			if (ImGui::IsKeyPressed(ImGuiKey_1)) m_GizmoType = 0;
 			if (ImGui::IsKeyPressed(ImGuiKey_2)) m_GizmoType = 1;
 			if (ImGui::IsKeyPressed(ImGuiKey_3)) m_GizmoType = 2;
+			if (m_SceneState == SceneState::Edit
+				&& !io.WantCaptureKeyboard
+				&& ImGui::IsKeyPressed(ImGuiKey_F, false))
+				FocusSelectedEntity();
 		}
 
 		// --- DockSpace ---

@@ -1,0 +1,192 @@
+Scene: Untitled
+Version: 6
+Entities:
+  - Entity: 7509082079051211910
+    Components:
+      TagComponent: Entity Copy Copy
+      TransformComponent:
+        Translation: [35.954445, 51.502586, 53.786926]
+        Rotation: [0, 0, 0]
+        Scale: [7.91, 7.91, 7.91]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 386
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 7633283146183385939
+          NormalTexture: 7633283146183385940
+          AOTexture: 7633283146183385941
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0
+          Roughness: 0.5
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5
+  - Entity: 4628675233167904721
+    Components:
+      TagComponent: Entity Copy Copy
+      TransformComponent:
+        Translation: [35.954445, 51.502586, 44.830578]
+        Rotation: [0, 0, 0]
+        Scale: [7.91, 7.91, 7.91]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 386
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 7633283146183385942
+          NormalTexture: 7633283146183385943
+          AOTexture: 7633283146183385944
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0
+          Roughness: 0.5
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5
+  - Entity: 13464185193317550313
+    Components:
+      TagComponent: Entity Copy
+      TransformComponent:
+        Translation: [35.954445, 51.502586, 35.664917]
+        Rotation: [0, 0, 0]
+        Scale: [7.91, 7.91, 7.91]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 130
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 7633283146183385945
+          NormalTexture: 7633283146183385946
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0
+          Roughness: 0.5
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5
+  - Entity: 13853111935112731262
+    Components:
+      TagComponent: Entity
+      TransformComponent:
+        Translation: [35.954445, 51.502586, 26.241749]
+        Rotation: [0, 0, 0]
+        Scale: [7.91, 7.91, 7.91]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 386
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 15261581679978376490
+          NormalTexture: 13472256562800029033
+          AOTexture: 760354001728689454
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0
+          Roughness: 0.5
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5
+  - Entity: 8037821723999907854
+    Components:
+      TagComponent: Terrain
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      TerrainComponent:
+        Procedural: true
+        Preset: Alpine
+        HeightMapResolution: 512
+        MeshResolution: 256
+        HeightScale: 42
+        HeightMap: 0
+        RenderShader: 13614654561704837220
+        GenerationShader: 7633283146183385932
+        ErosionShader: 7633283146183385933
+        DerivationShader: 7633283146183385934
+        TerrainMaterial: 0
+        Noise:
+          Seed: 11
+          Octaves: 7
+          Frequency: 2.4
+          Lacunarity: 2
+          Persistence: 0.48
+          DomainWarp: 0.82
+          RidgeStrength: 0.82
+          ContinentScale: 0.3
+          ErosionStrength: 0.16
+          DetailStrength: 0.08
+          MountainDirection: 0.35
+          MountainWidth: 0.24
+          PlateauStrength: 0
+          Offset: [0, 0]
+        Authoring:
+          EnableThermalErosion: true
+          ThermalIterations: 28
+          Talus: 0.01
+          ThermalStrength: 0.3
+  - Entity: 3309957975959230101
+    Components:
+      TagComponent: Sky Light
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      SkyLightComponent:
+        Cubemap: 14395647676425568118
+        Intensity: 1
+        Enabled: true
+  - Entity: 14007567076709477111
+    Components:
+      TagComponent: Point Light
+      TransformComponent:
+        Translation: [0, 12, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      PointLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 80
+        Range: 40
+        Enabled: true
+  - Entity: 2314661946058119299
+    Components:
+      TagComponent: Sun
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [-50, 30, 0]
+        Scale: [1, 1, 1]
+      DirectionalLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 8.4
+        AmbientIntensity: 0.05
+        Enabled: true
+        CastShadows: true
+        ShadowMapResolution: 2048
+        ShadowCascadeCount: 4
+        ShadowDistance: 80
+        ShadowBias: 0.0015
+        ShadowSplitLambda: 0.65
+        ShadowCascadeBlend: 0.1

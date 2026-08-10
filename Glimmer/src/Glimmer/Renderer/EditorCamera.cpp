@@ -45,6 +45,10 @@ namespace gl {
 				moveDirection += GetRightDirection();
 			if (Input::IsKeyPressed(GL_KEY_A))
 				moveDirection -= GetRightDirection();
+			if (Input::IsKeyPressed(GL_KEY_E))
+				moveDirection += GetUpDirection();
+			if (Input::IsKeyPressed(GL_KEY_Q))
+				moveDirection -= GetUpDirection();
 
 			if (glm::dot(moveDirection, moveDirection) > 0.0f)
 			{
@@ -105,6 +109,13 @@ namespace gl {
 		m_Distance = glm::clamp(distance, 0.5f, 500.0f);
 		m_Pitch = glm::clamp(pitchDegrees, -89.0f, 89.0f);
 		m_Yaw = yawDegrees;
+		UpdateView();
+	}
+
+	void EditorCamera::Focus(const glm::vec3& focalPoint, float distance)
+	{
+		m_FocalPoint = focalPoint;
+		m_Distance = glm::clamp(distance, 0.5f, 500.0f);
 		UpdateView();
 	}
 

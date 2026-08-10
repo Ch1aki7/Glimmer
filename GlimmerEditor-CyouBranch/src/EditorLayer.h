@@ -29,6 +29,7 @@ namespace gl {
 		void ExitTemporaryDebugScene();
 		void OnScenePlay();
 		void OnSceneStop();
+		void FocusSelectedEntity();
 
 	private:
 		ShaderLibrary m_ShaderLib;

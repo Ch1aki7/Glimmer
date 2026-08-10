@@ -36,6 +36,11 @@ AssetRegistry:
   - Handle: 3818937180868702455
     Type: Model
     FilePath: models/dragon.obj
+  - Handle: 4106150851551311864
+    Type: Texture2D
+    FilePath: textures/pbr/snow/Snow005_1K-PNG_Displacement.png
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 4883067855471021819
     Type: Shader
     FilePath: shaders/InkOutline.glsl
@@ -83,8 +88,8 @@ AssetRegistry:
   - Handle: 7633283146183385938
     Type: Texture2D
     FilePath: textures/pbr/grass/Grass001_1K-PNG_AmbientOcclusion.png
-    ColorSpace: SRGB
-    Semantic: Color
+    ColorSpace: Linear
+    Semantic: Data
   - Handle: 7633283146183385939
     Type: Texture2D
     FilePath: textures/pbr/ground/Ground054_1K-PNG_Color.png
@@ -134,6 +139,11 @@ AssetRegistry:
   - Handle: 8631387498429252298
     Type: Model
     FilePath: models/geos/Cube.obj
+  - Handle: 8880898063803579831
+    Type: Texture2D
+    FilePath: textures/pbr/brick/factory_brick_arm_1k.jpg
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 9195328290163695800
     Type: Texture2D
     FilePath: textures/balatro.png
