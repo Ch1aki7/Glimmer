@@ -2,6 +2,7 @@
 
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
+#include "Glimmer/Renderer/Cubemap.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -139,6 +140,36 @@ namespace gl
 		ImGui::Text("Handle: %llu", static_cast<unsigned long long>(handle));
 		ImGui::TextWrapped("Path: %s", metadata.FilePath.string().c_str());
 		ImGui::Text("Type: %d", static_cast<int>(metadata.Type));
+
+		if (metadata.Type == AssetType::Cubemap)
+		{
+			Ref<Cubemap> cubemap = AssetManager::GetCubemap(handle);
+			if (!cubemap || !cubemap->GetTexture())
+			{
+				ImGui::TextDisabled("Cubemap asset could not be loaded.");
+				return;
+			}
+			const auto& specification =
+				cubemap->GetTexture()->GetSpecification();
+			ImGui::Separator();
+			ImGui::Text("Source: %s", cubemap->IsHDR()
+				? "HDR Equirectangular"
+				: "Six Faces");
+			if (!cubemap->GetSourcePath().empty())
+			{
+				ImGui::TextWrapped("Environment: %s",
+					cubemap->GetSourcePath().string().c_str());
+			}
+			ImGui::Text("Format: %s", specification.Format
+				== TextureFormat::RGBA16F ? "RGBA16F Linear" : "RGBA8");
+			ImGui::Text("Face Size: %u", specification.Size);
+			ImGui::Text("Mip Levels: %u", specification.MipLevels);
+			ImGui::Text("Runtime Version: %llu",
+				static_cast<unsigned long long>(cubemap->GetVersion()));
+			if (ImGui::Button("Reload Cubemap"))
+				cubemap->Reload();
+			return;
+		}
 
 		if (metadata.Type == AssetType::TerrainMaterial)
 		{

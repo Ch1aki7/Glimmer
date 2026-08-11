@@ -91,6 +91,9 @@ uniform int u_ShadowEnabled;
 uniform int u_ShadowCascadeDebug;
 uniform float u_ShadowBias;
 uniform float u_ShadowTexelSize;
+uniform samplerCube u_DiffuseIrradianceMap;
+uniform int u_HasDiffuseIrradiance;
+uniform float u_SkyLightIntensity;
 
 const float PI = 3.14159265359;
 
@@ -122,6 +125,13 @@ float GeometrySmith(vec3 normal, vec3 viewDirection,
 vec3 FresnelSchlick(float cosine, vec3 reflectance)
 {
     return reflectance + (1.0 - reflectance)
+        * pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
+}
+
+vec3 FresnelSchlickRoughness(
+    float cosine, vec3 reflectance, float roughness)
+{
+    return reflectance + (max(vec3(1.0 - roughness), reflectance) - reflectance)
         * pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
 }
 
@@ -278,8 +288,23 @@ void main()
         ambientOcclusion = mix(1.0, sampledAO, clamp(u_AOStrength, 0.0, 1.0));
     }
 
-    vec3 result = albedo * u_AmbientColorIntensity.rgb
-        * u_AmbientColorIntensity.a * ambientOcclusion;
+    vec3 result;
+    if (u_HasDiffuseIrradiance != 0)
+    {
+        vec3 reflectance = mix(vec3(0.04), albedo, metallic);
+        vec3 fresnel = FresnelSchlickRoughness(
+            max(dot(normal, viewDirection), 0.0), reflectance, roughness);
+        vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
+        vec3 irradiance = texture(u_DiffuseIrradianceMap, normal).rgb
+            * max(u_SkyLightIntensity, 0.0);
+        result = diffuseWeight * albedo * irradiance / PI
+            * ambientOcclusion;
+    }
+    else
+    {
+        result = albedo * u_AmbientColorIntensity.rgb
+            * u_AmbientColorIntensity.a * ambientOcclusion;
+    }
 
     if (u_DirectionalDirectionIntensity.w > 0.0)
     {

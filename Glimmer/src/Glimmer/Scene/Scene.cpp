@@ -442,6 +442,20 @@ namespace gl {
 			environment.PointLights.push_back(light);
 		}
 
+		auto skyLightView = m_Registry.view<SkyLightComponent>();
+		for (auto entity : skyLightView)
+		{
+			const auto& component =
+				skyLightView.get<SkyLightComponent>(entity);
+			if (!component.Enabled
+				|| static_cast<uint64_t>(component.CubemapHandle) == 0)
+				continue;
+			environment.SkyLightCubemap = component.CubemapHandle;
+			environment.SkyLightIntensity = component.Intensity;
+			environment.SkyLightEnabled = true;
+			break;
+		}
+
 		Renderer::UploadLightEnvironment(environment);
 	}
 

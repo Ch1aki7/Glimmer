@@ -7,6 +7,9 @@ AssetRegistry:
   - Handle: 801164346423064841
     Type: Model
     FilePath: models/geos/Plane.obj
+  - Handle: 1626385373724971314
+    Type: Cubemap
+    FilePath: textures/hdr/grasslands_sunset_4k.hdr
   - Handle: 2065354797702115295
     Type: Texture2D
     FilePath: textures/pbr/brick/brick_4_rough_1k.jpg
@@ -23,6 +26,9 @@ AssetRegistry:
   - Handle: 3528201362395488632
     Type: Shader
     FilePath: shaders/Hologram.glsl
+  - Handle: 3578528139193509533
+    Type: Cubemap
+    FilePath: textures/hdr/grasslands_sunset_1k.hdr
   - Handle: 3694092518017178816
     Type: Texture2D
     FilePath: textures/pbr/brick/factory_brick_disp_1k.png

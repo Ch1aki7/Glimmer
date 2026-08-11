@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Glimmer/Asset/Asset.h"
+
 #include <glm/glm.hpp>
 #include <vector>
 
@@ -28,6 +30,9 @@ namespace gl {
 
 		DirectionalLight Directional;
 		std::vector<PointLight> PointLights;
+		AssetHandle SkyLightCubemap{ 0 };
+		float SkyLightIntensity = 0.0f;
+		bool SkyLightEnabled = false;
 	};
 
 }

@@ -1,5 +1,6 @@
 #include "glpch.h"
 #include "TerrainRenderer.h"
+#include "EnvironmentLighting.h"
 
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/RenderCommand.h"
@@ -271,6 +272,7 @@ namespace gl {
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
 		ShadowRenderer::BindForLighting(shader, 16);
+		EnvironmentLighting::BindForLighting(shader, 20);
 		const bool hasDerivedMaps = runtime.NormalSlopeMap
 			&& runtime.AnalysisMap && runtime.MaterialWeightMap;
 		shader->UploadUniformInt("u_HasDerivedMaps", hasDerivedMaps ? 1 : 0);

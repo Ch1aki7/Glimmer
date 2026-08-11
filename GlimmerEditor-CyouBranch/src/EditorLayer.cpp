@@ -869,7 +869,7 @@ namespace gl {
 							.Specification.TerrainMaterialHandle = handle;
 						m_HierarchyPanel.SetSelectedEntity(terrainEntity);
 					}
-				}				else if (ext == ".glsky")
+				}				else if (ext == ".glsky" || ext == ".hdr")
 				{
 					AssetHandle handle = AssetManager::ImportAsset(path);
 					if (AssetManager::GetMetadata(handle).Type

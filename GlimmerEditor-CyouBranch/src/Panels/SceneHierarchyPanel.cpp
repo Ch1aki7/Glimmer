@@ -659,7 +659,7 @@ namespace gl {
 					&& metadata.Type == AssetType::Cubemap;
 				const std::string assetName = hasCubemap
 					? metadata.FilePath.filename().string()
-					: "None (drag .glsky here)";
+					: "None (drag .glsky or .hdr here)";
 
 				SkyLightComponent before = skyLight;
 				ImGui::Checkbox("Enabled##SkyLight", &skyLight.Enabled);

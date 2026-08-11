@@ -74,7 +74,7 @@ namespace gl {
 
 		GLenum ToFilter(TextureFilter filter)
 		{
-			return filter == TextureFilter::Linear ? GL_LINEAR : GL_NEAREST;
+			return filter == TextureFilter::Nearest ? GL_NEAREST : GL_LINEAR;
 		}
 
 		GLenum ToWrap(TextureWrap wrap)

@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P10 IBL 环境光照
-- 主线状态：待开始（P8.1 已完成，下一步先收口 HDR 环境资源与浮点 Cubemap/Mip Chain）
+- 主线状态：进行中（HDR Cubemap、Mip Chain 与 Diffuse Irradiance 已完成；下一步实现 Specular Prefilter）
 
 ## 使用与更新规则
 
@@ -59,12 +59,24 @@
 
 **依赖**：P4 的 PBR、颜色空间和 TextureCube 方向约定稳定。
 
+**状态**：进行中。
+
 **目标**
 
 - 支持 HDR 经纬图导入、浮点 Cubemap 和完整 Mip Chain；
 - 依次实现 Diffuse Irradiance、Specular Prefilter 和 BRDF LUT；
 - 以源环境 Handle、资源版本和生成参数缓存派生贴图；
 - Terrain 与 Model 使用同一 SkyLight 环境数据。
+
+**阶段进展（2026-08-11）**
+
+- HDR 环境源基础已落地：支持直接导入 Radiance `.hdr`，也支持由 `.glsky` 的 `Source` 与 `Resolution` 引用等距柱状 HDR；
+- `EnvironmentMapLoader` 在 Renderer 核心层完成浮点解码、双线性经纬采样和六面转换；输出保持线性高动态范围，不由 EditorLayer 或 OpenGL 后端承担资产算法；
+- `TextureCube` 已支持 `RGBA16F`、显式 Mip 数、逐级上传和完整 `1×1` Mip Chain；既有六面 LDR Cubemap 也会生成 Mip；
+- Cubemap Runtime 暴露来源、HDR 标记和递增版本，Content Browser、Viewport 拖放与 Asset Inspector 已识别 `.hdr`；
+- `EnvironmentLighting` 已实现 `32×32 / 64 samples` 的余弦加权 Diffuse Irradiance；Scene 从第一个启用的 SkyLight 提交 Handle/Intensity，PBRModel 与 Terrain 分别在 slot 8 和 slot 20 采样同一派生环境；
+- 派生缓存键由源 Cubemap Handle、Runtime Version、Irradiance Resolution 与 Sample Count 组成；同一活动键直接复用，Reload 或参数变化才重新生成，同一源的旧版本内存项会被替换；
+- 当前完成的是环境漫反射。下一步实现按 Roughness 分级的 Specular Prefilter，随后接入 BRDF LUT；P10 在这两项和完整验收完成前仍保持“进行中”。
 
 **验收**
 
@@ -405,7 +417,7 @@
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；仍缺少 Chunk/LOD 和固定步长 Runtime Erosion 调度；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
-- SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
+- SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存和 Model/Terrain 共用的 Diffuse Irradiance；尚无 Specular Prefilter、BRDF LUT、持久化磁盘缓存和环境旋转；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 

@@ -241,6 +241,8 @@ f 1/1/1 4/4/1 3/3/1
 	{
 		const auto path = GetUniquePath(directory, "New Skybox", ".glsky");
 		return WriteTextFile(path, R"(Cubemap:
+  Source: ""
+  Resolution: 512
   ColorSpace: SRGB
   Right: ""
   Left: ""

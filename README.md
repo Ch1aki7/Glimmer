@@ -12891,6 +12891,126 @@ TerrainSamplingBenchmarkTool 位于编辑器 Debug 目录，只读取 TerrainRen
 
 Full-4、Top-2 和 Auto 固定视口截图已逐档检查，山体轮廓、草/岩混合和 Triplanar 投影方向一致，未发现新增条带接缝。Terrain 图形 Shader 与 GenerateFBM、ThermalErosion、DeriveTerrainMaps 均在 GTX 1050 上成功编译。Premake VS2026 重新生成、Debug x64 全解决方案构建和 64 项无窗口回归全部通过，构建输出目录未清理。
 
+## HDR 环境 Cubemap 与 Mip Chain 基础
+
+P10 的第一阶段先统一“环境源如何进入 Renderer”，尚未提前实现完整 IBL。现在 SkyLight 可以继续引用传统六面 `.glsky`，也可以直接使用 Radiance `.hdr` 等距柱状图；两种来源最终都得到遵守同一六面方向约定、带完整 Mip Chain 的 TextureCube。
+
+### 导入与描述格式
+
+直接把位于项目 `assets` 内的 `.hdr` 拖到 Viewport 或 Sky Light 的 Cubemap 属性即可。AssetManager 会将其注册为 `AssetType::Cubemap`，而不是普通 Texture2D。
+
+如果需要一个可命名、可调整目标分辨率的环境资产，可以创建 `.glsky` 并使用：
+
+```yaml
+Cubemap:
+  Source: "../textures/environment.hdr"
+  Resolution: 512
+```
+
+`Source` 相对 `.glsky` 所在目录解析。Source 为空时仍使用原来的 `Right/Left/Top/Bottom/Front/Back` 六面字段，因此旧资产无需迁移。Content Browser、Viewport 拖放和 Cubemap Asset Inspector 均识别 `.hdr`；Inspector 会显示来源类型、实际源路径、格式、面尺寸、Mip 数和 Runtime 版本，并支持 Reload。
+
+### 核心数据流
+
+```text
+.hdr / .glsky Source
+  → AssetManager Cubemap Handle
+  → Cubemap::Reload
+  → EnvironmentMapLoader::LoadEquirectangularHDR
+  → FloatImageData（线性 RGBA float）
+  → 双线性 Equirectangular-to-Cubemap 转换
+  → TextureCube RGBA16F
+  → GenerateMipmaps，直到 1×1
+  → SkyboxRenderer 可见背景
+```
+
+`EnvironmentMapLoader` 位于引擎核心 Renderer，而不是 EditorLayer 或 OpenGL 平台层。它处理经度循环、纬度钳制和 `+X/-X/+Y/-Y/+Z/-Z` 六面方向；OpenGL 后端只负责不可变存储、指定 Mip/面的数据上传和 Mip 生成。HDR 像素不会先压到 0～1，也不会执行 sRGB 解码，最终使用线性 `RGBA16F`。
+
+TextureCube 规格新增显式 `MipLevels`，完整链的级数为 `floor(log2(faceSize)) + 1`。传统六面 LDR Cubemap 也会生成完整链并使用 Trilinear Min Filter。当前自动生成的是普通颜色下采样 Mip，只用于稳定可见天空盒采样并准备资源接口；它不能替代按 Roughness 卷积的 Specular Prefilter。
+
+### Reload 与后续派生缓存
+
+Cubemap 成功加载后记录实际源路径、是否 HDR 和递增 Runtime Version。该版本不是新的持久资产 ID；它用于后续把派生 IBL 缓存键定义为：
+
+```text
+Source Cubemap Handle + Runtime Version + Generation Parameters
+```
+
+这样 HDR 文件热重载或生成参数变化时，只失效对应 Irradiance、Prefilter 和 BRDF LUT，正常帧不会重复卷积。Diffuse Irradiance 已在下一章节完成；当前还需继续实现 Specular Prefilter 和 BRDF LUT。
+
+### 验证
+
+- VS2026 Premake 工程重新生成成功，`Debug | x64` 全解决方案构建成功；
+- 71 项无窗口回归全部通过，覆盖完整 Mip 级数、六面中心方向、经纬图实际采样方向、HDR 高亮值保持、Radiance 文件解码和 `.hdr` 资产类型；
+- 方向测试首次运行发现北极连续坐标在行号钳制后仍使用旧插值权重，现已改为先钳制连续纬度坐标再计算双线性权重；
+- NVIDIA GeForce GTX 1050 / OpenGL 4.6 短时启动验证通过，Skybox、ToneMapping、PBR、Terrain 与三个 Compute Shader 均加载成功，无 OpenGL、Framebuffer 或 Shader 断言；
+- 构建输出保留，未删除 `bin` 或 `bin-int`。
+
+## Diffuse Irradiance 环境漫反射
+
+P10 第二阶段已经让 SkyLight 不再只是背景。模型和地形现在会从同一个 Cubemap 派生低频环境漫反射，因此关闭 Directional Light 后，非金属表面仍能接收到来自天空不同方向和颜色的柔和照明。
+
+### 运行链路
+
+```text
+Scene 中第一个启用的 SkyLightComponent
+  → LightEnvironment：Cubemap Handle + Intensity
+  → AssetManager::GetCubemap
+  → EnvironmentLighting 派生缓存
+  → TextureCube 浮点六面读回
+  → EnvironmentMapLoader 余弦加权卷积
+  → 32×32 RGBA16F Diffuse Irradiance
+  ├─ Renderer3D / PBRModel：slot 8
+  └─ TerrainRenderer / Terrain：slot 20
+```
+
+Scene 只提交可序列化的 Cubemap Handle 和 SkyLight Intensity；卷积数据、GPU TextureCube 和缓存统计不进入场景文件。EditorLayer 没有新增 OpenGL 调用或 IBL 算法。
+
+### 漫反射积分
+
+Diffuse Irradiance 保存的是法线半球上的：
+
+```text
+E(N) = ∫ L(ω) × max(dot(N, ω), 0) dω
+```
+
+实现使用确定性 Hammersley 序列进行余弦重要性采样，默认输出 `32×32` 六面图，每像素 64 个样本。对于常量环境，结果应为 `π × Radiance`，对应回归测试已验证。Shader 再使用 Fresnel-Schlick-Roughness 计算：
+
+```text
+Diffuse IBL = (1 - F) × (1 - metallic) × albedo × irradiance / π
+              × AO × SkyLightIntensity
+```
+
+没有有效 SkyLight/Irradiance 时，Shader 保留原方向光 Ambient 回退。金属材质的 `(1-metallic)` 接近零，因此在 Specular Prefilter 尚未完成时关闭直接光会偏暗，这是当前阶段的预期限制。
+
+### 派生缓存和失效
+
+缓存键已经落实为：
+
+```text
+Cubemap AssetHandle
++ Cubemap Runtime Version
++ Irradiance Resolution
++ Irradiance Sample Count
+```
+
+同一活动键在后续帧直接复用，不执行 TextureCube 读回或卷积。点击 Cubemap Inspector 的 Reload 会递增 Runtime Version；修改生成参数也会形成新键。生成新版本后，同一源环境的旧版本内存项会被移除。当前缓存仅存在于进程内，重新启动编辑器仍会生成一次；持久化磁盘缓存和 LRU 内存预算留作后续基础建设。
+
+### 如何查看效果
+
+1. 场景中保留启用的 Sky Light，并给它分配 `.glsky` 或 `.hdr`；
+2. 给模型使用 PBRModel 材质，或者观察 Terrain；
+3. 暂时关闭 Directional Light 的 Enabled；
+4. 非金属区域应保留随法线方向变化的环境颜色，而不是退化为统一黑色；
+5. 调整 Sky Light Intensity，应同时改变可见天空盒和 Model/Terrain 环境漫反射强度。
+
+### 验证
+
+- VS2026 `Debug | x64` 的 Cyou 编辑器与回归测试项目增量构建成功；
+- 74 项无窗口回归全部通过，新增覆盖常量环境余弦积分和缓存键的复用/版本/参数失效；
+- NVIDIA GeForce GTX 1050 / OpenGL 4.6 下，默认 `32×32 / 64 samples` Irradiance 在相邻日志秒内完成且只记录一次生成；
+- PBR Material Lab 成功渲染 6/6 模型，PBRModel、Terrain、ShadowDepth 和既有 Compute Shader 均编译通过；
+- 未删除 `bin`、`bin-int`，构建产物保留。
+
 ## KB
 
 ### 为什么不用动态库？

@@ -427,6 +427,8 @@ namespace gl {
 			return AssetType::TerrainMaterial;
 		if (extension == ".glsky")
 			return AssetType::Cubemap;
+		if (extension == ".hdr")
+			return AssetType::Cubemap;
 		return AssetType::None;
 	}
 

@@ -27,9 +27,11 @@ namespace gl {
 		if (std::filesystem::is_directory(path)) return ICON_FA_FOLDER;
 		auto ext = path.extension().string();
 		if (ext == ".glsl")      return ICON_FA_CODE;
-		if (ext == ".glimmer" || ext == ".glsky") return ICON_FA_GLOBE;
+		if (ext == ".glimmer" || ext == ".glsky" || ext == ".hdr")
+			return ICON_FA_GLOBE;
 		if (ext == ".obj")       return ICON_FA_CUBE;
-		if (ext == ".png" || ext == ".jpg") return ICON_FA_IMAGE;
+		if (ext == ".png" || ext == ".jpg" || ext == ".hdr")
+			return ICON_FA_IMAGE;
 		return ICON_FA_FILE;
 	}
 

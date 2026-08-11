@@ -19,7 +19,12 @@ namespace gl {
 		R32F
 	};
 
-	enum class TextureFilter { Nearest = 0, Linear };
+	enum class TextureFilter
+	{
+		Nearest = 0,
+		Linear,
+		LinearMipmapLinear
+	};
 	enum class TextureWrap { Repeat = 0, ClampToEdge, MirroredRepeat };
 
 	enum class TextureUsage : uint32_t {

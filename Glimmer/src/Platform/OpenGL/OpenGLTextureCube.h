@@ -19,12 +19,17 @@ namespace gl {
         }
 
         void SetFaceData(
-            TextureCubeFace face, const void* data, uint32_t size) override;
+            TextureCubeFace face, const void* data, uint32_t size,
+            uint32_t mipLevel = 0) override;
+        bool GetFaceFloatData(
+            TextureCubeFace face, float* data, uint32_t componentCount,
+            uint32_t mipLevel = 0) const override;
+        void GenerateMipmaps() override;
         void Bind(uint32_t slot = 0) const override;
         uint32_t GetRendererID() const override { return m_RendererID; }
 
     private:
-        uint32_t GetFaceTransferSize() const;
+        uint32_t GetFaceTransferSize(uint32_t mipLevel) const;
 
     private:
         TextureCubeSpecification m_Specification;

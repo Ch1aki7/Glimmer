@@ -40,6 +40,26 @@ namespace gl {
 	{
 		try
 		{
+			std::string extension = m_Path.extension().string();
+			std::transform(extension.begin(), extension.end(), extension.begin(),
+				[](unsigned char character)
+				{
+					return static_cast<char>(std::tolower(character));
+				});
+			if (extension == ".hdr")
+			{
+				TextureCubeEquirectangularSpecification specification;
+				specification.Path = m_Path;
+				Ref<TextureCube> texture = TextureCube::Create(specification);
+				if (!texture)
+					return false;
+				m_Texture = std::move(texture);
+				m_SourcePath = m_Path;
+				m_IsHDR = true;
+				++m_Version;
+				return true;
+			}
+
 			const YAML::Node root = YAML::LoadFile(m_Path.string());
 			const YAML::Node cubemap = root["Cubemap"];
 			if (!cubemap)
@@ -51,6 +71,29 @@ namespace gl {
 			}
 
 			const std::filesystem::path directory = m_Path.parent_path();
+			const YAML::Node source = cubemap["Source"];
+			if (source)
+			{
+				const std::string relativePath = source.as<std::string>();
+				if (!relativePath.empty())
+				{
+					TextureCubeEquirectangularSpecification specification;
+					specification.Path =
+						(directory / relativePath).lexically_normal();
+					if (cubemap["Resolution"])
+						specification.FaceSize = std::max(
+							1u, cubemap["Resolution"].as<uint32_t>());
+					Ref<TextureCube> texture = TextureCube::Create(specification);
+					if (!texture)
+						return false;
+					m_Texture = std::move(texture);
+					m_SourcePath = specification.Path;
+					m_IsHDR = true;
+					++m_Version;
+					return true;
+				}
+			}
+
 			TextureCubeFileSpecification specification;
 			specification.FacePaths = {
 				ReadFacePath(cubemap, "Right", directory),
@@ -84,6 +127,9 @@ namespace gl {
 				return false;
 
 			m_Texture = std::move(texture);
+			m_SourcePath.clear();
+			m_IsHDR = false;
+			++m_Version;
 			return true;
 		}
 		catch (const YAML::Exception& exception)

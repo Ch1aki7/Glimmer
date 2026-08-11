@@ -1,6 +1,7 @@
 #include "glpch.h"
 #include "TextureCube.h"
 
+#include "Glimmer/Renderer/EnvironmentMapLoader.h"
 #include "Glimmer/Renderer/Renderer.h"
 #include "Platform/OpenGL/OpenGLTextureCube.h"
 
@@ -9,6 +10,17 @@
 #include <vector>
 
 namespace gl {
+
+    uint32_t CalculateTextureMipCount(uint32_t size)
+    {
+        uint32_t levels = 0;
+        do
+        {
+            ++levels;
+            size >>= 1;
+        } while (size > 0);
+        return levels;
+    }
 
     Ref<TextureCube> TextureCube::Create(
         const TextureCubeSpecification& specification)
@@ -105,8 +117,13 @@ namespace gl {
 
         TextureCubeSpecification textureSpecification;
         textureSpecification.Size = faceSize;
+        textureSpecification.MipLevels = fileSpecification.GenerateMipmaps
+            ? CalculateTextureMipCount(faceSize) : 1;
         textureSpecification.Format = TextureFormat::RGBA8;
         textureSpecification.ColorSpace = fileSpecification.ColorSpace;
+        textureSpecification.MinFilter = fileSpecification.GenerateMipmaps
+            ? TextureFilter::LinearMipmapLinear
+            : TextureFilter::Linear;
 
         Ref<TextureCube> texture = Create(textureSpecification);
         if (!texture)
@@ -119,7 +136,62 @@ namespace gl {
                 facePixels[faceIndex].data(),
                 static_cast<uint32_t>(facePixels[faceIndex].size()));
         }
+        if (fileSpecification.GenerateMipmaps)
+            texture->GenerateMipmaps();
 
+        return texture;
+    }
+
+    Ref<TextureCube> TextureCube::Create(
+        const TextureCubeEquirectangularSpecification& specification)
+    {
+        if (specification.Path.empty())
+        {
+            GL_CORE_ERROR("HDR environment path cannot be empty.");
+            return nullptr;
+        }
+
+        FloatImageData source;
+        if (!EnvironmentMapLoader::LoadEquirectangularHDR(
+            specification.Path, source))
+            return nullptr;
+
+        const uint32_t faceSize = specification.FaceSize > 0
+            ? specification.FaceSize
+            : EnvironmentMapLoader::SuggestFaceSize(source);
+        CubemapFloatData faces;
+        if (!EnvironmentMapLoader::ConvertEquirectangularToCubemap(
+            source, faceSize, faces))
+        {
+            GL_CORE_ERROR(
+                "Failed to convert HDR environment to cubemap: {0}",
+                specification.Path.string());
+            return nullptr;
+        }
+
+        TextureCubeSpecification textureSpecification;
+        textureSpecification.Size = faceSize;
+        textureSpecification.MipLevels = specification.GenerateMipmaps
+            ? CalculateTextureMipCount(faceSize) : 1;
+        textureSpecification.Format = TextureFormat::RGBA16F;
+        textureSpecification.ColorSpace = TextureColorSpace::Linear;
+        textureSpecification.MinFilter = specification.GenerateMipmaps
+            ? TextureFilter::LinearMipmapLinear
+            : TextureFilter::Linear;
+        Ref<TextureCube> texture = Create(textureSpecification);
+        if (!texture)
+            return nullptr;
+
+        for (size_t faceIndex = 0; faceIndex < faces.Faces.size(); ++faceIndex)
+        {
+            const auto& face = faces.Faces[faceIndex];
+            texture->SetFaceData(
+                static_cast<TextureCubeFace>(faceIndex),
+                face.data(),
+                static_cast<uint32_t>(face.size() * sizeof(float)));
+        }
+        if (specification.GenerateMipmaps)
+            texture->GenerateMipmaps();
         return texture;
     }
 }

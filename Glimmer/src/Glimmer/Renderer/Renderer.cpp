@@ -5,6 +5,7 @@
 #include "TerrainRenderer.h"
 #include "ShadowRenderer.h"
 #include "SkyboxRenderer.h"
+#include "EnvironmentLighting.h"
 #include "UniformBuffer.h"
 namespace gl {
 
@@ -42,6 +43,7 @@ namespace gl {
 		Renderer2D::Init();
 		Renderer3D::Init();
 		TerrainRenderer::Init();
+		EnvironmentLighting::Init();
 		s_LightUniformBuffer = UniformBuffer::Create(sizeof(GPULightEnvironment), 1);
 		SkyboxRenderer::Init();
 	}
@@ -49,6 +51,7 @@ namespace gl {
 	void Renderer::Shutdown() {
 		ShadowRenderer::Shutdown();
 		TerrainRenderer::Shutdown();
+		EnvironmentLighting::Shutdown();
 		s_LightUniformBuffer.reset();
 		Renderer3D::Shutdown();
 		SkyboxRenderer::Shutdown();
@@ -71,6 +74,10 @@ namespace gl {
 
 	void Renderer::UploadLightEnvironment(const LightEnvironment& environment)
 	{
+		EnvironmentLighting::SetSkyLight(
+			environment.SkyLightCubemap,
+			environment.SkyLightIntensity,
+			environment.SkyLightEnabled);
 		if (!s_LightUniformBuffer)
 			return;
 

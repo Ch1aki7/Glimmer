@@ -194,17 +194,23 @@ Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite �
 
 ### 5.4 光照、PBR、天空盒与地形
 
-Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight 构造 `LightEnvironment`。Renderer 将其转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO。
+Scene 每帧从第一个启用的 DirectionalLight、最多 16 个 PointLight 和第一个启用且拥有有效 Cubemap Handle 的 SkyLight 构造 `LightEnvironment`。Renderer 将方向光与点光转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO；SkyLight Handle、Intensity 和启用状态交给 `EnvironmentLighting` 解析，不写入该 UBO。
 
 第一个启用且开启 `CastShadows` 的 DirectionalLight 同时驱动 CSM Shadow Pass。Scene 在主颜色 Pass 前调用 `ShadowRenderer`：后者按序列化的 Resolution、Distance、Bias、Cascade Count、Split Lambda 与 Cascade Blend 创建或复用最多四个纯运行时 `Depth32F` Framebuffer，从 Camera View/Projection 重建世界空间视锥，并以 Practical Split 划分各级覆盖范围。每级使用包围球确定稳定正交范围并执行 Shadow Texel Snap；相邻级联再按较短区间的一定比例向 Split 两侧扩展，形成共同可采样的重叠区域。Mesh 在构造时缓存局部 AABB；ShadowRenderer 将 Model 子网格 Bounds 与 Terrain 的网格/高度 Bounds 变换到当前 Light VP Clip Space，执行保守六平面剔除后才提交深度 Draw。Terrain 先经 `TerrainRenderer::Prepare` 生成或复用 Height/派生 Runtime，因此首帧即可参与投影；全部级联完成后由 `RenderPass::RebindCurrentTarget` 恢复 Scene Framebuffer 与 Viewport。
 
-PBRModel 与 Terrain 共用四组 Light VP、Cascade Split/Blend Width、Camera View、Bias 和 `3×3 PCF` 接收契约，并按片元视空间深度选择级联。Split 过渡区同时采样相邻级联并以 `smoothstep` 混合，区间外只采样当前级联。模型材质占用 0～3 后将级联图绑定到 slot 4～7；Terrain 已占用 0～15，级联图绑定到 slot 16～19。`ShadowRenderer` 还持有不参与 `Disable` 帧重置的运行时级联可视化开关，并在 Lighting Bind 时统一上传；PBRModel 与 Terrain 以固定色覆盖部分最终线性颜色，重叠区复用同一 Blend 权重，因此不改变 Shadow Depth、Alpha 或 Entity ID。Scene 向 Model Shadow Submit 传递 MaterialHandle 与实体 Overrides，ShadowRenderer 通过 MaterialInstance 得到最终 Alpha 状态；Opaque 与 Mask 进入 Shadow Queue，Blend 在提交边界被跳过，避免半透明表面生成错误的实心轮廓。Mask 在 ShadowDepth Fragment 中以 BaseColor Alpha、BaseColor Texture Alpha、TilingFactor 和 AlphaCutoff 执行与颜色 Pass 相同的裁剪。每个级联内，Model 子网格在 Frustum 剔除后进入 Shadow Queue，并按 Mesh 与最终 Mask 状态排序；兼容批次使用最多 1024 项的动态 Transform Buffer 执行 Instanced Draw，Mask 的贴图、Base Alpha、Cutoff 或 Tiling 不同都会拆批。ShadowRenderer 为每个源 Mesh 缓存独立 Shadow VAO，只复制 PerVertex Buffer 并将 Shadow Instance Transform 放在 location 4～7，从而不依赖或覆盖 Renderer3D 已挂到源 VAO 的 Transform/EntityID Instance Buffer。ShadowDepth 将模型 UV 固定在 location 3，并保留 Terrain Height UV 的 location 1；Terrain 当前仍独立绘制。Shadow Framebuffer、深度纹理、Light VP、Split、Blend Width、队列、实例缓冲、Shadow VAO 缓存与调试开关均不序列化，DirectionalLight 只持久化重建所需设置。
+PBRModel 与 Terrain 共用四组 Light VP、Cascade Split/Blend Width、Camera View、Bias 和 `3×3 PCF` 接收契约，并按片元视空间深度选择级联。Split 过渡区同时采样相邻级联并以 `smoothstep` 混合，区间外只采样当前级联。模型材质占用 0～3，级联图绑定到 slot 4～7，Diffuse Irradiance 绑定到 slot 8；Terrain 已占用 0～15，级联图绑定到 slot 16～19，Diffuse Irradiance 绑定到 slot 20。`ShadowRenderer` 还持有不参与 `Disable` 帧重置的运行时级联可视化开关，并在 Lighting Bind 时统一上传；PBRModel 与 Terrain 以固定色覆盖部分最终线性颜色，重叠区复用同一 Blend 权重，因此不改变 Shadow Depth、Alpha 或 Entity ID。Scene 向 Model Shadow Submit 传递 MaterialHandle 与实体 Overrides，ShadowRenderer 通过 MaterialInstance 得到最终 Alpha 状态；Opaque 与 Mask 进入 Shadow Queue，Blend 在提交边界被跳过，避免半透明表面生成错误的实心轮廓。Mask 在 ShadowDepth Fragment 中以 BaseColor Alpha、BaseColor Texture Alpha、TilingFactor 和 AlphaCutoff 执行与颜色 Pass 相同的裁剪。每个级联内，Model 子网格在 Frustum 剔除后进入 Shadow Queue，并按 Mesh 与最终 Mask 状态排序；兼容批次使用最多 1024 项的动态 Transform Buffer 执行 Instanced Draw，Mask 的贴图、Base Alpha、Cutoff 或 Tiling 不同都会拆批。ShadowRenderer 为每个源 Mesh 缓存独立 Shadow VAO，只复制 PerVertex Buffer 并将 Shadow Instance Transform 放在 location 4～7，从而不依赖或覆盖 Renderer3D 已挂到源 VAO 的 Transform/EntityID Instance Buffer。ShadowDepth 将模型 UV 固定在 location 3，并保留 Terrain Height UV 的 location 1；Terrain 当前仍独立绘制。Shadow Framebuffer、深度纹理、Light VP、Split、Blend Width、队列、实例缓冲、Shadow VAO 缓存与调试开关均不序列化，DirectionalLight 只持久化重建所需设置。
 
 `GPUTimer` 是 Renderer 层的可选计时资源；OpenGL 后端以四个 `GL_TIME_ELAPSED` Query 轮转，Begin/End 只提交时间范围，`TryGetElapsedMilliseconds` 仅在 `GL_QUERY_RESULT_AVAILABLE` 为真时读取，禁止为调试 UI 强制等待 GPU。ShadowRenderer 在第一条 Cascade GPU 命令前开始、最后一个 Cascade 结束后停止；TerrainRenderer 以 BeginScene/EndScene 包围 Terrain Color Pass。两者都只在 Statistics 中保存最近可用耗时和单调递增样本号，不序列化。Vulkan 当前返回空 Timer，调用方必须允许计时不可用。
 
 当前 3D Material 参数包括 BaseColor/BaseColorTexture、NormalTexture/NormalScale、AOTexture/AOStrength、EmissiveTexture/EmissiveColor/EmissiveStrength、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR：切线空间 Normal 修改 BRDF 法线，AO 只调制环境光项，Emissive 在线性 HDR 结果中累加；BaseColor Alpha 与纹理 Alpha 的乘积继续驱动 Mask/Blend。模型加载阶段按 UV 梯度生成 Tangent，退化 UV 或无有效累积切线时建立稳定正交基，避免 Normal Mapping 产生 NaN。
 
-`SkyLightComponent` 引用 `.glsky` Cubemap 资产；描述文件保存六个面图路径，AssetManager 缓存解析后的 `Cubemap`，SkyboxRenderer 使用去除平移的视图方向绘制背景。
+`SkyLightComponent` 引用 Cubemap 资产。Cubemap 可以是保存六面 LDR 图片路径的 `.glsky`，也可以是直接导入的 Radiance `.hdr`；`.glsky` 还可通过 `Source` 引用相对路径的等距柱状 HDR，并用 `Resolution` 指定目标面尺寸。AssetManager 缓存 `Cubemap` Runtime；后者记录实际环境源路径、HDR 标记和成功 Reload 后递增的资源版本。SkyboxRenderer 使用去除平移的视图方向绘制同一 Runtime 的可见背景。
+
+`EnvironmentMapLoader` 属于 Renderer 核心层，负责将等距柱状浮点图按统一 `+X/-X/+Y/-Y/+Z/-Z` 方向约定双线性转换为六面数据；经度循环、纬度钳制，避免接缝和极点越界。转换结果以线性 `RGBA16F TextureCube` 上传并生成完整至 `1×1` 的 Mip Chain。TextureCube 抽象拥有 Mip 数、逐级面上传和生成 Mip 接口，OpenGL 只实现存储与传输，不拥有环境资产解析算法。当前这些 Mip 仍是普通下采样链，不等同于 Specular Prefilter。
+
+`EnvironmentLighting` 管理当前 SkyLight 和进程内派生环境缓存。首次遇到新键时，它通过 TextureCube 的后端无关浮点面读回取得线性源数据；sRGB 六面源在 CPU 侧解码，HDR 源保持线性。EnvironmentMapLoader 使用确定性 Hammersley 序列执行余弦重要性采样，默认生成 `32×32 RGBA16F`、每像素 64 样本的 Diffuse Irradiance。缓存键为 `Source Handle + Cubemap Runtime Version + Resolution + Sample Count`；活动键正常帧不查重、不读回、不卷积，Reload/参数变化时替换同一源的旧版本项。该缓存当前只在进程内存中存在，尚无磁盘派生资产或 LRU 预算。
+
+PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness 与 `(1-F) × (1-metallic)` 漫反射权重，并乘以 AO 和 SkyLight Intensity；没有有效 Irradiance 时保留方向光 Ambient 回退。当前金属材质尚无环境镜面项，因此关闭直接光后会比最终 IBL 更暗。
 
 地形实体由 `TerrainComponent` 保存可序列化的 `TerrainSpecification`，运行时 GPU 对象放在不持久化的 `TerrainRuntime` 中：
 
@@ -269,9 +275,9 @@ Scene 维护 `UUID -> entt::entity` 映射，提供按 UUID 和临时 EnTT ID �
 - Shader；
 - Material（`.glmat`）；
 - TerrainMaterial（`.glterrainmat`）；
-- Cubemap（`.glsky`）。
+- Cubemap（`.glsky`、Radiance `.hdr`）。
 
-AssetManager 按规范化相对路径去重导入，并分别维护 Texture、Model、Shader、Material、TerrainMaterial、Cubemap 缓存。Texture 元数据区分 Linear/sRGB 与 Color/Normal/Data/Height 语义，修改元数据时清除对应缓存并重写注册表。PBR 约定 BaseColor/Emissive 为 sRGB Color，Normal 为 Linear Normal，AO 为 Linear Data（Height 也可作为线性单通道数据）；Renderer3D 与 TerrainRenderer 只解析符合 slot 契约的 Texture Handle，不在绘制阶段改写注册表。
+AssetManager 按规范化相对路径去重导入，并分别维护 Texture、Model、Shader、Material、TerrainMaterial、Cubemap 缓存。`.hdr` 与 `.glsky` 都注册为 Cubemap，但前者直接作为浮点环境源加载。Texture 元数据区分 Linear/sRGB 与 Color/Normal/Data/Height 语义，修改元数据时清除对应缓存并重写注册表。PBR 约定 BaseColor/Emissive 为 sRGB Color，Normal 为 Linear Normal，AO 为 Linear Data（Height 也可作为线性单通道数据）；Renderer3D 与 TerrainRenderer 只解析符合 slot 契约的 Texture Handle，不在绘制阶段改写注册表。
 
 ```mermaid
 flowchart LR
@@ -431,11 +437,11 @@ flowchart LR
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - 新增 3D Shader 必须遵守 `Opaque / Mask / Blend` 契约；若声明支持 AlphaMode，需要消费 `u_AlphaMode`、`u_AlphaCutoff` 并保持 Mask/Blend 的深度和 EntityID 语义。透明对象仍不得进入现有 Opaque Instancing；
 - 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；未来固定步长 Runtime Erosion 必须使用独立状态集和调度器，不能复用或隐式推进 Authoring 管线；
-- 未来 IBL 的 Irradiance、Prefilter 和 BRDF LUT 属于派生缓存，应按源环境 Handle、资源版本和生成参数失效，禁止逐帧卷积；这条约束不代表当前已经实现 IBL；
+- IBL 源环境和 Diffuse Irradiance 已按 Handle、Cubemap Runtime Version 与生成参数进入内存派生缓存；后续 Prefilter 和 BRDF LUT 必须复用同一失效边界，禁止逐帧卷积，磁盘缓存需另行定义版本化格式；
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，以及带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM 已经落地；当前主线是 IBL 环境光照。Metallic/Roughness Texture/ORM、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain 和 Diffuse Irradiance 已经落地；当前主线继续完成 Specular Prefilter 与 BRDF LUT。Metallic/Roughness Texture/ORM、Runtime Erosion、完整 Specular IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

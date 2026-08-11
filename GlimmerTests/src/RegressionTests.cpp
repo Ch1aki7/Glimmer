@@ -2,6 +2,8 @@
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/MaterialInstance.h"
+#include "Glimmer/Renderer/EnvironmentMapLoader.h"
+#include "Glimmer/Renderer/EnvironmentLighting.h"
 #include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Scene/Entity.h"
@@ -597,6 +599,197 @@ namespace {
 			"blend materials do not cast solid directional shadows");
 	}
 
+	void TestEnvironmentMapFoundation(
+		TestContext& context,
+		const std::filesystem::path& root)
+	{
+		context.Check(gl::CalculateTextureMipCount(1) == 1
+			&& gl::CalculateTextureMipCount(2) == 2
+			&& gl::CalculateTextureMipCount(256) == 9,
+			"cubemap mip count includes the complete 1x1 chain");
+
+		const glm::vec3 expectedDirections[] = {
+			{ 1.0f, 0.0f, 0.0f },
+			{ -1.0f, 0.0f, 0.0f },
+			{ 0.0f, 1.0f, 0.0f },
+			{ 0.0f, -1.0f, 0.0f },
+			{ 0.0f, 0.0f, 1.0f },
+			{ 0.0f, 0.0f, -1.0f }
+		};
+		bool centersMatch = true;
+		for (uint32_t face = 0; face < 6; ++face)
+		{
+			centersMatch = centersMatch && Near(
+				gl::EnvironmentMapLoader::CubemapDirection(
+					static_cast<gl::TextureCubeFace>(face), 0.0f, 0.0f),
+				expectedDirections[face]);
+		}
+		context.Check(centersMatch,
+			"equirectangular conversion follows the TextureCube face convention");
+
+		gl::FloatImageData source;
+		source.Width = 8;
+		source.Height = 4;
+		source.Pixels.resize(
+			static_cast<size_t>(source.Width) * source.Height * 4);
+		for (size_t offset = 0; offset < source.Pixels.size(); offset += 4)
+		{
+			source.Pixels[offset + 0] = 4.0f;
+			source.Pixels[offset + 1] = 2.0f;
+			source.Pixels[offset + 2] = 0.5f;
+			source.Pixels[offset + 3] = 1.0f;
+		}
+		context.Check(gl::EnvironmentMapLoader::SuggestFaceSize(source) == 2,
+			"2:1 HDR source suggests a proportional cubemap face size");
+
+		gl::CubemapFloatData converted;
+		const bool convertedSuccessfully =
+			gl::EnvironmentMapLoader::ConvertEquirectangularToCubemap(
+				source, 3, converted);
+		bool preservesHDR = convertedSuccessfully && converted.IsValid();
+		for (const auto& face : converted.Faces)
+		{
+			for (size_t offset = 0; preservesHDR && offset < face.size();
+				offset += 4)
+			{
+				preservesHDR = Near(face[offset + 0], 4.0f)
+					&& Near(face[offset + 1], 2.0f)
+					&& Near(face[offset + 2], 0.5f)
+					&& Near(face[offset + 3], 1.0f);
+			}
+		}
+		context.Check(preservesHDR,
+			"equirectangular conversion preserves values above display white");
+
+		gl::CubemapFloatData constantEnvironment;
+		constexpr float irradiancePi = 3.14159265358979323846f;
+		constantEnvironment.Size = 4;
+		for (auto& face : constantEnvironment.Faces)
+		{
+			face.resize(4 * 4 * 4);
+			for (size_t offset = 0; offset < face.size(); offset += 4)
+			{
+				face[offset + 0] = 2.0f;
+				face[offset + 1] = 0.5f;
+				face[offset + 2] = 0.25f;
+				face[offset + 3] = 1.0f;
+			}
+		}
+		gl::CubemapFloatData diffuseIrradiance;
+		const bool generatedIrradiance =
+			gl::EnvironmentMapLoader::GenerateDiffuseIrradiance(
+				constantEnvironment, 4, 64, diffuseIrradiance);
+		bool constantIrradianceMatches =
+			generatedIrradiance && diffuseIrradiance.IsValid();
+		for (const auto& face : diffuseIrradiance.Faces)
+		{
+			for (size_t offset = 0;
+				constantIrradianceMatches && offset < face.size();
+				offset += 4)
+			{
+				constantIrradianceMatches =
+					std::abs(face[offset + 0] - 2.0f * irradiancePi) < 0.002f
+					&& std::abs(face[offset + 1] - 0.5f * irradiancePi) < 0.002f
+					&& std::abs(face[offset + 2] - 0.25f * irradiancePi) < 0.002f
+					&& Near(face[offset + 3], 1.0f);
+			}
+		}
+		context.Check(constantIrradianceMatches,
+			"cosine-weighted diffuse convolution integrates a constant environment");
+
+		gl::EnvironmentDerivedMapKey cacheKey;
+		cacheKey.SourceHandle = gl::AssetHandle(42);
+		cacheKey.SourceVersion = 3;
+		cacheKey.Irradiance = { 32, 256 };
+		gl::EnvironmentDerivedMapKey sameCacheKey = cacheKey;
+		gl::EnvironmentDerivedMapKey reloadedKey = cacheKey;
+		++reloadedKey.SourceVersion;
+		gl::EnvironmentDerivedMapKey parameterKey = cacheKey;
+		parameterKey.Irradiance.SampleCount = 512;
+		const gl::EnvironmentDerivedMapKeyHash keyHash;
+		context.Check(cacheKey == sameCacheKey
+			&& keyHash(cacheKey) == keyHash(sameCacheKey),
+			"identical environment source versions and parameters share a cache key");
+		context.Check(!(cacheKey == reloadedKey)
+			&& !(cacheKey == parameterKey),
+			"environment reloads and generation settings invalidate derived cache keys");
+
+		gl::FloatImageData directionalSource;
+		directionalSource.Width = 64;
+		directionalSource.Height = 32;
+		directionalSource.Pixels.resize(
+			static_cast<size_t>(directionalSource.Width)
+			* directionalSource.Height * 4);
+		constexpr float pi = 3.14159265358979323846f;
+		for (uint32_t y = 0; y < directionalSource.Height; ++y)
+		{
+			const float latitude = pi
+				* (static_cast<float>(y) + 0.5f)
+				/ static_cast<float>(directionalSource.Height);
+			for (uint32_t x = 0; x < directionalSource.Width; ++x)
+			{
+				const float longitude = 2.0f * pi
+					* (static_cast<float>(x) + 0.5f)
+					/ static_cast<float>(directionalSource.Width) - pi;
+				const glm::vec3 direction{
+					std::sin(latitude) * std::cos(longitude),
+					std::cos(latitude),
+					std::sin(latitude) * std::sin(longitude)
+				};
+				const size_t offset =
+					(static_cast<size_t>(y) * directionalSource.Width + x) * 4;
+				directionalSource.Pixels[offset + 0] = direction.x * 0.5f + 0.5f;
+				directionalSource.Pixels[offset + 1] = direction.y * 0.5f + 0.5f;
+				directionalSource.Pixels[offset + 2] = direction.z * 0.5f + 0.5f;
+				directionalSource.Pixels[offset + 3] = 1.0f;
+			}
+		}
+
+		gl::CubemapFloatData directionalCube;
+		bool conversionOrientationMatches =
+			gl::EnvironmentMapLoader::ConvertEquirectangularToCubemap(
+				directionalSource, 5, directionalCube);
+		for (uint32_t face = 0; face < 6 && conversionOrientationMatches; ++face)
+		{
+			const size_t centerOffset = (2 * 5 + 2) * 4;
+			const glm::vec3 sampledDirection{
+				directionalCube.Faces[face][centerOffset + 0] * 2.0f - 1.0f,
+				directionalCube.Faces[face][centerOffset + 1] * 2.0f - 1.0f,
+				directionalCube.Faces[face][centerOffset + 2] * 2.0f - 1.0f
+			};
+			conversionOrientationMatches =
+				glm::length(sampledDirection - expectedDirections[face]) < 0.08f;
+		}
+		context.Check(conversionOrientationMatches,
+			"equirectangular sampling preserves all six cubemap orientations");
+
+		const std::filesystem::path hdrPath = root / "environment.hdr";
+		{
+			std::ofstream stream(hdrPath, std::ios::binary);
+			stream << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 4\n";
+			const char rgbe[] = {
+				static_cast<char>(128), static_cast<char>(64),
+				static_cast<char>(32), static_cast<char>(130)
+			};
+			for (uint32_t pixel = 0; pixel < 8; ++pixel)
+				stream.write(rgbe, sizeof(rgbe));
+		}
+		gl::FloatImageData decodedHDR;
+		const bool decodedSuccessfully =
+			gl::EnvironmentMapLoader::LoadEquirectangularHDR(hdrPath, decodedHDR);
+		context.Check(decodedSuccessfully && decodedHDR.IsValid()
+			&& decodedHDR.Width == 4 && decodedHDR.Height == 2
+			&& decodedHDR.Pixels[0] > 1.0f,
+			"Radiance HDR decoding retains linear high-range values");
+		gl::AssetManager::Initialize(root);
+		const gl::AssetHandle hdrHandle =
+			gl::AssetManager::ImportAsset(hdrPath);
+		context.Check(gl::AssetManager::GetMetadata(hdrHandle).Type
+			== gl::AssetType::Cubemap,
+			".hdr imports as a Cubemap asset");
+		gl::AssetManager::Shutdown();
+	}
+
 }
 
 int main(int argc, char** argv)
@@ -614,6 +807,7 @@ int main(int argc, char** argv)
 	TestTerrainCopyAndTransactions(context);
 	TestTerrainPresets(context);
 	TestShadowFrustumCulling(context);
+	TestEnvironmentMapFoundation(context, temporaryDirectory.Path());
 
 	if (argc > 1 && std::string(argv[1]) == "--force-failure")
 		context.Check(false, "intentional failure verifies non-zero exit propagation");
