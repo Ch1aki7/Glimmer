@@ -1,6 +1,7 @@
 #include "DebugPanel.h"
 
 #include "Glimmer/Renderer/ShadowRenderer.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
 
 #include <imgui.h>
 #include <utility>
@@ -39,8 +40,11 @@ namespace gl {
 	{
 		const ShadowRenderer::Statistics shadowStatistics =
 			ShadowRenderer::GetStatistics();
+		const TerrainRenderer::Statistics terrainStatistics =
+			TerrainRenderer::GetStatistics();
 		m_InstancingLab.UpdateShadowBenchmark(shadowStatistics);
 		m_PBRMaterialLab.UpdateValidation(statistics);
+		m_TerrainSamplingBenchmark.Update(terrainStatistics);
 		if (!m_Open)
 			return;
 		if (!ImGui::Begin("Debug", &m_Open))
@@ -84,6 +88,39 @@ namespace gl {
 				if (ImGui::Checkbox("Visualize Cascades", &visualizeCascades))
 					ShadowRenderer::SetCascadeDebugVisualization(visualizeCascades);
 				ImGui::TextDisabled("1 Red, 2 Green, 3 Blue, 4 Yellow");
+				ImGui::Separator();
+				ImGui::TextUnformatted("Terrain");
+				ImGui::Text("Draw Calls: %u", terrainStatistics.DrawCalls);
+				ImGui::Text("Bound Material Textures: %u",
+					terrainStatistics.BoundMaterialTextures);
+				if (terrainStatistics.GpuTimingAvailable)
+					ImGui::Text("GPU Time: %.3f ms",
+						terrainStatistics.GpuMilliseconds);
+				else
+					ImGui::TextDisabled("GPU Time: pending");
+				int samplingMode = static_cast<int>(
+					TerrainRenderer::GetSamplingMode());
+				const char* samplingModes[] = {
+					"Full 4 Layers",
+					"Top 2 Layers",
+					"Top 2 + Dominant Normal/AO",
+					"Auto Distance"
+				};
+				if (ImGui::Combo("Sampling", &samplingMode,
+					samplingModes, IM_ARRAYSIZE(samplingModes)))
+				{
+					TerrainRenderer::SetSamplingMode(
+						static_cast<TerrainRenderer::SamplingMode>(samplingMode));
+				}
+				if (TerrainRenderer::GetSamplingMode()
+					== TerrainRenderer::SamplingMode::AutomaticDistance)
+				{
+					float detailDistance = TerrainRenderer::GetDetailDistance();
+					if (ImGui::DragFloat("Detail Distance", &detailDistance,
+						1.0f, 1.0f, 10000.0f))
+						TerrainRenderer::SetDetailDistance(detailDistance);
+				}
+				m_TerrainSamplingBenchmark.OnImGuiRender(terrainStatistics);
 				ImGui::EndTabItem();
 			}
 

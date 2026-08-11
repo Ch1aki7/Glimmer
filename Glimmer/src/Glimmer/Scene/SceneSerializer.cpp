@@ -220,6 +220,10 @@ namespace gl {
 		out << YAML::Key << "MountainDirection" << YAML::Value << noise.MountainDirection;
 		out << YAML::Key << "MountainWidth" << YAML::Value << noise.MountainWidth;
 		out << YAML::Key << "PlateauStrength" << YAML::Value << noise.PlateauStrength;
+		out << YAML::Key << "GeologyBlend" << YAML::Value << noise.GeologyBlend;
+		out << YAML::Key << "GeologyScale" << YAML::Value << noise.GeologyScale;
+		out << YAML::Key << "RiftStrength" << YAML::Value << noise.RiftStrength;
+		out << YAML::Key << "TrendStrength" << YAML::Value << noise.TrendStrength;
 		out << YAML::Key << "Offset" << YAML::Value << YAML::Flow << YAML::BeginSeq
 			<< noise.Offset.x << noise.Offset.y << YAML::EndSeq;
 		out << YAML::EndMap;
@@ -266,6 +270,18 @@ namespace gl {
 			if (noiseNode["MountainDirection"]) noise.MountainDirection = noiseNode["MountainDirection"].as<float>();
 			if (noiseNode["MountainWidth"]) noise.MountainWidth = noiseNode["MountainWidth"].as<float>();
 			if (noiseNode["PlateauStrength"]) noise.PlateauStrength = noiseNode["PlateauStrength"].as<float>();
+			if (noiseNode["GeologyBlend"])
+				noise.GeologyBlend = glm::clamp(
+					noiseNode["GeologyBlend"].as<float>(), 0.0f, 1.0f);
+			if (noiseNode["GeologyScale"])
+				noise.GeologyScale = glm::clamp(
+					noiseNode["GeologyScale"].as<float>(), 0.25f, 12.0f);
+			if (noiseNode["RiftStrength"])
+				noise.RiftStrength = glm::clamp(
+					noiseNode["RiftStrength"].as<float>(), 0.0f, 0.5f);
+			if (noiseNode["TrendStrength"])
+				noise.TrendStrength = glm::clamp(
+					noiseNode["TrendStrength"].as<float>(), 0.0f, 0.5f);
 			if (const auto offset = noiseNode["Offset"]; offset && offset.size() >= 2)
 				noise.Offset = { offset[0].as<float>(), offset[1].as<float>() };
 		}

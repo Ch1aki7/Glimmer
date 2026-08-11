@@ -38,6 +38,30 @@ namespace gl {
 			return HasEnvironmentVariable("GLIMMER_SHADOW_BENCHMARK_AUTORUN");
 		}
 
+		bool ShouldAutorunTerrainSamplingBenchmark()
+		{
+			return HasEnvironmentVariable(
+				"GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN");
+		}
+
+		int GetTerrainSamplingVisualMode()
+		{
+#ifdef GL_PLATFORM_WINDOWS
+			char* value = nullptr;
+			size_t length = 0;
+			if (_dupenv_s(&value, &length,
+				"GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE") != 0 || !value)
+				return -1;
+			const int mode = std::atoi(value);
+			std::free(value);
+			return mode;
+#else
+			const char* value =
+				std::getenv("GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE");
+			return value ? std::atoi(value) : -1;
+#endif
+		}
+
 		bool ShouldAutorunShadowVisualValidation()
 		{
 			return HasEnvironmentVariable("GLIMMER_SHADOW_VISUAL_AUTORUN");
@@ -261,6 +285,7 @@ namespace gl {
 	void EditorLayer::OnAttach() {
 		GL_PROFILE_FUNCTION();
 		AssetManager::Initialize("assets");
+		const int terrainSamplingVisualMode = GetTerrainSamplingVisualMode();
 
 		m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
 		m_ShaderLib.Load("assets/shaders/StarNest.glsl");
@@ -338,7 +363,12 @@ namespace gl {
 		terrain.Specification.DerivationShaderHandle = terrainDerivationShaderHandle;
 		// Keep the startup terrain texture-free. Assigning a TerrainMaterial later
 		// opts into the full four-layer Triplanar texture path.
-		terrain.Specification.TerrainMaterialHandle = AssetHandle(0);
+		terrain.Specification.TerrainMaterialHandle =
+			(ShouldAutorunTerrainSamplingBenchmark()
+				|| terrainSamplingVisualMode >= 0)
+			? AssetManager::ImportAsset(
+				"assets/materials/DefaultTerrain.glterrainmat")
+			: AssetHandle(0);
 
 
 		// --- 层级面板 ---
@@ -411,6 +441,28 @@ namespace gl {
 		{
 			GL_CORE_ERROR("Shadow Benchmark autorun could not be initialized.");
 			Application::Get().Close();
+		}
+		m_TerrainSamplingBenchmarkAutorun =
+			ShouldAutorunTerrainSamplingBenchmark();
+		if (m_TerrainSamplingBenchmarkAutorun)
+		{
+			m_EditorCamera.SetView({ 0.0f, 10.0f, 0.0f },
+				150.0f, -30.0f, 0.0f);
+			m_DebugPanel.StartTerrainSamplingBenchmark(true);
+			GL_CORE_INFO(
+				"Terrain Sampling Benchmark autorun started: fixed camera, 15 warmup and 30 timed samples per mode.");
+		}
+		else if (terrainSamplingVisualMode >= 0
+			&& terrainSamplingVisualMode <= static_cast<int>(
+				TerrainRenderer::SamplingMode::AutomaticDistance))
+		{
+			TerrainRenderer::SetSamplingMode(
+				static_cast<TerrainRenderer::SamplingMode>(
+					terrainSamplingVisualMode));
+			m_EditorCamera.SetView({ 0.0f, 10.0f, 0.0f },
+				150.0f, -30.0f, 0.0f);
+			GL_CORE_INFO("Terrain Sampling Visual mode active: {0}.",
+				terrainSamplingVisualMode);
 		}
 
 
@@ -738,6 +790,14 @@ namespace gl {
 		{
 			m_ShadowBenchmarkAutorun = false;
 			GL_CORE_INFO("Shadow Benchmark autorun finished; closing the editor.");
+			Application::Get().Close();
+		}
+		if (m_TerrainSamplingBenchmarkAutorun
+			&& m_DebugPanel.IsTerrainSamplingBenchmarkComplete())
+		{
+			m_TerrainSamplingBenchmarkAutorun = false;
+			GL_CORE_INFO(
+				"Terrain Sampling Benchmark autorun finished; closing the editor.");
 			Application::Get().Close();
 		}
 

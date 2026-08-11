@@ -2,6 +2,7 @@
 
 #include "../Debug/InstancingLabTool.h"
 #include "../Debug/PBRMaterialLabTool.h"
+#include "../Debug/TerrainSamplingBenchmarkTool.h"
 
 namespace gl {
 
@@ -29,6 +30,15 @@ namespace gl {
 		bool GeneratePBRMaterialLabForValidation();
 		bool GenerateInstancingLabForShadowBenchmark();
 		bool GenerateInstancingLabForShadowVisualValidation(bool casterCloseup = false);
+		bool StartTerrainSamplingBenchmark(bool waitForTexturedTerrain = false)
+		{
+			m_Open = true;
+			return m_TerrainSamplingBenchmark.Start(waitForTexturedTerrain);
+		}
+		bool IsTerrainSamplingBenchmarkComplete() const
+		{
+			return m_TerrainSamplingBenchmark.IsComplete();
+		}
 		bool IsShadowBenchmarkComplete() const
 		{
 			return m_InstancingLab.IsShadowBenchmarkComplete();
@@ -43,6 +53,7 @@ namespace gl {
 		bool m_Open = false;
 		InstancingLabTool m_InstancingLab;
 		PBRMaterialLabTool m_PBRMaterialLab;
+		TerrainSamplingBenchmarkTool m_TerrainSamplingBenchmark;
 	};
 
 }

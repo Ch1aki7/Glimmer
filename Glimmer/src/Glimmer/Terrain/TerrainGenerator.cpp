@@ -43,6 +43,14 @@ namespace gl {
 		m_GenerationShader->UploadUniformFloat("u_MountainDirection", settings.MountainDirection);
 		m_GenerationShader->UploadUniformFloat("u_MountainWidth", settings.MountainWidth);
 		m_GenerationShader->UploadUniformFloat("u_PlateauStrength", settings.PlateauStrength);
+		m_GenerationShader->UploadUniformFloat("u_GeologyBlend",
+			glm::clamp(settings.GeologyBlend, 0.0f, 1.0f));
+		m_GenerationShader->UploadUniformFloat("u_GeologyScale",
+			glm::clamp(settings.GeologyScale, 0.25f, 12.0f));
+		m_GenerationShader->UploadUniformFloat("u_RiftStrength",
+			glm::clamp(settings.RiftStrength, 0.0f, 0.5f));
+		m_GenerationShader->UploadUniformFloat("u_TrendStrength",
+			glm::clamp(settings.TrendStrength, 0.0f, 0.5f));
 		m_GenerationShader->UploadUniformFloat2("u_Offset", settings.Offset);
 		m_GenerationShader->BindImageTexture(
 			0,

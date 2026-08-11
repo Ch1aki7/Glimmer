@@ -17,6 +17,10 @@ uniform float u_DetailStrength;
 uniform float u_MountainDirection;
 uniform float u_MountainWidth;
 uniform float u_PlateauStrength;
+uniform float u_GeologyBlend;
+uniform float u_GeologyScale;
+uniform float u_RiftStrength;
+uniform float u_TrendStrength;
 uniform vec2 u_Offset;
 
 uint Hash(uint value)
@@ -35,6 +39,14 @@ float Random(ivec2 coordinate)
 	uint y = uint(coordinate.y);
 	uint seed = uint(u_Seed);
 	return float(Hash(x ^ Hash(y ^ Hash(seed)))) / 4294967295.0;
+}
+
+float RandomSalted(ivec2 coordinate, uint salt)
+{
+	uint x = uint(coordinate.x);
+	uint y = uint(coordinate.y);
+	return float(Hash(x ^ Hash(y ^ Hash(uint(u_Seed) + salt))))
+		/ 4294967295.0;
 }
 
 vec2 Gradient(ivec2 coordinate)
@@ -107,6 +119,27 @@ mat2 Rotation(float angle)
 	return mat2(cosine, -sine, sine, cosine);
 }
 
+float WorleyDistance(vec2 position)
+{
+	ivec2 cell = ivec2(floor(position));
+	vec2 fraction = fract(position);
+	float minimumDistance = 2.0;
+	for (int y = -1; y <= 1; ++y)
+	{
+		for (int x = -1; x <= 1; ++x)
+		{
+			ivec2 offset = ivec2(x, y);
+			ivec2 neighbour = cell + offset;
+			vec2 feature = vec2(
+				RandomSalted(neighbour, 0x68bc21ebu),
+				RandomSalted(neighbour, 0x02e5be93u));
+			minimumDistance = min(minimumDistance,
+				length(vec2(offset) + feature - fraction));
+		}
+	}
+	return clamp(minimumDistance / 1.41421356, 0.0, 1.0);
+}
+
 void main()
 {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -158,6 +191,35 @@ void main()
 	float height = 0.04 + broadLand * 0.20 + continental * foothills + mountains * 0.42;
 	height += fineDetail * u_DetailStrength * smoothstep(0.12, 0.45, height);
 	height -= channels * u_ErosionStrength * continental * (0.30 + mountainMask * 0.70);
+
+	// Optional geological shaping adapted from the tmpTerrain prototype.
+	// A zero blend preserves the original Glimmer generator exactly.
+	if (u_GeologyBlend > 0.0)
+	{
+		float geologyScale = max(u_GeologyScale, 0.25);
+		float steepRegion = smoothstep(0.42, 0.70,
+			FBM(position * 0.34 + vec2(19.7, 83.1)));
+		float cellular = 1.0 - WorleyDistance(
+			warpedPosition * geologyScale + vec2(7.3, 31.9));
+		float cellularRelief = (cellular - 0.52)
+			* (0.10 + steepRegion * 0.22) * continental;
+
+		float riftNoise = FBM(
+			warpedPosition * (geologyScale * 1.9) + vec2(113.7, 47.3));
+		float riftLine = 1.0 - abs(riftNoise * 2.0 - 1.0);
+		float rift = pow(clamp(riftLine, 0.0, 1.0), 8.0)
+			* (1.0 - steepRegion * 0.35) * continental;
+
+		vec2 trendPosition = Rotation(u_MountainDirection)
+			* position * 0.22 + vec2(151.1, 23.7);
+		float trend = (FBM(trendPosition) - 0.5)
+			* smoothstep(0.18, 0.72, broadLand);
+
+		float geologicalHeight = height + cellularRelief
+			- rift * u_RiftStrength + trend * u_TrendStrength;
+		height = mix(height, geologicalHeight,
+			clamp(u_GeologyBlend, 0.0, 1.0));
+	}
 
 	if (u_Preset == 2)
 	{

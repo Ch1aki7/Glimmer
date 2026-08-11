@@ -104,6 +104,8 @@ uniform float u_HeightInfluence;
 uniform float u_SlopeInfluence;
 uniform float u_CurvatureInfluence;
 uniform float u_MoistureInfluence;
+uniform int u_TerrainSamplingMode;
+uniform float u_TerrainDetailDistance;
 uniform sampler2D u_ShadowMaps[4];
 uniform mat4 u_LightViewProjections[4];
 uniform float u_ShadowCascadeSplits[4];
@@ -296,6 +298,38 @@ void main()
 	vec3 geometricNormal = normalize(v_Normal);
 	vec3 projection = ProjectionWeights(geometricNormal);
 	vec4 layerWeights = ResolveMaterialWeights(geometricNormal);
+	int primaryLayer = 0;
+	int secondaryLayer = 1;
+	for (int index = 1; index < 4; ++index)
+	{
+		if (layerWeights[index] > layerWeights[primaryLayer])
+		{
+			secondaryLayer = primaryLayer;
+			primaryLayer = index;
+		}
+		else if (index != primaryLayer
+			&& layerWeights[index] > layerWeights[secondaryLayer])
+			secondaryLayer = index;
+	}
+	int samplingMode = u_TerrainSamplingMode;
+	float secondaryDetailBlend = 1.0;
+	if (samplingMode == 3)
+	{
+		float cameraDistance = distance(u_CameraPos, v_WorldPos);
+		secondaryDetailBlend = 1.0 - smoothstep(
+			u_TerrainDetailDistance * 0.85,
+			u_TerrainDetailDistance * 1.15,
+			cameraDistance);
+		samplingMode = secondaryDetailBlend > 0.0 ? 1 : 2;
+	}
+	if (samplingMode != 0)
+	{
+		vec4 selectedWeights = vec4(0.0);
+		selectedWeights[primaryLayer] = layerWeights[primaryLayer];
+		selectedWeights[secondaryLayer] = layerWeights[secondaryLayer];
+		layerWeights = selectedWeights
+			/ max(dot(selectedWeights, vec4(1.0)), 0.0001);
+	}
 	vec3 albedo = vec3(0.0);
 	vec3 detailNormal = vec3(0.0);
 	float metallic = 0.0;
@@ -303,19 +337,31 @@ void main()
 	float ao = 0.0;
 	for (int index = 0; index < 4; ++index)
 	{
+		if (layerWeights[index] <= 0.0)
+			continue;
 		TerrainLayer layer = u_Layers[index];
 		vec3 layerAlbedo = pow(max(layer.BaseColor, vec3(0.0)), vec3(2.2));
 		if (layer.HasAlbedo != 0)
 			layerAlbedo *= SampleTriplanar(u_AlbedoTextures[index],
 				v_WorldPos, projection, layer.Tiling).rgb;
 		vec3 layerNormal = geometricNormal;
-		if (layer.HasNormal != 0)
+		bool sampleDetail = samplingMode != 2 || index == primaryLayer;
+		if (layer.HasNormal != 0 && sampleDetail)
+		{
 			layerNormal = SampleTriplanarNormal(u_NormalTextures[index],
 				v_WorldPos, geometricNormal, projection, layer.Tiling, layer.NormalScale);
+			if (u_TerrainSamplingMode == 3 && index == secondaryLayer)
+				layerNormal = normalize(mix(
+					geometricNormal, layerNormal, secondaryDetailBlend));
+		}
 		float layerAO = 1.0;
-		if (layer.HasAO != 0)
+		if (layer.HasAO != 0 && sampleDetail)
+		{
 			layerAO = mix(1.0, SampleTriplanar(u_AOTextures[index],
 				v_WorldPos, projection, layer.Tiling).r, clamp(layer.AOStrength, 0.0, 1.0));
+			if (u_TerrainSamplingMode == 3 && index == secondaryLayer)
+				layerAO = mix(1.0, layerAO, secondaryDetailBlend);
+		}
 		float weight = layerWeights[index];
 		albedo += layerAlbedo * weight;
 		detailNormal += layerNormal * weight;

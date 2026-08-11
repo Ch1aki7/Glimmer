@@ -88,6 +88,10 @@ namespace {
 			&& Near(leftNoise.MountainDirection, rightNoise.MountainDirection)
 			&& Near(leftNoise.MountainWidth, rightNoise.MountainWidth)
 			&& Near(leftNoise.PlateauStrength, rightNoise.PlateauStrength)
+			&& Near(leftNoise.GeologyBlend, rightNoise.GeologyBlend)
+			&& Near(leftNoise.GeologyScale, rightNoise.GeologyScale)
+			&& Near(leftNoise.RiftStrength, rightNoise.RiftStrength)
+			&& Near(leftNoise.TrendStrength, rightNoise.TrendStrength)
 			&& Near(leftNoise.Offset.x, rightNoise.Offset.x)
 			&& Near(leftNoise.Offset.y, rightNoise.Offset.y)
 			&& left.Authoring.EnableThermalErosion
@@ -354,6 +358,10 @@ namespace {
 		terrain.Specification.Noise.MountainDirection = -0.45f;
 		terrain.Specification.Noise.MountainWidth = 0.21f;
 		terrain.Specification.Noise.PlateauStrength = 0.31f;
+		terrain.Specification.Noise.GeologyBlend = 0.74f;
+		terrain.Specification.Noise.GeologyScale = 4.25f;
+		terrain.Specification.Noise.RiftStrength = 0.19f;
+		terrain.Specification.Noise.TrendStrength = 0.13f;
 		terrain.Specification.Noise.Offset = { 4.0f, -2.0f };
 		terrain.Specification.Authoring.EnableThermalErosion = true;
 		terrain.Specification.Authoring.ThermalIterations = 31;
@@ -533,6 +541,14 @@ namespace {
 				+ gl::TerrainPresetToString(preset));
 			context.Check(first.Preset == preset
 				&& first.Noise.Seed != previousSeed
+				&& first.Noise.GeologyBlend >= 0.0f
+				&& first.Noise.GeologyBlend <= 1.0f
+				&& first.Noise.GeologyScale >= 0.25f
+				&& first.Noise.GeologyScale <= 12.0f
+				&& first.Noise.RiftStrength >= 0.0f
+				&& first.Noise.RiftStrength <= 0.5f
+				&& first.Noise.TrendStrength >= 0.0f
+				&& first.Noise.TrendStrength <= 0.5f
 				&& first.Authoring.ThermalIterations <= 128
 				&& first.Authoring.ThermalStrength >= 0.0f
 				&& first.Authoring.ThermalStrength <= 0.5f,

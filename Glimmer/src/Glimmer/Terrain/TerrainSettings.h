@@ -31,6 +31,10 @@ namespace gl {
 		float MountainDirection = 0.35f;
 		float MountainWidth = 0.32f;
 		float PlateauStrength = 0.0f;
+		float GeologyBlend = 0.45f;
+		float GeologyScale = 3.0f;
+		float RiftStrength = 0.10f;
+		float TrendStrength = 0.08f;
 		glm::vec2 Offset{ 0.0f };
 	};
 

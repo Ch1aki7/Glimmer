@@ -9,8 +9,8 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P8.1 TerrainMaterial 采样优化
-- 主线状态：待开始（P9 已完成，下一步先建立同场景 Terrain Pass 采样/耗时基线，再实现 Top-2 层裁剪）
+- 当前主线：P10 IBL 环境光照
+- 主线状态：待开始（P8.1 已完成，下一步先收口 HDR 环境资源与浮点 Cubemap/Mip Chain）
 
 ## 使用与更新规则
 
@@ -55,26 +55,6 @@
 
 ## 当前主线
 
-### P8.1：TerrainMaterial 采样优化
-
-**依赖**：P8 四层 Triplanar PBR、P9 CSM 已完成。
-
-**目标**
-
-- 按最终混合权重裁剪到贡献最高的两层，再执行具体纹理采样；
-- 评估 Normal/AO 仅采样主导层，以及按摄像机距离切换质量档位；
-- 保留无具体材质纹理的基础颜色路径作为性能对照。
-
-**验收**
-
-- RenderDoc/GPU Timer 证明 Terrain Pass 纹理读取量和 GPU 时间下降；
-- 四层过渡、法线、AO 与距离质量切换无明显接缝或跳变；
-- 优化前后在独显环境下使用相同场景、分辨率和相机进行比较。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P10：IBL 环境光照
 
 **依赖**：P4 的 PBR、颜色空间和 TextureCube 方向约定稳定。
@@ -92,6 +72,10 @@
 - Roughness 增大时环境反射逐渐模糊；
 - Cubemap 无翻转、明显接缝或重复 Gamma；
 - 同一环境资源不会逐帧卷积或重复生成缓存。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P11：Terrain Chunk、LOD 与剔除
 
@@ -171,6 +155,22 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-11：P8.1 TerrainMaterial 采样优化
+
+- Terrain Fragment Shader 在最终高度/坡度/曲率/湿度权重确定后只保留贡献最高的两层，再执行 Triplanar Albedo/Normal/AO 采样；高性能档进一步只为主导层采样 Normal/AO，Auto Distance 在近景 Top-2 完整细节与远景主层细节之间使用 30% 宽度的 smoothstep 过渡；
+- TerrainRenderer 新增独立非阻塞 GPU Timer、采样模式、距离阈值、DrawCall/绑定纹理统计；Debug Overview 可即时切换 Full-4、Top-2、Top-2 + Dominant Normal/AO 与 Auto Distance。Auto 成为默认，Full-4 与 Handle=0 的无纹理基础颜色路径继续作为质量和性能基线；
+- 新增独立 TerrainSamplingBenchmarkTool：不持有 Scene 或 EditorLayer 状态，按唯一 GPU Query 样本执行 15 次预热和每档 30 次采样；无人值守入口只为默认 Terrain 分配完整 DefaultTerrain、固定相机，完成后正常退出；
+- GTX 1050/OpenGL 4.6 固定场景结果：Full-4 10.681 ms，Top-2 6.026 ms（降低 43.6%），Top-2 + Dominant Normal/AO 4.226 ms（降低 60.4%）；三档固定视口截图未发现新增条带接缝，Terrain 图形/Compute Shader 均成功编译；
+- 验证：Premake VS2026 重新生成成功，VS2026 Debug x64 全解决方案构建成功，64 项无窗口断言全部 PASS；提交：待提交。
+
+### 2026-08-11：tmpTerrain 地质地貌迁移实验
+
+- 从 `tmp/tmpTerrain/TerrainHeightInitializer_CS.hlsl` 选择性迁移 Worley 地质块、陡峭区遮罩、狭长裂谷和大尺度趋势思想；算法已重写为现有 OpenGL GLSL Compute 分支，没有引入原型的 HLSL、固定 4096² 网格或 GPU 网格初始化；
+- `TerrainNoiseSettings` 新增 GeologyBlend、GeologyScale、RiftStrength 与 TrendStrength；参数进入 Terrain Preset、Scene YAML、Inspector 连续编辑事务和 Runtime Dirty/Regenerate 链路，GeologyBlend 设为 0 时跳过新增计算并恢复原始生成公式；
+- 未迁移原型的浅水、泥沙、蒸发和气象耦合 Pass：原始 `TerrainData_CS.hlsl` 在单次 Dispatch 中用 Group Barrier 后跨 Workgroup 读取输出，存在数据竞争，后续必须按固定步长拆成 Flux、Water Update、Velocity、Sediment 和 Erosion 等独立 Ping-Pong Pass；
+- 验证：GTX 1050/OpenGL 4.6 下 GenerateFBM、ThermalErosion、DeriveTerrainMaps 与 Terrain 图形 Shader 编译成功；两次 GPU 输出确定性 Hash 均为 `16881604791310884879`，共 30 次 Dispatch；VS2026 `Debug | x64` 全解决方案构建成功，64 项无窗口断言全部 PASS；
+- 提交：待提交。
 
 ### 2026-08-11：P9 方向光阴影与 CSM
 
@@ -405,7 +405,6 @@
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；仍缺少 Chunk/LOD 和固定步长 Runtime Erosion 调度；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
-- 完整纹理 Terrain Fragment Shader 对四层 Albedo/Normal/AO 全量执行三平面采样，最坏接近 40 次纹理读取/像素；该成本尚待通过 GPU Timer 定量验证并按 P8.1 优化，但不再视为屏幕撕裂的根因；
 - SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。

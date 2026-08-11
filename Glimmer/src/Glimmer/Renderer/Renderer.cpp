@@ -2,6 +2,7 @@
 #include "Renderer.h"
 #include "Renderer2D.h"
 #include "Renderer3D.h"
+#include "TerrainRenderer.h"
 #include "ShadowRenderer.h"
 #include "SkyboxRenderer.h"
 #include "UniformBuffer.h"
@@ -40,12 +41,14 @@ namespace gl {
 		RenderCommand::Init();
 		Renderer2D::Init();
 		Renderer3D::Init();
+		TerrainRenderer::Init();
 		s_LightUniformBuffer = UniformBuffer::Create(sizeof(GPULightEnvironment), 1);
 		SkyboxRenderer::Init();
 	}
 
 	void Renderer::Shutdown() {
 		ShadowRenderer::Shutdown();
+		TerrainRenderer::Shutdown();
 		s_LightUniformBuffer.reset();
 		Renderer3D::Shutdown();
 		SkyboxRenderer::Shutdown();

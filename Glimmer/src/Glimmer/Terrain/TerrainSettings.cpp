@@ -49,6 +49,10 @@ namespace gl {
 				noise.DetailStrength = 0.08f;
 				noise.MountainDirection = 0.35f;
 				noise.MountainWidth = 0.24f;
+				noise.GeologyBlend = 0.72f;
+				noise.GeologyScale = 3.4f;
+				noise.RiftStrength = 0.08f;
+				noise.TrendStrength = 0.12f;
 				heightScale = 42.0f;
 				authoring.ThermalIterations = 28;
 				authoring.Talus = 0.010f;
@@ -64,6 +68,10 @@ namespace gl {
 				noise.ErosionStrength = 0.10f;
 				noise.DetailStrength = 0.035f;
 				noise.PlateauStrength = 0.82f;
+				noise.GeologyBlend = 0.42f;
+				noise.GeologyScale = 2.2f;
+				noise.RiftStrength = 0.14f;
+				noise.TrendStrength = 0.10f;
 				heightScale = 30.0f;
 				authoring.ThermalIterations = 14;
 				authoring.Talus = 0.018f;
@@ -80,6 +88,10 @@ namespace gl {
 				noise.ContinentScale = 0.55f;
 				noise.ErosionStrength = 0.035f;
 				noise.DetailStrength = 0.025f;
+				noise.GeologyBlend = 0.16f;
+				noise.GeologyScale = 1.6f;
+				noise.RiftStrength = 0.02f;
+				noise.TrendStrength = 0.08f;
 				heightScale = 16.0f;
 				authoring.ThermalIterations = 8;
 				authoring.Talus = 0.020f;
@@ -94,6 +106,10 @@ namespace gl {
 				noise.ContinentScale = 0.38f;
 				noise.ErosionStrength = 0.08f;
 				noise.DetailStrength = 0.06f;
+				noise.GeologyBlend = 0.12f;
+				noise.GeologyScale = 2.5f;
+				noise.RiftStrength = 0.03f;
+				noise.TrendStrength = 0.04f;
 				heightScale = 38.0f;
 				authoring.ThermalIterations = 18;
 				authoring.Talus = 0.014f;
@@ -110,6 +126,10 @@ namespace gl {
 				noise.DetailStrength = 0.045f;
 				noise.MountainDirection = -0.55f;
 				noise.MountainWidth = 0.30f;
+				noise.GeologyBlend = 0.68f;
+				noise.GeologyScale = 2.8f;
+				noise.RiftStrength = 0.22f;
+				noise.TrendStrength = 0.14f;
 				heightScale = 34.0f;
 				authoring.ThermalIterations = 48;
 				authoring.Talus = 0.008f;

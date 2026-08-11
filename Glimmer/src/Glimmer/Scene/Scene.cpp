@@ -305,6 +305,7 @@ namespace gl {
 			}
 			Renderer3D::FlushOpaqueAndMask();
 
+			TerrainRenderer::BeginScene();
 			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 			for (auto entity : terrainView)
 			{
@@ -313,6 +314,7 @@ namespace gl {
 				TerrainRenderer::Draw(terrain, transform.GetTransform(), viewProjection,
 					cameraPosition, static_cast<int>(static_cast<uint32_t>(entity)));
 			}
+			TerrainRenderer::EndScene();
 
 			if (deferSpritePass)
 			{
@@ -350,6 +352,7 @@ namespace gl {
 		}
 		Renderer3D::FlushOpaqueAndMask();
 
+		TerrainRenderer::BeginScene();
 		auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 		for (auto entity : terrainView)
 		{
@@ -358,6 +361,7 @@ namespace gl {
 			TerrainRenderer::Draw(terrain, transform.GetTransform(), viewProjection,
 				cameraPosition, static_cast<int>(static_cast<uint32_t>(entity)));
 		}
+		TerrainRenderer::EndScene();
 
 		if (deferSpritePass)
 		{

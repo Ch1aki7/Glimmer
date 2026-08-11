@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/ShadowRenderer.h"
+#include "Glimmer/Renderer/GPUTimer.h"
 #include "Glimmer/Terrain/Terrain.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
 
@@ -12,6 +13,21 @@
 
 namespace gl {
 	namespace {
+		struct TerrainRendererData
+		{
+			Ref<GPUTimer> Timer;
+			TerrainRenderer::Statistics Stats;
+			TerrainRenderer::SamplingMode Sampling =
+				TerrainRenderer::SamplingMode::AutomaticDistance;
+			float DetailDistance = 80.0f;
+			float LastGpuMilliseconds = 0.0f;
+			uint64_t GpuTimingSample = 0;
+			bool HasGpuTiming = false;
+			bool PassActive = false;
+		};
+
+		TerrainRendererData s_Data;
+
 		SimulationGridSpecification CreateGridSpecification(uint32_t resolution)
 		{
 			SimulationGridSpecification specification;
@@ -59,6 +75,66 @@ namespace gl {
 				|| metadata.ColorSpace != colorSpace || metadata.Semantic != semantic)
 				return nullptr;
 			return AssetManager::GetTexture2D(handle);
+		}
+	}
+
+	void TerrainRenderer::Init()
+	{
+		if (!s_Data.Timer)
+			s_Data.Timer = GPUTimer::Create();
+	}
+
+	void TerrainRenderer::Shutdown()
+	{
+		if (s_Data.PassActive && s_Data.Timer)
+			s_Data.Timer->End();
+		s_Data.PassActive = false;
+		s_Data.Timer.reset();
+		s_Data.Stats = {};
+		s_Data.HasGpuTiming = false;
+		s_Data.GpuTimingSample = 0;
+	}
+
+	void TerrainRenderer::BeginScene()
+	{
+		if (!s_Data.Timer)
+			s_Data.Timer = GPUTimer::Create();
+		float elapsedMilliseconds = 0.0f;
+		if (s_Data.Timer
+			&& s_Data.Timer->TryGetElapsedMilliseconds(elapsedMilliseconds))
+		{
+			s_Data.LastGpuMilliseconds = elapsedMilliseconds;
+			s_Data.HasGpuTiming = true;
+			++s_Data.GpuTimingSample;
+		}
+		s_Data.Stats = {};
+		s_Data.Stats.GpuMilliseconds = s_Data.LastGpuMilliseconds;
+		s_Data.Stats.GpuTimingAvailable = s_Data.HasGpuTiming;
+		s_Data.Stats.GpuTimingSample = s_Data.GpuTimingSample;
+		s_Data.Stats.Mode = s_Data.Sampling;
+		s_Data.Stats.DetailDistance = s_Data.DetailDistance;
+		if (s_Data.Timer)
+		{
+			s_Data.Timer->Begin();
+			s_Data.PassActive = true;
+		}
+	}
+
+	void TerrainRenderer::EndScene()
+	{
+		if (!s_Data.PassActive || !s_Data.Timer)
+			return;
+		s_Data.Timer->End();
+		s_Data.PassActive = false;
+		float elapsedMilliseconds = 0.0f;
+		if (s_Data.Timer->TryGetElapsedMilliseconds(elapsedMilliseconds))
+		{
+			s_Data.LastGpuMilliseconds = elapsedMilliseconds;
+			s_Data.HasGpuTiming = true;
+			++s_Data.GpuTimingSample;
+			s_Data.Stats.GpuMilliseconds = elapsedMilliseconds;
+			s_Data.Stats.GpuTimingAvailable = true;
+			s_Data.Stats.GpuTimingSample = s_Data.GpuTimingSample;
 		}
 	}
 
@@ -188,6 +264,10 @@ namespace gl {
 		const float sampleSpacing = static_cast<float>(runtime.Mesh->GetGridSize())
 			/ static_cast<float>(sampleCount);
 		shader->UploadUniformFloat("u_SampleSpacing", sampleSpacing);
+		shader->UploadUniformInt("u_TerrainSamplingMode",
+			static_cast<int>(s_Data.Sampling));
+		shader->UploadUniformFloat("u_TerrainDetailDistance",
+			s_Data.DetailDistance);
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
 		ShadowRenderer::BindForLighting(shader, 16);
@@ -253,9 +333,13 @@ namespace gl {
 			if (albedo) albedo->Bind(albedoSlot);
 			if (normal) normal->Bind(normalSlot);
 			if (ao) ao->Bind(aoSlot);
+			s_Data.Stats.BoundMaterialTextures += static_cast<uint32_t>(
+				static_cast<bool>(albedo) + static_cast<bool>(normal)
+				+ static_cast<bool>(ao));
 		}
 		runtime.Mesh->Bind();
 		RenderCommand::DrawIndexed(runtime.Mesh->GetVertexArray(), runtime.Mesh->GetIndexCount());
+		++s_Data.Stats.DrawCalls;
 	}
 
 	void TerrainRenderer::Invalidate(TerrainComponent& component)
@@ -265,5 +349,30 @@ namespace gl {
 			component.Runtime->Dirty = true;
 			component.Runtime->ValidationComplete = false;
 		}
+	}
+
+	void TerrainRenderer::SetSamplingMode(SamplingMode mode)
+	{
+		s_Data.Sampling = mode;
+	}
+
+	TerrainRenderer::SamplingMode TerrainRenderer::GetSamplingMode()
+	{
+		return s_Data.Sampling;
+	}
+
+	void TerrainRenderer::SetDetailDistance(float distance)
+	{
+		s_Data.DetailDistance = std::clamp(distance, 1.0f, 10000.0f);
+	}
+
+	float TerrainRenderer::GetDetailDistance()
+	{
+		return s_Data.DetailDistance;
+	}
+
+	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()
+	{
+		return s_Data.Stats;
 	}
 }

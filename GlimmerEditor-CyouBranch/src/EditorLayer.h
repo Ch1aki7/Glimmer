@@ -67,6 +67,7 @@ namespace gl {
 		enum class SceneState { Edit = 0, Play = 1 };
 		SceneState m_SceneState = SceneState::Edit;
 		bool m_ShadowBenchmarkAutorun = false;
+		bool m_TerrainSamplingBenchmarkAutorun = false;
 
 
 		// 设置灯光参数

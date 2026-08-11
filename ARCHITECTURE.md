@@ -200,7 +200,7 @@ Scene 每帧从第一个启用的 DirectionalLight 和最多 16 个 PointLight �
 
 PBRModel 与 Terrain 共用四组 Light VP、Cascade Split/Blend Width、Camera View、Bias 和 `3×3 PCF` 接收契约，并按片元视空间深度选择级联。Split 过渡区同时采样相邻级联并以 `smoothstep` 混合，区间外只采样当前级联。模型材质占用 0～3 后将级联图绑定到 slot 4～7；Terrain 已占用 0～15，级联图绑定到 slot 16～19。`ShadowRenderer` 还持有不参与 `Disable` 帧重置的运行时级联可视化开关，并在 Lighting Bind 时统一上传；PBRModel 与 Terrain 以固定色覆盖部分最终线性颜色，重叠区复用同一 Blend 权重，因此不改变 Shadow Depth、Alpha 或 Entity ID。Scene 向 Model Shadow Submit 传递 MaterialHandle 与实体 Overrides，ShadowRenderer 通过 MaterialInstance 得到最终 Alpha 状态；Opaque 与 Mask 进入 Shadow Queue，Blend 在提交边界被跳过，避免半透明表面生成错误的实心轮廓。Mask 在 ShadowDepth Fragment 中以 BaseColor Alpha、BaseColor Texture Alpha、TilingFactor 和 AlphaCutoff 执行与颜色 Pass 相同的裁剪。每个级联内，Model 子网格在 Frustum 剔除后进入 Shadow Queue，并按 Mesh 与最终 Mask 状态排序；兼容批次使用最多 1024 项的动态 Transform Buffer 执行 Instanced Draw，Mask 的贴图、Base Alpha、Cutoff 或 Tiling 不同都会拆批。ShadowRenderer 为每个源 Mesh 缓存独立 Shadow VAO，只复制 PerVertex Buffer 并将 Shadow Instance Transform 放在 location 4～7，从而不依赖或覆盖 Renderer3D 已挂到源 VAO 的 Transform/EntityID Instance Buffer。ShadowDepth 将模型 UV 固定在 location 3，并保留 Terrain Height UV 的 location 1；Terrain 当前仍独立绘制。Shadow Framebuffer、深度纹理、Light VP、Split、Blend Width、队列、实例缓冲、Shadow VAO 缓存与调试开关均不序列化，DirectionalLight 只持久化重建所需设置。
 
-`GPUTimer` 是 Renderer 层的可选计时资源；OpenGL 后端以四个 `GL_TIME_ELAPSED` Query 轮转，Begin/End 只提交时间范围，`TryGetElapsedMilliseconds` 仅在 `GL_QUERY_RESULT_AVAILABLE` 为真时读取，禁止为调试 UI 强制等待 GPU。ShadowRenderer 在第一条 Cascade GPU 命令前开始、最后一个 Cascade 结束后停止，并保存最近一次可用结果；该数据只存在于 Statistics，不序列化。Vulkan 当前返回空 Timer，调用方必须允许计时不可用。
+`GPUTimer` 是 Renderer 层的可选计时资源；OpenGL 后端以四个 `GL_TIME_ELAPSED` Query 轮转，Begin/End 只提交时间范围，`TryGetElapsedMilliseconds` 仅在 `GL_QUERY_RESULT_AVAILABLE` 为真时读取，禁止为调试 UI 强制等待 GPU。ShadowRenderer 在第一条 Cascade GPU 命令前开始、最后一个 Cascade 结束后停止；TerrainRenderer 以 BeginScene/EndScene 包围 Terrain Color Pass。两者都只在 Statistics 中保存最近可用耗时和单调递增样本号，不序列化。Vulkan 当前返回空 Timer，调用方必须允许计时不可用。
 
 当前 3D Material 参数包括 BaseColor/BaseColorTexture、NormalTexture/NormalScale、AOTexture/AOStrength、EmissiveTexture/EmissiveColor/EmissiveStrength、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR：切线空间 Normal 修改 BRDF 法线，AO 只调制环境光项，Emissive 在线性 HDR 结果中累加；BaseColor Alpha 与纹理 Alpha 的乘积继续驱动 Mask/Blend。模型加载阶段按 UV 梯度生成 Tangent，退化 UV 或无有效累积切线时建立稳定正交基，避免 Normal Mapping 产生 NaN。
 
@@ -208,7 +208,7 @@ PBRModel 与 Terrain 共用四组 Light VP、Cascade Split/Blend Width、Camera 
 
 地形实体由 `TerrainComponent` 保存可序列化的 `TerrainSpecification`，运行时 GPU 对象放在不持久化的 `TerrainRuntime` 中：
 
-- `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion 与 Derive Maps；
+- `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion 与 Derive Maps；GenerateFBM 可按序列化的 GeologyBlend 选择性叠加 Worley 地质块、陡峭区遮罩、裂谷和大尺度趋势，Blend 为 0 时保持原生成公式；
 - Height 使用 R32F `SimulationGrid` Ping-Pong；侵蚀每轮只读 ReadTexture、只写 WriteTexture，Barrier 后交换，禁止同纹理读写；
 - 派生阶段从最终 Height 生成三张 RGBA16F Runtime 纹理：Normal/Slope、Curvature/Flow Potential、Grass/Soil/Rock/Snow Material Weights；
 - Custom、Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 预设属于可序列化规格，手动修改预设参数后转为 Custom；
@@ -217,7 +217,10 @@ PBRModel 与 Terrain 共用四组 Light VP、Cascade Split/Blend Width、Camera 
 - `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
 - `TerrainSpecification::TerrainMaterialHandle` 引用独立 `.glterrainmat`；Handle 为 0 时 TerrainRenderer 使用内建四层颜色/PBR 参数且不加载具体层纹理，有效 Handle 才从 AssetManager 缓存解析四层参数，并使用纹理单元 4～15 绑定每层 Albedo/Normal/AO；
 - Terrain Shader 以世界坐标对 XY/XZ/YZ 三个平面采样并按法线方向混合，避免陡坡沿网格 UV 拉伸；派生权重再叠加高度、坡度、曲率和 Flow/低地湿度修正，最后进入 Cook–Torrance 直接光与线性 HDR 输出；
+- TerrainRenderer 的采样质量是纯运行时全局状态：Full-4 保留完整基线，Top-2 在最终权重确定后裁剪低贡献层，Dominant Detail 只为主导层读取 Normal/AO，Auto Distance 在近景 Top-2 与远景 Dominant Detail 间平滑衰减次要层细节；默认使用 Auto，距离阈值为 80 世界单位。采样设置、GPU Timer 与 Statistics 不进入 Scene YAML；
 - 参数、Compute Shader 或资源变化时通过 `Invalidate` 使 Runtime 失效。正常帧只采样缓存结果；生成、有限次侵蚀与派生只在 Dirty 或显式 Regenerate 时 Dispatch。
+
+`tmp/tmpTerrain` 的水流、泥沙、蒸发和气象 HLSL 仅作为后续算法参考，不属于当前运行链路。运行时水文仍必须遵守 SimulationGrid 的 Ping-Pong 所有权和跨 Dispatch 全局 Barrier；禁止在单个 Workgroup Barrier 后读取其它 Workgroup 尚未完成的输出。
 
 `.glterrainmat` 与普通 `.glmat` 是两个注册表类型和两套 YAML 根。TerrainMaterial 固定拥有 Grass、Soil、Rock、Snow 四层；每层保存颜色、Albedo/Normal/AO Handle、Tiling、Metallic、Roughness、NormalScale 和 AOStrength，资产级参数控制三平面锐度与高度/坡度/曲率/湿度混合强度。缺失纹理时使用层颜色、几何法线和 AO=1；存在纹理必须分别满足 sRGB Color、Linear Normal、Linear Data 语义。TerrainMaterial 保存也采用临时文件替换，但不进入 MaterialInstance 或实体 MaterialOverrides 链路。
 
@@ -332,11 +335,13 @@ flowchart LR
 
 进入 Play 时，EditorLayer 清理选择，复制 EditorScene 为 RuntimeScene，切换所有面板上下文并禁用编辑命令历史；停止时销毁运行时脚本，丢弃 RuntimeScene，再切回 EditorScene。运行时修改不会写回编辑场景。
 
-DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D Overview、`InstancingLabTool` 与 `PBRMaterialLabTool`。两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。
+DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D/Terrain Overview、`InstancingLabTool`、`PBRMaterialLabTool` 与 `TerrainSamplingBenchmarkTool`。前两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。Terrain Sampling Benchmark 不创建或持有 Scene，只读取 TerrainRenderer Statistics 并切换纯运行时采样档位；手动入口要求当前 Terrain 已绑定具体纹理。
 
 Instancing Lab 同时托管 Shadow Benchmark 状态机和 Shadow Visual Validation 预设。Benchmark 只修改 Lab 自己的 DirectionalLight，在固定的 9 组 Cascade/Resolution 配置间轮换，并在每次切换后先预热再采样。`ShadowRenderer::Statistics::GpuTimingSample` 是跨帧单调递增的 Query 结果序号；状态机仅在序号变化时接收耗时，因而不会把非阻塞计时器保留的上一结果重复计入平均值。DebugPanel 在窗口可见性判断之前推进状态机，使页签切换或关闭面板不会暂停测试；结果只保存在工具运行时内存中。Visual Validation 复用相同临时 Scene 边界，生成 Opaque、Mask、Blend 三种投影策略对照和四级深度标记，通过 EditorLayer 提供的受控相机框选回调调用 `EditorCamera::SetView`，提供级联全景与投影物近景两种构图；它只调整临时方向光和纯运行时级联调试开关，不污染正式 Scene。
 
 EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel 的受控接口生成固定 2500 实体的 Maximum Instancing Lab 并启动相同状态机。完成时 InstancingLabTool 将 9 组统计写入日志，EditorLayer 再请求 Application 正常关闭；`GLIMMER_SHADOW_VISUAL_AUTORUN` 使用同一边界生成视觉场景，`GLIMMER_SHADOW_VISUALIZE_CASCADES` 与 `GLIMMER_SHADOW_VISUAL_CLOSEUP` 分别选择级联着色和投影物近景。自动入口不绕过临时 Scene 隔离，也不另建第二套阴影逻辑。
+
+`GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN` 仅在诊断运行中为默认 Terrain 分配 DefaultTerrain 资产、固定 EditorCamera，并启动与手动入口相同的 TerrainSamplingBenchmarkTool；三档完成后由 EditorLayer 请求正常退出。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 使用同一固定场景边界选择单档供截图检查。这些入口不改变默认内存 Scene 仍保持 TerrainMaterialHandle=0 的启动契约，也不保存任何场景或采样设置。
 
 ### 9.2 选择与面板职责
 
@@ -430,7 +435,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR，以及带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM 已经落地；当前主线是 TerrainMaterial 采样优化。Metallic/Roughness Texture/ORM、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，以及带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM 已经落地；当前主线是 IBL 环境光照。Metallic/Roughness Texture/ORM、Runtime Erosion、IBL、Chunk/LOD 和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

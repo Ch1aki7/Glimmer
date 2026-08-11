@@ -481,6 +481,25 @@ namespace gl {
 						return ImGui::SliderFloat("Plateau Strength",
 							&noise.PlateauStrength, 0.0f, 1.0f);
 					});
+					ImGui::SeparatorText("Geological Features");
+					drawNoise("Edit Terrain Geology Blend", [&]() {
+						return ImGui::SliderFloat("Geology Blend",
+							&noise.GeologyBlend, 0.0f, 1.0f);
+					});
+					drawNoise("Edit Terrain Geology Scale", [&]() {
+						return ImGui::DragFloat("Geology Scale",
+							&noise.GeologyScale, 0.02f, 0.25f, 12.0f);
+					});
+					drawNoise("Edit Terrain Rift Strength", [&]() {
+						return ImGui::SliderFloat("Rift Strength",
+							&noise.RiftStrength, 0.0f, 0.5f);
+					});
+					drawNoise("Edit Terrain Trend Strength", [&]() {
+						return ImGui::SliderFloat("Trend Strength",
+							&noise.TrendStrength, 0.0f, 0.5f);
+					});
+					ImGui::TextDisabled(
+						"Set Geology Blend to 0 to restore the original generator.");
 					drawNoise("Edit Terrain Offset", [&]() {
 						return ImGui::DragFloat2("Offset", &noise.Offset.x, 0.005f);
 					});

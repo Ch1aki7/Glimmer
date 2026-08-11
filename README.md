@@ -12813,6 +12813,84 @@ void Renderer2D::Flush()
 
 验证：VS2026 `Debug | x64` 编辑器目标构建成功；55 项无窗口断言及最终汇总全部 PASS；默认 Alpine 场景在 Intel Iris Xe/OpenGL 4.6 下稳定启动，未出现 OpenGL 或 Shader 错误。
 
+## tmpTerrain 地质地貌迁移实验
+
+本次没有直接复制 `tmp/tmpTerrain` 的 HLSL，而是把其中可独立验证的 Worley 地质块、陡峭区遮罩、裂谷和大尺度趋势重写进现有 `GenerateFBM.comp`。因此新效果继续复用 Terrain Entity、Compute Shader 热重载、Runtime Dirty、Thermal Erosion、派生图、TerrainMaterial、CSM 和场景序列化，不新增第二套地形生命周期。
+
+### 可编辑参数
+
+Terrain Inspector 的 `Geological Features` 区域新增：
+
+- `Geology Blend`：原始 Glimmer 高度与新增地质塑形之间的混合量；设为 0 会跳过新增分支并恢复原生成公式；
+- `Geology Scale`：控制 Worley 地质块和裂谷结构的尺度；
+- `Rift Strength`：控制狭长低地/裂谷对高度的削减；
+- `Trend Strength`：控制沿 Mountain Direction 形成的大尺度高低趋势。
+
+修改任一参数会把预设切换为 Custom，并通过现有 Inspector 事务生成单次 Undo/Redo 命令；Terrain Runtime 被标记 Dirty，下一次 Prepare 重新生成 Height、Normal/Slope、Analysis 和 Material Weights。四项参数随 Scene YAML 保存。重新选择 Alpine、Plateau、Rolling Hills、Volcanic 或 Eroded Valley 时会载入各自较保守的地质参数，其中 Alpine/Eroded Valley 较强，Rolling Hills/Volcanic 较弱。
+
+### Compute 流程
+
+```text
+现有 Domain Warp / Continental / Ridged Mountain / Channel
+  → 可选 Worley 地质块与 Steep Region Mask
+  → 狭长 Rift 削减
+  → Mountain Direction 驱动的大尺度 Trend
+  → Geology Blend 与原高度混合
+  → 既有 Preset 特化
+  → Thermal Erosion Ping-Pong
+  → Normal / Curvature / Flow Potential / Material Weights
+```
+
+原型中的水流、泥沙、蒸发和气象耦合没有迁移。其单个 `TerrainData_CS` 在写入 WaterFlow 后只执行 Workgroup Barrier，却立即读取相邻 Workgroup 的结果，不能保证跨组可见性。正式接入时应按固定时间步拆成 Rain/Evaporation、Flux、Water Update、Velocity、Sediment、Erosion/Deposition 与 Derive Maps 等独立 Dispatch，每一步使用明确的 Ping-Pong 资源和全局 Memory Barrier。
+
+### 验证
+
+- GTX 1050/OpenGL 4.6 下 GenerateFBM、ThermalErosion、DeriveTerrainMaps 与 Terrain Shader 全部编译成功；
+- 默认验证场景执行 30 次 Dispatch，两轮输出均通过有限值、范围和四层权重归一化检查，确定性 Hash 为 `16881604791310884879`；
+- VS2026 `Debug | x64` 全解决方案构建成功；
+- 64 项无窗口回归断言全部 PASS，新增参数已覆盖 Scene YAML 往返和五类 Terrain Preset 范围。
+
+## TerrainMaterial Top-2 采样与 GPU 基准
+
+四层 TerrainMaterial 的原始质量路径会对 Grass、Soil、Rock、Snow 全部执行 Albedo、Normal、AO 的三平面读取，最坏接近 40 次纹理采样/像素。此次优化不改变高度、派生权重或 PBR 光照公式，而是在最终混合权重已经包含高度、坡度、曲率与湿度修正后，先选出贡献最高的两层，再进入具体纹理采样。
+
+### 质量档位
+
+Debug → Overview → Terrain 的 Sampling 提供四档：
+
+- Full 4 Layers：完整四层采样，作为最高质量与性能基线；
+- Top 2 Layers：只保留贡献最高的两层，两层仍读取 Albedo、Normal 和 AO；
+- Top 2 + Dominant Normal/AO：两层读取 Albedo，但 Normal/AO 只读取主导层；
+- Auto Distance：默认档位；近景使用 Top-2 完整细节，远景使用主层 Normal/AO。Detail Distance 默认为 80 世界单位，阈值前后各 15% 组成 smoothstep 过渡带，次要层法线和 AO 不会在单个距离点硬切。
+
+TerrainMaterialHandle 为 0 时仍走无具体材质纹理的内建颜色路径。它既保持默认编辑器启动轻量，也可作为“不加载 11 张材质纹理”的基础对照；分配 DefaultTerrain.glterrainmat 后才进入完整纹理路径。
+
+### Renderer 与诊断边界
+
+TerrainRenderer 现在由 Scene 通过 BeginScene/EndScene 包围 Color Pass，并持有独立的非阻塞 GPUTimer。OpenGL 后端轮转 Time Query，只有结果可用时才读取；Debug UI 显示最近的 GPU ms、样本号、Terrain DrawCall 和实际绑定的材质纹理数，不会为统计等待 GPU。
+
+TerrainSamplingBenchmarkTool 位于编辑器 Debug 目录，只读取 TerrainRenderer Statistics 并切换运行时采样模式，不持有 Scene、Entity 或 EditorLayer 内部状态。每次模式切换后先接收 15 个唯一 GPU Query 预热样本，再记录 30 个唯一耗时样本，避免重复统计旧结果。手动使用步骤：
+
+1. 给 Terrain 分配包含具体纹理的 TerrainMaterial；
+2. 固定相机和视口尺寸；
+3. 打开 Window → Debug → Overview；
+4. 点击 Start Terrain Benchmark，期间不要移动相机或缩放窗口；
+5. 在面板或日志中比较 Full-4、Top-2 和 Dominant Normal/AO。
+
+无人值守验证可设置 GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN=1 后启动编辑器。该入口只在本次诊断运行中给默认 Terrain 分配 DefaultTerrain、固定 EditorCamera，完成三档测试后正常退出，不保存场景。GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3 可用同一固定场景单独打开四档画面，供截图对照。
+
+### GTX 1050 验证
+
+同一编辑器窗口、分辨率、DefaultTerrain、Alpine 地形和固定相机下，OpenGL 4.6 / NVIDIA GeForce GTX 1050 的结果为：
+
+| Sampling Mode | Samples | Average | Minimum | Maximum | 相对 Full-4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Full 4 Layers | 30 | 10.681 ms | 10.449 ms | 11.510 ms | 基线 |
+| Top 2 Layers | 30 | 6.026 ms | 5.790 ms | 6.661 ms | 降低 43.6% |
+| Top 2 + Dominant Normal/AO | 30 | 4.226 ms | 4.006 ms | 5.122 ms | 降低 60.4% |
+
+Full-4、Top-2 和 Auto 固定视口截图已逐档检查，山体轮廓、草/岩混合和 Triplanar 投影方向一致，未发现新增条带接缝。Terrain 图形 Shader 与 GenerateFBM、ThermalErosion、DeriveTerrainMaps 均在 GTX 1050 上成功编译。Premake VS2026 重新生成、Debug x64 全解决方案构建和 64 项无窗口回归全部通过，构建输出目录未清理。
+
 ## KB
 
 ### 为什么不用动态库？
