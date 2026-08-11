@@ -28,6 +28,7 @@ namespace gl {
 		void OnImGuiRender(const Renderer3D::Statistics& statistics);
 		bool GeneratePBRMaterialLabForValidation();
 		bool GenerateInstancingLabForShadowBenchmark();
+		bool GenerateInstancingLabForShadowVisualValidation(bool casterCloseup = false);
 		bool IsShadowBenchmarkComplete() const
 		{
 			return m_InstancingLab.IsShadowBenchmarkComplete();

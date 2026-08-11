@@ -6,6 +6,7 @@
 
 namespace gl {
 	class Shader;
+	enum class MaterialAlphaMode : uint8_t;
 	struct MaterialOverrides;
 	struct TerrainComponent;
 
@@ -61,6 +62,7 @@ namespace gl {
 		static bool IsEnabled();
 		static void SetCascadeDebugVisualization(bool enabled);
 		static bool IsCascadeDebugVisualizationEnabled();
+		static bool ShouldCastShadow(MaterialAlphaMode alphaMode);
 		static Statistics GetStatistics();
 		static bool IntersectsClipFrustum(
 			const glm::vec3& boundsMin,

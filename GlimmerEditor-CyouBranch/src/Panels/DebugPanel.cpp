@@ -123,4 +123,12 @@ namespace gl {
 		return m_InstancingLab.GenerateForShadowBenchmark();
 	}
 
+	bool DebugPanel::GenerateInstancingLabForShadowVisualValidation(bool casterCloseup)
+	{
+		if (m_PBRMaterialLab.IsActive())
+			return false;
+		m_Open = true;
+		return m_InstancingLab.GenerateForShadowVisualValidation(casterCloseup);
+	}
+
 }

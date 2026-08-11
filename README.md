@@ -12669,7 +12669,8 @@ Scene 找到首个启用且 CastShadows 的 Directional Light
   → 每级执行包围球稳定化与 Shadow Texel Snap
   → 使用 Mesh/Terrain Bounds 对当前级联执行保守六平面剔除
   → 依次绑定各级 Depth32F Framebuffer
-  → Model 按 Mesh + Mask 状态排序并构造每级 Instancing Batch
+  → Opaque/Mask Model 按 Mesh + Mask 状态排序并构造每级 Instancing Batch
+  → Blend Model 默认跳过 Shadow Pass，避免错误的实心投影
   → ShadowDepth.glsl 实例化绘制兼容 Model，独立绘制 Terrain
   → 恢复 Scene Framebuffer 与 Viewport
   → 正常 Opaque / Terrain / Skybox / Sprite / Transparent
@@ -12707,6 +12708,8 @@ if (clamp(u_BaseColorAlpha * textureAlpha, 0.0, 1.0) < u_AlphaCutoff)
 
 因此树叶、铁丝网或镂空贴图的透明区域不会写入 Shadow Map，接收面上会得到对应的镂空阴影。模型贴图优先使用最终 Material BaseColorTexture，未设置时沿用 Mesh 自带纹理；纹理语义仍必须是 sRGB Color。ShadowDepth 分别从 location 3 读取 Model UV、从 location 1 读取 Terrain Height UV，透明裁剪不会破坏地形顶点位移。
 
+Blend 材质采用明确的首版策略：不进入 Directional Shadow Queue。半透明表面没有单一正确的二值深度，直接写入会投出与透明度无关的实心轮廓；因此当前优先避免错误阴影，而不是伪装成透射阴影。Opaque 与 Mask 仍正常投影。未来若需要玻璃彩色透射、随机抖动或透射率累积，应作为独立的 Transparent Shadow 能力实现，而不是混入现有 Depth-only CSM。
+
 每个级联不再逐模型立即 Draw。通过 Frustum 测试的子网格先进入 Shadow Queue，随后按 Mesh 和最终 Mask 状态排序；Opaque 只要求 Mesh 相同，Mask 还要求 BaseColor Texture、BaseColor Alpha、AlphaCutoff 与 TilingFactor 全部一致。兼容批次把 Transform 写入动态 Instance Buffer：
 
 ```cpp
@@ -12727,7 +12730,7 @@ RenderCommand::DrawIndexedInstanced(
 5. 在结果表读取每组 `Avg/Min/Max ms`、`Draws` 和 `Saved`；测试可随时取消，关闭 Debug 窗口或切换页签不会中断；
 6. 回到 `Overview` 开启 `Visualize Cascades` 检查覆盖与 Blend，再关闭调试色观察 Acne、Peter Panning 和移动相机时的级联跳变。
 
-若要集中完成视觉检查，将 Preset 改为 `Shadow Visual Validation` 后点击 Generate。工具会忽略 Count/Spacing，固定生成 7 个模型实体：长距离地面、橙色 Opaque 对照板、使用 `balatro.png` Alpha 的 Mask 镂空板，以及沿相机深度分布的四个彩色标记。相机会自动框定测试区，也可点击 `Frame Validation Scene` 恢复构图。
+若要集中完成视觉检查，将 Preset 改为 `Shadow Visual Validation` 后点击 Generate。工具会忽略 Count/Spacing，固定生成 8 个模型实体：长距离地面、橙色 Opaque 对照板、使用 `balatro.png` Alpha 的 Mask 镂空板、不会投射实心阴影的青色 Blend 对照板，以及沿相机深度分布的四个彩色标记。相机会自动框定测试区；`Frame Cascade Range` 恢复长距离级联构图，`Frame Casters` 切换到 Opaque/Mask/Blend 近景。
 
 视觉面板提供以下纯运行时控制：
 
@@ -12739,7 +12742,16 @@ RenderCommand::DrawIndexedInstanced(
 
 该预设仍是临时内存 Scene，不进入场景保存、Undo/Redo 或资产文件；退出 Lab 后恢复原编辑场景。
 
-RTX 4060 实际窗口验证中，该预设成功生成 7/7 个模型并自动框定长地面；Opaque 板、四个深度标记和带 `balatro.png` 镂空的 Mask 板均正常着色，接收面出现对应模型阴影，证明 Visual Lab 的 Scene、相机、Material Override、ShadowDepth 与 PBRModel 链路已经连通。最终画质判定仍应由使用者移动相机并操作上述四项参数完成。
+也可以从 `GlimmerEditor-CyouBranch` 工作目录启动可重复的视觉入口：
+
+```powershell
+$env:GLIMMER_SHADOW_VISUAL_AUTORUN = ''1''
+$env:GLIMMER_SHADOW_VISUAL_CLOSEUP = ''1''          # 可选：投影物近景
+$env:GLIMMER_SHADOW_VISUALIZE_CASCADES = ''1''      # 可选：级联着色
+..\bin\Debug-windows-x86_64\GlimmerEditor-CyouBranch\GlimmerEditor-CyouBranch.exe
+```
+
+GTX 1050/OpenGL 4.6 实际窗口验证中，全景构图显示深度标记跨越不同级联，重叠边界保持连续；近景构图中 Opaque 接触阴影稳定、`balatro.png` Mask 保持镂空轮廓，默认 Bias 下未见明显大面积 Acne 或 Peter Panning。青色 Blend 板自身正常透明绘制，但地面不出现对应的实心矩形阴影，与回归策略一致。
 
 每次配置切换后的预热会排空异步 Query 延迟；采样仅在 GPU 返回新结果时推进，不会重复使用面板中缓存的上一帧数值。结果只存在于当前临时 Lab，不写入场景或资产。测试时仍需保持窗口分辨率、相机、模型数量、Shadow Distance 与驱动设置一致。GPU Time 只统计 Shadow Pass，不包含 Scene Color、Terrain Compute、Tone Mapping 或 ImGui，因此适合比较级联数、分辨率与实例数量对阴影本身的影响。
 
@@ -12759,9 +12771,9 @@ $env:GLIMMER_SHADOW_BENCHMARK_AUTORUN = '1'
 - Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered、Frustum Culled、Draw Calls、Instanced/Individual、Instances、Saved Draws 与非阻塞 GPU Time；可通过移动相机或生成重复模型确认剔除、合批及耗时，也可启用 `Visualize Cascades` 检查分级和重叠过渡；
 - Debug → Rendering 的 Instancing Lab 可自动完成 9 组 CSM 性能采样并显示 Avg/Min/Max；计时样本带单调序号，只有新的异步 Query 结果才会被纳入统计；
 - Model Shadow Pass 已按每个级联独立合批；不同 Mesh 或不同最终 Mask 状态会正确拆批，Terrain 保持独立提交；
-- Alpha Mask 已按最终 MaterialInstance 的 BaseColor Alpha、纹理 Alpha、TilingFactor 与 AlphaCutoff 裁剪 ShadowDepth；Blend 仍投射完整实体轮廓，尚未实现抖动或透射式半透明阴影；
+- Alpha Mask 已按最终 MaterialInstance 的 BaseColor Alpha、纹理 Alpha、TilingFactor 与 AlphaCutoff 裁剪 ShadowDepth；Blend 默认跳过 Shadow Pass，尚未实现抖动、彩色透射或透射率累积阴影；
 - Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
-- VS2026 独立回归目标构建成功；61 项断言与最终汇总全部 PASS，包含阴影设置往返、四类 Bounds 剔除测试，以及 Shadow Saved Draw 正常计算和下溢保护；
+- VS2026 `Debug | x64` 全解决方案构建成功；立即重复同配置构建只执行增量项目检查，没有重新编译源文件；64 项断言与最终汇总全部 PASS，包含阴影设置往返、四类 Bounds 剔除、Shadow Saved Draw 计算，以及 Opaque/Mask/Blend 投影策略；
 - 新增级联调试着色、Alpha Mask 与 Shadow Instancing 后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型，默认地形的 Height UV 与 Compute 路径正常。自动测试不判定颜色和投影轮廓，仍需手动勾选 `Visualize Cascades` 检查分区，并用带 Alpha 的 BaseColor Texture + Mask 材质确认透明区域不产生阴影。
 - PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 draw calls / 4 instanced / 20 saved / 4 cascades`：每个级联把 6 个相同 Mesh 合并为一次 Draw，并确认保守测试没有误删投影。把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
 - OpenGL Time Query 已在 Intel Iris Xe 上非阻塞返回，PBR Lab 四级 Shadow Pass 得到一次 `0.278 ms` 验证样本；该数字只验证计时范围和读取链路，正式性能结论必须按上面的固定场景步骤在 RTX 4060 上采集多组稳定值。
@@ -12779,7 +12791,7 @@ $env:GLIMMER_SHADOW_BENCHMARK_AUTORUN = '1'
 | 2 | 4096 | 3.182 | 3.178 | 3.194 | 4 | 2278 |
 | 4 | 4096 | 6.313 | 6.304 | 6.319 | 5 | 2562 |
 
-同场景 Iris Xe 的 `4096 × 4` 平均为 `11.224 ms`，RTX 4060 为 `6.313 ms`，最高档约快 1.78 倍；RTX 各组 Min/Max 也更集中。该结果只证明 Shadow Pass 的定量性能和自动采样链路，级联边界、Mask 轮廓、Acne 与 Peter Panning 仍需在视口中人工判断。
+同场景 Iris Xe 的 `4096 × 4` 平均为 `11.224 ms`，RTX 4060 为 `6.313 ms`，最高档约快 1.78 倍；RTX 各组 Min/Max 也更集中。定量性能由固定基准覆盖，级联边界、Mask 轮廓、Acne、Peter Panning 与 Blend 策略则由 GTX 1050 的全景/近景实际视口验收覆盖，P9 至此完成。
 
 ## Renderer2D 空批次残留修复
 

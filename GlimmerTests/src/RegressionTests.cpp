@@ -570,6 +570,15 @@ namespace {
 		batchedStatistics.DrawCalls = 25;
 		context.Check(batchedStatistics.GetSavedDrawCalls() == 0,
 			"shadow saved draw count cannot underflow");
+		context.Check(gl::ShadowRenderer::ShouldCastShadow(
+			gl::MaterialAlphaMode::Opaque),
+			"opaque materials cast directional shadows");
+		context.Check(gl::ShadowRenderer::ShouldCastShadow(
+			gl::MaterialAlphaMode::Mask),
+			"mask materials cast directional shadows");
+		context.Check(!gl::ShadowRenderer::ShouldCastShadow(
+			gl::MaterialAlphaMode::Blend),
+			"blend materials do not cast solid directional shadows");
 	}
 
 }

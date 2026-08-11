@@ -32,6 +32,7 @@ namespace gl {
 		void OnImGuiRender(const Renderer3D::Statistics& statistics);
 		void UpdateShadowBenchmark(const ShadowRenderer::Statistics& statistics);
 		bool GenerateForShadowBenchmark();
+		bool GenerateForShadowVisualValidation(bool casterCloseup = false);
 		void Exit();
 
 		bool IsActive() const { return m_Active; }
@@ -96,6 +97,8 @@ namespace gl {
 			const ShadowRenderer::Statistics& statistics);
 		void DrawShadowBenchmark();
 		void DrawShadowVisualControls();
+		void FrameShadowVisualOverview() const;
+		void FrameShadowVisualCasters() const;
 		ExpectedStatistics CalculateExpectedStatistics(uint32_t submeshCount) const;
 		uint32_t GetRequestedEntityCount() const;
 

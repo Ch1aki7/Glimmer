@@ -5,12 +5,12 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-09
+- 最近更新：2026-08-11
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P9 方向光阴影与 CSM
-- 主线状态：进行中（CSM 完整链路与非阻塞 GPU 计时已落地，下一阶段为独显实机画质/性能验收）
+- 当前主线：P8.1 TerrainMaterial 采样优化
+- 主线状态：待开始（P9 已完成，下一步先建立同场景 Terrain Pass 采样/耗时基线，再实现 Top-2 层裁剪）
 
 ## 使用与更新规则
 
@@ -55,49 +55,9 @@
 
 ## 当前主线
 
-### P9：方向光阴影与 CSM
+### P8.1：TerrainMaterial 采样优化
 
-**依赖**：P4、P8 已完成。
-
-**目标**
-
-- 先实现 Directional Shadow Map，再扩展 3～4 级 CSM；
-- 建立独立 Shadow Pass、深度资源和偏移策略；
-- 让 Model 与 Terrain 共用一致的阴影约定。
-
-**验收**
-
-- 山峰和模型遮挡关系稳定，无明显 Peter Panning 或大面积 Acne；
-- 级联切换不过度跳变，视锥外阴影对象不提交；
-- Shadow 资源不写入场景文件，只由可序列化设置重建。
-
-**阶段进展（2026-08-10）**
-
-- 已将单级 Directional Shadow Map 扩展为 1～4 级 CSM：`ShadowRenderer` 按级联数持有纯运行时 `Depth32F` Framebuffer 数组，根据相机视锥、Shadow Distance 和 Practical Split Lambda 计算各级覆盖范围；
-- 每级方向光正交投影使用包围球稳定范围与 Shadow Texel Snap，Scene 在主 Pass 前逐级提交 Model 与 Terrain；PBRModel/Terrain 按视空间深度选择级联，并分别从连续纹理槽 4～7、16～19 执行 `3×3 PCF`；
-- 相邻级联根据较短一侧范围建立可调重叠区；接收端在 Split 两侧同时采样相邻级联并使用 `smoothstep` 混合，非过渡区域和单级模式仍只采样一张阴影图；
-- Mesh 在加载时缓存局部 AABB；Shadow Pass 将 Model 子网格 Bounds 以及由网格尺寸/HeightScale 构造的 Terrain Bounds 变换到当前级联 Clip Space，只有 8 个角点同时位于同一裁剪平面外侧时才保守剔除；
-- `ShadowRenderer::Statistics` 记录 Cascade Pass、候选/实际/剔除项、Draw Call、Instanced/Individual Draw、实例数与节省 Draw；Debug → Overview 可直接查看每帧 Shadow Frustum 剔除和合批结果，PBR Lab 自动验证日志也输出同组统计；
-- Debug → Overview 新增纯运行时 `Visualize Cascades`：PBRModel 与 Terrain 以红、绿、蓝、黄标出第 1～4 级，并沿现有 Cascade Blend 权重渐变显示重叠区；调试色只覆盖最终线性颜色，不改写 Alpha、Entity ID、Shadow Depth 或场景 YAML；
-- Scene 将 Model 实体的 MaterialHandle 与实体级 Overrides 一并提交给 ShadowRenderer；Shadow Pass 通过 MaterialInstance 解析最终 BaseColor、BaseColorTexture、TilingFactor、AlphaMode 与 AlphaCutoff，Mask 材质按与 PBRModel 相同的 `BaseColor.a × Texture.a < AlphaCutoff` 规则 `discard`，因此镂空区域不再写入级联深度图；模型 UV 使用 location 3，Terrain Height UV 继续使用 location 1；
-- 每个级联先收集通过 Bounds 测试的 Model 子网格，再按 Mesh 与最终 Alpha Mask 状态排序；兼容项通过动态 Instance Buffer 和 `glDrawElementsInstanced` 合并，单次最多 1024 实例。Mask 只有 BaseColor Texture、BaseColor Alpha、AlphaCutoff 与 TilingFactor 全部一致时才合批；ShadowRenderer 为每个 Mesh 缓存独立 Shadow VAO，只复制逐顶点缓冲并将实例矩阵固定到 location 4～7，避免与 Renderer3D 的 Instance Buffer 相互污染；Terrain 保持独立 Draw；
-- 新增 Renderer 层 `GPUTimer` 资源与 OpenGL `GL_TIME_ELAPSED` 实现；四个 Query 组成非阻塞环，结果未就绪时继续使用上一份数据而不调用同步式等待。ShadowRenderer 在级联矩阵准备完成后 Begin、全部 Cascade Draw 完成后 End，因此 `GpuMilliseconds` 只覆盖整段 Shadow GPU 工作；Debug → Overview 与 PBR Lab 日志可直接读取；现有 Instancing Lab 可生成最多 100000 个临时实体作为独显压力场景；
-- Instancing Lab 新增自动 Shadow Benchmark：按 `1/2/4 Cascades × 1024/2048/4096 Resolution` 依次修改临时方向光，每组执行可调预热并采集可调数量的唯一异步 GPU Timer 样本，汇总 Avg/Min/Max、Draw Calls 与 Saved Draws；`GpuTimingSample` 只在新 Query 结果返回时递增，避免重复统计缓存耗时。测试状态在 Debug 窗口关闭或切换页签后仍继续推进，结果不进入 Scene、Undo/Redo 或资产文件；
-- 新增 `GLIMMER_SHADOW_BENCHMARK_AUTORUN=1` 无人值守入口：固定生成 `50×1×50` Maximum Instancing 场景，以每组 15 帧预热和 30 个唯一样本跑完全部配置，逐行记录硬件信息与结果后正常关闭编辑器；用于在目标独显上重复采样并留下可比日志，不替代 Mask/级联边界等视觉检查；
-- Instancing Lab 新增 `Shadow Visual Validation` 预设：用同一临时 Scene 自动搭建长距离接收地面、Opaque 对照板、使用 `balatro.png` 的 Alpha Mask 镂空板和四个深度标记，并通过受控回调将 EditorCamera 框定到测试区；Lab 内可直接开关级联着色并运行时调整 Bias、Split Lambda、Cascade Blend 与 Shadow Distance，用一处场景检查 Mask 轮廓、级联过渡、Acne 和 Peter Panning；
-- Visual Validation 验证：61 项无窗口断言全部 PASS，VS2026 最终编辑器目标构建成功；RTX 4060 实际窗口中预设生成 7/7 模型，长地面、四个彩色深度标记、Opaque 板与 `balatro.png` Mask 镂空板均进入自动框选构图，接收面可见模型阴影且透明纹理正常裁剪；测试窗口正常关闭，临时 GPU 偏好、截图和进程均已清理；
-- `TerrainRenderer::Prepare` 将高度/派生 Runtime 准备与颜色绘制分开，使程序化地形首帧即可参与 Shadow Pass；Shadow Pass 完成后恢复当前 Scene Framebuffer 和 Viewport；
-- Directional Light Inspector 现提供 Cast Shadows、512～4096 Resolution、1～4 Cascade Count、Shadow Distance、Bias、Split Lambda 与 Cascade Blend；设置进入 Scene YAML，级联深度纹理、FBO、矩阵、Split 和 Blend Width 保持纯运行时；
-- 验证：Premake VS2026 工程重新生成成功，VS2026 独立回归目标构建成功，61 项断言及最终汇总全部 PASS；含无人值守入口的最终编辑器目标构建成功。固定 2500 实体基准先在 Intel Iris Xe 完成 9 组，再通过临时 Windows 每应用高性能 GPU 偏好确认 OpenGL Renderer 为 `NVIDIA GeForce RTX 4060 Laptop GPU`，9 组各 30 样本全部完成且编辑器正常退出；RTX 结果从 `1024×1 = 0.058 ms`、`2048×4 = 2.414 ms` 到 `4096×4 = 6.313 ms`，最高档相对 Iris Xe 的 `11.224 ms` 约快 1.78 倍；临时 GPU 偏好和进程均已清理；
-- 尚未完成：独显下的级联覆盖/过渡、Mask 轮廓与 Acne/Peter Panning 视觉验收，以及 Blend 半透明阴影策略；性能对照已完成，因此 P9 继续保持进行中但不再缺少定量基准。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
-### P8.1：TerrainMaterial 采样优化（P9 后）
-
-**依赖**：P8 四层 Triplanar PBR 已完成。
+**依赖**：P8 四层 Triplanar PBR、P9 CSM 已完成。
 
 **目标**
 
@@ -110,6 +70,10 @@
 - RenderDoc/GPU Timer 证明 Terrain Pass 纹理读取量和 GPU 时间下降；
 - 四层过渡、法线、AO 与距离质量切换无明显接缝或跳变；
 - 优化前后在独显环境下使用相同场景、分辨率和相机进行比较。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P10：IBL 环境光照
 
@@ -207,6 +171,15 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-11：P9 方向光阴影与 CSM
+
+- Model 与 Terrain 共用 1～4 级方向光 CSM，包含 Practical Split、稳定正交范围、Texel Snap、可调重叠混合、`3×3 PCF`、Slope Bias 与纯运行时级联可视化；Shadow 深度资源和矩阵不序列化，只由 Directional Light 设置重建；
+- Model/Terrain Bounds 在每级 Shadow Frustum 中保守剔除；Model Shadow Queue 按 Mesh 与最终 Mask 状态排序，并以独立 Shadow VAO/Instance Buffer 合批；Mask 使用最终 MaterialInstance 的纹理 Alpha 与 Cutoff 裁剪；
+- 明确半透明投影策略：Opaque 与 Mask 参与方向光阴影，Blend 默认不写 Shadow Map，避免半透明表面投出错误的实心轮廓；未来若需要彩色透射或抖动阴影，作为独立能力建设；
+- 建立非阻塞 `GPUTimer`、9 组 Shadow Benchmark、无人值守入口和包含 Opaque/Mask/Blend 对照、四级深度标记及远近两种构图的 Shadow Visual Validation；
+- 验证：RTX 4060 完成固定 2500 实体、9 组各 30 样本性能基准；GTX 1050/OpenGL 4.6 实际窗口检查级联覆盖/过渡、Mask 镂空、Opaque 接触阴影及 Blend 无实心阴影，默认 Bias 下未见明显大面积 Acne 或 Peter Panning；VS2026 `Debug | x64` 全解决方案构建成功，立即重复同配置构建只执行增量项目检查，64 项无窗口断言全部 PASS；
+- 提交：待提交。
 
 ### 2026-08-09：Renderer2D 空批次残留修复
 
@@ -431,7 +404,7 @@
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；仍缺少 Chunk/LOD 和固定步长 Runtime Erosion 调度；
-- CSM 已有 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色视图、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 材质仍按完整实体轮廓投影，独显画质/性能尚待 P9 最终验收；
+- CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - 完整纹理 Terrain Fragment Shader 对四层 Albedo/Normal/AO 全量执行三平面采样，最坏接近 40 次纹理读取/像素；该成本尚待通过 GPU Timer 定量验证并按 P8.1 优化，但不再视为屏幕撕裂的根因；
 - SkyLight 目前只绘制可见 Cubemap，尚无 HDR 环境导入、Diffuse/Specular IBL 和派生缓存；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；

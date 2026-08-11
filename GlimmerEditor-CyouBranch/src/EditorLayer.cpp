@@ -38,6 +38,21 @@ namespace gl {
 			return HasEnvironmentVariable("GLIMMER_SHADOW_BENCHMARK_AUTORUN");
 		}
 
+		bool ShouldAutorunShadowVisualValidation()
+		{
+			return HasEnvironmentVariable("GLIMMER_SHADOW_VISUAL_AUTORUN");
+		}
+
+		bool ShouldVisualizeShadowCascades()
+		{
+			return HasEnvironmentVariable("GLIMMER_SHADOW_VISUALIZE_CASCADES");
+		}
+
+		bool ShouldUseShadowCasterCloseup()
+		{
+			return HasEnvironmentVariable("GLIMMER_SHADOW_VISUAL_CLOSEUP");
+		}
+
 		void EncapsulateTransformedBounds(
 			const glm::vec3& boundsMin,
 			const glm::vec3& boundsMax,
@@ -379,6 +394,17 @@ namespace gl {
 			});
 		if (ShouldAutorunPBRLab())
 			m_DebugPanel.GeneratePBRMaterialLabForValidation();
+		if (ShouldAutorunShadowVisualValidation())
+		{
+			ShadowRenderer::SetCascadeDebugVisualization(
+				ShouldVisualizeShadowCascades());
+			if (!m_DebugPanel.GenerateInstancingLabForShadowVisualValidation(
+				ShouldUseShadowCasterCloseup()))
+			{
+				GL_CORE_ERROR("Shadow Visual Validation autorun could not be initialized.");
+				Application::Get().Close();
+			}
+		}
 		m_ShadowBenchmarkAutorun = ShouldAutorunShadowBenchmark();
 		if (m_ShadowBenchmarkAutorun
 			&& !m_DebugPanel.GenerateInstancingLabForShadowBenchmark())

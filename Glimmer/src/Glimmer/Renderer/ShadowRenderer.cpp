@@ -528,6 +528,8 @@ namespace gl {
 				materialProperties = instance.GetProperties();
 			}
 		}
+		if (!ShouldCastShadow(materialProperties.AlphaMode))
+			return;
 		const bool alphaMasked =
 			materialProperties.AlphaMode == MaterialAlphaMode::Mask;
 		const Ref<Texture2D> materialTexture =
@@ -690,6 +692,11 @@ namespace gl {
 	bool ShadowRenderer::IsCascadeDebugVisualizationEnabled()
 	{
 		return s_Data.CascadeDebugVisualization;
+	}
+
+	bool ShadowRenderer::ShouldCastShadow(MaterialAlphaMode alphaMode)
+	{
+		return alphaMode != MaterialAlphaMode::Blend;
 	}
 
 	ShadowRenderer::Statistics ShadowRenderer::GetStatistics()

@@ -98,7 +98,7 @@ namespace gl {
 	uint32_t InstancingLabTool::GetRequestedEntityCount() const
 	{
 		if (m_Preset == Preset::ShadowVisualValidation)
-			return 7;
+			return 8;
 		uint64_t count = 1;
 		for (int dimension : m_Count)
 			count *= static_cast<uint64_t>(std::max(dimension, 1));
@@ -198,7 +198,7 @@ namespace gl {
 		}
 
 		std::vector<UUID> representatives;
-		representatives.reserve(3);
+		representatives.reserve(4);
 		if (m_Preset == Preset::ShadowVisualValidation)
 		{
 			const AssetHandle alphaTexture =
@@ -213,7 +213,8 @@ namespace gl {
 				TextureColorSpace::SRGB, TextureSemantic::Color);
 
 			const auto addModel = [&](const char* name, const glm::vec3& position,
-				const glm::vec3& scale, const glm::vec4& color, bool mask) {
+				const glm::vec3& scale, const glm::vec4& color,
+				MaterialAlphaMode alphaMode) {
 				Entity entity = scene->CreateEntity(name);
 				auto& transform = entity.GetComponent<TransformComponent>();
 				transform.Translation = position;
@@ -224,10 +225,9 @@ namespace gl {
 				component.Overrides.SetEnabled(MaterialOverride::BaseColor, true);
 				component.Overrides.Values.Roughness = 0.75f;
 				component.Overrides.SetEnabled(MaterialOverride::Roughness, true);
-				component.Overrides.Values.AlphaMode = mask
-					? MaterialAlphaMode::Mask : MaterialAlphaMode::Opaque;
+				component.Overrides.Values.AlphaMode = alphaMode;
 				component.Overrides.SetEnabled(MaterialOverride::AlphaMode, true);
-				if (mask)
+				if (alphaMode == MaterialAlphaMode::Mask)
 				{
 					component.Overrides.Values.BaseColorTexture = alphaTexture;
 					component.Overrides.SetEnabled(
@@ -240,13 +240,16 @@ namespace gl {
 
 			Entity ground = addModel("Shadow Receiver Ground",
 				{ 0.0f, -1.5f, 25.0f }, { 18.0f, 1.0f, 35.0f },
-				{ 0.45f, 0.48f, 0.52f, 1.0f }, false);
+				{ 0.45f, 0.48f, 0.52f, 1.0f }, MaterialAlphaMode::Opaque);
 			Entity opaque = addModel("Opaque Shadow Reference",
 				{ 5.0f, 2.0f, 4.0f }, { 3.0f, 3.0f, 0.35f },
-				{ 0.95f, 0.55f, 0.18f, 1.0f }, false);
+				{ 0.95f, 0.55f, 0.18f, 1.0f }, MaterialAlphaMode::Opaque);
 			Entity masked = addModel("Alpha Mask Shadow Caster",
 				{ -5.0f, 2.0f, 4.0f }, { 3.0f, 3.0f, 0.35f },
-				{ 1.0f, 1.0f, 1.0f, 1.0f }, true);
+				{ 1.0f, 1.0f, 1.0f, 1.0f }, MaterialAlphaMode::Mask);
+			Entity blended = addModel("Blend No-Shadow Reference",
+				{ 0.0f, 7.0f, 4.0f }, { 3.0f, 3.0f, 0.35f },
+				{ 0.18f, 0.80f, 0.95f, 0.35f }, MaterialAlphaMode::Blend);
 			const std::array<float, 4> markerDepths = { 10.0f, 24.0f, 42.0f, 64.0f };
 			const std::array<glm::vec4, 4> markerColors = {
 				glm::vec4{ 0.95f, 0.25f, 0.25f, 1.0f },
@@ -257,8 +260,9 @@ namespace gl {
 			for (size_t index = 0; index < markerDepths.size(); ++index)
 				addModel(("Cascade Depth Marker " + std::to_string(index + 1)).c_str(),
 					{ 0.0f, 0.0f, markerDepths[index] }, { 1.5f, 1.5f, 1.5f },
-					markerColors[index], false);
-			representatives = { ground.GetUUID(), opaque.GetUUID(), masked.GetUUID() };
+					markerColors[index], MaterialAlphaMode::Opaque);
+			representatives = {
+				ground.GetUUID(), opaque.GetUUID(), masked.GetUUID(), blended.GetUUID() };
 		}
 		else
 		{
@@ -323,8 +327,8 @@ namespace gl {
 		m_Expected = CalculateExpectedStatistics(
 			static_cast<uint32_t>(model->GetMeshes().size()));
 		m_Active = true;
-		if (m_Preset == Preset::ShadowVisualValidation && m_FrameScene)
-			m_FrameScene({ 0.0f, 0.0f, 25.0f }, 48.0f, -24.0f, 0.0f);
+		if (m_Preset == Preset::ShadowVisualValidation)
+			FrameShadowVisualOverview();
 		m_LastGenerationMilliseconds = std::chrono::duration<float, std::milli>(
 			std::chrono::steady_clock::now() - start).count();
 		m_Status = "Temporary lab generated. Statistics validate after the next rendered frame.";
@@ -410,6 +414,20 @@ namespace gl {
 		}
 		GL_CORE_INFO(
 			"Shadow Benchmark autorun started: 2500 entities, 15 warmup frames and 30 samples per configuration.");
+		return true;
+	}
+
+	bool InstancingLabTool::GenerateForShadowVisualValidation(bool casterCloseup)
+	{
+		m_Preset = Preset::ShadowVisualValidation;
+		if (!Generate())
+		{
+			GL_CORE_ERROR("Shadow Visual Validation autorun failed: {0}", m_Status);
+			return false;
+		}
+		if (casterCloseup)
+			FrameShadowVisualCasters();
+		GL_CORE_INFO("Shadow Visual Validation autorun started.");
 		return true;
 	}
 
@@ -604,10 +622,25 @@ namespace gl {
 			0.01f, 0.0f, 0.3f);
 		ImGui::DragFloat("Shadow Distance##VisualLab", &light.ShadowDistance,
 			1.0f, 10.0f, 200.0f);
-		if (ImGui::Button("Frame Validation Scene") && m_FrameScene)
-			m_FrameScene({ 0.0f, 0.0f, 25.0f }, 48.0f, -24.0f, 0.0f);
+		if (ImGui::Button("Frame Cascade Range"))
+			FrameShadowVisualOverview();
+		ImGui::SameLine();
+		if (ImGui::Button("Frame Casters"))
+			FrameShadowVisualCasters();
 		ImGui::TextDisabled(
 			"Bias too low: surface acne. Bias too high: detached shadow (Peter Panning). Runtime-only controls.");
+	}
+
+	void InstancingLabTool::FrameShadowVisualOverview() const
+	{
+		if (m_FrameScene)
+			m_FrameScene({ 0.0f, 0.0f, 25.0f }, 48.0f, -24.0f, 0.0f);
+	}
+
+	void InstancingLabTool::FrameShadowVisualCasters() const
+	{
+		if (m_FrameScene)
+			m_FrameScene({ 0.0f, 1.0f, 5.0f }, 17.0f, -16.0f, 0.0f);
 	}
 
 	void InstancingLabTool::DrawExpectedAndActual(
