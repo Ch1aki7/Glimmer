@@ -13,22 +13,20 @@ namespace gl {
 
 	namespace {
 
-		struct DerivedEnvironment
-		{
-			Ref<TextureCube> DiffuseIrradiance;
-		};
-
 		struct EnvironmentLightingData
 		{
-			DiffuseIrradianceSettings Settings;
+			DiffuseIrradianceSettings IrradianceSettings;
+			SpecularPrefilterSettings PrefilterSettings;
 			std::unordered_map<
 				EnvironmentDerivedMapKey,
-				DerivedEnvironment,
+				Ref<TextureCube>,
 				EnvironmentDerivedMapKeyHash> Cache;
-			EnvironmentDerivedMapKey ActiveKey;
+			EnvironmentDerivedMapKey ActiveDiffuseKey;
+			EnvironmentDerivedMapKey ActiveSpecularKey;
 			Ref<TextureCube> ActiveIrradiance;
+			Ref<TextureCube> ActivePrefilter;
 			float ActiveIntensity = 0.0f;
-			bool HasActiveKey = false;
+			bool HasActiveEnvironment = false;
 			EnvironmentLighting::Statistics Stats;
 		};
 
@@ -40,21 +38,38 @@ namespace gl {
 				+ 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
 		}
 
-		Ref<TextureCube> BuildDiffuseIrradiance(
-			const Ref<Cubemap>& source,
+		EnvironmentDerivedMapKey MakeDiffuseKey(
+			AssetHandle handle,
+			uint64_t version,
 			const DiffuseIrradianceSettings& settings)
 		{
-			if (!source || !source->GetTexture())
-				return nullptr;
+			return {
+				handle,
+				version,
+				EnvironmentDerivedMapType::DiffuseIrradiance,
+				settings.Resolution,
+				settings.SampleCount
+			};
+		}
 
-			CubemapFloatData sourceData;
-			if (!EnvironmentMapLoader::ReadTextureCube(
-				*source->GetTexture(), sourceData))
-			{
-				GL_CORE_ERROR("Failed to read source Cubemap for diffuse irradiance.");
-				return nullptr;
-			}
+		EnvironmentDerivedMapKey MakeSpecularKey(
+			AssetHandle handle,
+			uint64_t version,
+			const SpecularPrefilterSettings& settings)
+		{
+			return {
+				handle,
+				version,
+				EnvironmentDerivedMapType::SpecularPrefilter,
+				settings.Resolution,
+				settings.SampleCount
+			};
+		}
 
+		Ref<TextureCube> BuildDiffuseIrradiance(
+			const CubemapFloatData& sourceData,
+			const DiffuseIrradianceSettings& settings)
+		{
 			CubemapFloatData irradianceData;
 			if (!EnvironmentMapLoader::GenerateDiffuseIrradiance(
 				sourceData,
@@ -88,6 +103,56 @@ namespace gl {
 			return texture;
 		}
 
+		Ref<TextureCube> BuildSpecularPrefilter(
+			const CubemapFloatData& sourceData,
+			const SpecularPrefilterSettings& settings)
+		{
+			CubemapMipChainFloatData prefilterData;
+			if (!EnvironmentMapLoader::GenerateSpecularPrefilter(
+				sourceData,
+				settings.Resolution,
+				settings.SampleCount,
+				prefilterData))
+			{
+				GL_CORE_ERROR("Failed to generate specular prefilter Cubemap.");
+				return nullptr;
+			}
+
+			TextureCubeSpecification specification;
+			specification.Size = settings.Resolution;
+			specification.MipLevels =
+				static_cast<uint32_t>(prefilterData.Mips.size());
+			specification.Format = TextureFormat::RGBA16F;
+			specification.ColorSpace = TextureColorSpace::Linear;
+			specification.MinFilter = TextureFilter::LinearMipmapLinear;
+			specification.MagFilter = TextureFilter::Linear;
+			Ref<TextureCube> texture = TextureCube::Create(specification);
+			if (!texture)
+				return nullptr;
+
+			for (uint32_t mip = 0; mip < prefilterData.Mips.size(); ++mip)
+			{
+				const auto& mipData = prefilterData.Mips[mip];
+				for (uint32_t face = 0; face < mipData.Faces.size(); ++face)
+				{
+					const auto& pixels = mipData.Faces[face];
+					texture->SetFaceData(
+						static_cast<TextureCubeFace>(face),
+						pixels.data(),
+						static_cast<uint32_t>(pixels.size() * sizeof(float)),
+						mip);
+				}
+			}
+			return texture;
+		}
+
+		void ResetActiveEnvironment()
+		{
+			s_Data.ActiveIrradiance.reset();
+			s_Data.ActivePrefilter.reset();
+			s_Data.HasActiveEnvironment = false;
+		}
+
 	}
 
 	size_t EnvironmentDerivedMapKeyHash::operator()(
@@ -96,8 +161,9 @@ namespace gl {
 		size_t result = 0;
 		HashCombine(result, static_cast<uint64_t>(key.SourceHandle));
 		HashCombine(result, key.SourceVersion);
-		HashCombine(result, key.Irradiance.Resolution);
-		HashCombine(result, key.Irradiance.SampleCount);
+		HashCombine(result, static_cast<uint64_t>(key.Type));
+		HashCombine(result, key.Resolution);
+		HashCombine(result, key.SampleCount);
 		return result;
 	}
 
@@ -119,89 +185,155 @@ namespace gl {
 		s_Data.ActiveIntensity = glm::max(intensity, 0.0f);
 		if (!enabled || static_cast<uint64_t>(cubemapHandle) == 0)
 		{
-			s_Data.ActiveIrradiance.reset();
-			s_Data.HasActiveKey = false;
+			ResetActiveEnvironment();
 			return;
 		}
 
 		const Ref<Cubemap> source = AssetManager::GetCubemap(cubemapHandle);
 		if (!source || !source->GetTexture())
 		{
-			s_Data.ActiveIrradiance.reset();
-			s_Data.HasActiveKey = false;
+			ResetActiveEnvironment();
 			return;
 		}
 
-		EnvironmentDerivedMapKey key;
-		key.SourceHandle = cubemapHandle;
-		key.SourceVersion = source->GetVersion();
-		key.Irradiance = s_Data.Settings;
-		if (s_Data.HasActiveKey && key == s_Data.ActiveKey
-			&& s_Data.ActiveIrradiance)
+		const EnvironmentDerivedMapKey diffuseKey = MakeDiffuseKey(
+			cubemapHandle, source->GetVersion(), s_Data.IrradianceSettings);
+		const EnvironmentDerivedMapKey specularKey = MakeSpecularKey(
+			cubemapHandle, source->GetVersion(), s_Data.PrefilterSettings);
+		if (s_Data.HasActiveEnvironment
+			&& diffuseKey == s_Data.ActiveDiffuseKey
+			&& specularKey == s_Data.ActiveSpecularKey
+			&& s_Data.ActiveIrradiance
+			&& s_Data.ActivePrefilter)
 			return;
-
-		const auto cached = s_Data.Cache.find(key);
-		if (cached != s_Data.Cache.end())
-		{
-			s_Data.ActiveKey = key;
-			s_Data.ActiveIrradiance = cached->second.DiffuseIrradiance;
-			s_Data.HasActiveKey = true;
-			++s_Data.Stats.CacheHits;
-			s_Data.Stats.CacheEntries =
-				static_cast<uint32_t>(s_Data.Cache.size());
-			return;
-		}
-
-		++s_Data.Stats.CacheMisses;
-		Ref<TextureCube> irradiance =
-			BuildDiffuseIrradiance(source, s_Data.Settings);
-		if (!irradiance)
-		{
-			s_Data.ActiveIrradiance.reset();
-			s_Data.HasActiveKey = false;
-			return;
-		}
 
 		for (auto iterator = s_Data.Cache.begin();
 			iterator != s_Data.Cache.end();)
 		{
-			if (iterator->first.SourceHandle == cubemapHandle)
+			if (iterator->first.SourceHandle == cubemapHandle
+				&& iterator->first.SourceVersion != source->GetVersion())
 				iterator = s_Data.Cache.erase(iterator);
 			else
 				++iterator;
 		}
-		s_Data.Cache.emplace(key, DerivedEnvironment{ irradiance });
-		s_Data.ActiveKey = key;
-		s_Data.ActiveIrradiance = std::move(irradiance);
-		s_Data.HasActiveKey = true;
-		++s_Data.Stats.GenerationCount;
+
+		auto diffuse = s_Data.Cache.find(diffuseKey);
+		auto specular = s_Data.Cache.find(specularKey);
+		if (diffuse != s_Data.Cache.end())
+		{
+			s_Data.ActiveIrradiance = diffuse->second;
+			++s_Data.Stats.CacheHits;
+		}
+		if (specular != s_Data.Cache.end())
+		{
+			s_Data.ActivePrefilter = specular->second;
+			++s_Data.Stats.CacheHits;
+		}
+
+		const bool needsDiffuse = diffuse == s_Data.Cache.end();
+		const bool needsSpecular = specular == s_Data.Cache.end();
+		s_Data.Stats.CacheMisses +=
+			static_cast<uint64_t>(needsDiffuse)
+			+ static_cast<uint64_t>(needsSpecular);
+		if (needsDiffuse || needsSpecular)
+		{
+			CubemapFloatData sourceData;
+			if (!EnvironmentMapLoader::ReadTextureCube(
+				*source->GetTexture(), sourceData))
+			{
+				GL_CORE_ERROR(
+					"Failed to read source Cubemap for environment lighting.");
+				ResetActiveEnvironment();
+				return;
+			}
+
+			if (needsDiffuse)
+			{
+				s_Data.ActiveIrradiance = BuildDiffuseIrradiance(
+					sourceData, s_Data.IrradianceSettings);
+				if (s_Data.ActiveIrradiance)
+				{
+					s_Data.Cache.emplace(
+						diffuseKey, s_Data.ActiveIrradiance);
+					++s_Data.Stats.GenerationCount;
+					++s_Data.Stats.DiffuseGenerationCount;
+					GL_CORE_INFO(
+						"Diffuse irradiance generated: handle={0}, version={1}, "
+						"resolution={2}, samples={3}",
+						static_cast<uint64_t>(cubemapHandle),
+						source->GetVersion(),
+						s_Data.IrradianceSettings.Resolution,
+						s_Data.IrradianceSettings.SampleCount);
+				}
+			}
+			if (needsSpecular)
+			{
+				s_Data.ActivePrefilter = BuildSpecularPrefilter(
+					sourceData, s_Data.PrefilterSettings);
+				if (s_Data.ActivePrefilter)
+				{
+					s_Data.Cache.emplace(
+						specularKey, s_Data.ActivePrefilter);
+					++s_Data.Stats.GenerationCount;
+					++s_Data.Stats.SpecularGenerationCount;
+					GL_CORE_INFO(
+						"Specular prefilter generated: handle={0}, version={1}, "
+						"resolution={2}, mips={3}, samples={4}",
+						static_cast<uint64_t>(cubemapHandle),
+						source->GetVersion(),
+						s_Data.PrefilterSettings.Resolution,
+						s_Data.ActivePrefilter->GetSpecification().MipLevels,
+						s_Data.PrefilterSettings.SampleCount);
+				}
+			}
+		}
+
+		s_Data.ActiveDiffuseKey = diffuseKey;
+		s_Data.ActiveSpecularKey = specularKey;
+		s_Data.HasActiveEnvironment =
+			s_Data.ActiveIrradiance && s_Data.ActivePrefilter;
 		s_Data.Stats.CacheEntries =
 			static_cast<uint32_t>(s_Data.Cache.size());
-		GL_CORE_INFO(
-			"Diffuse irradiance generated: handle={0}, version={1}, "
-			"resolution={2}, samples={3}",
-			static_cast<uint64_t>(cubemapHandle),
-			source->GetVersion(),
-			s_Data.Settings.Resolution,
-			s_Data.Settings.SampleCount);
 	}
 
 	void EnvironmentLighting::BindForLighting(
 		const Ref<Shader>& shader,
-		uint32_t textureSlot)
+		uint32_t diffuseTextureSlot,
+		uint32_t specularTextureSlot)
 	{
 		if (!shader)
 			return;
-		const bool available =
+
+		const bool diffuseAvailable =
 			s_Data.ActiveIrradiance && s_Data.ActiveIntensity > 0.0f;
+		const bool specularAvailable =
+			s_Data.ActivePrefilter && s_Data.ActiveIntensity > 0.0f;
 		shader->UploadUniformInt(
-			"u_HasDiffuseIrradiance", available ? 1 : 0);
+			"u_HasDiffuseIrradiance", diffuseAvailable ? 1 : 0);
+		shader->UploadUniformInt(
+			"u_DiffuseIrradianceMap",
+			static_cast<int>(diffuseTextureSlot));
+		if (diffuseAvailable)
+			s_Data.ActiveIrradiance->Bind(diffuseTextureSlot);
+
+		shader->UploadUniformInt(
+			"u_HasSpecularPrefilter", specularAvailable ? 1 : 0);
+		shader->UploadUniformInt(
+			"u_SpecularPrefilterMap",
+			static_cast<int>(specularTextureSlot));
+		const float maxLod = specularAvailable
+			? static_cast<float>(
+				s_Data.ActivePrefilter->GetSpecification().MipLevels - 1)
+			: 0.0f;
 		shader->UploadUniformFloat(
-			"u_SkyLightIntensity", available ? s_Data.ActiveIntensity : 0.0f);
-		shader->UploadUniformInt(
-			"u_DiffuseIrradianceMap", static_cast<int>(textureSlot));
-		if (available)
-			s_Data.ActiveIrradiance->Bind(textureSlot);
+			"u_SpecularPrefilterMaxLod", maxLod);
+		if (specularAvailable)
+			s_Data.ActivePrefilter->Bind(specularTextureSlot);
+
+		shader->UploadUniformFloat(
+			"u_SkyLightIntensity",
+			(diffuseAvailable || specularAvailable)
+				? s_Data.ActiveIntensity : 0.0f);
 	}
 
 	void EnvironmentLighting::SetIrradianceSettings(
@@ -210,16 +342,32 @@ namespace gl {
 		DiffuseIrradianceSettings sanitized;
 		sanitized.Resolution = std::clamp(settings.Resolution, 4u, 128u);
 		sanitized.SampleCount = std::clamp(settings.SampleCount, 16u, 4096u);
-		if (sanitized == s_Data.Settings)
+		if (sanitized == s_Data.IrradianceSettings)
 			return;
-		s_Data.Settings = sanitized;
-		s_Data.ActiveIrradiance.reset();
-		s_Data.HasActiveKey = false;
+		s_Data.IrradianceSettings = sanitized;
+		ResetActiveEnvironment();
 	}
 
 	DiffuseIrradianceSettings EnvironmentLighting::GetIrradianceSettings()
 	{
-		return s_Data.Settings;
+		return s_Data.IrradianceSettings;
+	}
+
+	void EnvironmentLighting::SetPrefilterSettings(
+		const SpecularPrefilterSettings& settings)
+	{
+		SpecularPrefilterSettings sanitized;
+		sanitized.Resolution = std::clamp(settings.Resolution, 8u, 256u);
+		sanitized.SampleCount = std::clamp(settings.SampleCount, 16u, 4096u);
+		if (sanitized == s_Data.PrefilterSettings)
+			return;
+		s_Data.PrefilterSettings = sanitized;
+		ResetActiveEnvironment();
+	}
+
+	SpecularPrefilterSettings EnvironmentLighting::GetPrefilterSettings()
+	{
+		return s_Data.PrefilterSettings;
 	}
 
 	EnvironmentLighting::Statistics EnvironmentLighting::GetStatistics()

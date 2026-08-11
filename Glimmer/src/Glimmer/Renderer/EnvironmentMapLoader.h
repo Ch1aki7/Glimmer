@@ -29,6 +29,13 @@ namespace gl {
 		bool IsValid() const;
 	};
 
+	struct CubemapMipChainFloatData
+	{
+		std::vector<CubemapFloatData> Mips;
+
+		bool IsValid() const;
+	};
+
 	class EnvironmentMapLoader
 	{
 	public:
@@ -50,6 +57,11 @@ namespace gl {
 			uint32_t faceSize,
 			uint32_t sampleCount,
 			CubemapFloatData& irradiance);
+		static bool GenerateSpecularPrefilter(
+			const CubemapFloatData& source,
+			uint32_t faceSize,
+			uint32_t sampleCount,
+			CubemapMipChainFloatData& prefilter);
 		static uint32_t SuggestFaceSize(const FloatImageData& source);
 		static glm::vec3 CubemapDirection(
 			TextureCubeFace face,

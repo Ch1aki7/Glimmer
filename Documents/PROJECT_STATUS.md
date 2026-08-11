@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P10 IBL 环境光照
-- 主线状态：进行中（HDR Cubemap、Mip Chain 与 Diffuse Irradiance 已完成；下一步实现 Specular Prefilter）
+- 主线状态：进行中（HDR Cubemap、Diffuse Irradiance 与 Specular Prefilter 已完成；下一步实现 BRDF LUT）
 
 ## 使用与更新规则
 
@@ -74,9 +74,10 @@
 - `EnvironmentMapLoader` 在 Renderer 核心层完成浮点解码、双线性经纬采样和六面转换；输出保持线性高动态范围，不由 EditorLayer 或 OpenGL 后端承担资产算法；
 - `TextureCube` 已支持 `RGBA16F`、显式 Mip 数、逐级上传和完整 `1×1` Mip Chain；既有六面 LDR Cubemap 也会生成 Mip；
 - Cubemap Runtime 暴露来源、HDR 标记和递增版本，Content Browser、Viewport 拖放与 Asset Inspector 已识别 `.hdr`；
-- `EnvironmentLighting` 已实现 `32×32 / 64 samples` 的余弦加权 Diffuse Irradiance；Scene 从第一个启用的 SkyLight 提交 Handle/Intensity，PBRModel 与 Terrain 分别在 slot 8 和 slot 20 采样同一派生环境；
-- 派生缓存键由源 Cubemap Handle、Runtime Version、Irradiance Resolution 与 Sample Count 组成；同一活动键直接复用，Reload 或参数变化才重新生成，同一源的旧版本内存项会被替换；
-- 当前完成的是环境漫反射。下一步实现按 Roughness 分级的 Specular Prefilter，随后接入 BRDF LUT；P10 在这两项和完整验收完成前仍保持“进行中”。
+- `EnvironmentLighting` 已实现 `32×32 / 64 samples` 的余弦加权 Diffuse Irradiance，以及 `64×64 / 64 samples`、完整 7 层 Mip Chain 的 GGX Specular Prefilter；Mip 0 保留清晰环境，后续 Mip 随 Roughness 扩散反射；
+- 派生缓存键统一为源 Cubemap Handle、Runtime Version、派生图类型、Resolution 与 Sample Count；Diffuse 和 Specular 可独立命中或失效，正常帧不重复读回、卷积或上传，同一源的旧 Runtime Version 会被移除；
+- Scene 从第一个启用的 SkyLight 提交 Handle/Intensity；PBRModel 分别使用 slot 8/9，Terrain 使用 slot 20/21 采样 Diffuse/Specular 环境图。当前镜面环境项使用 Fresnel 与预过滤颜色的阶段性近似；下一步接入 Split-Sum BRDF LUT 后再完成 P10；
+- 验证：76 项无窗口回归全部 PASS；GTX 1050 / OpenGL 4.6 下 Diffuse、Specular 各生成一次，PBR Material Lab 6/6，PBRModel、Terrain、Shadow 与地形 Compute Shader 均成功加载；构建产物保留，提交：待提交。
 
 **验收**
 
@@ -417,7 +418,7 @@
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；仍缺少 Chunk/LOD 和固定步长 Runtime Erosion 调度；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
-- SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存和 Model/Terrain 共用的 Diffuse Irradiance；尚无 Specular Prefilter、BRDF LUT、持久化磁盘缓存和环境旋转；
+- SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance 和 GGX Specular Prefilter；尚无 BRDF LUT、持久化磁盘缓存和环境旋转；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 

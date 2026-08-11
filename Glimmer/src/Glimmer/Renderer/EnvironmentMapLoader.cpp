@@ -31,6 +31,35 @@ namespace gl {
 			return static_cast<float>(bits) * 2.3283064365386963e-10f;
 		}
 
+		glm::vec3 ImportanceSampleGGX(
+			float sequenceX,
+			float sequenceY,
+			const glm::vec3& normal,
+			float roughness)
+		{
+			const float alpha = roughness * roughness;
+			const float alphaSquared = alpha * alpha;
+			const float phi = 2.0f * Pi * sequenceX;
+			const float cosTheta = std::sqrt(
+				(1.0f - sequenceY)
+				/ glm::max(
+					1.0f + (alphaSquared - 1.0f) * sequenceY,
+					0.000001f));
+			const float sinTheta = std::sqrt(
+				glm::max(1.0f - cosTheta * cosTheta, 0.0f));
+			const glm::vec3 local(
+				std::cos(phi) * sinTheta,
+				std::sin(phi) * sinTheta,
+				cosTheta);
+			const glm::vec3 up = std::abs(normal.z) < 0.999f
+				? glm::vec3(0.0f, 0.0f, 1.0f)
+				: glm::vec3(1.0f, 0.0f, 0.0f);
+			const glm::vec3 tangent = glm::normalize(glm::cross(up, normal));
+			const glm::vec3 bitangent = glm::cross(normal, tangent);
+			return glm::normalize(
+				tangent * local.x + bitangent * local.y + normal * local.z);
+		}
+
 		glm::vec4 ReadPixel(
 			const FloatImageData& image,
 			uint32_t x,
@@ -171,6 +200,23 @@ namespace gl {
 		for (const auto& face : Faces)
 		{
 			if (face.size() != expected)
+				return false;
+		}
+		return true;
+	}
+
+	bool CubemapMipChainFloatData::IsValid() const
+	{
+		if (Mips.empty() || !Mips.front().IsValid())
+			return false;
+		const uint32_t baseSize = Mips.front().Size;
+		if (Mips.size() != CalculateTextureMipCount(baseSize))
+			return false;
+		for (size_t mip = 0; mip < Mips.size(); ++mip)
+		{
+			if (!Mips[mip].IsValid()
+				|| Mips[mip].Size != std::max(
+					1u, baseSize >> static_cast<uint32_t>(mip)))
 				return false;
 		}
 		return true;
@@ -414,5 +460,93 @@ namespace gl {
 			}
 		}
 		return true;
+	}
+
+	bool EnvironmentMapLoader::GenerateSpecularPrefilter(
+		const CubemapFloatData& source,
+		uint32_t faceSize,
+		uint32_t sampleCount,
+		CubemapMipChainFloatData& prefilter)
+	{
+		prefilter = {};
+		if (!source.IsValid() || faceSize == 0 || sampleCount == 0)
+			return false;
+
+		const uint32_t mipLevels = CalculateTextureMipCount(faceSize);
+		prefilter.Mips.resize(mipLevels);
+		for (uint32_t mip = 0; mip < mipLevels; ++mip)
+		{
+			CubemapFloatData& mipData = prefilter.Mips[mip];
+			mipData.Size = std::max(1u, faceSize >> mip);
+			const float roughness = mipLevels > 1
+				? static_cast<float>(mip) / static_cast<float>(mipLevels - 1)
+				: 0.0f;
+			const size_t componentCount =
+				static_cast<size_t>(mipData.Size) * mipData.Size * 4;
+			for (uint32_t face = 0; face < mipData.Faces.size(); ++face)
+			{
+				auto& destination = mipData.Faces[face];
+				destination.resize(componentCount);
+				for (uint32_t y = 0; y < mipData.Size; ++y)
+				{
+					for (uint32_t x = 0; x < mipData.Size; ++x)
+					{
+						const float coordinateX =
+							2.0f * (static_cast<float>(x) + 0.5f)
+							/ mipData.Size - 1.0f;
+						const float coordinateY =
+							2.0f * (static_cast<float>(y) + 0.5f)
+							/ mipData.Size - 1.0f;
+						const glm::vec3 normal = CubemapDirection(
+							static_cast<TextureCubeFace>(face),
+							coordinateX, coordinateY);
+						glm::vec3 value(0.0f);
+						if (mip == 0)
+						{
+							value = glm::vec3(
+								SampleCubemapUnchecked(source, normal));
+						}
+						else
+						{
+							const glm::vec3 view = normal;
+							float totalWeight = 0.0f;
+							for (uint32_t sample = 0;
+								sample < sampleCount; ++sample)
+							{
+								const float sequenceX =
+									(static_cast<float>(sample) + 0.5f)
+									/ sampleCount;
+								const glm::vec3 halfway = ImportanceSampleGGX(
+									sequenceX, RadicalInverse(sample),
+									normal, roughness);
+								const glm::vec3 light = glm::normalize(
+									2.0f * glm::dot(view, halfway)
+									* halfway - view);
+								const float normalDotLight =
+									glm::max(glm::dot(normal, light), 0.0f);
+								if (normalDotLight <= 0.0f)
+									continue;
+								value += glm::vec3(
+									SampleCubemapUnchecked(source, light))
+									* normalDotLight;
+								totalWeight += normalDotLight;
+							}
+							if (totalWeight > 0.000001f)
+								value /= totalWeight;
+							else
+								value = glm::vec3(
+									SampleCubemapUnchecked(source, normal));
+						}
+						const size_t offset =
+							(static_cast<size_t>(y) * mipData.Size + x) * 4;
+						destination[offset + 0] = value.r;
+						destination[offset + 1] = value.g;
+						destination[offset + 2] = value.b;
+						destination[offset + 3] = 1.0f;
+					}
+				}
+			}
+		}
+		return prefilter.IsValid();
 	}
 }

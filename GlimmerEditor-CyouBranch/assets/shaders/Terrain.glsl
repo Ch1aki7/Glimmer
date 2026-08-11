@@ -118,6 +118,9 @@ uniform float u_ShadowBias;
 uniform float u_ShadowTexelSize;
 uniform samplerCube u_DiffuseIrradianceMap;
 uniform int u_HasDiffuseIrradiance;
+uniform samplerCube u_SpecularPrefilterMap;
+uniform int u_HasSpecularPrefilter;
+uniform float u_SpecularPrefilterMaxLod;
 uniform float u_SkyLightIntensity;
 
 const float PI = 3.14159265359;
@@ -381,13 +384,14 @@ void main()
 	}
 	vec3 normal = normalize(detailNormal);
 	vec3 viewDirection = normalize(u_CameraPos - v_WorldPos);
+	vec3 reflectance = mix(vec3(0.04), albedo, metallic);
+	vec3 environmentFresnel = FresnelSchlickRoughness(
+		max(dot(normal, viewDirection), 0.0), reflectance, roughness);
 	vec3 result;
 	if (u_HasDiffuseIrradiance != 0)
 	{
-		vec3 reflectance = mix(vec3(0.04), albedo, metallic);
-		vec3 fresnel = FresnelSchlickRoughness(
-			max(dot(normal, viewDirection), 0.0), reflectance, roughness);
-		vec3 diffuseWeight = (vec3(1.0) - fresnel) * (1.0 - metallic);
+		vec3 diffuseWeight =
+			(vec3(1.0) - environmentFresnel) * (1.0 - metallic);
 		vec3 irradiance = texture(u_DiffuseIrradianceMap, normal).rgb
 			* max(u_SkyLightIntensity, 0.0);
 		result = diffuseWeight * albedo * irradiance / PI * ao;
@@ -396,6 +400,16 @@ void main()
 	{
 		result = albedo * u_AmbientColorIntensity.rgb
 			* u_AmbientColorIntensity.a * ao;
+	}
+	if (u_HasSpecularPrefilter != 0)
+	{
+		vec3 reflection = reflect(-viewDirection, normal);
+		vec3 prefiltered = textureLod(
+			u_SpecularPrefilterMap,
+			reflection,
+			roughness * max(u_SpecularPrefilterMaxLod, 0.0)).rgb;
+		result += prefiltered * environmentFresnel
+			* max(u_SkyLightIntensity, 0.0) * ao;
 	}
 	if (u_DirectionalDirectionIntensity.w > 0.0)
 	{

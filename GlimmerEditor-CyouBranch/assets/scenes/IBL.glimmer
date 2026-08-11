@@ -1,0 +1,119 @@
+Scene: Untitled
+Version: 6
+Entities:
+  - Entity: 7834017280709574353
+    Components:
+      TagComponent: Sun
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [-50, 30, 0]
+        Scale: [1, 1, 1]
+      DirectionalLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 1
+        AmbientIntensity: 0.05
+        Enabled: true
+        CastShadows: true
+        ShadowMapResolution: 2048
+        ShadowCascadeCount: 4
+        ShadowDistance: 80
+        ShadowBias: 0.0015
+        ShadowSplitLambda: 0.65
+        ShadowCascadeBlend: 0.1
+  - Entity: 9769244849998984590
+    Components:
+      TagComponent: Point Light
+      TransformComponent:
+        Translation: [0, 12, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      PointLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 80
+        Range: 40
+        Enabled: true
+  - Entity: 16649961512409331976
+    Components:
+      TagComponent: Sky Light
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      SkyLightComponent:
+        Cubemap: 1626385373724971314
+        Intensity: 1
+        Enabled: true
+  - Entity: 480778866970688348
+    Components:
+      TagComponent: Terrain
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      TerrainComponent:
+        Procedural: true
+        Preset: Custom
+        HeightMapResolution: 512
+        MeshResolution: 256
+        HeightScale: 80.1
+        HeightMap: 0
+        RenderShader: 13614654561704837220
+        GenerationShader: 7633283146183385932
+        ErosionShader: 7633283146183385933
+        DerivationShader: 7633283146183385934
+        TerrainMaterial: 0
+        Noise:
+          Seed: 11
+          Octaves: 7
+          Frequency: 2.4
+          Lacunarity: 2
+          Persistence: 0.48
+          DomainWarp: 1.33
+          RidgeStrength: 1
+          ContinentScale: 0.3
+          ErosionStrength: 0
+          DetailStrength: 0.08
+          MountainDirection: 1.2566371
+          MountainWidth: 0.24
+          PlateauStrength: 0
+          GeologyBlend: 0.542
+          GeologyScale: 3.4
+          RiftStrength: 0.062
+          TrendStrength: 0.5
+          Offset: [0, 0]
+        Authoring:
+          EnableThermalErosion: true
+          ThermalIterations: 30
+          Talus: 0.01
+          ThermalStrength: 0.3
+      SkyLightComponent:
+        Cubemap: 1626385373724971314
+        Intensity: 1
+        Enabled: true
+  - Entity: 14730394099596409345
+    Components:
+      TagComponent: Sphere
+      TransformComponent:
+        Translation: [8.864, 55.51503, -4.825]
+        Rotation: [0, 0, 0]
+        Scale: [7.319999, 7.319999, 7.319999]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 17
+          BaseColor: [0.6246154, 0.6246154, 0.6246154, 1]
+          BaseColorTexture: 0
+          NormalTexture: 0
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0.673
+          Roughness: 0.114
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5

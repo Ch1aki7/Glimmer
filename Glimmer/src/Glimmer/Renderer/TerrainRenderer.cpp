@@ -272,7 +272,7 @@ namespace gl {
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
 		ShadowRenderer::BindForLighting(shader, 16);
-		EnvironmentLighting::BindForLighting(shader, 20);
+		EnvironmentLighting::BindForLighting(shader, 20, 21);
 		const bool hasDerivedMaps = runtime.NormalSlopeMap
 			&& runtime.AnalysisMap && runtime.MaterialWeightMap;
 		shader->UploadUniformInt("u_HasDerivedMaps", hasDerivedMaps ? 1 : 0);

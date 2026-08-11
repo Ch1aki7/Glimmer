@@ -697,22 +697,89 @@ namespace {
 		context.Check(constantIrradianceMatches,
 			"cosine-weighted diffuse convolution integrates a constant environment");
 
+		gl::CubemapMipChainFloatData constantPrefilter;
+		const bool generatedConstantPrefilter =
+			gl::EnvironmentMapLoader::GenerateSpecularPrefilter(
+				constantEnvironment, 8, 64, constantPrefilter);
+		bool constantPrefilterMatches =
+			generatedConstantPrefilter && constantPrefilter.IsValid()
+			&& constantPrefilter.Mips.size() == 4;
+		for (const auto& mip : constantPrefilter.Mips)
+		{
+			for (const auto& face : mip.Faces)
+			{
+				for (size_t offset = 0;
+					constantPrefilterMatches && offset < face.size();
+					offset += 4)
+				{
+					constantPrefilterMatches =
+						std::abs(face[offset + 0] - 2.0f) < 0.002f
+						&& std::abs(face[offset + 1] - 0.5f) < 0.002f
+						&& std::abs(face[offset + 2] - 0.25f) < 0.002f
+						&& Near(face[offset + 3], 1.0f);
+				}
+			}
+		}
+		context.Check(constantPrefilterMatches,
+			"GGX prefilter preserves constant radiance across its complete mip chain");
+
+		gl::CubemapFloatData focusedEnvironment;
+		focusedEnvironment.Size = 8;
+		for (uint32_t faceIndex = 0;
+			faceIndex < focusedEnvironment.Faces.size(); ++faceIndex)
+		{
+			auto& face = focusedEnvironment.Faces[faceIndex];
+			face.resize(8 * 8 * 4);
+			for (size_t offset = 0; offset < face.size(); offset += 4)
+			{
+				const float radiance = faceIndex == 0 ? 1.0f : 0.0f;
+				face[offset + 0] = radiance;
+				face[offset + 1] = radiance;
+				face[offset + 2] = radiance;
+				face[offset + 3] = 1.0f;
+			}
+		}
+		gl::CubemapMipChainFloatData focusedPrefilter;
+		const bool generatedFocusedPrefilter =
+			gl::EnvironmentMapLoader::GenerateSpecularPrefilter(
+				focusedEnvironment, 8, 128, focusedPrefilter);
+		const auto averageRed = [](const gl::CubemapFloatData& mip)
+		{
+			const auto& face = mip.Faces[0];
+			float total = 0.0f;
+			for (size_t offset = 0; offset < face.size(); offset += 4)
+				total += face[offset];
+			return total / static_cast<float>(face.size() / 4);
+		};
+		const bool roughnessBlursFocusedRadiance =
+			generatedFocusedPrefilter && focusedPrefilter.IsValid()
+			&& averageRed(focusedPrefilter.Mips.front()) > 0.95f
+			&& averageRed(focusedPrefilter.Mips.back()) > 0.0f
+			&& averageRed(focusedPrefilter.Mips.back()) < 0.85f;
+		context.Check(roughnessBlursFocusedRadiance,
+			"higher prefilter mip levels broaden a focused environment reflection");
+
 		gl::EnvironmentDerivedMapKey cacheKey;
 		cacheKey.SourceHandle = gl::AssetHandle(42);
 		cacheKey.SourceVersion = 3;
-		cacheKey.Irradiance = { 32, 256 };
+		cacheKey.Type = gl::EnvironmentDerivedMapType::DiffuseIrradiance;
+		cacheKey.Resolution = 32;
+		cacheKey.SampleCount = 64;
 		gl::EnvironmentDerivedMapKey sameCacheKey = cacheKey;
 		gl::EnvironmentDerivedMapKey reloadedKey = cacheKey;
 		++reloadedKey.SourceVersion;
 		gl::EnvironmentDerivedMapKey parameterKey = cacheKey;
-		parameterKey.Irradiance.SampleCount = 512;
+		parameterKey.SampleCount = 128;
+		gl::EnvironmentDerivedMapKey specularKey = cacheKey;
+		specularKey.Type = gl::EnvironmentDerivedMapType::SpecularPrefilter;
 		const gl::EnvironmentDerivedMapKeyHash keyHash;
 		context.Check(cacheKey == sameCacheKey
 			&& keyHash(cacheKey) == keyHash(sameCacheKey),
 			"identical environment source versions and parameters share a cache key");
 		context.Check(!(cacheKey == reloadedKey)
-			&& !(cacheKey == parameterKey),
-			"environment reloads and generation settings invalidate derived cache keys");
+			&& !(cacheKey == parameterKey)
+			&& !(cacheKey == specularKey),
+			"map type, environment reloads and settings isolate derived cache keys");
 
 		gl::FloatImageData directionalSource;
 		directionalSource.Width = 64;

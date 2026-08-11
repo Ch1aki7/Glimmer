@@ -419,7 +419,7 @@ namespace gl {
 				item.ShaderResource->UploadUniformInt("u_AOTexture", 2);
 				item.ShaderResource->UploadUniformInt("u_EmissiveTexture", 3);
 				ShadowRenderer::BindForLighting(item.ShaderResource, 4);
-				EnvironmentLighting::BindForLighting(item.ShaderResource, 8);
+				EnvironmentLighting::BindForLighting(item.ShaderResource, 8, 9);
 				boundShader = item.ShaderResource;
 				s_Data.Stats.ShaderBinds++;
 			}
@@ -539,7 +539,7 @@ namespace gl {
 				item.ShaderResource->UploadUniformInt("u_AOTexture", 2);
 				item.ShaderResource->UploadUniformInt("u_EmissiveTexture", 3);
 				ShadowRenderer::BindForLighting(item.ShaderResource, 4);
-				EnvironmentLighting::BindForLighting(item.ShaderResource, 8);
+				EnvironmentLighting::BindForLighting(item.ShaderResource, 8, 9);
 				boundShader = item.ShaderResource;
 				s_Data.Stats.ShaderBinds++;
 			}

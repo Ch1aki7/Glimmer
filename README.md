@@ -12935,7 +12935,7 @@ Cubemap 成功加载后记录实际源路径、是否 HDR 和递增 Runtime Vers
 Source Cubemap Handle + Runtime Version + Generation Parameters
 ```
 
-这样 HDR 文件热重载或生成参数变化时，只失效对应 Irradiance、Prefilter 和 BRDF LUT，正常帧不会重复卷积。Diffuse Irradiance 已在下一章节完成；当前还需继续实现 Specular Prefilter 和 BRDF LUT。
+这样 HDR 文件热重载或生成参数变化时，只失效对应 Irradiance、Prefilter 和 BRDF LUT，正常帧不会重复卷积。Diffuse Irradiance 与 Specular Prefilter 已在后续章节完成；当前还需继续实现 BRDF LUT。
 
 ### 验证
 
@@ -12980,7 +12980,7 @@ Diffuse IBL = (1 - F) × (1 - metallic) × albedo × irradiance / π
               × AO × SkyLightIntensity
 ```
 
-没有有效 SkyLight/Irradiance 时，Shader 保留原方向光 Ambient 回退。金属材质的 `(1-metallic)` 接近零，因此在 Specular Prefilter 尚未完成时关闭直接光会偏暗，这是当前阶段的预期限制。
+没有有效 SkyLight/Irradiance 时，Shader 保留原方向光 Ambient 回退。金属材质所需的环境镜面反射已由下一章节的 Specular Prefilter 补入；在 BRDF LUT 完成前，其能量与掠射角响应仍是阶段性近似。
 
 ### 派生缓存和失效
 
@@ -13010,6 +13010,67 @@ Cubemap AssetHandle
 - NVIDIA GeForce GTX 1050 / OpenGL 4.6 下，默认 `32×32 / 64 samples` Irradiance 在相邻日志秒内完成且只记录一次生成；
 - PBR Material Lab 成功渲染 6/6 模型，PBRModel、Terrain、ShadowDepth 和既有 Compute Shader 均编译通过；
 - 未删除 `bin`、`bin-int`，构建产物保留。
+
+## Specular Prefilter 粗糙度环境反射
+
+P10 第三阶段加入了按粗糙度分级的环境镜面反射。模型和地形不再直接从可见 Skybox 的普通 Mip 猜测反射，而是从同一源 Cubemap 生成经过 GGX 卷积的专用 Prefilter Mip Chain。
+
+### 生成与渲染链路
+
+```text
+SkyLight Cubemap
+  → EnvironmentLighting 检查独立 Specular 缓存键
+  → 读取一次线性浮点六面源数据
+  → EnvironmentMapLoader：Hammersley + GGX 重要性采样
+  → 64×64 RGBA16F Specular Prefilter，共 7 层 Mip
+  ├─ Renderer3D / PBRModel：slot 9
+  └─ TerrainRenderer / Terrain：slot 21
+
+Fragment Shader
+  → reflect(-V, N)
+  → textureLod(prefilter, reflection, roughness × maxLod)
+  → Fresnel × AO × SkyLightIntensity
+```
+
+Mip 0 直接采样源环境，保留低 Roughness 材质需要的清晰反射；Mip 1～6 逐级提高 GGX Roughness。材质 Roughness 越大，Shader 选择的 LOD 越高，太阳等集中高亮会扩散为更宽、更柔和的反射。派生链是专用卷积结果，不等同于 Skybox 的普通颜色下采样 Mip。
+
+### 缓存边界
+
+Diffuse 与 Specular 共用统一键结构，但由派生图类型隔离：
+
+```text
+Cubemap AssetHandle
++ Cubemap Runtime Version
++ Derived Map Type
++ Resolution
++ Sample Count
+```
+
+因此修改 Irradiance 参数不会误命中 Prefilter，修改 Prefilter 参数也不会强制重建仍然有效的 Irradiance。只有任一派生图缺失时才读回源 Cubemap，单次更新可复用这份 CPU 浮点数据完成所需生成；正常帧只绑定缓存纹理。同一 Handle Reload 后，旧 Runtime Version 项会被移除。
+
+### 当前 Split-Sum 边界
+
+当前 Shader 已用反射方向、Roughness LOD 和 Fresnel 消费 Prefilter，金属与光滑表面可以看到环境镜面项；但尚未乘以预积分的 BRDF LUT。也就是说，模糊层级和方向已经正确接入，能量补偿、视角相关的 scale/bias 与掠射角响应仍是近似值。下一阶段应生成二维 BRDF LUT，并按标准 Split-Sum 公式完成：
+
+```text
+Specular IBL = PrefilteredEnvironment(R, roughness)
+             × (F0 × BRDF.x + BRDF.y)
+```
+
+### 如何查看效果
+
+1. 给场景 Sky Light 分配含明显太阳或高亮区域的 `.hdr`；
+2. 使用 PBRModel 或观察 Terrain，保持相机能看到环境高亮的反射方向；
+3. 将 Metallic 调高以弱化漫反射，再从低到高调整 Roughness；
+4. 低 Roughness 应看到较集中反射，高 Roughness 应平滑扩散；
+5. 同一环境持续运行时日志只应出现一次 Diffuse 和一次 Specular 生成记录。
+
+### 验证
+
+- 76 项无窗口回归全部 PASS；新增测试验证常量 HDR 辐射在完整 Prefilter Mip Chain 中保持一致，并验证高 Roughness Mip 会扩散只存在于单面的集中环境信号；
+- NVIDIA GeForce GTX 1050 / OpenGL 4.6 下生成 `64×64`、7 层、每像素 64 样本的 Prefilter，运行日志只记录一次生成；
+- PBR Material Lab 渲染 6/6，`PBRModel`、`Terrain`、`ShadowDepth` 和三条地形 Compute Shader 均成功加载；
+- 回归测试项目使用非增量链接重建，修复此前损坏的增量链接测试 EXE；未删除 `bin`、`bin-int`，编辑器构建产物保留。
 
 ## KB
 
