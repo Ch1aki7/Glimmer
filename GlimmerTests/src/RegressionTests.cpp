@@ -13,6 +13,7 @@
 #include "Glimmer/Terrain/Terrain.h"
 #include "Glimmer/Terrain/TerrainChunkLayout.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
+#include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
 #include "Editor/EditorCommand.h"
 
 #include <cmath>
@@ -672,6 +673,93 @@ namespace {
 			"terrain chunk LOD stabilization limits adjacent chunks to one level");
 	}
 
+	void TestTerrainHydrologyRuntime(TestContext& context)
+	{
+		gl::TerrainHydrologySpecification specification;
+		specification.Width = 3;
+		specification.Height = 1;
+		specification.CellSize = 1.0f;
+		specification.FixedTimeStep = 0.01f;
+		specification.MaxSubsteps = 4;
+		specification.FluxDamping = 0.98f;
+
+		gl::TerrainHydrologyRuntime pausedRuntime(
+			specification, { 0.0f, 1.0f, 0.0f });
+		pausedRuntime.SetWaterDepth({ 0.0f, 1.0f, 0.0f });
+		context.Check(pausedRuntime.Advance(0.2f) == 0
+			&& pausedRuntime.GetStatistics().StepCount == 0,
+			"paused hydrology does not advance with editor frame time");
+		context.Check(pausedRuntime.SingleStep()
+			&& pausedRuntime.GetStatistics().StepCount == 1
+			&& pausedRuntime.GetState().Water[1] < 1.0f
+			&& pausedRuntime.GetState().Water[0] > 0.0f
+			&& pausedRuntime.GetState().Water[2] > 0.0f,
+			"single step moves water from higher surface to lower neighbors");
+		const auto& singleStepStats = pausedRuntime.GetStatistics();
+		context.Check(singleStepStats.Finite
+			&& singleStepStats.MinimumWaterDepth >= 0.0f
+			&& std::abs(singleStepStats.MassError) < 1.0e-5,
+			"closed hydrology step remains finite non-negative and conservative");
+		pausedRuntime.Reset();
+		context.Check(pausedRuntime.GetStatistics().StepCount == 0
+			&& Near(pausedRuntime.GetState().Water[1], 1.0f)
+			&& Near(pausedRuntime.GetState().Water[0], 0.0f),
+			"hydrology reset restores the initial water snapshot");
+
+		gl::TerrainHydrologyRuntime largeFrames(
+			specification, { 0.0f, 1.0f, 0.0f });
+		gl::TerrainHydrologyRuntime smallFrames(
+			specification, { 0.0f, 1.0f, 0.0f });
+		largeFrames.SetWaterDepth({ 0.0f, 1.0f, 0.0f });
+		smallFrames.SetWaterDepth({ 0.0f, 1.0f, 0.0f });
+		largeFrames.Play();
+		smallFrames.Play();
+		for (uint32_t frame = 0; frame < 25; ++frame)
+			largeFrames.Advance(0.04f);
+		for (uint32_t frame = 0; frame < 100; ++frame)
+			smallFrames.Advance(0.01f);
+		bool partitionIndependent =
+			largeFrames.GetStatistics().StepCount
+				== smallFrames.GetStatistics().StepCount;
+		for (size_t index = 0;
+			index < largeFrames.GetState().Water.size(); ++index)
+		{
+			partitionIndependent &= Near(
+				largeFrames.GetState().Water[index],
+				smallFrames.GetState().Water[index], 1.0e-6f)
+				&& Near(largeFrames.GetState().Velocity[index],
+					smallFrames.GetState().Velocity[index]);
+		}
+		context.Check(partitionIndependent,
+			"fixed hydrology result is independent of frame partitioning");
+
+		gl::TerrainHydrologySpecification catchUpSpecification = specification;
+		catchUpSpecification.MaxSubsteps = 2;
+		gl::TerrainHydrologyRuntime catchUpRuntime(
+			catchUpSpecification, { 0.0f, 0.0f, 0.0f });
+		catchUpRuntime.Play();
+		context.Check(catchUpRuntime.Advance(0.10f) == 2
+			&& catchUpRuntime.GetStatistics().DroppedTime > 0.07,
+			"fixed hydrology caps catch-up work and reports dropped time");
+
+		gl::TerrainHydrologySpecification rainSpecification = specification;
+		rainSpecification.RainfallRate = 0.2f;
+		gl::TerrainHydrologyRuntime basinRuntime(
+			rainSpecification, { 1.0f, 0.0f, 1.0f });
+		basinRuntime.Play();
+		for (uint32_t frame = 0; frame < 100; ++frame)
+			basinRuntime.Advance(0.01f);
+		const auto& basinWater = basinRuntime.GetState().Water;
+		const auto& basinStats = basinRuntime.GetStatistics();
+		context.Check(basinWater[1] > basinWater[0]
+			&& basinWater[1] > basinWater[2],
+			"lower terrain cell accumulates rainfall as a basin");
+		context.Check(basinStats.Finite
+			&& basinStats.MinimumWaterDepth >= 0.0f
+			&& std::abs(basinStats.MassError) < 1.0e-4,
+			"rainfall volume is included in hydrology mass accounting");
+	}
+
 	void TestShadowFrustumCulling(TestContext& context)
 	{
 		const glm::mat4 identity(1.0f);
@@ -1032,6 +1120,7 @@ int main(int argc, char** argv)
 	TestTerrainCopyAndTransactions(context);
 	TestTerrainPresets(context);
 	TestTerrainChunkLayout(context);
+	TestTerrainHydrologyRuntime(context);
 	TestTerrainCameraFrustumCulling(context);
 	TestShadowFrustumCulling(context);
 	TestEnvironmentMapFoundation(context, temporaryDirectory.Path());

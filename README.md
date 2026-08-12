@@ -13270,6 +13270,39 @@ EditorLayer
 - 88 项无窗口回归全部 PASS；
 - 最终编辑器以项目工作目录和 `GLIMMER_DISTANCE_FOG_VISUALIZE=1` 启动并持续运行 15 秒，无提前退出；现有 Settings 操作、Viewport 输出和 Scene EntityID 拾取边界保持不变。
 
+## 固定步长水文 CPU 参考模型
+
+P13A 首先建立不依赖窗口和 GPU 的 `TerrainHydrologyRuntime`，用小网格固定算法契约，再迁移到 Compute Shader。它与有限次数的 Authoring Thermal Erosion 完全分离：Height 是水文初始化时的只读快照，Water、四向 Flux 和 Velocity 是独立运行时字段，不会写入 Scene YAML。
+
+```text
+旧 Height + 旧 Water + 旧 Flux
+  → 四邻域水面高差
+  → Left / Right / Down / Up Flux
+  → 按当前可用水量缩放总出流
+  → 汇总邻居入流与自身出流
+  → 新 Water + Velocity
+  → 固定步完成
+```
+
+首版使用封闭边界，边缘不会把水排出网格。每格的总出流如果超过当前水量在本步内能提供的体积，会统一缩放四个方向，因此 Water 不会因为一次过大的高差而变为负数。降雨以 `深度/秒` 加入每个单元，并计入质量统计。
+
+### 固定步长操作语义
+
+- `Play`：允许 `Advance(frameDelta)` 将帧时间累积并执行固定步；
+- `Pause`：帧时间不推进模拟；
+- `SingleStep`：只在暂停状态执行一个固定步；
+- `Reset`：恢复初始化 Height/Water，清空 Flux、Velocity、累计时间和统计；
+- `MaxSubsteps`：限制单帧追赶次数，超出的完整步时间记入 `DroppedTime`，避免卡顿后发生“螺旋式补帧”。
+
+统计包含 Step Count、Simulated Time、Accumulator、Dropped Time、Water/Rainfall Volume、Mass Error、最小/最大水深、最大速度和有限性。当前阶段只有代码接口和无窗口测试，没有新增编辑器操作；下一阶段才会接入 GPU Water/Flux/Velocity Ping-Pong、Terrain Height 初始化和 DebugPanel 控制。
+
+### 验证
+
+- 相同 1 秒模拟分别以 `0.04×25` 与 `0.01×100` 帧输入，执行相同固定步数并得到一致 Water/Velocity；
+- 封闭边界无降雨时质量误差小于 `1e-5`，水深非负且所有水量/速度有限；
+- 三格山峰测试中水从高水面流向左右低处，盆地测试中低格蓄水多于两侧高格；
+- 8 条新增水文断言与原有测试合计 96 项具体无窗口断言全部 PASS；VS2026 `Debug | x64` 整解决方案构建成功。
+
 ## KB
 
 ### 为什么不用动态库？

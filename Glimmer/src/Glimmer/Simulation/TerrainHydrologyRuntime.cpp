@@ -1,0 +1,248 @@
+#include "glpch.h"
+#include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+
+namespace gl {
+
+	TerrainHydrologyRuntime::TerrainHydrologyRuntime(
+		const TerrainHydrologySpecification& specification,
+		const std::vector<float>& heightField)
+		: m_Specification(specification), m_InitialHeight(heightField)
+	{
+		if (specification.Width == 0 || specification.Height == 0
+			|| specification.CellSize <= 0.0f
+			|| specification.FixedTimeStep <= 0.0f
+			|| specification.MaxSubsteps == 0
+			|| specification.Gravity < 0.0f
+			|| !std::isfinite(specification.CellSize)
+			|| !std::isfinite(specification.FixedTimeStep)
+			|| !std::isfinite(specification.Gravity))
+		{
+			throw std::invalid_argument(
+				"Terrain hydrology specification is invalid.");
+		}
+
+		const size_t cellCount = static_cast<size_t>(specification.Width)
+			* specification.Height;
+		if (heightField.size() != cellCount
+			|| !std::all_of(heightField.begin(), heightField.end(),
+				[](float value) { return std::isfinite(value); }))
+		{
+			throw std::invalid_argument(
+				"Terrain hydrology height field is invalid.");
+		}
+
+		m_InitialWater.assign(cellCount, 0.0f);
+		Reset();
+	}
+
+	uint32_t TerrainHydrologyRuntime::Advance(float frameDeltaSeconds)
+	{
+		if (!m_Playing || !std::isfinite(frameDeltaSeconds)
+			|| frameDeltaSeconds <= 0.0f)
+			return 0;
+
+		m_Accumulator += static_cast<double>(frameDeltaSeconds);
+		const double fixedTimeStep = m_Specification.FixedTimeStep;
+		uint32_t substeps = 0;
+		while (m_Accumulator + std::numeric_limits<double>::epsilon()
+			>= fixedTimeStep
+			&& substeps < m_Specification.MaxSubsteps)
+		{
+			Step(m_Specification.FixedTimeStep);
+			m_Accumulator -= fixedTimeStep;
+			++substeps;
+		}
+
+		if (substeps == m_Specification.MaxSubsteps
+			&& m_Accumulator >= fixedTimeStep)
+		{
+			const double retained = std::fmod(m_Accumulator, fixedTimeStep);
+			m_Statistics.DroppedTime += m_Accumulator - retained;
+			m_Accumulator = retained;
+		}
+		m_Statistics.Accumulator = m_Accumulator;
+		return substeps;
+	}
+
+	bool TerrainHydrologyRuntime::SingleStep()
+	{
+		if (m_Playing)
+			return false;
+		Step(m_Specification.FixedTimeStep);
+		return true;
+	}
+
+	void TerrainHydrologyRuntime::Reset()
+	{
+		m_Playing = false;
+		m_Accumulator = 0.0;
+		m_State.Height = m_InitialHeight;
+		m_State.Water = m_InitialWater;
+		m_State.Flux.assign(m_State.Height.size(), glm::vec4(0.0f));
+		m_State.Velocity.assign(m_State.Height.size(), glm::vec2(0.0f));
+		m_Statistics = {};
+		UpdateStatistics();
+		m_Statistics.InitialWaterVolume = m_Statistics.WaterVolume;
+	}
+
+	void TerrainHydrologyRuntime::SetWaterDepth(
+		const std::vector<float>& waterDepth)
+	{
+		if (waterDepth.size() != m_State.Water.size()
+			|| !std::all_of(waterDepth.begin(), waterDepth.end(),
+				[](float value) {
+					return std::isfinite(value) && value >= 0.0f;
+				}))
+		{
+			throw std::invalid_argument(
+				"Terrain hydrology water field is invalid.");
+		}
+
+		m_InitialWater = waterDepth;
+		Reset();
+	}
+
+	void TerrainHydrologyRuntime::SetRainfallRate(float rainfallRate)
+	{
+		m_Specification.RainfallRate =
+			std::isfinite(rainfallRate) ? std::max(rainfallRate, 0.0f) : 0.0f;
+	}
+
+	void TerrainHydrologyRuntime::Step(float deltaSeconds)
+	{
+		const uint32_t width = m_Specification.Width;
+		const uint32_t height = m_Specification.Height;
+		const float cellSize = m_Specification.CellSize;
+		const float cellArea = cellSize * cellSize;
+		const float gravityScale = m_Specification.Gravity
+			* deltaSeconds / cellSize;
+		const float damping = glm::clamp(
+			m_Specification.FluxDamping, 0.0f, 1.0f);
+		const float rainfallDepth = std::max(
+			m_Specification.RainfallRate, 0.0f) * deltaSeconds;
+
+		std::vector<glm::vec4> nextFlux(m_State.Flux.size(), glm::vec4(0.0f));
+		for (uint32_t y = 0; y < height; ++y)
+		{
+			for (uint32_t x = 0; x < width; ++x)
+			{
+				const size_t index = Index(x, y);
+				const float surface = m_State.Height[index]
+					+ m_State.Water[index] + rainfallDepth;
+				glm::vec4 flux(0.0f);
+				auto solveDirection = [&](int component, uint32_t nx, uint32_t ny) {
+					const size_t neighbour = Index(nx, ny);
+					const float neighbourSurface = m_State.Height[neighbour]
+						+ m_State.Water[neighbour] + rainfallDepth;
+					flux[component] = std::max(0.0f,
+						m_State.Flux[index][component] * damping
+						+ gravityScale * (surface - neighbourSurface));
+				};
+				if (x > 0) solveDirection(0, x - 1, y);
+				if (x + 1 < width) solveDirection(1, x + 1, y);
+				if (y > 0) solveDirection(2, x, y - 1);
+				if (y + 1 < height) solveDirection(3, x, y + 1);
+
+				const float outgoing = flux.x + flux.y + flux.z + flux.w;
+				if (outgoing > 0.0f)
+				{
+					const float availableVolume =
+						(m_State.Water[index] + rainfallDepth) * cellArea;
+					const float scale = std::min(
+						1.0f, availableVolume / (outgoing * deltaSeconds));
+					flux *= scale;
+				}
+				nextFlux[index] = flux;
+			}
+		}
+
+		std::vector<float> nextWater(m_State.Water.size(), 0.0f);
+		for (uint32_t y = 0; y < height; ++y)
+		{
+			for (uint32_t x = 0; x < width; ++x)
+			{
+				const size_t index = Index(x, y);
+				const glm::vec4 outgoingFlux = nextFlux[index];
+				const float outgoing = outgoingFlux.x + outgoingFlux.y
+					+ outgoingFlux.z + outgoingFlux.w;
+				float incoming = 0.0f;
+				if (x > 0) incoming += nextFlux[Index(x - 1, y)].y;
+				if (x + 1 < width) incoming += nextFlux[Index(x + 1, y)].x;
+				if (y > 0) incoming += nextFlux[Index(x, y - 1)].w;
+				if (y + 1 < height) incoming += nextFlux[Index(x, y + 1)].z;
+
+				const float water = m_State.Water[index] + rainfallDepth
+					+ (incoming - outgoing) * deltaSeconds / cellArea;
+				nextWater[index] = std::max(water, 0.0f);
+				const float averageDepth = std::max(
+					0.5f * (m_State.Water[index] + nextWater[index]), 1.0e-6f);
+				const float incomingFromLeft = x > 0
+					? nextFlux[Index(x - 1, y)].y : 0.0f;
+				const float incomingFromRight = x + 1 < width
+					? nextFlux[Index(x + 1, y)].x : 0.0f;
+				const float incomingFromDown = y > 0
+					? nextFlux[Index(x, y - 1)].w : 0.0f;
+				const float incomingFromUp = y + 1 < height
+					? nextFlux[Index(x, y + 1)].z : 0.0f;
+				m_State.Velocity[index] = {
+					0.5f * (outgoingFlux.y - incomingFromRight
+						+ incomingFromLeft - outgoingFlux.x)
+						/ (averageDepth * cellSize),
+					0.5f * (outgoingFlux.w - incomingFromUp
+						+ incomingFromDown - outgoingFlux.z)
+						/ (averageDepth * cellSize)
+				};
+			}
+		}
+
+		m_State.Flux = std::move(nextFlux);
+		m_State.Water = std::move(nextWater);
+		++m_Statistics.StepCount;
+		m_Statistics.SimulatedTime += deltaSeconds;
+		m_Statistics.RainfallVolume += static_cast<double>(rainfallDepth)
+			* cellArea * m_State.Water.size();
+		UpdateStatistics();
+	}
+
+	void TerrainHydrologyRuntime::UpdateStatistics()
+	{
+		const double cellArea = static_cast<double>(m_Specification.CellSize)
+			* m_Specification.CellSize;
+		double waterVolume = 0.0;
+		float minimumWater = std::numeric_limits<float>::max();
+		float maximumWater = 0.0f;
+		float maximumSpeed = 0.0f;
+		bool finite = true;
+		for (size_t index = 0; index < m_State.Water.size(); ++index)
+		{
+			const float water = m_State.Water[index];
+			const float speed = glm::length(m_State.Velocity[index]);
+			finite &= std::isfinite(water) && water >= 0.0f
+				&& std::isfinite(speed);
+			waterVolume += static_cast<double>(water) * cellArea;
+			minimumWater = std::min(minimumWater, water);
+			maximumWater = std::max(maximumWater, water);
+			maximumSpeed = std::max(maximumSpeed, speed);
+		}
+		m_Statistics.WaterVolume = waterVolume;
+		m_Statistics.MassError = waterVolume
+			- m_Statistics.InitialWaterVolume - m_Statistics.RainfallVolume;
+		m_Statistics.MinimumWaterDepth = m_State.Water.empty()
+			? 0.0f : minimumWater;
+		m_Statistics.MaximumWaterDepth = maximumWater;
+		m_Statistics.MaximumSpeed = maximumSpeed;
+		m_Statistics.Finite = finite;
+		m_Statistics.Accumulator = m_Accumulator;
+	}
+
+	size_t TerrainHydrologyRuntime::Index(uint32_t x, uint32_t y) const
+	{
+		return static_cast<size_t>(y) * m_Specification.Width + x;
+	}
+
+}

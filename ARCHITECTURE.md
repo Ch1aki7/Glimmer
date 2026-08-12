@@ -237,6 +237,8 @@ Color Pass 和 ShadowRenderer 都使用同一个 `TerrainChunkLayout`，按每�
 
 `tmp/tmpTerrain` 的水流、泥沙、蒸发和气象 HLSL 仅作为后续算法参考，不属于当前运行链路。运行时水文仍必须遵守 SimulationGrid 的 Ping-Pong 所有权和跨 Dispatch 全局 Barrier；禁止在单个 Workgroup Barrier 后读取其它 Workgroup 尚未完成的输出。
 
+P13A 已建立纯 CPU `TerrainHydrologyRuntime` 作为 GPU 迁移前的数值契约。它持有不可变的 Height 初始快照、Water、四方向 Flux 和二维 Velocity，并由 `TerrainRuntime::Hydrology` 独立拥有；该指针默认为空，不随 TerrainComponent 复制或序列化，也不复用 `TerrainGenerator` 的 Height Ping-Pong。每个固定步先从同一旧状态计算四邻域出流并按可用水量缩放，再统一汇总入流/出流更新 Water 和 Velocity；边界为封闭无流出。调度器提供 Play/Pause、暂停态 Single Step、Reset、固定 `dt` 累加器、最大补帧数和 Dropped Time 统计。当前尚未从 GPU Height 初始化该状态，也没有 GPU 水流 Pass、地形可视化或编辑器控制，因此不能视为已接入场景运行链路。
+
 `.glterrainmat` 与普通 `.glmat` 是两个注册表类型和两套 YAML 根。TerrainMaterial 固定拥有 Grass、Soil、Rock、Snow 四层；每层保存颜色、Albedo/Normal/AO Handle、Tiling、Metallic、Roughness、NormalScale 和 AOStrength，资产级参数控制三平面锐度与高度/坡度/曲率/湿度混合强度。缺失纹理时使用层颜色、几何法线和 AO=1；存在纹理必须分别满足 sRGB Color、Linear Normal、Linear Data 语义。TerrainMaterial 保存也采用临时文件替换，但不进入 MaterialInstance 或实体 MaterialOverrides 链路。
 
 ### 5.5 Shader、Compute 与数据读回
@@ -446,7 +448,7 @@ flowchart LR
 - `EditorLayer` 只负责 Scene、Scene Framebuffer、Camera、后处理输入和面板的生命周期编排，不承载 Bloom/Tone Mapping、Terrain、IBL 或环境模拟算法及其正式业务状态；
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - 新增 3D Shader 必须遵守 `Opaque / Mask / Blend` 契约；若声明支持 AlphaMode，需要消费 `u_AlphaMode`、`u_AlphaCutoff` 并保持 Mask/Blend 的深度和 EntityID 语义。透明对象仍不得进入现有 Opaque Instancing；
-- 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；未来固定步长 Runtime Erosion 必须使用独立状态集和调度器，不能复用或隐式推进 Authoring 管线；
+- 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；P13A CPU Hydrology 已使用独立状态集和固定步长调度器，后续 GPU 水流与 Runtime Erosion 必须沿用该边界，不能复用或隐式推进 Authoring 管线；
 - IBL 源环境、Diffuse Irradiance 和 Specular Prefilter 已按 Handle、Cubemap Runtime Version、派生图类型与生成参数进入内存派生缓存；BRDF LUT 作为环境无关的进程级共享资源只在初始化或参数变化时生成，禁止逐帧积分，磁盘缓存需另行定义版本化格式；
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。

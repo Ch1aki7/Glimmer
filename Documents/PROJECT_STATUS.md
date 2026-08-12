@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P13A 固定步长水流核心
-- 主线状态：待开始（先建立独立 Runtime Hydrology 状态、CPU 参考模型与固定步长调度边界）
+- 主线状态：进行中（CPU 参考模型、独立状态和固定步长状态机已完成；下一步迁移 GPU 水流 Pass 与 Debug 控制）
 
 ## 使用与更新规则
 
@@ -59,7 +59,7 @@
 
 **依赖**：P6 Terrain Runtime、P7 派生资源和稳定 GPU Ping-Pong 完成。
 
-**状态**：待开始。
+**状态**：进行中。
 
 **目标**
 
@@ -79,6 +79,14 @@
 - 建立不复用 Authoring Erosion 的 `TerrainHydrologyRuntime`，明确 Water、Flux、Velocity、Sediment 与 Height Ping-Pong 的所有权；
 - 建立固定 `dt` 累加器、最大补帧数和 Play/Pause/Single Step/Reset 状态机；
 - 先用纯 CPU 小网格参考模型验证守恒、非负和确定性，再迁移 Compute Pass。
+
+**阶段进展（2026-08-13）**
+
+- 新增纯 CPU `TerrainHydrologyRuntime`：Height 只读快照与 Water、四向 Flux、Velocity 分离持有；`TerrainRuntime` 仅以独立可选实例拥有水文状态，不复用 `TerrainGenerator` 的 Authoring Height Ping-Pong，也不参与 Scene YAML；
+- 固定步长调度支持 Play/Pause、暂停态 Single Step、Reset、最大补帧数和超额时间丢弃统计；相同模拟时长按 `0.04×25` 与 `0.01×100` 两种帧划分得到相同 Water/Velocity；
+- CPU 参考步使用封闭四邻域：先按只读水面高差计算并按可用水量缩放出流，再统一汇总入流/出流更新 Water 和速度；统计记录水量、降雨量、质量误差、最小/最大水深、最大速度和有限性；
+- 新增 8 条水文回归，覆盖暂停、单步、重置、高处向低处流动、非负/有限、封闭边界守恒、固定步长确定性、最大补帧和洼地蓄水；当前 96 项具体无窗口断言全部 PASS；
+- 下一步：以同一字段契约建立 GPU Water/Flux/Velocity Ping-Pong 与独立 Compute Pass，并在 DebugPanel 提供运行控制和统计；CPU 模型继续作为小网格数值基线。
 
 ## 后续任务
 

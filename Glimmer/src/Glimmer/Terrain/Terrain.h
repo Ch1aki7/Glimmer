@@ -3,6 +3,7 @@
 #include "Glimmer/Core/Core.h"
 #include "Glimmer/Renderer/TerrainMesh.h"
 #include "Glimmer/Terrain/TerrainGenerator.h"
+#include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
 
 #include <array>
 
@@ -10,6 +11,7 @@ namespace gl {
 	struct TerrainRuntime
 	{
 		Scope<TerrainGenerator> Generator;
+		Scope<TerrainHydrologyRuntime> Hydrology;
 		Ref<TerrainMesh> Mesh;
 		std::array<Ref<TerrainMesh>, 3> LODMeshes;
 		std::array<uint32_t, 9> ChunkLODLevels{};
