@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/Buffer.h"
 #include "Glimmer/Renderer/FrameBuffer.h"
 #include "Glimmer/Renderer/GPUTimer.h"
+#include "Glimmer/Renderer/FrustumCulling.h"
 #include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Renderer/Mesh.h"
 #include "Glimmer/Renderer/Model.h"
@@ -324,31 +325,8 @@ namespace gl {
 		const glm::mat4& transform,
 		const glm::mat4& viewProjection)
 	{
-		bool outsideLeft = true;
-		bool outsideRight = true;
-		bool outsideBottom = true;
-		bool outsideTop = true;
-		bool outsideNear = true;
-		bool outsideFar = true;
-		for (uint32_t z = 0; z < 2; ++z)
-			for (uint32_t y = 0; y < 2; ++y)
-				for (uint32_t x = 0; x < 2; ++x)
-				{
-					const glm::vec3 local(
-						x ? boundsMax.x : boundsMin.x,
-						y ? boundsMax.y : boundsMin.y,
-						z ? boundsMax.z : boundsMin.z);
-					const glm::vec4 clip = viewProjection * transform
-						* glm::vec4(local, 1.0f);
-					outsideLeft &= clip.x < -clip.w;
-					outsideRight &= clip.x > clip.w;
-					outsideBottom &= clip.y < -clip.w;
-					outsideTop &= clip.y > clip.w;
-					outsideNear &= clip.z < -clip.w;
-					outsideFar &= clip.z > clip.w;
-				}
-		return !(outsideLeft || outsideRight || outsideBottom
-			|| outsideTop || outsideNear || outsideFar);
+		return FrustumCulling::IntersectsClipFrustum(
+			boundsMin, boundsMax, transform, viewProjection);
 	}
 
 	void ShadowRenderer::Shutdown()

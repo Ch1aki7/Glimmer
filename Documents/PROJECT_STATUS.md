@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P11 Terrain Chunk、LOD 与剔除
-- 主线状态：进行中（固定 `3×3` Chunk、共享网格与 Shadow Chunk 剔除已落地；下一步接入颜色通道视锥剔除）
+- 主线状态：进行中（固定 `3×3` Chunk、共享网格以及 Color/Shadow Chunk 剔除已落地；下一步接入距离 LOD）
 
 ## 使用与更新规则
 
@@ -79,9 +79,10 @@
 - 新增纯 CPU `TerrainChunkLayout`，固定生成 `3×3` 区域；整体世界覆盖范围保持不变，每块使用连续的全局 Height UV 和局部 XZ 偏移/缩放；
 - `TerrainRenderer` 只创建一份按 `ceil(MeshResolution / 3)` 计算的共享 `TerrainMesh`，颜色通道以 9 次提交复用同一 VAO/Index Buffer，不复制 Height、派生图或材质纹理；
 - `ShadowRenderer` 复用同一 Chunk 布局，按每块独立 Bounds 执行级联视锥测试，再上传相同的 Chunk 坐标后绘制；
-- Debug Overview 已显示 Terrain Draw Calls、Submitted Chunks 与 Shared Meshes，默认完整可见地形应为 `9 / 9 / 1`；
-- 80 项无窗口回归全部通过，覆盖共享网格分辨率、横纵相邻边的 UV/局部坐标连续性及整体边界；VS2026 `Debug | x64` 回归和编辑器目标构建成功；GTX 1050 / OpenGL 4.6 运行 25 秒，Terrain、ShadowDepth 和三条 Terrain Compute Shader 均加载成功且无断言或崩溃；
-- 尚未完成颜色通道 Camera Frustum 剔除、距离 LOD 和跨 LOD 接缝策略，因此 P11 不进入已完成里程碑。
+- Terrain Color Pass 已按 Chunk 局部 XZ 范围和 HeightScale 构造保守 AABB，并连同 Terrain 实体 Transform 投影到 Camera Clip Space；八个角点只有全部位于同一裁剪平面外才剔除，穿越边界的 Chunk 继续提交；颜色与 Shadow 通过 `FrustumCulling` 共用同一判定实现；
+- Debug Overview 已显示 Terrain Draw Calls、Candidate/Submitted、Frustum Culled 与 Shared Meshes；完整可见时应为 `9 candidates / 9 submitted / 0 culled / 1 shared mesh`，移动相机后 Submitted 会随可见块数下降；
+- 84 项无窗口回归全部通过，除共享网格和连续边界外，新增覆盖相机视锥内、视锥外、穿越边界及 Terrain Transform 后的 Chunk Bounds；VS2026 `Debug | x64` 回归与最终编辑器目标构建成功；最终 EXE 在默认场景中正常显示连续 Terrain，未出现可见块误删、Shader 错误或崩溃；动态 Submitted/Culled 变化可继续按 README 操作人工观察；
+- 尚未完成距离 LOD 和跨 LOD 接缝策略，因此 P11 不进入已完成里程碑。
 
 ## 后续任务
 
@@ -404,7 +405,7 @@
 - PBRModel 已支持 Normal、AO 与 Emissive Texture；Metallic/Roughness 仍为标量，尚未定义独立贴图或 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
-- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；固定 `3×3` Chunk 与 Shadow Chunk 剔除已落地，仍缺颜色通道 Chunk 剔除、距离 LOD、跨 LOD 接缝策略和固定步长 Runtime Erosion 调度；
+- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；固定 `3×3` Chunk 与 Color/Shadow Chunk 剔除已落地，仍缺距离 LOD、跨 LOD 接缝策略和固定步长 Runtime Erosion 调度；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；

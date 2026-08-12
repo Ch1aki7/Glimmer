@@ -7,6 +7,7 @@
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Renderer/GPUTimer.h"
+#include "Glimmer/Renderer/FrustumCulling.h"
 #include "Glimmer/Terrain/Terrain.h"
 #include "Glimmer/Terrain/TerrainChunkLayout.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
@@ -350,10 +351,28 @@ namespace gl {
 		}
 		const auto chunks = TerrainChunkLayout::Build(
 			terrainWorldSize, runtime.Mesh->GetGridSize());
+		const float minimumHeight = std::min(0.0f, specification.HeightScale);
+		const float maximumHeight = std::max(0.0f, specification.HeightScale);
 		runtime.Mesh->Bind();
 		s_Data.Stats.SharedMeshes = 1;
 		for (const TerrainChunkRegion& chunk : chunks)
 		{
+			++s_Data.Stats.CandidateChunks;
+			const float halfSize = chunk.WorldSize * 0.5f;
+			const glm::vec3 boundsMin(
+				chunk.LocalOffset.x - halfSize,
+				minimumHeight,
+				chunk.LocalOffset.y - halfSize);
+			const glm::vec3 boundsMax(
+				chunk.LocalOffset.x + halfSize,
+				maximumHeight,
+				chunk.LocalOffset.y + halfSize);
+			if (!IntersectsCameraFrustum(
+				boundsMin, boundsMax, transform, viewProjection))
+			{
+				++s_Data.Stats.CulledChunks;
+				continue;
+			}
 			shader->UploadUniformFloat2(
 				"u_ChunkUVOffset", chunk.UVOffset);
 			shader->UploadUniformFloat2(
@@ -402,5 +421,15 @@ namespace gl {
 	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()
 	{
 		return s_Data.Stats;
+	}
+
+	bool TerrainRenderer::IntersectsCameraFrustum(
+		const glm::vec3& boundsMin,
+		const glm::vec3& boundsMax,
+		const glm::mat4& transform,
+		const glm::mat4& viewProjection)
+	{
+		return FrustumCulling::IntersectsClipFrustum(
+			boundsMin, boundsMax, transform, viewProjection);
 	}
 }

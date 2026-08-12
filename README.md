@@ -13106,19 +13106,22 @@ TerrainComponent / TerrainRuntime
        └─ Shadow Pass：逐块 Bounds 测试后复用 Mesh
 ```
 
-ShadowDepth 使用与颜色通道相同的 Chunk UV 和局部变换。`ShadowRenderer` 不再用整块 Terrain Bounds 判断每个 Cascade，而是对九个 Chunk 分别执行保守视锥测试，剔除后才提交该块的深度绘制。
+ShadowDepth 使用与颜色通道相同的 Chunk UV 和局部变换。Color Pass 与 `ShadowRenderer` 都不再把 Terrain 当成一个整体 Bounds：每块根据局部 XZ 范围和 HeightScale 建立 AABB，乘上 Terrain 实体 Transform 后分别测试 Camera ViewProjection 或当前 Cascade Light VP，剔除后才提交该块绘制。
+
+判定使用共用的八角点保守算法：只有 AABB 八个角点全部落在同一个 Clip Plane 外侧时才剔除。横跨视锥边界的 Chunk 会继续绘制，以避免因包围盒部分可见而误删地形。
 
 ### 如何观察
 
-打开 `Debug → Overview → Terrain`：默认整块地形都在视野中时，`Draw Calls / Submitted Chunks / Shared Meshes` 应显示 `9 / 9 / 1`。这表示九个区域分别提交，但只复用一份 GPU 网格。画面应保持一张连续地形，山体尺度与改造前一致；若看到九张重复地形，说明全局 UV 偏移未生效。
+打开 `Debug → Overview → Terrain`：默认整块地形都在视野中时，统计应显示 `9 candidates / 9 submitted / 0 frustum culled / 1 shared mesh`。这表示九个区域通过 Camera Frustum 并分别提交，但只复用一份 GPU 网格。把相机转向地形边缘或移出地形后，Candidate 保持 9，Submitted 应下降、Frustum Culled 相应上升，且二者之和始终为 9。
 
-当前颜色通道尚未执行 Camera Frustum 剔除，所以视野外 Chunk 仍会提交；距离 LOD、Skirt/边缘索引/Morph 接缝处理也尚未接入。下一阶段先让颜色通道基于每块 Bounds 剔除，再加入多级共享网格与跨 LOD 连续策略。
+当前尚未接入距离 LOD、Skirt/边缘索引/Morph 接缝处理。下一阶段将在当前可见 Chunk 集合上选择多级共享网格，并解决相邻不同 LOD 的边缘连续性。
 
 ### 验证
 
-- 80 项无窗口回归全部 PASS，新增覆盖共享网格向上取整、九块完整覆盖，以及横纵相邻 Chunk 的 UV/局部边界一致性；
+- 84 项无窗口回归全部 PASS，除共享网格向上取整、九块完整覆盖和相邻边连续性外，新增覆盖相机视锥内、视锥外、穿越边界及 Terrain Transform 后的 Chunk Bounds；
 - VS2026 `Debug | x64` 回归测试和 `GlimmerEditor-CyouBranch` 目标构建成功；
 - NVIDIA GeForce GTX 1050 / OpenGL 4.6 下运行 25 秒，Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功加载，无断言、崩溃或 Shader 错误；
+- Color Pass Chunk 剔除接入后，最终 EXE 默认场景仍正常显示连续 Terrain，未发生可见 Chunk 误删；Camera Frustum 的内/外/边界/实体 Transform 判定由新增回归断言覆盖；
 - 未删除 `bin`、`bin-int`，构建产物继续保留。
 
 ## KB

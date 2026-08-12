@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/EnvironmentMapLoader.h"
 #include "Glimmer/Renderer/EnvironmentLighting.h"
 #include "Glimmer/Renderer/ShadowRenderer.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Scene/Entity.h"
 #include "Glimmer/Scene/Scene.h"
@@ -666,6 +667,24 @@ namespace {
 			"blend materials do not cast solid directional shadows");
 	}
 
+	void TestTerrainCameraFrustumCulling(TestContext& context)
+	{
+		const glm::mat4 identity(1.0f);
+		context.Check(gl::TerrainRenderer::IntersectsCameraFrustum(
+			{ -0.5f, -0.5f, -0.5f }, { 0.5f, 0.5f, 0.5f }, identity, identity),
+			"terrain camera frustum keeps a chunk fully inside clip space");
+		context.Check(!gl::TerrainRenderer::IntersectsCameraFrustum(
+			{ 2.0f, -0.5f, -0.5f }, { 3.0f, 0.5f, 0.5f }, identity, identity),
+			"terrain camera frustum culls a chunk fully outside one clip plane");
+		context.Check(gl::TerrainRenderer::IntersectsCameraFrustum(
+			{ 0.5f, -0.5f, -0.5f }, { 1.5f, 0.5f, 0.5f }, identity, identity),
+			"terrain camera frustum conservatively keeps a boundary-crossing chunk");
+		context.Check(!gl::TerrainRenderer::IntersectsCameraFrustum(
+			{ -0.25f, -0.25f, -0.25f }, { 0.25f, 0.25f, 0.25f },
+			glm::translate(identity, glm::vec3(0.0f, 0.0f, 3.0f)), identity),
+			"terrain camera frustum applies the terrain entity transform");
+	}
+
 	void TestEnvironmentMapFoundation(
 		TestContext& context,
 		const std::filesystem::path& root)
@@ -972,6 +991,7 @@ int main(int argc, char** argv)
 	TestTerrainCopyAndTransactions(context);
 	TestTerrainPresets(context);
 	TestTerrainChunkLayout(context);
+	TestTerrainCameraFrustumCulling(context);
 	TestShadowFrustumCulling(context);
 	TestEnvironmentMapFoundation(context, temporaryDirectory.Path());
 

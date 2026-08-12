@@ -17,7 +17,9 @@ namespace gl {
 		struct Statistics
 		{
 			uint32_t DrawCalls = 0;
+			uint32_t CandidateChunks = 0;
 			uint32_t SubmittedChunks = 0;
+			uint32_t CulledChunks = 0;
 			uint32_t SharedMeshes = 0;
 			uint32_t BoundMaterialTextures = 0;
 			float GpuMilliseconds = 0.0f;
@@ -40,5 +42,10 @@ namespace gl {
 		static void SetDetailDistance(float distance);
 		static float GetDetailDistance();
 		static Statistics GetStatistics();
+		static bool IntersectsCameraFrustum(
+			const glm::vec3& boundsMin,
+			const glm::vec3& boundsMax,
+			const glm::mat4& transform,
+			const glm::mat4& viewProjection);
 	};
 }
