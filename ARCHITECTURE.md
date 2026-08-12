@@ -183,7 +183,7 @@ Framebuffer 支持以下附件格式：
 
 ```mermaid
 flowchart LR
-    ScenePass["Scene Pass\nRGBA16F + EntityID + Depth"] --> Tone["Tone Mapping Pass\nExposure / ACES / 可选灰度"]
+    ScenePass["Scene Pass\nRGBA16F + EntityID + Depth"] --> Tone["Tone Mapping Pass\nEV / ACES White Point / 可选灰度"]
     Tone --> Display["Display Framebuffer"]
     Display --> Viewport["ImGui Viewport"]
     ScenePass --> Picking["ReadPixel(EntityID)"]
@@ -192,7 +192,7 @@ flowchart LR
 
 Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Mask 被 `discard` 的像素不写颜色、深度或 EntityID；Blend 的有效 Alpha 小于等于 `1/255` 时同样丢弃，其余透明片元按远到近顺序写入 EntityID。Skybox 使用只读深度和 LessEqual 在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
 
-Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。ToneMapping Pass 同时读取 HDR Color 与 Scene Depth，并从当前编辑/运行相机获得 Inverse ViewProjection 和 Camera Position；Distance/Height Fog 对 `depth < 1` 的几何重建世界位置，在曝光、ACES 与 Gamma 之前在线性 HDR 空间混合。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。Scene 新增只读的 `GetDirectionalLightEntity` 查询以供后处理解析当前主光，不改变 LightEnvironment 上传所有权。天空深度被显式跳过，全部 Fog 参数由 Editor Settings 持有，不属于 Scene、Camera 或 Environment 序列化状态。
+Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。ToneMapping Pass 同时读取 HDR Color 与 Scene Depth，并从当前编辑/运行相机获得 Inverse ViewProjection 和 Camera Position；Distance/Height Fog 对 `depth < 1` 的几何重建世界位置，在 EV、ACES 与 Gamma 之前在线性 HDR 空间混合。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。Scene 新增只读的 `GetDirectionalLightEntity` 查询以供后处理解析当前主光，不改变 LightEnvironment 上传所有权。ToneMapping 以 `2^EV` 统一缩放场景与雾，再将 ACES 拟合结果按可调 White Point 响应归一，最后只做一次 Gamma。天空深度被显式跳过，全部 Fog/EV/White Point 参数由 Editor Settings 持有，不属于 Scene、Camera 或 Environment 序列化状态。
 
 ### 5.4 光照、PBR、天空盒与地形
 
@@ -413,7 +413,7 @@ sequenceDiagram
     Scene->>Renderers: 提交组件和 EntityID
     Editor->>Assets: 解析 SkyLight Cubemap
     Editor->>FBO: End Scene Pass
-    Editor->>Tone: HDR 颜色附件 + Exposure
+    Editor->>Tone: HDR 颜色附件 + EV + ACES White Point
     Tone-->>Editor: Display Texture
 ```
 

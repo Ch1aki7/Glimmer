@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P12 山脉大气表现与后处理
-- 主线状态：进行中（距离雾、高度雾与环境光色关联已落地；下一步校准 ACES 与评估 Bloom）
+- 主线状态：进行中（雾与 EV/ACES 显示链已校准；下一步评估并实现首版 Bloom）
 
 ## 使用与更新规则
 
@@ -88,7 +88,10 @@
 - Height Fog 使用沿 Camera→Fragment 射线的指数高度密度解析积分；Base Height 控制参考雾层高度，Height Falloff 控制随高度变稀的速度，并对指数范围与积分上限进行约束以避免调试极值产生 Inf/NaN；
 - Fog Color Source 支持 Manual、Sky Light 与 Directional Light：Sky Light 从当前 Cubemap 低 Mip 按视线方向采样并乘强度，Directional Light 使用首个启用方向光的线性 Color×Intensity；资源缺失时稳定回退 Manual；
 - VS2026 `Debug | x64` 整解决方案和回归目标构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 固定相机验证中 ToneMapping 与全部 Terrain/Shadow Shader 成功编译，SkyLight 色源与环境色调一致，远处低地衰减明显而近景高处保留细节；
-- 下一步校准当前 ACES 近似与雾曝光关系，再评估 Bloom 首版，P12 暂不进入已完成里程碑。
+- ToneMapping 将线性倍率 Exposure 改为摄影式 EV，实际倍率为 `2^EV`；默认 `0 EV` 等价于旧 `1.0×`，范围限制为 `-10..+10 EV`；
+- ACES 拟合曲线新增可调 White Point 并以曲线在白点的响应归一，默认 `11.2`；Scene HDR 与线性雾色先共同乘 EV，再进入同一 ACES，之后只执行一次 Gamma，未增加第二条 Tone Mapping 路径；
+- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 固定相机验证中 ToneMapping 成功编译，默认 `0 EV / 11.2` 保持既有亮度基线，高光未大面积截白，SkyLight 高度雾仍保留色彩层次；
+- 下一步评估并实现首版 Bloom，P12 暂不进入已完成里程碑。
 
 ## 后续任务
 

@@ -42,7 +42,8 @@ namespace gl {
 		Ref<Framebuffer> m_Framebuffer;
 		Ref<Framebuffer> m_DisplayFramebuffer;
 		bool m_GrayscaleEnabled = false;
-		float m_Exposure = 1.0f;
+		float m_ExposureEV = 0.0f;
+		float m_ACESWhitePoint = 11.2f;
 		bool m_DistanceFogEnabled = false;
 		float m_DistanceFogDensity = 0.012f;
 		float m_DistanceFogStart = 60.0f;

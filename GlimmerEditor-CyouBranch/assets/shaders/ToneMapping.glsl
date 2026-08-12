@@ -20,7 +20,8 @@ layout(location = 0) in vec2 v_TexCoord;
 
 uniform sampler2D u_SceneTexture;
 uniform sampler2D u_SceneDepth;
-uniform float u_Exposure;
+uniform float u_ExposureEV;
+uniform float u_ACESWhitePoint;
 uniform int u_ApplyGrayscale;
 uniform int u_DistanceFogEnabled;
 uniform float u_DistanceFogDensity;
@@ -36,15 +37,22 @@ uniform float u_FogSkyLightIntensity;
 uniform vec3 u_CameraPosition;
 uniform mat4 u_InverseViewProjection;
 
-vec3 ACESFilm(vec3 color)
+vec3 ACESFilmUnnormalized(vec3 color)
 {
     const float a = 2.51;
     const float b = 0.03;
     const float c = 2.43;
     const float d = 0.59;
     const float e = 0.14;
-    return clamp((color * (a * color + b))
-        / (color * (c * color + d) + e), 0.0, 1.0);
+    return (color * (a * color + b))
+        / (color * (c * color + d) + e);
+}
+
+vec3 ACESFilm(vec3 color)
+{
+    float whitePoint = max(u_ACESWhitePoint, 0.0001);
+    float whiteScale = max(ACESFilmUnnormalized(vec3(whitePoint)).r, 0.0001);
+    return clamp(ACESFilmUnnormalized(color) / whiteScale, 0.0, 1.0);
 }
 
 void main()
@@ -93,7 +101,8 @@ void main()
         }
         linearColor = mix(linearColor, fogColor, fogWeight);
     }
-    vec3 hdrColor = linearColor * max(u_Exposure, 0.0);
+    float exposureMultiplier = exp2(clamp(u_ExposureEV, -10.0, 10.0));
+    vec3 hdrColor = linearColor * exposureMultiplier;
     vec3 mappedColor = ACESFilm(hdrColor);
 
     if (u_ApplyGrayscale != 0)

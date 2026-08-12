@@ -10958,8 +10958,9 @@ Scene RGBA16F
 核心流程：
 
 ```glsl
-vec3 hdrColor = max(sceneColor.rgb, vec3(0.0)) * u_Exposure;
-vec3 mappedColor = ACESFilm(hdrColor);
+float exposureMultiplier = exp2(u_ExposureEV);
+vec3 hdrColor = max(sceneColor.rgb, vec3(0.0)) * exposureMultiplier;
+vec3 mappedColor = ACESFilm(hdrColor) / ACESFilm(vec3(u_ACESWhitePoint)).r;
 vec3 displayColor = pow(mappedColor, vec3(1.0 / 2.2));
 ```
 
@@ -10970,7 +10971,8 @@ Shader 参数：
 | Uniform | 作用 |
 |---|---|
 | `u_SceneTexture` | RGBA16F 场景颜色附件 |
-| `u_Exposure` | 进入 Tone Mapping 前的曝光倍率 |
+| `u_ExposureEV` | 摄影式曝光档位；每增加 1 EV，线性亮度翻倍 |
+| `u_ACESWhitePoint` | ACES 拟合曲线的显示白点归一参考 |
 | `u_ApplyGrayscale` | Tone Mapping 后、Gamma 前应用可选灰度效果 |
 
 灰度不再代表整个后处理是否启用，而只是 Tone Mapping Pass 中的一个可选效果。
@@ -11016,11 +11018,12 @@ Settings 面板新增：
 
 ```text
 HDR Output
-    Exposure   0.01 ～ 10.0
+    Exposure (EV)     -10 ～ +10
+    ACES White Point  1.0 ～ 32.0
     Grayscale  On / Off
 ```
 
-`Exposure` 控制进入 ACES 曲线前的线性亮度倍率。它不是灯光强度的替代品：灯光 Intensity 描述场景照明，Exposure 描述观察和显示映射。
+`Exposure (EV)` 控制进入 ACES 曲线前的线性亮度倍率，换算关系为 `multiplier = 2^EV`：`0 EV = 1×`、`+1 EV = 2×`、`-1 EV = 0.5×`。它不是灯光强度的替代品：灯光 Intensity 描述场景照明，EV 描述观察和显示映射。`ACES White Point` 将曲线在指定线性亮度处的响应归一为显示白，默认 `11.2`；调低会更早压缩高光，调高会保留更宽的高光范围。
 
 ### 天空盒与 IBL 后续关系
 
@@ -11057,14 +11060,14 @@ Glimmer/src/Platform/OpenGL/
   OpenGLFramebuffer.cpp             GL_RGBA16F 创建、调整尺寸和采样
 
 GlimmerEditor-CyouBranch/src/
-  EditorLayer.h                     Display FBO、Exposure、Grayscale 状态
+  EditorLayer.h                     Display FBO、Exposure EV、White Point、Grayscale 状态
   EditorLayer.cpp                   HDR Scene Pass 与固定 Tone Mapping Pass
 
 GlimmerEditor-CyouBranch/assets/shaders/
   PBRModel.glsl                     线性 HDR PBR 输出
   Texture.glsl                      Sprite 颜色线性化
   Terrain.glsl                      地形调色板线性化
-  ToneMapping.glsl                  ACES、Exposure、Gamma 与可选灰度
+  ToneMapping.glsl                  EV、ACES White Point、Gamma 与可选灰度
 
 Documents/
   PROJECT_STATUS.md                  IBL 后续顺序与验收条件

@@ -627,7 +627,8 @@ namespace gl {
 				resolvedFogColor = light.Color * std::max(light.Intensity, 0.0f);
 			}
 		}
-		toneMappingShader->UploadUniformFloat("u_Exposure", m_Exposure);
+		toneMappingShader->UploadUniformFloat("u_ExposureEV", m_ExposureEV);
+		toneMappingShader->UploadUniformFloat("u_ACESWhitePoint", m_ACESWhitePoint);
 		toneMappingShader->UploadUniformInt("u_ApplyGrayscale", m_GrayscaleEnabled ? 1 : 0);
 		toneMappingShader->UploadUniformInt("u_DistanceFogEnabled",
 			m_DistanceFogEnabled && hasPostProcessCamera ? 1 : 0);
@@ -892,7 +893,10 @@ namespace gl {
 		// Settings
 		ImGui::Begin("Settings");
 		ImGui::SeparatorText("HDR Output");
-		ImGui::DragFloat("Exposure", &m_Exposure, 0.05f, 0.01f, 10.0f);
+		ImGui::DragFloat("Exposure (EV)", &m_ExposureEV,
+			0.05f, -10.0f, 10.0f, "%+.2f EV");
+		ImGui::DragFloat("ACES White Point", &m_ACESWhitePoint,
+			0.1f, 1.0f, 32.0f, "%.1f");
 		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
 		ImGui::SeparatorText("Distance Fog");
 		ImGui::Checkbox("Enabled##DistanceFog", &m_DistanceFogEnabled);
