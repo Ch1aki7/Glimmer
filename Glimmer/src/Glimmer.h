@@ -37,6 +37,7 @@
 #include "Glimmer/Renderer/Model.h"
 #include "Glimmer/Renderer/Mesh.h"
 #include "Glimmer/Renderer/FrameBuffer.h"
+#include "Glimmer/Renderer/PostProcessRenderer.h"
 
 #include <imgui.h> // 方便在 Layer 里写 UI
 

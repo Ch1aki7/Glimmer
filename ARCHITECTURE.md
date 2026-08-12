@@ -194,7 +194,9 @@ flowchart LR
 
 Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Mask 被 `discard` 的像素不写颜色、深度或 EntityID；Blend 的有效 Alpha 小于等于 `1/255` 时同样丢弃，其余透明片元按远到近顺序写入 EntityID。Skybox 使用只读深度和 LessEqual 在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
 
-Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。Scene Color 先进入两张随视口缩放的半分辨率 `RGBA16F` Bloom FBO：软阈值提取根据 EV 后亮度决定贡献但保留未曝光 Radiance，5 权重高斯模糊以水平/垂直 Ping-Pong 迭代。ToneMapping Pass 同时读取 HDR Color、Bloom 与 Scene Depth，并从当前编辑/运行相机获得 Inverse ViewProjection 和 Camera Position；合成顺序固定为 Scene+Bloom、Distance/Height Fog、EV、ACES White Point、Gamma，因此 Bloom 不重复曝光且远处光晕受雾衰减。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。Scene 新增只读的 `GetDirectionalLightEntity` 查询以供后处理解析当前主光，不改变 LightEnvironment 上传所有权。天空深度被显式跳过，全部 Bloom/Fog/EV/White Point 参数由 Editor Settings 持有，不属于 Scene、Camera 或 Environment 序列化状态。
+Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。引擎侧 `PostProcessRenderer` 持有 Display FBO、两张随视口缩放的半分辨率 `RGBA16F` Bloom FBO、ToneMapping/Bloom Shader 引用、`PostProcessSettings` 和完整后处理执行顺序；Shader 仍注册在编辑器共享的 `ShaderLibrary`，因此沿用现有热重载入口。EditorLayer 只提交 Scene Color/Depth、Camera Position、Inverse ViewProjection、SkyLight Texture/Intensity 和 DirectionalLight Color，不直接实现提取、模糊或显示映射算法。
+
+Scene Color 先进行 Bloom 软阈值提取：根据 EV 后亮度决定贡献但保留未曝光 Radiance，5 权重高斯模糊以水平/垂直 Ping-Pong 迭代。ToneMapping Pass 同时读取 HDR Color、Bloom 与 Scene Depth；合成顺序固定为 Scene+Bloom、Distance/Height Fog、EV、ACES White Point、Gamma，因此 Bloom 不重复曝光且远处光晕受雾衰减。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。天空深度被显式跳过。全部 Bloom/Fog/EV/White Point 参数只存在于 `PostProcessSettings` 运行时实例，并由 Editor Settings UI 编辑，不属于 Scene、Camera 或 Environment 序列化状态。
 
 ### 5.4 光照、PBR、天空盒与地形
 
@@ -340,7 +342,7 @@ flowchart LR
 - `m_EditorScene`：可编辑的源场景；
 - `m_RuntimeScene`：进入 Play 时复制出的运行时场景；
 - `m_ActiveScene`：面板和渲染当前使用的场景；
-- `EditorCamera`、Scene/Display Framebuffer 和 Tone Mapping 参数；
+- `EditorCamera`、Scene Framebuffer 与一个引擎侧 `PostProcessRenderer` 实例；
 - `SelectionContext`、`EditorCommandHistory`；
 - Hierarchy、Inspector、ContentBrowser、ShaderPanel、DebugPanel。
 
@@ -408,15 +410,16 @@ sequenceDiagram
     participant Assets as AssetManager
     participant Renderers as 2D/3D/Terrain
     participant FBO as Scene Framebuffer
-    participant Tone as Tone Mapping
+    participant Post as PostProcessRenderer
     Editor->>FBO: Begin Scene Pass / Clear EntityID
     Editor->>Scene: OnUpdateEditor 或 OnUpdateRuntime
     Scene->>Assets: 通过 Handle 解析资源
     Scene->>Renderers: 提交组件和 EntityID
-    Editor->>Assets: 解析 SkyLight Cubemap
     Editor->>FBO: End Scene Pass
-    Editor->>Tone: HDR 颜色附件 + EV + ACES White Point
-    Tone-->>Editor: Display Texture
+    Editor->>Assets: 解析 SkyLight Cubemap
+    Editor->>Post: HDR Color/Depth + Camera + Light Inputs
+    Post->>Post: Bloom + Fog + EV + ACES + Gamma
+    Post-->>Editor: Display Texture
 ```
 
 ### 场景保存与恢复
@@ -440,7 +443,7 @@ flowchart LR
 - Scene 组件和 Asset 描述只保存可复制、可序列化的业务状态与 Handle；GPU Runtime、Framebuffer、派生纹理和后端对象放入运行时结构或资产缓存，不写入场景文件；
 - 持久资源使用 AssetHandle，实体长期身份使用 UUID，临时 EnTT ID 只用于当前 Scene 与拾取；
 - 正式场景参数应组件化或资源化；编辑器面板通过上下文和命令接口修改数据，不拥有 Application/Scene 生命周期，独立测试 Panel 仅用于诊断；
-- `EditorLayer` 只负责 Scene、Framebuffer、Pass、Camera 和面板的生命周期编排，不承载 Terrain、IBL 或环境模拟算法及其正式业务状态；
+- `EditorLayer` 只负责 Scene、Scene Framebuffer、Camera、后处理输入和面板的生命周期编排，不承载 Bloom/Tone Mapping、Terrain、IBL 或环境模拟算法及其正式业务状态；
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - 新增 3D Shader 必须遵守 `Opaque / Mask / Blend` 契约；若声明支持 AlphaMode，需要消费 `u_AlphaMode`、`u_AlphaCutoff` 并保持 Mask/Blend 的深度和 EntityID 语义。透明对象仍不得进入现有 Opaque Instancing；
 - 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；未来固定步长 Runtime Erosion 必须使用独立状态集和调度器，不能复用或隐式推进 Authoring 管线；
@@ -448,7 +451,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已完成 P11 验收。Metallic/Roughness Texture/ORM、Runtime Erosion、局部场景反射、连续几何 Morph、动态 Chunk 层级和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。当前 P12 从 Scene Depth 世界位置重建和线性 HDR 距离雾开始，规划不作为已实现事实。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已完成 P11；Depth 重建的距离/高度雾、环境关联雾色、EV/ACES White Point 与半分辨率 Bloom 已完成 P12，并由 P12.1 收拢到引擎侧 `PostProcessRenderer`。Metallic/Roughness Texture/ORM、Runtime Hydrology/Erosion、局部场景反射、连续几何 Morph、动态 Chunk 层级和环境模拟目前均是未实现或未完整实现的后续能力。TAA 同样尚未实现：当前没有投影 Jitter、Previous ViewProjection、Velocity Attachment、Previous Transform、HDR History、Disocclusion/Clamp 或 Reactive Mask；不得把单纯历史颜色混合描述为已支持。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

@@ -336,21 +336,7 @@ namespace gl {
 		};
 		m_Framebuffer = Framebuffer::Create(sceneFramebufferSpec);
 
-		FramebufferSpecification displayFramebufferSpec;
-		displayFramebufferSpec.Width = 1280;
-		displayFramebufferSpec.Height = 720;
-		displayFramebufferSpec.Attachments = { { FramebufferTextureFormat::RGBA8 } };
-		m_DisplayFramebuffer = Framebuffer::Create(displayFramebufferSpec);
-		FramebufferSpecification bloomFramebufferSpec;
-		bloomFramebufferSpec.Width = 640;
-		bloomFramebufferSpec.Height = 360;
-		bloomFramebufferSpec.Attachments = { { FramebufferTextureFormat::RGBA16F } };
-		m_BloomFramebuffers[0] = Framebuffer::Create(bloomFramebufferSpec);
-		m_BloomFramebuffers[1] = Framebuffer::Create(bloomFramebufferSpec);
-
-		m_ShaderLib.Load("assets/shaders/ToneMapping.glsl");
-		m_ShaderLib.Load("assets/shaders/BloomExtract.glsl");
-		m_ShaderLib.Load("assets/shaders/BloomBlur.glsl");
+		m_PostProcessRenderer.Initialize(m_ShaderLib);
 		m_ShaderLib.Load("assets/shaders/Overlay.glsl");
 		m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
 		m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
@@ -470,8 +456,9 @@ namespace gl {
 		}
 		if (ShouldVisualizeDistanceFog())
 		{
-			m_DistanceFogEnabled = true;
-			m_FogColorSource = 1;
+			auto& settings = m_PostProcessRenderer.GetSettings();
+			settings.DistanceFogEnabled = true;
+			settings.FogColor = FogColorSource::SkyLight;
 			GL_CORE_INFO("Distance and height fog visualization active with SkyLight color.");
 		}
 		if (m_TerrainSamplingBenchmarkAutorun)
@@ -503,6 +490,7 @@ namespace gl {
 			m_DebugPanel.ExitTemporaryTools();
 		if (m_SceneState == SceneState::Play)
 			OnSceneStop();
+		m_PostProcessRenderer.Shutdown();
 		AssetManager::Shutdown();
 	}
 
@@ -526,11 +514,7 @@ namespace gl {
 				|| framebufferSpecification.Height != viewportHeight)
 			{
 				m_Framebuffer->Resize(viewportWidth, viewportHeight);
-				m_DisplayFramebuffer->Resize(viewportWidth, viewportHeight);
-				const uint32_t bloomWidth = std::max(viewportWidth / 2u, 1u);
-				const uint32_t bloomHeight = std::max(viewportHeight / 2u, 1u);
-				m_BloomFramebuffers[0]->Resize(bloomWidth, bloomHeight);
-				m_BloomFramebuffers[1]->Resize(bloomWidth, bloomHeight);
+				m_PostProcessRenderer.Resize(viewportWidth, viewportHeight);
 			}
 
 			m_EditorCamera.SetViewportSize(
@@ -622,93 +606,25 @@ namespace gl {
 		//	RenderPass::End();
 		//}
 
-		uint32_t bloomTexture = 0;
-		if (m_BloomEnabled)
-		{
-			RenderPassSpecification bloomPass;
-			bloomPass.Target = m_BloomFramebuffers[0];
-			bloomPass.ClearColorValue = { 0.0f, 0.0f, 0.0f, 1.0f };
-			RenderPass::Begin(bloomPass);
-			auto bloomExtractShader = m_ShaderLib.Get("BloomExtract");
-			bloomExtractShader->Bind();
-			bloomExtractShader->UploadUniformFloat("u_Threshold", m_BloomThreshold);
-			bloomExtractShader->UploadUniformFloat("u_SoftKnee", m_BloomKnee);
-			bloomExtractShader->UploadUniformFloat("u_ExposureEV", m_ExposureEV);
-			Renderer2D::DrawPostProcess(bloomExtractShader,
-				m_Framebuffer->GetColorAttachmentRendererID());
-			RenderPass::End();
-
-			bool horizontal = true;
-			for (int pass = 0; pass < m_BloomBlurPasses; ++pass)
-			{
-				const uint32_t targetIndex = horizontal ? 1u : 0u;
-				const uint32_t sourceIndex = horizontal ? 0u : 1u;
-				bloomPass.Target = m_BloomFramebuffers[targetIndex];
-				RenderPass::Begin(bloomPass);
-				auto bloomBlurShader = m_ShaderLib.Get("BloomBlur");
-				bloomBlurShader->Bind();
-				bloomBlurShader->UploadUniformInt("u_Horizontal", horizontal ? 1 : 0);
-				const auto& bloomSpecification =
-					m_BloomFramebuffers[targetIndex]->GetSpecification();
-				bloomBlurShader->UploadUniformFloat2("u_TexelSize", {
-					1.0f / static_cast<float>(bloomSpecification.Width),
-					1.0f / static_cast<float>(bloomSpecification.Height)
-				});
-				Renderer2D::DrawPostProcess(bloomBlurShader,
-					m_BloomFramebuffers[sourceIndex]->GetColorAttachmentRendererID());
-				RenderPass::End();
-				horizontal = !horizontal;
-			}
-			const uint32_t finalIndex = m_BloomBlurPasses % 2 == 0 ? 0u : 1u;
-			bloomTexture = m_BloomFramebuffers[finalIndex]
-				->GetColorAttachmentRendererID();
-		}
-
-		RenderPassSpecification toneMappingPass;
-		toneMappingPass.Target = m_DisplayFramebuffer;
-		RenderPass::Begin(toneMappingPass);
-		auto toneMappingShader = m_ShaderLib.Get("ToneMapping");
-		toneMappingShader->Bind();
-		glm::vec3 resolvedFogColor = m_DistanceFogColor;
-		int resolvedFogColorSource = m_FogColorSource;
-		if (m_FogColorSource == 2 && m_ActiveScene)
+		PostProcessInput postProcessInput;
+		postProcessInput.SceneColorTexture =
+			m_Framebuffer->GetColorAttachmentRendererID();
+		postProcessInput.SceneDepthTexture =
+			m_Framebuffer->GetDepthAttachmentRendererID();
+		postProcessInput.HasCamera = hasPostProcessCamera;
+		postProcessInput.CameraPosition = postProcessCameraPosition;
+		postProcessInput.InverseViewProjection =
+			glm::inverse(postProcessViewProjection);
+		if (m_ActiveScene)
 		{
 			Entity directionalLight = m_ActiveScene->GetDirectionalLightEntity();
 			if (directionalLight)
 			{
 				const auto& light = directionalLight
 					.GetComponent<DirectionalLightComponent>();
-				resolvedFogColor = light.Color * std::max(light.Intensity, 0.0f);
+				postProcessInput.DirectionalLightColor =
+					light.Color * std::max(light.Intensity, 0.0f);
 			}
-		}
-		toneMappingShader->UploadUniformFloat("u_ExposureEV", m_ExposureEV);
-		toneMappingShader->UploadUniformFloat("u_ACESWhitePoint", m_ACESWhitePoint);
-		toneMappingShader->UploadUniformInt("u_BloomEnabled",
-			m_BloomEnabled && bloomTexture != 0 ? 1 : 0);
-		toneMappingShader->UploadUniformFloat("u_BloomIntensity", m_BloomIntensity);
-		if (bloomTexture != 0)
-			toneMappingShader->BindTexture("u_BloomTexture", 3, bloomTexture);
-		toneMappingShader->UploadUniformInt("u_ApplyGrayscale", m_GrayscaleEnabled ? 1 : 0);
-		toneMappingShader->UploadUniformInt("u_DistanceFogEnabled",
-			m_DistanceFogEnabled && hasPostProcessCamera ? 1 : 0);
-		toneMappingShader->UploadUniformFloat("u_DistanceFogDensity",
-			m_DistanceFogDensity);
-		toneMappingShader->UploadUniformFloat("u_DistanceFogStart",
-			m_DistanceFogStart);
-		toneMappingShader->UploadUniformFloat("u_DistanceFogEnd",
-			m_DistanceFogEnd);
-		toneMappingShader->UploadUniformFloat3("u_DistanceFogColor",
-			resolvedFogColor);
-		toneMappingShader->UploadUniformInt("u_HeightFogEnabled",
-			m_HeightFogEnabled ? 1 : 0);
-		toneMappingShader->UploadUniformFloat("u_HeightFogBaseHeight",
-			m_HeightFogBaseHeight);
-		toneMappingShader->UploadUniformFloat("u_HeightFogFalloff",
-			m_HeightFogFalloff);
-		if (resolvedFogColorSource == 1 && !m_ActiveScene)
-			resolvedFogColorSource = 0;
-		if (resolvedFogColorSource == 1 && m_ActiveScene)
-		{
 			Entity skyLight = m_ActiveScene->GetSkyLightEntity();
 			if (skyLight)
 			{
@@ -716,27 +632,12 @@ namespace gl {
 				if (Ref<Cubemap> cubemap =
 					AssetManager::GetCubemap(component.CubemapHandle))
 				{
-					cubemap->GetTexture()->Bind(2);
-					toneMappingShader->UploadUniformInt("u_FogSkyLight", 2);
-					toneMappingShader->UploadUniformFloat("u_FogSkyLightIntensity",
-						std::max(component.Intensity, 0.0f));
+					postProcessInput.SkyLightTexture = cubemap->GetTexture();
+					postProcessInput.SkyLightIntensity = component.Intensity;
 				}
-				else resolvedFogColorSource = 0;
 			}
-			else resolvedFogColorSource = 0;
 		}
-		toneMappingShader->UploadUniformInt("u_FogColorSource",
-			resolvedFogColorSource);
-		toneMappingShader->UploadUniformFloat3("u_CameraPosition",
-			postProcessCameraPosition);
-		toneMappingShader->UploadUniformMat4("u_InverseViewProjection",
-			glm::inverse(postProcessViewProjection));
-		toneMappingShader->BindTexture("u_SceneDepth", 1,
-			m_Framebuffer->GetDepthAttachmentRendererID());
-		Renderer2D::DrawPostProcess(
-			toneMappingShader, m_Framebuffer->GetColorAttachmentRendererID());
-		RenderPass::End();
-		m_FinalSceneTexture = m_DisplayFramebuffer->GetColorAttachmentRendererID();
+		m_PostProcessRenderer.Execute(postProcessInput);
 	}
 
 	void EditorLayer::OnImGuiRender() {
@@ -951,46 +852,57 @@ namespace gl {
 
 		// Settings
 		ImGui::Begin("Settings");
+		auto& postProcessSettings = m_PostProcessRenderer.GetSettings();
 		ImGui::SeparatorText("HDR Output");
-		ImGui::DragFloat("Exposure (EV)", &m_ExposureEV,
+		ImGui::DragFloat("Exposure (EV)", &postProcessSettings.ExposureEV,
 			0.05f, -10.0f, 10.0f, "%+.2f EV");
-		ImGui::DragFloat("ACES White Point", &m_ACESWhitePoint,
+		ImGui::DragFloat("ACES White Point", &postProcessSettings.ACESWhitePoint,
 			0.1f, 1.0f, 32.0f, "%.1f");
 		ImGui::SeparatorText("Bloom");
-		ImGui::Checkbox("Enabled##Bloom", &m_BloomEnabled);
-		if (m_BloomEnabled)
+		ImGui::Checkbox("Enabled##Bloom", &postProcessSettings.BloomEnabled);
+		if (postProcessSettings.BloomEnabled)
 		{
-			ImGui::DragFloat("Threshold##Bloom", &m_BloomThreshold,
+			ImGui::DragFloat("Threshold##Bloom", &postProcessSettings.BloomThreshold,
 				0.05f, 0.0f, 20.0f, "%.2f");
-			ImGui::DragFloat("Soft Knee##Bloom", &m_BloomKnee,
+			ImGui::DragFloat("Soft Knee##Bloom", &postProcessSettings.BloomKnee,
 				0.01f, 0.0f, 1.0f, "%.2f");
-			ImGui::DragFloat("Intensity##Bloom", &m_BloomIntensity,
+			ImGui::DragFloat("Intensity##Bloom", &postProcessSettings.BloomIntensity,
 				0.01f, 0.0f, 2.0f, "%.2f");
-			ImGui::SliderInt("Blur Passes##Bloom", &m_BloomBlurPasses, 1, 12);
+			ImGui::SliderInt("Blur Passes##Bloom",
+				&postProcessSettings.BloomBlurPasses, 1, 12);
 		}
-		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
+		ImGui::Checkbox("Grayscale", &postProcessSettings.GrayscaleEnabled);
 		ImGui::SeparatorText("Distance Fog");
-		ImGui::Checkbox("Enabled##DistanceFog", &m_DistanceFogEnabled);
-		ImGui::DragFloat("Density##DistanceFog", &m_DistanceFogDensity,
+		ImGui::Checkbox("Enabled##DistanceFog",
+			&postProcessSettings.DistanceFogEnabled);
+		ImGui::DragFloat("Density##DistanceFog",
+			&postProcessSettings.DistanceFogDensity,
 			0.001f, 0.0f, 0.1f, "%.3f");
 		ImGui::DragFloatRange2("Start / End##DistanceFog",
-			&m_DistanceFogStart, &m_DistanceFogEnd,
+			&postProcessSettings.DistanceFogStart,
+			&postProcessSettings.DistanceFogEnd,
 			1.0f, 0.0f, 5000.0f, "Start %.0f", "End %.0f");
-		m_DistanceFogEnd = std::max(
-			m_DistanceFogEnd, m_DistanceFogStart + 1.0f);
+		postProcessSettings.DistanceFogEnd = std::max(
+			postProcessSettings.DistanceFogEnd,
+			postProcessSettings.DistanceFogStart + 1.0f);
 		ImGui::ColorEdit3("Color##DistanceFog",
-			glm::value_ptr(m_DistanceFogColor));
+			glm::value_ptr(postProcessSettings.DistanceFogColor));
 		const char* fogColorSources[] = {
 			"Manual", "Sky Light", "Directional Light"
 		};
-		ImGui::Combo("Color Source##DistanceFog", &m_FogColorSource,
-			fogColorSources, IM_ARRAYSIZE(fogColorSources));
-		ImGui::Checkbox("Height Fog", &m_HeightFogEnabled);
-		if (m_HeightFogEnabled)
+		int fogColorSource = static_cast<int>(postProcessSettings.FogColor);
+		if (ImGui::Combo("Color Source##DistanceFog", &fogColorSource,
+			fogColorSources, IM_ARRAYSIZE(fogColorSources)))
+			postProcessSettings.FogColor =
+				static_cast<FogColorSource>(fogColorSource);
+		ImGui::Checkbox("Height Fog", &postProcessSettings.HeightFogEnabled);
+		if (postProcessSettings.HeightFogEnabled)
 		{
-			ImGui::DragFloat("Base Height##DistanceFog", &m_HeightFogBaseHeight,
+			ImGui::DragFloat("Base Height##DistanceFog",
+				&postProcessSettings.HeightFogBaseHeight,
 				0.5f, -1000.0f, 1000.0f);
-			ImGui::DragFloat("Height Falloff##DistanceFog", &m_HeightFogFalloff,
+			ImGui::DragFloat("Height Falloff##DistanceFog",
+				&postProcessSettings.HeightFogFalloff,
 				0.001f, 0.0f, 1.0f, "%.3f");
 		}
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
@@ -1015,7 +927,7 @@ namespace gl {
 			static_cast<float>(static_cast<uint32_t>(std::max(viewportPanelSize.y, 0.0f)))
 		};
 
-		uint32_t textureID = m_FinalSceneTexture;
+		uint32_t textureID = m_PostProcessRenderer.GetOutputTextureID();
 		ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ viewportPanelSize.x, viewportPanelSize.y }, { 0, 1 }, { 1, 0 });
 
 		if (ImGui::BeginDragDropTarget())

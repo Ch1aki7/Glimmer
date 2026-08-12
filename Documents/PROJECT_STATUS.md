@@ -9,8 +9,8 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P12 山脉大气表现与后处理
-- 主线状态：进行中（距离/高度雾、EV/ACES 与首版 Bloom 已落地；下一步评估 TAA 是否进入 P12）
+- 当前主线：P13A 固定步长水流核心
+- 主线状态：待开始（先建立独立 Runtime Hydrology 状态、CPU 参考模型与固定步长调度边界）
 
 ## 使用与更新规则
 
@@ -55,68 +55,54 @@
 
 ## 当前主线
 
-### P12：山脉大气表现与后处理
+### P13A：固定步长水流核心
 
-**依赖**：Scene Depth 世界位置重建稳定；P10 环境光照已完成。
+**依赖**：P6 Terrain Runtime、P7 派生资源和稳定 GPU Ping-Pong 完成。
 
-**状态**：进行中。
+**状态**：待开始。
 
 **目标**
 
-- 依次实现距离雾、高度雾和主光方向驱动的雾色；
-- 校准 ACES Tone Mapping，再评估 Bloom 与 TAA；
-- 完整 Atmospheric Scattering、Motion Blur 和 DOF 不作为首版阻塞项。
+- 建立 Rainfall → Flux → WaterDepth/Velocity 流程；
+- 提供 Play、Pause、Single Step、Reset 和统计；
+- 与有限次 Authoring Erosion 分开调度和保存，为泥沙输运保留稳定输入。
 
 **验收**
 
-- 远山对比度和饱和度随距离下降；
-- 天空与地形交界自然，近景不会被均匀灰雾覆盖；
-- 曝光和雾效不产生重复 Tone Mapping/Gamma。
+- 水深和流速保持非负/有限且无 NaN；
+- 无降雨/蒸发边界下质量误差处于明确容差；
+- 洼地能蓄水，高处水流向低处；
+- 固定时间步下结果不依赖编辑器帧率。
 
 **第一步**
 
-- 审查现有 Scene HDR、Depth 与 Tone Mapping Pass，明确深度纹理采样和逆 ViewProjection 所有权；
-- 在 Tone Mapping 前加入首版距离雾，保持线性 HDR 空间混合；
-- 为启用、密度、起止距离和雾色建立纯运行时调试入口，再用固定相机验证近景保留与远山衰减。
-
-**阶段进展（2026-08-13）**
-
-- Scene HDR Framebuffer 显式使用可采样 `Depth24Stencil8` 附件；编辑相机与运行相机都向 Tone Mapping Pass 提供 Camera Position 和 Inverse ViewProjection；
-- ToneMapping 在曝光、ACES 和 Gamma 之前读取深度并重建世界位置，以相机世界距离计算 `smoothstep(Start, End) × (1-exp(-Density×Distance))`；Depth 接近 1 的天空像素跳过，避免把无几何背景错误地雾化；
-- Settings 新增 Distance Fog 的 Enabled、Density、Start/End 和线性 Fog Color；设置仅存在于当前编辑器会话，不写入 Scene YAML；`GLIMMER_DISTANCE_FOG_VISUALIZE=1` 可在固定相机验证中默认开启；
-- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 下 ToneMapping、Terrain、ShadowDepth 与三条 Compute Shader 均成功编译，固定相机截图确认近景保留、远景向雾色衰减且无崩溃或 Shader 错误；
-- Height Fog 使用沿 Camera→Fragment 射线的指数高度密度解析积分；Base Height 控制参考雾层高度，Height Falloff 控制随高度变稀的速度，并对指数范围与积分上限进行约束以避免调试极值产生 Inf/NaN；
-- Fog Color Source 支持 Manual、Sky Light 与 Directional Light：Sky Light 从当前 Cubemap 低 Mip 按视线方向采样并乘强度，Directional Light 使用首个启用方向光的线性 Color×Intensity；资源缺失时稳定回退 Manual；
-- VS2026 `Debug | x64` 整解决方案和回归目标构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 固定相机验证中 ToneMapping 与全部 Terrain/Shadow Shader 成功编译，SkyLight 色源与环境色调一致，远处低地衰减明显而近景高处保留细节；
-- ToneMapping 将线性倍率 Exposure 改为摄影式 EV，实际倍率为 `2^EV`；默认 `0 EV` 等价于旧 `1.0×`，范围限制为 `-10..+10 EV`；
-- ACES 拟合曲线新增可调 White Point 并以曲线在白点的响应归一，默认 `11.2`；Scene HDR 与线性雾色先共同乘 EV，再进入同一 ACES，之后只执行一次 Gamma，未增加第二条 Tone Mapping 路径；
-- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 固定相机验证中 ToneMapping 成功编译，默认 `0 EV / 11.2` 保持既有亮度基线，高光未大面积截白，SkyLight 高度雾仍保留色彩层次；
-- 新增两张随 Viewport 缩放的半分辨率 `RGBA16F` Bloom Ping-Pong FBO；`BloomExtract` 按 EV 后亮度执行 Threshold + Soft Knee 提取，但保留未曝光 HDR Radiance，`BloomBlur` 以 5 权重、水平/垂直交替执行默认 6 次高斯模糊；
-- ToneMapping 合成顺序为 `Scene HDR + Bloom → Distance/Height Fog → 2^EV → ACES White Point → Gamma`；Bloom 只随场景统一曝光一次，并被远景雾共同衰减，不存在第二次 Tone Mapping；
-- Settings 新增 Bloom Enabled、Threshold、Soft Knee、Intensity 与 Blur Passes；默认 `1.0 / 0.5 / 0.08 / 6`，只强调 HDR 高光而不过度抬升地形中间调；
-- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 下 BloomExtract、BloomBlur、ToneMapping 与全套 Terrain/Shadow Shader 均成功编译，固定相机截图中太阳高光出现柔和扩散，地形未整体洗白；
-- 下一步评估 TAA 对当前多 Pass/EntityID/编辑器拾取链路的收益与代价，再决定完成 P12 或实施首版 TAA。
+- 建立不复用 Authoring Erosion 的 `TerrainHydrologyRuntime`，明确 Water、Flux、Velocity、Sediment 与 Height Ping-Pong 的所有权；
+- 建立固定 `dt` 累加器、最大补帧数和 Play/Pause/Single Step/Reset 状态机；
+- 先用纯 CPU 小网格参考模型验证守恒、非负和确定性，再迁移 Compute Pass。
 
 ## 后续任务
 
 任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
-### P13：固定步长水流与运行时侵蚀
+### P13B：泥沙输运
 
-**依赖**：P6 Terrain Runtime、P7 派生资源和稳定 GPU Ping-Pong 完成。
+**依赖**：P13A 水深、Flux、Velocity 与固定步长稳定。
 
 **目标**
 
-- 建立 Rainfall → Flux → WaterDepth/Velocity → Sediment → Erosion/Deposition 流程；
-- 提供 Play、Pause、Single Step、Reset 和统计；
-- 与有限次 Authoring Erosion 分开调度和保存。
+- 建立 Sediment 状态、携沙能力与随流速输运；
+- 保持泥沙非负、有限，并记录边界流失和质量误差；
+- 暂不修改 Height，先隔离验证输运方向与确定性。
 
-**验收**
+### P13C：运行时侵蚀与沉积
 
-- 水深、泥沙和地形状态保持非负、有限且无 NaN；
-- 无降雨/蒸发边界下质量误差处于明确容差；
-- 洼地能蓄水，高处水流向低处，侵蚀和沉积方向合理；
-- 固定时间步下结果不依赖编辑器帧率。
+**依赖**：P13B 泥沙输运稳定。
+
+**目标**
+
+- 依据携沙能力差异修改 Height 与 Sediment；
+- 建立侵蚀/沉积强度、边界和稳定性限制；
+- 明确运行时结果的重置、保留与烘焙边界，不污染 Authoring Erosion。
 
 ### P14：简化气候与植被闭环
 
@@ -146,6 +132,21 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-13：P12.1 后处理职责收拢
+
+- 新增引擎侧 `PostProcessRenderer`，集中持有 Display FBO、半分辨率 Bloom Ping-Pong FBO、三张后处理 Shader 引用、运行时参数以及 Bloom/Tone Mapping Pass 执行；
+- `EditorLayer` 不再实现 Bloom 与 Tone Mapping 算法，只提交 Scene Color/Depth、相机逆 VP/位置、SkyLight 和 DirectionalLight 输入，并将 `PostProcessSettings` 暴露给既有 Settings UI；画面算法、默认参数和 Scene YAML 边界保持不变；
+- 验证：Premake 已将新增源文件纳入 Glimmer 工程；VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；最终编辑器以项目工作目录和雾验证开关持续运行 15 秒，无提前退出；
+- 提交：待提交。
+
+### 2026-08-13：P12 山脉大气表现与后处理
+
+- Scene Depth 重建世界位置，在单一 ToneMapping 链中实现距离雾、沿相机射线解析积分的指数高度雾，以及 Manual/SkyLight/Directional Light 三档线性雾色；
+- 显示映射改为 `2^EV` 摄影曝光、可调 ACES White Point 和单次 Gamma；新增半分辨率 HDR Bloom，使用软阈值提取与双缓冲高斯模糊，合成后再统一经过雾、EV 和 ACES；
+- TAA 评估结论为暂缓：当前没有投影 Jitter、上一帧 ViewProjection、HDR History 或 Motion Vector；只用 Depth 重投影会使移动 Model/Instancing/Sprite/透明物体和编辑器相机切换产生拖影。后续须先建立 Velocity 附件、实体 Previous Transform、历史失效规则、邻域 Clamp 与透明响应 Mask，EntityID 仍保持非时域拾取；
+- 验证：VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 下全部后处理、Terrain 与 Shadow Shader 编译成功；固定相机验证远景雾化、高处细节、环境色关联、默认 EV/ACES 高光和太阳 Bloom，无断言、崩溃或整屏泛白；
+- 提交：待提交。
 
 ### 2026-08-13：P11 Terrain Chunk、LOD 与剔除
 

@@ -13219,6 +13219,57 @@ Settings 的 `Bloom` 区域提供：
 - 固定 Terrain 相机画面中，默认参数只在太阳等 HDR 高光周围产生柔和扩散，地形中间调没有整体泛白；高度雾继续衰减远处 Bloom，没有出现光晕穿透雾层；
 - 当前为经典双缓冲高斯 Bloom；Mip Pyramid/Kawase、Lens Dirt 和自动曝光联动属于后续优化，不是首版范围。
 
+## TAA 接入评估
+
+P12 对 Temporal Anti-Aliasing 做了管线级评估，但没有加入只有历史颜色 Alpha 混合的简化版本。当前 Glimmer 已有 Scene HDR、Depth、EntityID、Bloom 和 Tone Mapping，但缺少完整 TAA 所需的时域数据：
+
+- 相机投影没有 Halton 等亚像素 Jitter；
+- Renderer 不保存上一帧 ViewProjection；
+- Scene FBO 没有 Motion Vector/Velocity 附件；
+- Entity/Renderer3D Instancing/Sprite 不保存上一帧 Transform；
+- 没有 HDR History Ping-Pong、Resize/Play/Stop/场景切换/相机跳变失效规则；
+- 没有邻域 Clamp、反遮挡判断和透明响应 Mask。
+
+只使用当前 Depth 重建世界位置并投影到上一帧，最多只能正确处理静态地形和静态相机运动。移动模型、GPU Instancing、Sprite、Blend 透明物体及编辑器 Gizmo 会缺少自身速度，产生拖影或历史残留。因此本阶段不引入会降低编辑器可靠性的“伪 TAA”。
+
+后续正式 TAA 的最低接入顺序为：
+
+```text
+Projection Jitter
+→ Current / Previous Clip Position
+→ RG16F Velocity Attachment
+→ HDR History Ping-Pong
+→ Depth Disocclusion + Neighborhood Clamp
+→ Reactive Mask for Transparent / Emissive
+→ History Reset on resize, scene/camera/state changes
+```
+
+EntityID 不参与历史混合，拾取仍读取当前帧整数附件；TAA 只处理 HDR Scene Color，并且应在 Bloom 提取之前稳定当前场景颜色。达到上述边界后再重新评估接入。
+
+## 后处理渲染器职责收拢
+
+P12.1 将原本直接写在 `EditorLayer` 中的 Bloom 与 Tone Mapping 执行逻辑迁入引擎侧 `PostProcessRenderer`。这次调整不改变画面公式、默认参数或 Settings 操作，只收拢资源所有权和 Pass 边界，避免后续水文模拟继续扩大编辑器协调层。
+
+```text
+EditorLayer
+  ├─ 渲染 Scene HDR / EntityID / Depth
+  ├─ 收集 Camera、SkyLight、DirectionalLight 输入
+  └─ PostProcessRenderer::Execute(input)
+       ├─ Bloom Extract
+       ├─ Half-res Ping-Pong Blur
+       ├─ Fog / EV / ACES / Gamma
+       └─ 输出 Display Texture
+```
+
+`PostProcessRenderer` 现在负责 Display Framebuffer、两张 Bloom Framebuffer、三张后处理 Shader 引用、Viewport Resize 和 Pass 执行；其 `PostProcessSettings` 集中保存 Bloom、雾、曝光、ACES 与灰度参数。Editor Settings 仍直接编辑这些纯运行时参数，它们不会写入 Scene YAML。Shader 继续加入同一个 `ShaderLibrary`，原有自动/手动热重载工作流不变。
+
+### 验证
+
+- Premake 已将新增的 `PostProcessRenderer.cpp` 纳入 Glimmer 静态库工程；
+- VS2026 `Debug | x64` 整解决方案构建成功；
+- 88 项无窗口回归全部 PASS；
+- 最终编辑器以项目工作目录和 `GLIMMER_DISTANCE_FOG_VISUALIZE=1` 启动并持续运行 15 秒，无提前退出；现有 Settings 操作、Viewport 输出和 Scene EntityID 拾取边界保持不变。
+
 ## KB
 
 ### 为什么不用动态库？
