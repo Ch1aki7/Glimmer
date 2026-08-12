@@ -13081,6 +13081,46 @@ Specular IBL = PrefilteredEnvironment(R, roughness)
 - PBR Material Lab 渲染 6/6；`64×64 / 128 samples` BRDF LUT 在 GTX 1050 / OpenGL 4.6 下生成一次，`PBRModel`、`Terrain`、`ShadowDepth` 和三条地形 Compute Shader 均成功加载；
 - 回归测试项目使用非增量链接重建，修复此前损坏的增量链接测试 EXE；未删除 `bin`、`bin-int`，编辑器构建产物保留。
 
+## Terrain 固定 3×3 Chunk 基础
+
+P11 第一阶段把原先整块提交的 Terrain 拆成固定 `3×3` 区域，但不改变场景中的 `TerrainSpecification`、整体世界尺寸或 HeightMap 内容。这一步先稳定 Chunk 坐标和共享资源边界，再在同一结构上继续增加颜色通道剔除和距离 LOD。
+
+### 共享网格与坐标
+
+`TerrainChunkLayout` 是 Terrain 核心目录中的纯 CPU 布局工具。对于原始 `MeshResolution`，共享 Chunk Mesh 分辨率按以下方式计算：
+
+```text
+SharedMeshResolution = ceil(MeshResolution / 3)
+ChunkWorldSize       = TerrainWorldSize / 3
+ChunkUVScale         = (1/3, 1/3)
+```
+
+九个 Chunk 不各自创建 Mesh，也不复制 Height、Normal/Slope、Analysis、Material Weights 或 TerrainMaterial 纹理。`TerrainRuntime` 仍只持有一份 Mesh；绘制每块时只上传 `UVOffset / UVScale / LocalOffset / LocalScale`，同一个顶点网格由 Shader 映射到对应的全局 Height UV 和局部 XZ 区域。因此相邻块边缘会采样完全相同的 Height/派生纹理坐标，整体边界仍覆盖原来的完整地形，而不是把同一张地形重复九次。
+
+```text
+TerrainComponent / TerrainRuntime
+  ├─ 一套 Height + Derived Maps + TerrainMaterial 绑定
+  ├─ 一份 Shared TerrainMesh
+  └─ TerrainChunkLayout[9]
+       ├─ Color Pass：逐块上传坐标并复用 Mesh
+       └─ Shadow Pass：逐块 Bounds 测试后复用 Mesh
+```
+
+ShadowDepth 使用与颜色通道相同的 Chunk UV 和局部变换。`ShadowRenderer` 不再用整块 Terrain Bounds 判断每个 Cascade，而是对九个 Chunk 分别执行保守视锥测试，剔除后才提交该块的深度绘制。
+
+### 如何观察
+
+打开 `Debug → Overview → Terrain`：默认整块地形都在视野中时，`Draw Calls / Submitted Chunks / Shared Meshes` 应显示 `9 / 9 / 1`。这表示九个区域分别提交，但只复用一份 GPU 网格。画面应保持一张连续地形，山体尺度与改造前一致；若看到九张重复地形，说明全局 UV 偏移未生效。
+
+当前颜色通道尚未执行 Camera Frustum 剔除，所以视野外 Chunk 仍会提交；距离 LOD、Skirt/边缘索引/Morph 接缝处理也尚未接入。下一阶段先让颜色通道基于每块 Bounds 剔除，再加入多级共享网格与跨 LOD 连续策略。
+
+### 验证
+
+- 80 项无窗口回归全部 PASS，新增覆盖共享网格向上取整、九块完整覆盖，以及横纵相邻 Chunk 的 UV/局部边界一致性；
+- VS2026 `Debug | x64` 回归测试和 `GlimmerEditor-CyouBranch` 目标构建成功；
+- NVIDIA GeForce GTX 1050 / OpenGL 4.6 下运行 25 秒，Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功加载，无断言、崩溃或 Shader 错误；
+- 未删除 `bin`、`bin-int`，构建产物继续保留。
+
 ## KB
 
 ### 为什么不用动态库？

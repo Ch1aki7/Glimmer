@@ -10,6 +10,7 @@
 #include "Glimmer/Scene/Scene.h"
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Terrain/Terrain.h"
+#include "Glimmer/Terrain/TerrainChunkLayout.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
 #include "Editor/EditorCommand.h"
 
@@ -52,6 +53,11 @@ namespace {
 	bool Near(const glm::vec3& left, const glm::vec3& right)
 	{
 		return Near(left.x, right.x) && Near(left.y, right.y) && Near(left.z, right.z);
+	}
+
+	bool Near(const glm::vec2& left, const glm::vec2& right)
+	{
+		return Near(left.x, right.x) && Near(left.y, right.y);
 	}
 
 	bool Near(const glm::vec4& left, const glm::vec4& right)
@@ -563,6 +569,67 @@ namespace {
 			"unknown terrain preset falls back to Custom");
 	}
 
+	void TestTerrainChunkLayout(TestContext& context)
+	{
+		const uint32_t sharedResolution =
+			gl::TerrainChunkLayout::CalculateSharedMeshResolution(256);
+		const auto chunks =
+			gl::TerrainChunkLayout::Build(256.0f, sharedResolution);
+		context.Check(sharedResolution == 86
+			&& chunks.size() == gl::TerrainChunkLayout::ChunkCount,
+			"terrain chunks share one ceil-divided mesh resolution");
+
+		bool regionsAreContinuous = true;
+		for (uint32_t z = 0; z < gl::TerrainChunkLayout::AxisCount; ++z)
+		{
+			for (uint32_t x = 0; x < gl::TerrainChunkLayout::AxisCount; ++x)
+			{
+				const auto& chunk =
+					chunks[z * gl::TerrainChunkLayout::AxisCount + x];
+				regionsAreContinuous = regionsAreContinuous
+					&& Near(chunk.UVScale, glm::vec2(1.0f / 3.0f))
+					&& Near(
+						chunk.LocalScale
+							* static_cast<float>(sharedResolution),
+						chunk.WorldSize);
+				if (x + 1 < gl::TerrainChunkLayout::AxisCount)
+				{
+					const auto& right = chunks[
+						z * gl::TerrainChunkLayout::AxisCount + x + 1];
+					regionsAreContinuous = regionsAreContinuous
+						&& Near(chunk.UVOffset.x + chunk.UVScale.x,
+							right.UVOffset.x)
+						&& Near(chunk.LocalOffset.x
+								+ chunk.WorldSize * 0.5f,
+							right.LocalOffset.x
+								- right.WorldSize * 0.5f);
+				}
+				if (z + 1 < gl::TerrainChunkLayout::AxisCount)
+				{
+					const auto& above = chunks[
+						(z + 1) * gl::TerrainChunkLayout::AxisCount + x];
+					regionsAreContinuous = regionsAreContinuous
+						&& Near(chunk.UVOffset.y + chunk.UVScale.y,
+							above.UVOffset.y)
+						&& Near(chunk.LocalOffset.y
+								+ chunk.WorldSize * 0.5f,
+							above.LocalOffset.y
+								- above.WorldSize * 0.5f);
+				}
+			}
+		}
+		const auto& first = chunks.front();
+		const auto& last = chunks.back();
+		regionsAreContinuous = regionsAreContinuous
+			&& Near(first.LocalOffset.x - first.WorldSize * 0.5f, -128.0f)
+			&& Near(first.LocalOffset.y - first.WorldSize * 0.5f, -128.0f)
+			&& Near(last.LocalOffset.x + last.WorldSize * 0.5f, 128.0f)
+			&& Near(last.LocalOffset.y + last.WorldSize * 0.5f, 128.0f)
+			&& Near(last.UVOffset + last.UVScale, glm::vec2(1.0f));
+		context.Check(regionsAreContinuous,
+			"3x3 terrain chunks cover continuous UV and local-space bounds");
+	}
+
 	void TestShadowFrustumCulling(TestContext& context)
 	{
 		const glm::mat4 identity(1.0f);
@@ -904,6 +971,7 @@ int main(int argc, char** argv)
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
 	TestTerrainCopyAndTransactions(context);
 	TestTerrainPresets(context);
+	TestTerrainChunkLayout(context);
 	TestShadowFrustumCulling(context);
 	TestEnvironmentMapFoundation(context, temporaryDirectory.Path());
 

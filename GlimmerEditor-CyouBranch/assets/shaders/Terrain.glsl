@@ -16,6 +16,10 @@ uniform float u_MaxHeight;
 uniform float u_UVScale;
 uniform vec2 u_TexelSize;
 uniform float u_SampleSpacing;
+uniform vec2 u_ChunkUVOffset;
+uniform vec2 u_ChunkUVScale;
+uniform vec2 u_ChunkLocalOffset;
+uniform float u_ChunkLocalScale;
 
 out vec3 v_WorldPos;
 out vec3 v_Normal;
@@ -32,13 +36,16 @@ float SampleHeight(vec2 uv)
 
 void main()
 {
-	vec2 uv = a_TexCoord * u_UVScale;
+	vec2 uv = u_ChunkUVOffset
+		+ a_TexCoord * u_ChunkUVScale * u_UVScale;
 	float height = SampleHeight(uv);
 	float leftHeight = SampleHeight(uv - vec2(u_TexelSize.x, 0.0));
 	float rightHeight = SampleHeight(uv + vec2(u_TexelSize.x, 0.0));
 	float downHeight = SampleHeight(uv - vec2(0.0, u_TexelSize.y));
 	float upHeight = SampleHeight(uv + vec2(0.0, u_TexelSize.y));
 	vec3 localPosition = a_Position;
+	localPosition.xz = a_Position.xz * u_ChunkLocalScale
+		+ u_ChunkLocalOffset;
 	localPosition.y = height * u_MaxHeight;
 	float spacing = max(u_SampleSpacing, 0.0001);
 	vec3 localNormal = u_HasDerivedMaps != 0

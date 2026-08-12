@@ -91,6 +91,9 @@ namespace gl {
 				ImGui::Separator();
 				ImGui::TextUnformatted("Terrain");
 				ImGui::Text("Draw Calls: %u", terrainStatistics.DrawCalls);
+				ImGui::Text("Chunks / Shared Meshes: %u / %u",
+					terrainStatistics.SubmittedChunks,
+					terrainStatistics.SharedMeshes);
 				ImGui::Text("Bound Material Textures: %u",
 					terrainStatistics.BoundMaterialTextures);
 				if (terrainStatistics.GpuTimingAvailable)

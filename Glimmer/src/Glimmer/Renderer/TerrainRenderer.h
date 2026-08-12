@@ -17,6 +17,8 @@ namespace gl {
 		struct Statistics
 		{
 			uint32_t DrawCalls = 0;
+			uint32_t SubmittedChunks = 0;
+			uint32_t SharedMeshes = 0;
 			uint32_t BoundMaterialTextures = 0;
 			float GpuMilliseconds = 0.0f;
 			uint64_t GpuTimingSample = 0;

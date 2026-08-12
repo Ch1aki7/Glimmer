@@ -12,6 +12,10 @@ uniform sampler2D u_HeightMap;
 uniform float u_MaxHeight;
 uniform int u_IsTerrain;
 uniform int u_UseInstancing;
+uniform vec2 u_ChunkUVOffset;
+uniform vec2 u_ChunkUVScale;
+uniform vec2 u_ChunkLocalOffset;
+uniform float u_ChunkLocalScale;
 
 layout(location = 0) out vec2 v_TexCoord;
 
@@ -19,8 +23,16 @@ void main()
 {
 	vec3 localPosition = a_Position;
 	if (u_IsTerrain != 0)
-		localPosition.y = texture(u_HeightMap, a_TerrainTexCoord).r * u_MaxHeight;
-	v_TexCoord = u_IsTerrain != 0 ? a_TerrainTexCoord : a_ModelTexCoord;
+	{
+		vec2 terrainUV = u_ChunkUVOffset
+			+ a_TerrainTexCoord * u_ChunkUVScale;
+		localPosition.xz = a_Position.xz * u_ChunkLocalScale
+			+ u_ChunkLocalOffset;
+		localPosition.y = texture(u_HeightMap, terrainUV).r * u_MaxHeight;
+		v_TexCoord = terrainUV;
+	}
+	else
+		v_TexCoord = a_ModelTexCoord;
 	mat4 transform = u_UseInstancing != 0 ? a_InstanceTransform : u_Transform;
 	gl_Position = u_LightViewProjection * transform * vec4(localPosition, 1.0);
 }

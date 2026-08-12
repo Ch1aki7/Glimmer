@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P11 Terrain Chunk、LOD 与剔除
-- 主线状态：待开始（先建立固定 3×3 Chunk 与连续边界验证，再接入剔除和距离 LOD）
+- 主线状态：进行中（固定 `3×3` Chunk、共享网格与 Shadow Chunk 剔除已落地；下一步接入颜色通道视锥剔除）
 
 ## 使用与更新规则
 
@@ -59,7 +59,7 @@
 
 **依赖**：P7 地形生成和 P8 TerrainMaterial 在单块地形上稳定。
 
-**状态**：待开始。
+**状态**：进行中。
 
 **目标**
 
@@ -73,6 +73,15 @@
 - Chunk 边缘无裂缝和法线断层；
 - 视锥外 Chunk 不提交 DrawCall；
 - LOD 切换不过度跳变，近景精度和远景覆盖可独立调整。
+
+**阶段进展（2026-08-12）**
+
+- 新增纯 CPU `TerrainChunkLayout`，固定生成 `3×3` 区域；整体世界覆盖范围保持不变，每块使用连续的全局 Height UV 和局部 XZ 偏移/缩放；
+- `TerrainRenderer` 只创建一份按 `ceil(MeshResolution / 3)` 计算的共享 `TerrainMesh`，颜色通道以 9 次提交复用同一 VAO/Index Buffer，不复制 Height、派生图或材质纹理；
+- `ShadowRenderer` 复用同一 Chunk 布局，按每块独立 Bounds 执行级联视锥测试，再上传相同的 Chunk 坐标后绘制；
+- Debug Overview 已显示 Terrain Draw Calls、Submitted Chunks 与 Shared Meshes，默认完整可见地形应为 `9 / 9 / 1`；
+- 80 项无窗口回归全部通过，覆盖共享网格分辨率、横纵相邻边的 UV/局部坐标连续性及整体边界；VS2026 `Debug | x64` 回归和编辑器目标构建成功；GTX 1050 / OpenGL 4.6 运行 25 秒，Terrain、ShadowDepth 和三条 Terrain Compute Shader 均加载成功且无断言或崩溃；
+- 尚未完成颜色通道 Camera Frustum 剔除、距离 LOD 和跨 LOD 接缝策略，因此 P11 不进入已完成里程碑。
 
 ## 后续任务
 
@@ -395,7 +404,7 @@
 - PBRModel 已支持 Normal、AO 与 Emissive Texture；Metallic/Roughness 仍为标量，尚未定义独立贴图或 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
-- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；仍缺少 Chunk/LOD 和固定步长 Runtime Erosion 调度；
+- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；固定 `3×3` Chunk 与 Shadow Chunk 剔除已落地，仍缺颜色通道 Chunk 剔除、距离 LOD、跨 LOD 接缝策略和固定步长 Runtime Erosion 调度；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；

@@ -8,6 +8,7 @@
 #include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Renderer/GPUTimer.h"
 #include "Glimmer/Terrain/Terrain.h"
+#include "Glimmer/Terrain/TerrainChunkLayout.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
 
 #include <cstdlib>
@@ -146,10 +147,14 @@ namespace gl {
 			component.Runtime = CreateRef<TerrainRuntime>();
 		auto& runtime = *component.Runtime;
 
-		if (!runtime.Mesh || runtime.LoadedMeshResolution != specification.MeshResolution)
+		const uint32_t sharedMeshResolution =
+			TerrainChunkLayout::CalculateSharedMeshResolution(
+				specification.MeshResolution);
+		if (!runtime.Mesh
+			|| runtime.LoadedMeshResolution != sharedMeshResolution)
 		{
-			runtime.Mesh = CreateRef<TerrainMesh>(std::max(specification.MeshResolution, 1u));
-			runtime.LoadedMeshResolution = specification.MeshResolution;
+			runtime.Mesh = CreateRef<TerrainMesh>(sharedMeshResolution);
+			runtime.LoadedMeshResolution = sharedMeshResolution;
 		}
 
 		if (specification.Procedural)
@@ -183,7 +188,8 @@ namespace gl {
 			if (runtime.Dirty)
 			{
 				runtime.Generator->Generate(specification,
-					static_cast<float>(runtime.Mesh->GetGridSize()));
+					static_cast<float>(
+						std::max(specification.MeshResolution, 1u)));
 				runtime.LastGenerationDispatchCount =
 					runtime.Generator->GetLastDispatchCount();
 				++runtime.GenerationVersion;
@@ -199,7 +205,8 @@ namespace gl {
 				const TerrainValidationResult first =
 					runtime.Generator->ValidateOutputs();
 				runtime.Generator->Generate(specification,
-					static_cast<float>(runtime.Mesh->GetGridSize()));
+					static_cast<float>(
+						std::max(specification.MeshResolution, 1u)));
 				const TerrainValidationResult second =
 					runtime.Generator->ValidateOutputs();
 				runtime.HeightMap = runtime.Generator->GetHeightMap();
@@ -262,7 +269,9 @@ namespace gl {
 			1.0f / static_cast<float>(runtime.HeightMap->GetHeight()) });
 		const uint32_t sampleCount = runtime.HeightMap->GetWidth() > 1
 			? runtime.HeightMap->GetWidth() - 1 : 1;
-		const float sampleSpacing = static_cast<float>(runtime.Mesh->GetGridSize())
+		const float terrainWorldSize = static_cast<float>(
+			std::max(specification.MeshResolution, 1u));
+		const float sampleSpacing = terrainWorldSize
 			/ static_cast<float>(sampleCount);
 		shader->UploadUniformFloat("u_SampleSpacing", sampleSpacing);
 		shader->UploadUniformInt("u_TerrainSamplingMode",
@@ -339,9 +348,26 @@ namespace gl {
 				static_cast<bool>(albedo) + static_cast<bool>(normal)
 				+ static_cast<bool>(ao));
 		}
+		const auto chunks = TerrainChunkLayout::Build(
+			terrainWorldSize, runtime.Mesh->GetGridSize());
 		runtime.Mesh->Bind();
-		RenderCommand::DrawIndexed(runtime.Mesh->GetVertexArray(), runtime.Mesh->GetIndexCount());
-		++s_Data.Stats.DrawCalls;
+		s_Data.Stats.SharedMeshes = 1;
+		for (const TerrainChunkRegion& chunk : chunks)
+		{
+			shader->UploadUniformFloat2(
+				"u_ChunkUVOffset", chunk.UVOffset);
+			shader->UploadUniformFloat2(
+				"u_ChunkUVScale", chunk.UVScale);
+			shader->UploadUniformFloat2(
+				"u_ChunkLocalOffset", chunk.LocalOffset);
+			shader->UploadUniformFloat(
+				"u_ChunkLocalScale", chunk.LocalScale);
+			RenderCommand::DrawIndexed(
+				runtime.Mesh->GetVertexArray(),
+				runtime.Mesh->GetIndexCount());
+			++s_Data.Stats.SubmittedChunks;
+			++s_Data.Stats.DrawCalls;
+		}
 	}
 
 	void TerrainRenderer::Invalidate(TerrainComponent& component)

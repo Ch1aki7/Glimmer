@@ -14,6 +14,7 @@
 #include "Glimmer/Renderer/VertexArray.h"
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Terrain/Terrain.h"
+#include "Glimmer/Terrain/TerrainChunkLayout.h"
 
 #include <array>
 #include <algorithm>
@@ -579,19 +580,8 @@ namespace gl {
 		if (!s_Data.PassActive || !terrain.Runtime || !terrain.Runtime->Mesh
 			|| !terrain.Runtime->HeightMap)
 			return;
-		s_Data.Stats.CandidateDraws++;
-		const float halfSize = static_cast<float>(
-			terrain.Runtime->Mesh->GetGridSize()) * 0.5f;
 		const float minimumHeight = std::min(0.0f, terrain.Specification.HeightScale);
 		const float maximumHeight = std::max(0.0f, terrain.Specification.HeightScale);
-		if (!IntersectsClipFrustum(
-			{ -halfSize, minimumHeight, -halfSize },
-			{ halfSize, maximumHeight, halfSize },
-			transform, s_Data.LightViewProjections[s_Data.ActiveCascade]))
-		{
-			s_Data.Stats.CulledDraws++;
-			return;
-		}
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 1);
 		s_Data.DepthShader->UploadUniformInt("u_AlphaMaskEnabled", 0);
 		s_Data.DepthShader->UploadUniformInt("u_UseInstancing", 0);
@@ -599,11 +589,44 @@ namespace gl {
 		s_Data.DepthShader->UploadUniformFloat(
 			"u_MaxHeight", terrain.Specification.HeightScale);
 		terrain.Runtime->HeightMap->Bind(0);
-		RenderCommand::DrawIndexed(
-			terrain.Runtime->Mesh->GetVertexArray(), terrain.Runtime->Mesh->GetIndexCount());
-		s_Data.Stats.RenderedDraws++;
-		s_Data.Stats.DrawCalls++;
-		s_Data.Stats.IndividualDrawCalls++;
+		const float terrainWorldSize = static_cast<float>(
+			std::max(terrain.Specification.MeshResolution, 1u));
+		const auto chunks = TerrainChunkLayout::Build(
+			terrainWorldSize, terrain.Runtime->Mesh->GetGridSize());
+		for (const TerrainChunkRegion& chunk : chunks)
+		{
+			++s_Data.Stats.CandidateDraws;
+			const float halfSize = chunk.WorldSize * 0.5f;
+			const glm::vec3 boundsMin(
+				chunk.LocalOffset.x - halfSize,
+				minimumHeight,
+				chunk.LocalOffset.y - halfSize);
+			const glm::vec3 boundsMax(
+				chunk.LocalOffset.x + halfSize,
+				maximumHeight,
+				chunk.LocalOffset.y + halfSize);
+			if (!IntersectsClipFrustum(
+				boundsMin, boundsMax, transform,
+				s_Data.LightViewProjections[s_Data.ActiveCascade]))
+			{
+				++s_Data.Stats.CulledDraws;
+				continue;
+			}
+			s_Data.DepthShader->UploadUniformFloat2(
+				"u_ChunkUVOffset", chunk.UVOffset);
+			s_Data.DepthShader->UploadUniformFloat2(
+				"u_ChunkUVScale", chunk.UVScale);
+			s_Data.DepthShader->UploadUniformFloat2(
+				"u_ChunkLocalOffset", chunk.LocalOffset);
+			s_Data.DepthShader->UploadUniformFloat(
+				"u_ChunkLocalScale", chunk.LocalScale);
+			RenderCommand::DrawIndexed(
+				terrain.Runtime->Mesh->GetVertexArray(),
+				terrain.Runtime->Mesh->GetIndexCount());
+			++s_Data.Stats.RenderedDraws;
+			++s_Data.Stats.DrawCalls;
+			++s_Data.Stats.IndividualDrawCalls;
+		}
 	}
 
 	void ShadowRenderer::EndCascade()
