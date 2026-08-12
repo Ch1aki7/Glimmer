@@ -192,6 +192,8 @@ flowchart LR
 
 Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Mask 被 `discard` 的像素不写颜色、深度或 EntityID；Blend 的有效 Alpha 小于等于 `1/255` 时同样丢弃，其余透明片元按远到近顺序写入 EntityID。Skybox 使用只读深度和 LessEqual 在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
 
+Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。ToneMapping Pass 同时读取 HDR Color 与 Scene Depth，并从当前编辑/运行相机获得 Inverse ViewProjection 和 Camera Position；首版 Distance Fog 对 `depth < 1` 的几何重建世界位置，在曝光、ACES 与 Gamma 之前在线性 HDR 空间混合纯运行时 Fog Color。天空深度被显式跳过，Distance Fog 参数当前由 Editor Settings 持有，不属于 Scene、Camera 或 Environment 序列化状态。
+
 ### 5.4 光照、PBR、天空盒与地形
 
 Scene 每帧从第一个启用的 DirectionalLight、最多 16 个 PointLight 和第一个启用且拥有有效 Cubemap Handle 的 SkyLight 构造 `LightEnvironment`。Renderer 将方向光与点光转换为与 GLSL `std140` 对齐的 GPU 数据并上传到 binding 1 的 UBO；SkyLight Handle、Intensity 和启用状态交给 `EnvironmentLighting` 解析，不写入该 UBO。
@@ -444,7 +446,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已形成 P11 实现。Metallic/Roughness Texture/ORM、Runtime Erosion、局部场景反射、连续几何 Morph、动态 Chunk 层级和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已完成 P11 验收。Metallic/Roughness Texture/ORM、Runtime Erosion、局部场景反射、连续几何 Morph、动态 Chunk 层级和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。当前 P12 从 Scene Depth 世界位置重建和线性 HDR 距离雾开始，规划不作为已实现事实。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

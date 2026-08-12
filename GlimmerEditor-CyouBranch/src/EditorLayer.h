@@ -43,6 +43,11 @@ namespace gl {
 		Ref<Framebuffer> m_DisplayFramebuffer;
 		bool m_GrayscaleEnabled = false;
 		float m_Exposure = 1.0f;
+		bool m_DistanceFogEnabled = false;
+		float m_DistanceFogDensity = 0.012f;
+		float m_DistanceFogStart = 60.0f;
+		float m_DistanceFogEnd = 260.0f;
+		glm::vec3 m_DistanceFogColor = { 0.55f, 0.65f, 0.75f };
 		uint32_t m_FinalSceneTexture = 0;
 
 		// 场景 & 层级面板

@@ -9,8 +9,8 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P11 Terrain Chunk、LOD 与剔除
-- 主线状态：进行中（固定 `3×3` Chunk、Color/Shadow 剔除、三档距离 LOD、Skirt 与 LOD 调试着色已落地；等待人工接缝验收）
+- 当前主线：P12 山脉大气表现与后处理
+- 主线状态：进行中（线性 HDR 距离雾已落地；下一步加入高度雾与环境光色关联）
 
 ## 使用与更新规则
 
@@ -55,44 +55,11 @@
 
 ## 当前主线
 
-### P11：Terrain Chunk、LOD 与剔除
-
-**依赖**：P7 地形生成和 P8 TerrainMaterial 在单块地形上稳定。
-
-**状态**：进行中。
-
-**目标**
-
-- 从固定 `3×3` Chunk 验证坐标、采样和边缘连续；
-- 共享网格模板，增加 Bounds、视锥剔除和距离 LOD；
-- 通过 Skirt、边缘索引或 Morph 解决 LOD 接缝；
-- 规模扩大后再评估 Quadtree、Geomipmapping 或 Clipmap。
-
-**验收**
-
-- Chunk 边缘无裂缝和法线断层；
-- 视锥外 Chunk 不提交 DrawCall；
-- LOD 切换不过度跳变，近景精度和远景覆盖可独立调整。
-
-**阶段进展（2026-08-13）**
-
-- 新增纯 CPU `TerrainChunkLayout`，固定生成 `3×3` 区域；整体世界覆盖范围保持不变，每块使用连续的全局 Height UV 和局部 XZ 偏移/缩放；
-- `TerrainRenderer` 按 `ceil(MeshResolution / 3)` 创建 LOD0/1/2 三份共享网格模板，分辨率依次约为 `1 / 1/2 / 1/4`；九块区域只选择模板，不复制 Height、派生图或材质纹理；
-- `ShadowRenderer` 复用同一 Chunk 布局，按每块独立 Bounds 执行级联视锥测试，再上传相同的 Chunk 坐标后绘制；
-- Terrain Color Pass 已按 Chunk 局部 XZ 范围和 HeightScale 构造保守 AABB，并连同 Terrain 实体 Transform 投影到 Camera Clip Space；八个角点只有全部位于同一裁剪平面外才剔除，穿越边界的 Chunk 继续提交；颜色与 Shadow 通过 `FrustumCulling` 共用同一判定实现；
-- Color Pass 按 Chunk 世界中心到相机的距离选择 LOD；默认中/远阈值为 `90 / 180` 世界单位，5 单位迟滞带抑制阈值抖动，相邻四方向 Chunk 最多相差一级；Shadow Pass 固定使用 LOD0，避免阴影轮廓随相机距离切换；
-- 每级共享网格四边都带向下延伸的 Skirt，以遮盖不同拓扑边界的 T-Junction 裂缝；这是遮缝策略，不承担几何连续 Morph；
-- Debug Overview 已显示 Candidate/Submitted/Culled、三份 Shared Mesh、LOD0/1/2 可见块数、提交三角形数和可实时调整的 LOD Distances；
-- Debug Overview 新增 `Visualize Terrain LODs`：LOD0/1/2 分别以红/绿/蓝覆盖显示；也可用 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 启动，便于固定相机截图和驱动验证；该开关只影响 Color Pass 的最终显示，不影响 LOD 选择、Shadow 或序列化；
-- 88 项无窗口回归全部通过，覆盖 LOD 分辨率、距离阈值、迟滞及相邻级差；VS2026 `Debug | x64` 整解决方案构建成功；最终 EXE 以正确工作目录在 Intel Iris Xe / OpenGL 4.6 下持续运行 15 秒，Terrain、ShadowDepth 和三条 Terrain Compute Shader 均成功加载，无断言、崩溃或 Shader 错误；P11 仍需人工移动相机确认 Skirt 无可见裂缝且 LOD 统计随距离变化后再进入已完成里程碑。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P12：山脉大气表现与后处理
 
-**依赖**：Scene Depth 世界位置重建稳定；优先在 P10 后接入环境一致性。
+**依赖**：Scene Depth 世界位置重建稳定；P10 环境光照已完成。
+
+**状态**：进行中。
 
 **目标**
 
@@ -105,6 +72,24 @@
 - 远山对比度和饱和度随距离下降；
 - 天空与地形交界自然，近景不会被均匀灰雾覆盖；
 - 曝光和雾效不产生重复 Tone Mapping/Gamma。
+
+**第一步**
+
+- 审查现有 Scene HDR、Depth 与 Tone Mapping Pass，明确深度纹理采样和逆 ViewProjection 所有权；
+- 在 Tone Mapping 前加入首版距离雾，保持线性 HDR 空间混合；
+- 为启用、密度、起止距离和雾色建立纯运行时调试入口，再用固定相机验证近景保留与远山衰减。
+
+**阶段进展（2026-08-13）**
+
+- Scene HDR Framebuffer 显式使用可采样 `Depth24Stencil8` 附件；编辑相机与运行相机都向 Tone Mapping Pass 提供 Camera Position 和 Inverse ViewProjection；
+- ToneMapping 在曝光、ACES 和 Gamma 之前读取深度并重建世界位置，以相机世界距离计算 `smoothstep(Start, End) × (1-exp(-Density×Distance))`；Depth 接近 1 的天空像素跳过，避免把无几何背景错误地雾化；
+- Settings 新增 Distance Fog 的 Enabled、Density、Start/End 和线性 Fog Color；设置仅存在于当前编辑器会话，不写入 Scene YAML；`GLIMMER_DISTANCE_FOG_VISUALIZE=1` 可在固定相机验证中默认开启；
+- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 下 ToneMapping、Terrain、ShadowDepth 与三条 Compute Shader 均成功编译，固定相机截图确认近景保留、远景向雾色衰减且无崩溃或 Shader 错误；
+- 下一步加入随世界高度变化的密度积分，并让雾色可选择跟随 SkyLight/主方向光，P12 暂不进入已完成里程碑。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P13：固定步长水流与运行时侵蚀
 
@@ -151,6 +136,14 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-13：P11 Terrain Chunk、LOD 与剔除
+
+- Terrain 固定拆分为 `3×3` Chunk，Color/Shadow Pass 使用共享布局与保守八角点视锥剔除；九块共用 Height、派生图和 TerrainMaterial 绑定；
+- Runtime 持有约 `1 / 1/2 / 1/4` 密度的三份共享网格，Color Pass 按世界距离选择 LOD，加入 5 单位迟滞和相邻四方向最多一级的约束；Shadow 固定使用 LOD0；
+- 三档网格四边使用 Skirt 遮盖 T-Junction；Debug Overview 提供 LOD 数量、三角形数、距离阈值及红/绿/蓝 LOD 调试着色；
+- 验证：88 项无窗口回归全部 PASS，VS2026 `Debug | x64` 整解决方案构建成功；Intel Iris Xe / OpenGL 4.6 下 Terrain、ShadowDepth 与三条 Compute Shader 均正常加载；固定相机截图呈现连续的红/绿/蓝近中远区域，颜色边界未露出天空盒或 Clear Color，也未出现孤立越级 Chunk；
+- 提交：待提交。
 
 ### 2026-08-12：P10 IBL 环境光照
 

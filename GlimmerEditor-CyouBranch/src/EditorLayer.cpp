@@ -77,6 +77,11 @@ namespace gl {
 			return HasEnvironmentVariable("GLIMMER_TERRAIN_LOD_VISUALIZE");
 		}
 
+		bool ShouldVisualizeDistanceFog()
+		{
+			return HasEnvironmentVariable("GLIMMER_DISTANCE_FOG_VISUALIZE");
+		}
+
 		bool ShouldUseShadowCasterCloseup()
 		{
 			return HasEnvironmentVariable("GLIMMER_SHADOW_VISUAL_CLOSEUP");
@@ -326,7 +331,8 @@ namespace gl {
 		sceneFramebufferSpec.Height = 720;
 		sceneFramebufferSpec.Attachments = {
 			{ FramebufferTextureFormat::RGBA16F },
-			{ FramebufferTextureFormat::RED_INTEGER }  // 鼠标拾取
+			{ FramebufferTextureFormat::RED_INTEGER }, // 鼠标拾取
+			{ FramebufferTextureFormat::Depth24Stencil8 }
 		};
 		m_Framebuffer = Framebuffer::Create(sceneFramebufferSpec);
 
@@ -454,6 +460,11 @@ namespace gl {
 			TerrainRenderer::SetLODVisualizationEnabled(true);
 			GL_CORE_INFO("Terrain LOD visualization active: LOD0 red, LOD1 green, LOD2 blue.");
 		}
+		if (ShouldVisualizeDistanceFog())
+		{
+			m_DistanceFogEnabled = true;
+			GL_CORE_INFO("Distance fog visualization active.");
+		}
 		if (m_TerrainSamplingBenchmarkAutorun)
 		{
 			m_EditorCamera.SetView({ 0.0f, 10.0f, 0.0f },
@@ -521,6 +532,9 @@ namespace gl {
 		scenePass.ClearColorValue = { 0.1f, 0.1f, 0.1f, 1 };
 		RenderPass::Begin(scenePass);
 		m_Framebuffer->ClearAttachment(1, -1);
+		glm::mat4 postProcessViewProjection{ 1.0f };
+		glm::vec3 postProcessCameraPosition{ 0.0f };
+		bool hasPostProcessCamera = false;
 
 		{
 			GL_PROFILE_SCOPE("Scene Draw");
@@ -533,6 +547,9 @@ namespace gl {
 				skyboxView = m_EditorCamera.GetViewMatrix();
 				skyboxProjection = m_EditorCamera.GetProjectionMatrix();
 				hasSkyboxCamera = true;
+				postProcessViewProjection = skyboxProjection * skyboxView;
+				postProcessCameraPosition = m_EditorCamera.GetPosition();
+				hasPostProcessCamera = true;
 				m_ActiveScene->OnUpdateEditor(
 					ts, skyboxView, skyboxProjection,
 					m_EditorCamera.GetPosition(),
@@ -551,6 +568,10 @@ namespace gl {
 					skyboxView = glm::inverse(cameraEntity
 						.GetComponent<TransformComponent>().GetTransform());
 					hasSkyboxCamera = true;
+					postProcessViewProjection = skyboxProjection * skyboxView;
+					postProcessCameraPosition = cameraEntity
+						.GetComponent<TransformComponent>().Translation;
+					hasPostProcessCamera = true;
 				}
 			}
 
@@ -595,6 +616,22 @@ namespace gl {
 		toneMappingShader->Bind();
 		toneMappingShader->UploadUniformFloat("u_Exposure", m_Exposure);
 		toneMappingShader->UploadUniformInt("u_ApplyGrayscale", m_GrayscaleEnabled ? 1 : 0);
+		toneMappingShader->UploadUniformInt("u_DistanceFogEnabled",
+			m_DistanceFogEnabled && hasPostProcessCamera ? 1 : 0);
+		toneMappingShader->UploadUniformFloat("u_DistanceFogDensity",
+			m_DistanceFogDensity);
+		toneMappingShader->UploadUniformFloat("u_DistanceFogStart",
+			m_DistanceFogStart);
+		toneMappingShader->UploadUniformFloat("u_DistanceFogEnd",
+			m_DistanceFogEnd);
+		toneMappingShader->UploadUniformFloat3("u_DistanceFogColor",
+			m_DistanceFogColor);
+		toneMappingShader->UploadUniformFloat3("u_CameraPosition",
+			postProcessCameraPosition);
+		toneMappingShader->UploadUniformMat4("u_InverseViewProjection",
+			glm::inverse(postProcessViewProjection));
+		toneMappingShader->BindTexture("u_SceneDepth", 1,
+			m_Framebuffer->GetDepthAttachmentRendererID());
 		Renderer2D::DrawPostProcess(
 			toneMappingShader, m_Framebuffer->GetColorAttachmentRendererID());
 		RenderPass::End();
@@ -816,6 +853,17 @@ namespace gl {
 		ImGui::SeparatorText("HDR Output");
 		ImGui::DragFloat("Exposure", &m_Exposure, 0.05f, 0.01f, 10.0f);
 		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
+		ImGui::SeparatorText("Distance Fog");
+		ImGui::Checkbox("Enabled##DistanceFog", &m_DistanceFogEnabled);
+		ImGui::DragFloat("Density##DistanceFog", &m_DistanceFogDensity,
+			0.001f, 0.0f, 0.1f, "%.3f");
+		ImGui::DragFloatRange2("Start / End##DistanceFog",
+			&m_DistanceFogStart, &m_DistanceFogEnd,
+			1.0f, 0.0f, 5000.0f, "Start %.0f", "End %.0f");
+		m_DistanceFogEnd = std::max(
+			m_DistanceFogEnd, m_DistanceFogStart + 1.0f);
+		ImGui::ColorEdit3("Color##DistanceFog",
+			glm::value_ptr(m_DistanceFogColor));
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 		ImGui::End();
 

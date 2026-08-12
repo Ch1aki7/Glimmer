@@ -13128,8 +13128,45 @@ Color Pass 以 Chunk 世界中心到相机的距离选择 LOD0/1/2，默认中�
 - VS2026 `Debug | x64` 回归测试与整解决方案构建成功；
 - 最终 EXE 使用项目工作目录在 Intel Iris Xe / OpenGL 4.6 下持续运行 15 秒，Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功加载，无断言、崩溃或 Shader 错误；
 - LOD 调试着色通过 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 在同一真实 OpenGL 环境中启动验证；日志确认模式启用且新版 Terrain Shader 成功编译；
+- 固定相机最终截图显示近、中、远区域连续呈现红、绿、蓝三档；不同颜色交界处未露出天空盒或 Clear Color，未观察到孤立越级 Chunk，P11 接缝与 LOD 分布验收通过；
 - Color Pass Chunk 剔除接入后，最终 EXE 默认场景仍正常显示连续 Terrain，未发生可见 Chunk 误删；Camera Frustum 的内/外/边界/实体 Transform 判定由新增回归断言覆盖；
 - 未删除 `bin`、`bin-int`，构建产物继续保留。
+
+## Scene Depth 距离雾
+
+P12 第一阶段在现有 HDR Scene Pass 和 Tone Mapping 之间接入距离雾。Scene Framebuffer 除 `RGBA16F` 场景颜色和整数 EntityID 外，显式保留一张可采样的 `Depth24Stencil8`；后处理阶段使用当前相机的逆 ViewProjection 将屏幕 UV 与深度还原到世界位置，再计算相机到该片元的真实世界距离。
+
+雾在曝光和 ACES Filmic 之前混合，因此 Fog Color 与 Scene HDR Color 都处于线性空间，只经过一次 Tone Mapping 和 Gamma。深度接近 1 的像素代表没有场景几何，当前策略保留 Skybox 原色，避免把天空误当成远平面实体。
+
+```glsl
+vec4 clip = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+vec4 world = u_InverseViewProjection * clip;
+world /= world.w;
+
+float distanceToCamera = length(world.xyz - u_CameraPosition);
+float rangeWeight = smoothstep(startDistance, endDistance, distanceToCamera);
+float opticalWeight = 1.0 - exp(-density * max(distanceToCamera - startDistance, 0.0));
+float fogWeight = rangeWeight * opticalWeight;
+linearColor = mix(linearColor, fogColor, fogWeight);
+```
+
+### 使用方法
+
+打开 `Settings → Distance Fog`：
+
+- `Enabled`：开启或关闭距离雾；
+- `Density`：控制距离增加时的指数衰减速度；
+- `Start / End`：控制近景保护区和完全进入远景雾的范围；
+- `Color`：线性 HDR 雾色。
+
+默认参数为 Density `0.012`、Start `60`、End `260`。调试启动可以设置 `GLIMMER_DISTANCE_FOG_VISUALIZE=1`；该开关和全部雾参数当前只存在于编辑器会话，不保存到 Scene YAML。
+
+### 验证
+
+- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；
+- Intel Iris Xe / OpenGL 4.6 下 ToneMapping、Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功编译；
+- 固定 Terrain 相机截图确认近景保留原材质对比度，远景逐步向雾色衰减，天空深度不参与世界位置雾化；无 Shader 错误、断言或崩溃；
+- 下一阶段加入高度密度和环境光色关联，当前距离雾不代表完整大气散射。
 
 ## KB
 
