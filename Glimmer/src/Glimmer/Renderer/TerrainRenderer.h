@@ -47,6 +47,8 @@ namespace gl {
 		static float GetDetailDistance();
 		static void SetLODDistances(float middleDistance, float farDistance);
 		static glm::vec2 GetLODDistances();
+		static void SetLODVisualizationEnabled(bool enabled);
+		static bool IsLODVisualizationEnabled();
 		static Statistics GetStatistics();
 		static bool IntersectsCameraFrustum(
 			const glm::vec3& boundsMin,

@@ -224,6 +224,7 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 - `TerrainSpecification::TerrainMaterialHandle` 引用独立 `.glterrainmat`；Handle 为 0 时 TerrainRenderer 使用内建四层颜色/PBR 参数且不加载具体层纹理，有效 Handle 才从 AssetManager 缓存解析四层参数，并使用纹理单元 4～15 绑定每层 Albedo/Normal/AO；
 - Terrain Shader 以世界坐标对 XY/XZ/YZ 三个平面采样并按法线方向混合，避免陡坡沿网格 UV 拉伸；派生权重再叠加高度、坡度、曲率和 Flow/低地湿度修正，最后进入 Cook–Torrance 直接光与线性 HDR 输出；
 - TerrainRenderer 的采样质量是纯运行时全局状态：Full-4 保留完整基线，Top-2 在最终权重确定后裁剪低贡献层，Dominant Detail 只为主导层读取 Normal/AO，Auto Distance 在近景 Top-2 与远景 Dominant Detail 间平滑衰减次要层细节；默认使用 Auto，距离阈值为 80 世界单位。采样设置、GPU Timer 与 Statistics 不进入 Scene YAML；
+- TerrainRenderer 另持有纯运行时 LOD 可视化开关；Color Pass 在正常 PBR 与级联调试结果之后，以红/绿/蓝覆盖 LOD0/1/2。DebugPanel 和 `GLIMMER_TERRAIN_LOD_VISUALIZE` 只控制该开关，不改变 LOD 选择、Shadow LOD0 路径或 Scene YAML；
 - 参数、Compute Shader 或资源变化时通过 `Invalidate` 使 Runtime 失效。正常帧只采样缓存结果；生成、有限次侵蚀与派生只在 Dirty 或显式 Regenerate 时 Dispatch。
 
 Color Pass 和 ShadowRenderer 都使用同一个 `TerrainChunkLayout`，按每个 Chunk 的局部 XZ 范围与 Terrain HeightScale 构造独立 AABB，再通过共用的 `FrustumCulling` 八角点算法连同实体 Transform 投入 Camera 或 Light Clip Space。只有八个角点全部位于同一平面外才剔除，因此跨越视锥边界的 Chunk 保守保留；通过测试后才上传 Chunk Uniform 并提交 Draw。Color Pass 使用距离 LOD，Shadow Pass 固定使用 `TerrainRuntime::Mesh` 指向的 LOD0；两条路径都在顶点阶段把 Skirt 标记顶点下移，遮盖不同分辨率的接缝。Chunk 布局、LOD 历史、统计和共享 Mesh 都是运行时状态，不进入 Scene YAML。
@@ -343,7 +344,7 @@ flowchart LR
 
 进入 Play 时，EditorLayer 清理选择，复制 EditorScene 为 RuntimeScene，切换所有面板上下文并禁用编辑命令历史；停止时销毁运行时脚本，丢弃 RuntimeScene，再切回 EditorScene。运行时修改不会写回编辑场景。
 
-DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D/Terrain Overview、`InstancingLabTool`、`PBRMaterialLabTool` 与 `TerrainSamplingBenchmarkTool`。前两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。Terrain Sampling Benchmark 不创建或持有 Scene，只读取 TerrainRenderer Statistics 并切换纯运行时采样档位；手动入口要求当前 Terrain 已绑定具体纹理。
+DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D/Terrain Overview、`InstancingLabTool`、`PBRMaterialLabTool` 与 `TerrainSamplingBenchmarkTool`。Terrain Overview 还提供 LOD0/1/2 统计、距离阈值和运行时调试着色。前两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。Terrain Sampling Benchmark 不创建或持有 Scene，只读取 TerrainRenderer Statistics 并切换纯运行时采样档位；手动入口要求当前 Terrain 已绑定具体纹理。
 
 Instancing Lab 同时托管 Shadow Benchmark 状态机和 Shadow Visual Validation 预设。Benchmark 只修改 Lab 自己的 DirectionalLight，在固定的 9 组 Cascade/Resolution 配置间轮换，并在每次切换后先预热再采样。`ShadowRenderer::Statistics::GpuTimingSample` 是跨帧单调递增的 Query 结果序号；状态机仅在序号变化时接收耗时，因而不会把非阻塞计时器保留的上一结果重复计入平均值。DebugPanel 在窗口可见性判断之前推进状态机，使页签切换或关闭面板不会暂停测试；结果只保存在工具运行时内存中。Visual Validation 复用相同临时 Scene 边界，生成 Opaque、Mask、Blend 三种投影策略对照和四级深度标记，通过 EditorLayer 提供的受控相机框选回调调用 `EditorCamera::SetView`，提供级联全景与投影物近景两种构图；它只调整临时方向光和纯运行时级联调试开关，不污染正式 Scene。
 

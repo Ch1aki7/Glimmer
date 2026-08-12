@@ -13120,11 +13120,14 @@ Color Pass 以 Chunk 世界中心到相机的距离选择 LOD0/1/2，默认中�
 
 打开 `Debug → Overview → Terrain`：完整可见时 Candidate 应为 9，Submitted 与 Frustum Culled 之和始终为 9，Shared Meshes 为 3。`LOD Chunks (0 / 1 / 2)` 显示本帧实际提交的各级数量，`Submitted Triangles` 会随远处块使用低级网格而下降。拖动 `LOD Distances` 可以立即调整中/远阈值；把两值调小应看到更多 LOD2，把两值调大则更多 LOD0。移动相机跨过阈值时检查边界，不能出现能看到天空盒或 Clear Color 的裂缝。
 
+勾选 `Visualize Terrain LODs` 后，LOD0、LOD1、LOD2 分别覆盖为红、绿、蓝。它适合同时观察九块的分级、阈值迟滞和相邻级差；关闭后立即恢复正常 TerrainMaterial。无人值守或固定相机检查可以在启动前设置 `GLIMMER_TERRAIN_LOD_VISUALIZE=1`，该环境变量不保存到场景。
+
 ### 验证
 
 - 88 项无窗口回归覆盖共享网格向上取整、九块完整覆盖、视锥判定，以及 LOD 分辨率、距离阈值、迟滞和相邻级差；
 - VS2026 `Debug | x64` 回归测试与整解决方案构建成功；
 - 最终 EXE 使用项目工作目录在 Intel Iris Xe / OpenGL 4.6 下持续运行 15 秒，Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功加载，无断言、崩溃或 Shader 错误；
+- LOD 调试着色通过 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 在同一真实 OpenGL 环境中启动验证；日志确认模式启用且新版 Terrain Shader 成功编译；
 - Color Pass Chunk 剔除接入后，最终 EXE 默认场景仍正常显示连续 Terrain，未发生可见 Chunk 误删；Camera Frustum 的内/外/边界/实体 Transform 判定由新增回归断言覆盖；
 - 未删除 `bin`、`bin-int`，构建产物继续保留。
 

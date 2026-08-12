@@ -26,6 +26,7 @@ namespace gl {
 			float LODMiddleDistance = 90.0f;
 			float LODFarDistance = 180.0f;
 			float LODHysteresis = 5.0f;
+			bool VisualizeLODs = false;
 			float LastGpuMilliseconds = 0.0f;
 			uint64_t GpuTimingSample = 0;
 			bool HasGpuTiming = false;
@@ -289,6 +290,8 @@ namespace gl {
 		const float skirtDepth = std::max(
 			2.0f, std::abs(specification.HeightScale) * 0.08f);
 		shader->UploadUniformFloat("u_SkirtDepth", skirtDepth);
+		shader->UploadUniformInt("u_TerrainLODVisualization",
+			s_Data.VisualizeLODs ? 1 : 0);
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
 		ShadowRenderer::BindForLighting(shader, 16);
@@ -415,6 +418,8 @@ namespace gl {
 			shader->UploadUniformFloat(
 				"u_ChunkLocalScale", chunk.WorldSize
 					/ static_cast<float>(lodMesh->GetGridSize()));
+			shader->UploadUniformInt("u_TerrainLODLevel",
+				static_cast<int>(lodLevel));
 			RenderCommand::DrawIndexed(
 				lodMesh->GetVertexArray(), lodMesh->GetIndexCount());
 			++s_Data.Stats.SubmittedChunks;
@@ -468,6 +473,16 @@ namespace gl {
 	glm::vec2 TerrainRenderer::GetLODDistances()
 	{
 		return { s_Data.LODMiddleDistance, s_Data.LODFarDistance };
+	}
+
+	void TerrainRenderer::SetLODVisualizationEnabled(bool enabled)
+	{
+		s_Data.VisualizeLODs = enabled;
+	}
+
+	bool TerrainRenderer::IsLODVisualizationEnabled()
+	{
+		return s_Data.VisualizeLODs;
 	}
 
 	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()

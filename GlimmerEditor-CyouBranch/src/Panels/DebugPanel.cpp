@@ -108,6 +108,11 @@ namespace gl {
 					1.0f, 1.0f, 2000.0f, "%.0f"))
 					TerrainRenderer::SetLODDistances(
 						lodDistances.x, lodDistances.y);
+				bool visualizeLODs =
+					TerrainRenderer::IsLODVisualizationEnabled();
+				if (ImGui::Checkbox("Visualize Terrain LODs", &visualizeLODs))
+					TerrainRenderer::SetLODVisualizationEnabled(visualizeLODs);
+				ImGui::TextDisabled("LOD0 Red, LOD1 Green, LOD2 Blue");
 				ImGui::Text("Bound Material Textures: %u",
 					terrainStatistics.BoundMaterialTextures);
 				if (terrainStatistics.GpuTimingAvailable)

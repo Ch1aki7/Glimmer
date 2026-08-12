@@ -5,12 +5,12 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-12
+- 最近更新：2026-08-13
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P11 Terrain Chunk、LOD 与剔除
-- 主线状态：进行中（固定 `3×3` Chunk、共享网格以及 Color/Shadow Chunk 剔除已落地；下一步接入距离 LOD）
+- 主线状态：进行中（固定 `3×3` Chunk、Color/Shadow 剔除、三档距离 LOD、Skirt 与 LOD 调试着色已落地；等待人工接缝验收）
 
 ## 使用与更新规则
 
@@ -83,6 +83,7 @@
 - Color Pass 按 Chunk 世界中心到相机的距离选择 LOD；默认中/远阈值为 `90 / 180` 世界单位，5 单位迟滞带抑制阈值抖动，相邻四方向 Chunk 最多相差一级；Shadow Pass 固定使用 LOD0，避免阴影轮廓随相机距离切换；
 - 每级共享网格四边都带向下延伸的 Skirt，以遮盖不同拓扑边界的 T-Junction 裂缝；这是遮缝策略，不承担几何连续 Morph；
 - Debug Overview 已显示 Candidate/Submitted/Culled、三份 Shared Mesh、LOD0/1/2 可见块数、提交三角形数和可实时调整的 LOD Distances；
+- Debug Overview 新增 `Visualize Terrain LODs`：LOD0/1/2 分别以红/绿/蓝覆盖显示；也可用 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 启动，便于固定相机截图和驱动验证；该开关只影响 Color Pass 的最终显示，不影响 LOD 选择、Shadow 或序列化；
 - 88 项无窗口回归全部通过，覆盖 LOD 分辨率、距离阈值、迟滞及相邻级差；VS2026 `Debug | x64` 整解决方案构建成功；最终 EXE 以正确工作目录在 Intel Iris Xe / OpenGL 4.6 下持续运行 15 秒，Terrain、ShadowDepth 和三条 Terrain Compute Shader 均成功加载，无断言、崩溃或 Shader 错误；P11 仍需人工移动相机确认 Skirt 无可见裂缝且 LOD 统计随距离变化后再进入已完成里程碑。
 
 ## 后续任务

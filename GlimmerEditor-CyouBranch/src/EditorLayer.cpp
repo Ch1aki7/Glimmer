@@ -72,6 +72,11 @@ namespace gl {
 			return HasEnvironmentVariable("GLIMMER_SHADOW_VISUALIZE_CASCADES");
 		}
 
+		bool ShouldVisualizeTerrainLODs()
+		{
+			return HasEnvironmentVariable("GLIMMER_TERRAIN_LOD_VISUALIZE");
+		}
+
 		bool ShouldUseShadowCasterCloseup()
 		{
 			return HasEnvironmentVariable("GLIMMER_SHADOW_VISUAL_CLOSEUP");
@@ -444,6 +449,11 @@ namespace gl {
 		}
 		m_TerrainSamplingBenchmarkAutorun =
 			ShouldAutorunTerrainSamplingBenchmark();
+		if (ShouldVisualizeTerrainLODs())
+		{
+			TerrainRenderer::SetLODVisualizationEnabled(true);
+			GL_CORE_INFO("Terrain LOD visualization active: LOD0 red, LOD1 green, LOD2 blue.");
+		}
 		if (m_TerrainSamplingBenchmarkAutorun)
 		{
 			m_EditorCamera.SetView({ 0.0f, 10.0f, 0.0f },

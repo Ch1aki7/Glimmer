@@ -116,6 +116,8 @@ uniform float u_CurvatureInfluence;
 uniform float u_MoistureInfluence;
 uniform int u_TerrainSamplingMode;
 uniform float u_TerrainDetailDistance;
+uniform int u_TerrainLODVisualization;
+uniform int u_TerrainLODLevel;
 uniform sampler2D u_ShadowMaps[4];
 uniform mat4 u_LightViewProjections[4];
 uniform float u_ShadowCascadeSplits[4];
@@ -452,6 +454,15 @@ void main()
 	}
 	if (u_ShadowCascadeDebug != 0 && u_ShadowEnabled != 0)
 		result = mix(result, ResolveCascadeDebugColor(v_WorldPos), 0.65);
+	if (u_TerrainLODVisualization != 0)
+	{
+		vec3 lodColor = u_TerrainLODLevel == 0
+			? vec3(1.0, 0.12, 0.08)
+			: (u_TerrainLODLevel == 1
+				? vec3(0.12, 1.0, 0.18)
+				: vec3(0.10, 0.28, 1.0));
+		result = mix(result, lodColor, 0.72);
+	}
 	o_Color = vec4(max(result, vec3(0.0)), 1.0);
 	o_EntityID = v_EntityID;
 }
