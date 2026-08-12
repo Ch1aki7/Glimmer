@@ -629,6 +629,47 @@ namespace {
 			&& Near(last.UVOffset + last.UVScale, glm::vec2(1.0f));
 		context.Check(regionsAreContinuous,
 			"3x3 terrain chunks cover continuous UV and local-space bounds");
+
+		const auto lodResolutions =
+			gl::TerrainChunkLayout::CalculateLODResolutions(sharedResolution);
+		context.Check(lodResolutions[0] == 86
+			&& lodResolutions[1] == 43 && lodResolutions[2] == 22,
+			"terrain chunk LOD meshes reduce shared resolution by powers of two");
+		context.Check(gl::TerrainChunkLayout::SelectLODLevel(89.0f, 90.0f, 180.0f) == 0
+			&& gl::TerrainChunkLayout::SelectLODLevel(90.0f, 90.0f, 180.0f) == 1
+			&& gl::TerrainChunkLayout::SelectLODLevel(180.0f, 90.0f, 180.0f) == 2,
+			"terrain chunk LOD selection follows near middle and far thresholds");
+		context.Check(gl::TerrainChunkLayout::SelectLODLevelWithHysteresis(
+			92.0f, 90.0f, 180.0f, 0, 5.0f) == 0
+			&& gl::TerrainChunkLayout::SelectLODLevelWithHysteresis(
+				96.0f, 90.0f, 180.0f, 0, 5.0f) == 1
+			&& gl::TerrainChunkLayout::SelectLODLevelWithHysteresis(
+				87.0f, 90.0f, 180.0f, 1, 5.0f) == 1,
+			"terrain chunk LOD hysteresis prevents threshold flicker");
+		std::array<uint32_t, gl::TerrainChunkLayout::ChunkCount> unstable{
+			0, 2, 2,
+			2, 2, 2,
+			2, 2, 2
+		};
+		const auto stable =
+			gl::TerrainChunkLayout::StabilizeNeighborLODs(unstable);
+		bool neighborDeltaIsBounded = true;
+		for (uint32_t z = 0; z < gl::TerrainChunkLayout::AxisCount; ++z)
+			for (uint32_t x = 0; x < gl::TerrainChunkLayout::AxisCount; ++x)
+			{
+				const uint32_t index = z * gl::TerrainChunkLayout::AxisCount + x;
+				if (x + 1 < gl::TerrainChunkLayout::AxisCount)
+					neighborDeltaIsBounded &= std::abs(
+						static_cast<int>(stable[index])
+						- static_cast<int>(stable[index + 1])) <= 1;
+				if (z + 1 < gl::TerrainChunkLayout::AxisCount)
+					neighborDeltaIsBounded &= std::abs(
+						static_cast<int>(stable[index])
+						- static_cast<int>(stable[index
+							+ gl::TerrainChunkLayout::AxisCount])) <= 1;
+			}
+		context.Check(neighborDeltaIsBounded && stable[1] == 1 && stable[3] == 1,
+			"terrain chunk LOD stabilization limits adjacent chunks to one level");
 	}
 
 	void TestShadowFrustumCulling(TestContext& context)

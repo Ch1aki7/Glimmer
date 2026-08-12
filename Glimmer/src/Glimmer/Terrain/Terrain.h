@@ -4,11 +4,16 @@
 #include "Glimmer/Renderer/TerrainMesh.h"
 #include "Glimmer/Terrain/TerrainGenerator.h"
 
+#include <array>
+
 namespace gl {
 	struct TerrainRuntime
 	{
 		Scope<TerrainGenerator> Generator;
 		Ref<TerrainMesh> Mesh;
+		std::array<Ref<TerrainMesh>, 3> LODMeshes;
+		std::array<uint32_t, 9> ChunkLODLevels{};
+		bool HasChunkLODHistory = false;
 		Ref<Texture2D> HeightMap;
 		Ref<Texture2D> NormalSlopeMap;
 		Ref<Texture2D> AnalysisMap;

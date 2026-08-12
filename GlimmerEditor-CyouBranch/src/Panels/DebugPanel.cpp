@@ -97,6 +97,17 @@ namespace gl {
 				ImGui::Text("Frustum Culled / Shared Meshes: %u / %u",
 					terrainStatistics.CulledChunks,
 					terrainStatistics.SharedMeshes);
+				ImGui::Text("LOD Chunks (0 / 1 / 2): %u / %u / %u",
+					terrainStatistics.LOD0Chunks,
+					terrainStatistics.LOD1Chunks,
+					terrainStatistics.LOD2Chunks);
+				ImGui::Text("Submitted Triangles: %llu",
+					static_cast<unsigned long long>(terrainStatistics.SubmittedTriangles));
+				glm::vec2 lodDistances = TerrainRenderer::GetLODDistances();
+				if (ImGui::DragFloat2("LOD Distances", &lodDistances.x,
+					1.0f, 1.0f, 2000.0f, "%.0f"))
+					TerrainRenderer::SetLODDistances(
+						lodDistances.x, lodDistances.y);
 				ImGui::Text("Bound Material Textures: %u",
 					terrainStatistics.BoundMaterialTextures);
 				if (terrainStatistics.GpuTimingAvailable)

@@ -219,14 +219,14 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 - 派生阶段从最终 Height 生成三张 RGBA16F Runtime 纹理：Normal/Slope、Curvature/Flow Potential、Grass/Soil/Rock/Snow Material Weights；
 - Custom、Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 预设属于可序列化规格，手动修改预设参数后转为 Custom；
 - 也可引用导入的高度图 Texture Asset；
-- `TerrainMesh` 生成规则网格；`TerrainChunkLayout` 以纯 CPU 数据固定描述 `3×3` Chunk 的全局 UV 范围、局部 XZ 范围和世界尺寸；
-- `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；它只持有一份按 `ceil(MeshResolution / 3)` 建立的共享 Chunk Mesh，九块区域复用同一 VAO/Index Buffer、Height/派生纹理和材质绑定，并通过逐块 Uniform 恢复原地形的完整覆盖；Color Pass 在提交前按 Chunk Bounds 执行 Camera Frustum 剔除；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
+- `TerrainMesh` 生成规则表面与四条重复边界 Skirt；`TerrainChunkLayout` 以纯 CPU 数据固定描述 `3×3` Chunk 的全局 UV、局部 XZ、世界尺寸、三档 LOD 分辨率及相邻级差约束；
+- `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；Runtime 持有按 `ceil(MeshResolution / 3)`、约二分之一和约四分之一建立的 LOD0/1/2 三份共享 Chunk Mesh，九块区域共用 Height/派生纹理和材质绑定，并通过逐块 Uniform 恢复完整覆盖；Color Pass 先执行 Camera Frustum 剔除，再按 Chunk 世界中心距离选择 LOD，复用上帧级别施加 5 单位迟滞，并把四方向相邻级差限制为 1；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
 - `TerrainSpecification::TerrainMaterialHandle` 引用独立 `.glterrainmat`；Handle 为 0 时 TerrainRenderer 使用内建四层颜色/PBR 参数且不加载具体层纹理，有效 Handle 才从 AssetManager 缓存解析四层参数，并使用纹理单元 4～15 绑定每层 Albedo/Normal/AO；
 - Terrain Shader 以世界坐标对 XY/XZ/YZ 三个平面采样并按法线方向混合，避免陡坡沿网格 UV 拉伸；派生权重再叠加高度、坡度、曲率和 Flow/低地湿度修正，最后进入 Cook–Torrance 直接光与线性 HDR 输出；
 - TerrainRenderer 的采样质量是纯运行时全局状态：Full-4 保留完整基线，Top-2 在最终权重确定后裁剪低贡献层，Dominant Detail 只为主导层读取 Normal/AO，Auto Distance 在近景 Top-2 与远景 Dominant Detail 间平滑衰减次要层细节；默认使用 Auto，距离阈值为 80 世界单位。采样设置、GPU Timer 与 Statistics 不进入 Scene YAML；
 - 参数、Compute Shader 或资源变化时通过 `Invalidate` 使 Runtime 失效。正常帧只采样缓存结果；生成、有限次侵蚀与派生只在 Dirty 或显式 Regenerate 时 Dispatch。
 
-Color Pass 和 ShadowRenderer 都使用同一个 `TerrainChunkLayout`，按每个 Chunk 的局部 XZ 范围与 Terrain HeightScale 构造独立 AABB，再通过共用的 `FrustumCulling` 八角点算法连同实体 Transform 投入 Camera 或 Light Clip Space。只有八个角点全部位于同一平面外才剔除，因此跨越视锥边界的 Chunk 保守保留；通过测试后才上传 Chunk Uniform 并提交 Draw。当前仍未执行距离 LOD。Chunk 布局、统计和共享 Mesh 都是运行时状态，不进入 Scene YAML。
+Color Pass 和 ShadowRenderer 都使用同一个 `TerrainChunkLayout`，按每个 Chunk 的局部 XZ 范围与 Terrain HeightScale 构造独立 AABB，再通过共用的 `FrustumCulling` 八角点算法连同实体 Transform 投入 Camera 或 Light Clip Space。只有八个角点全部位于同一平面外才剔除，因此跨越视锥边界的 Chunk 保守保留；通过测试后才上传 Chunk Uniform 并提交 Draw。Color Pass 使用距离 LOD，Shadow Pass 固定使用 `TerrainRuntime::Mesh` 指向的 LOD0；两条路径都在顶点阶段把 Skirt 标记顶点下移，遮盖不同分辨率的接缝。Chunk 布局、LOD 历史、统计和共享 Mesh 都是运行时状态，不进入 Scene YAML。
 
 `tmp/tmpTerrain` 的水流、泥沙、蒸发和气象 HLSL 仅作为后续算法参考，不属于当前运行链路。运行时水文仍必须遵守 SimulationGrid 的 Ping-Pong 所有权和跨 Dispatch 全局 Barrier；禁止在单个 Workgroup Barrier 后读取其它 Workgroup 尚未完成的输出。
 
@@ -443,7 +443,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、共享 Mesh 与 Color/Shadow Chunk 剔除也已形成 P11 基础。Metallic/Roughness Texture/ORM、Runtime Erosion、局部场景反射、距离 LOD/接缝处理和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已形成 P11 实现。Metallic/Roughness Texture/ORM、Runtime Erosion、局部场景反射、连续几何 Morph、动态 Chunk 层级和环境模拟目前均是未实现或未完整实现的后续能力，不应从本文件推断为已经落地。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

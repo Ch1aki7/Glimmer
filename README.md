@@ -13081,9 +13081,9 @@ Specular IBL = PrefilteredEnvironment(R, roughness)
 - PBR Material Lab 渲染 6/6；`64×64 / 128 samples` BRDF LUT 在 GTX 1050 / OpenGL 4.6 下生成一次，`PBRModel`、`Terrain`、`ShadowDepth` 和三条地形 Compute Shader 均成功加载；
 - 回归测试项目使用非增量链接重建，修复此前损坏的增量链接测试 EXE；未删除 `bin`、`bin-int`，编辑器构建产物保留。
 
-## Terrain 固定 3×3 Chunk 基础
+## Terrain 固定 3×3 Chunk、LOD 与剔除
 
-P11 第一阶段把原先整块提交的 Terrain 拆成固定 `3×3` 区域，但不改变场景中的 `TerrainSpecification`、整体世界尺寸或 HeightMap 内容。这一步先稳定 Chunk 坐标和共享资源边界，再在同一结构上继续增加颜色通道剔除和距离 LOD。
+P11 把原先整块提交的 Terrain 拆成固定 `3×3` 区域，但不改变场景中的 `TerrainSpecification`、整体世界尺寸或 HeightMap 内容。在稳定 Chunk 坐标与剔除边界后，Color Pass 会为每块选择三档距离 LOD，并用 Skirt 遮盖不同分辨率接缝。
 
 ### 共享网格与坐标
 
@@ -13095,32 +13095,36 @@ ChunkWorldSize       = TerrainWorldSize / 3
 ChunkUVScale         = (1/3, 1/3)
 ```
 
-九个 Chunk 不各自创建 Mesh，也不复制 Height、Normal/Slope、Analysis、Material Weights 或 TerrainMaterial 纹理。`TerrainRuntime` 仍只持有一份 Mesh；绘制每块时只上传 `UVOffset / UVScale / LocalOffset / LocalScale`，同一个顶点网格由 Shader 映射到对应的全局 Height UV 和局部 XZ 区域。因此相邻块边缘会采样完全相同的 Height/派生纹理坐标，整体边界仍覆盖原来的完整地形，而不是把同一张地形重复九次。
+九个 Chunk 不各自创建 Mesh，也不复制 Height、Normal/Slope、Analysis、Material Weights 或 TerrainMaterial 纹理。`TerrainRuntime` 只创建 LOD0、LOD1、LOD2 三份共享模板，分辨率约为 `1 / 1/2 / 1/4`；绘制每块时选择其中一份并上传 `UVOffset / UVScale / LocalOffset / LocalScale`。三档网格都会映射到相同的 Chunk 世界尺寸和全局 Height UV，因此改变密度不会缩小区域或重复地形。
 
 ```text
 TerrainComponent / TerrainRuntime
   ├─ 一套 Height + Derived Maps + TerrainMaterial 绑定
-  ├─ 一份 Shared TerrainMesh
+  ├─ 三份 Shared TerrainMesh（LOD0 / LOD1 / LOD2）
   └─ TerrainChunkLayout[9]
-       ├─ Color Pass：逐块上传坐标并复用 Mesh
-       └─ Shadow Pass：逐块 Bounds 测试后复用 Mesh
+       ├─ Color Pass：剔除后按距离选择 LOD Mesh
+       └─ Shadow Pass：逐块 Bounds 测试后固定使用 LOD0
 ```
 
 ShadowDepth 使用与颜色通道相同的 Chunk UV 和局部变换。Color Pass 与 `ShadowRenderer` 都不再把 Terrain 当成一个整体 Bounds：每块根据局部 XZ 范围和 HeightScale 建立 AABB，乘上 Terrain 实体 Transform 后分别测试 Camera ViewProjection 或当前 Cascade Light VP，剔除后才提交该块绘制。
 
 判定使用共用的八角点保守算法：只有 AABB 八个角点全部落在同一个 Clip Plane 外侧时才剔除。横跨视锥边界的 Chunk 会继续绘制，以避免因包围盒部分可见而误删地形。
 
+### 距离 LOD 与接缝
+
+Color Pass 以 Chunk 世界中心到相机的距离选择 LOD0/1/2，默认中档和远档阈值为 `90 / 180` 世界单位。首次绘制直接按距离选择；之后保留每块上帧级别，只有越过阈值外侧 5 单位后才切换，避免相机在阈值附近轻微移动时反复跳级。选择完成后再约束四方向相邻块，使其最多相差一级。
+
+不同密度边缘会形成 T-Junction。每份 `TerrainMesh` 因此在四边复制一圈顶点，Shader 用 `a_Skirt` 标记把它们向下延伸；竖向裙边覆盖潜在缝隙，但不改变表面 Height/Normal 采样。Shadow Pass 固定使用 LOD0，并同样绘制 Skirt，避免阴影轮廓随相机距离变化。
+
 ### 如何观察
 
-打开 `Debug → Overview → Terrain`：默认整块地形都在视野中时，统计应显示 `9 candidates / 9 submitted / 0 frustum culled / 1 shared mesh`。这表示九个区域通过 Camera Frustum 并分别提交，但只复用一份 GPU 网格。把相机转向地形边缘或移出地形后，Candidate 保持 9，Submitted 应下降、Frustum Culled 相应上升，且二者之和始终为 9。
-
-当前尚未接入距离 LOD、Skirt/边缘索引/Morph 接缝处理。下一阶段将在当前可见 Chunk 集合上选择多级共享网格，并解决相邻不同 LOD 的边缘连续性。
+打开 `Debug → Overview → Terrain`：完整可见时 Candidate 应为 9，Submitted 与 Frustum Culled 之和始终为 9，Shared Meshes 为 3。`LOD Chunks (0 / 1 / 2)` 显示本帧实际提交的各级数量，`Submitted Triangles` 会随远处块使用低级网格而下降。拖动 `LOD Distances` 可以立即调整中/远阈值；把两值调小应看到更多 LOD2，把两值调大则更多 LOD0。移动相机跨过阈值时检查边界，不能出现能看到天空盒或 Clear Color 的裂缝。
 
 ### 验证
 
-- 84 项无窗口回归全部 PASS，除共享网格向上取整、九块完整覆盖和相邻边连续性外，新增覆盖相机视锥内、视锥外、穿越边界及 Terrain Transform 后的 Chunk Bounds；
-- VS2026 `Debug | x64` 回归测试和 `GlimmerEditor-CyouBranch` 目标构建成功；
-- NVIDIA GeForce GTX 1050 / OpenGL 4.6 下运行 25 秒，Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功加载，无断言、崩溃或 Shader 错误；
+- 88 项无窗口回归覆盖共享网格向上取整、九块完整覆盖、视锥判定，以及 LOD 分辨率、距离阈值、迟滞和相邻级差；
+- VS2026 `Debug | x64` 回归测试与整解决方案构建成功；
+- 最终 EXE 使用项目工作目录在 Intel Iris Xe / OpenGL 4.6 下持续运行 15 秒，Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功加载，无断言、崩溃或 Shader 错误；
 - Color Pass Chunk 剔除接入后，最终 EXE 默认场景仍正常显示连续 Terrain，未发生可见 Chunk 误删；Camera Frustum 的内/外/边界/实体 Transform 判定由新增回归断言覆盖；
 - 未删除 `bin`、`bin-int`，构建产物继续保留。
 

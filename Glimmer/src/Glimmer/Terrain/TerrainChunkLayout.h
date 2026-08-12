@@ -27,6 +27,15 @@ namespace gl {
 		static std::array<TerrainChunkRegion, ChunkCount> Build(
 			float terrainWorldSize,
 			uint32_t sharedMeshResolution);
+		static std::array<uint32_t, 3> CalculateLODResolutions(
+			uint32_t highestResolution);
+		static uint32_t SelectLODLevel(float distance,
+			float middleDistance, float farDistance);
+		static uint32_t SelectLODLevelWithHysteresis(float distance,
+			float middleDistance, float farDistance, uint32_t previousLevel,
+			float hysteresis);
+		static std::array<uint32_t, ChunkCount> StabilizeNeighborLODs(
+			std::array<uint32_t, ChunkCount> levels);
 	};
 
 }

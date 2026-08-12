@@ -21,6 +21,10 @@ namespace gl {
 			uint32_t SubmittedChunks = 0;
 			uint32_t CulledChunks = 0;
 			uint32_t SharedMeshes = 0;
+			uint32_t LOD0Chunks = 0;
+			uint32_t LOD1Chunks = 0;
+			uint32_t LOD2Chunks = 0;
+			uint64_t SubmittedTriangles = 0;
 			uint32_t BoundMaterialTextures = 0;
 			float GpuMilliseconds = 0.0f;
 			uint64_t GpuTimingSample = 0;
@@ -41,6 +45,8 @@ namespace gl {
 		static SamplingMode GetSamplingMode();
 		static void SetDetailDistance(float distance);
 		static float GetDetailDistance();
+		static void SetLODDistances(float middleDistance, float farDistance);
+		static glm::vec2 GetLODDistances();
 		static Statistics GetStatistics();
 		static bool IntersectsCameraFrustum(
 			const glm::vec3& boundsMin,

@@ -3,6 +3,7 @@
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec2 a_TexCoord;
+layout(location = 2) in float a_Skirt;
 
 uniform mat4 u_ViewProjection;
 uniform mat4 u_Transform;
@@ -20,6 +21,7 @@ uniform vec2 u_ChunkUVOffset;
 uniform vec2 u_ChunkUVScale;
 uniform vec2 u_ChunkLocalOffset;
 uniform float u_ChunkLocalScale;
+uniform float u_SkirtDepth;
 
 out vec3 v_WorldPos;
 out vec3 v_Normal;
@@ -47,6 +49,7 @@ void main()
 	localPosition.xz = a_Position.xz * u_ChunkLocalScale
 		+ u_ChunkLocalOffset;
 	localPosition.y = height * u_MaxHeight;
+	localPosition.y -= a_Skirt * u_SkirtDepth;
 	float spacing = max(u_SampleSpacing, 0.0001);
 	vec3 localNormal = u_HasDerivedMaps != 0
 		? normalize(texture(u_NormalSlopeMap, uv).xyz * 2.0 - 1.0)

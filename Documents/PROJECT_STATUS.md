@@ -74,15 +74,16 @@
 - 视锥外 Chunk 不提交 DrawCall；
 - LOD 切换不过度跳变，近景精度和远景覆盖可独立调整。
 
-**阶段进展（2026-08-12）**
+**阶段进展（2026-08-13）**
 
 - 新增纯 CPU `TerrainChunkLayout`，固定生成 `3×3` 区域；整体世界覆盖范围保持不变，每块使用连续的全局 Height UV 和局部 XZ 偏移/缩放；
-- `TerrainRenderer` 只创建一份按 `ceil(MeshResolution / 3)` 计算的共享 `TerrainMesh`，颜色通道以 9 次提交复用同一 VAO/Index Buffer，不复制 Height、派生图或材质纹理；
+- `TerrainRenderer` 按 `ceil(MeshResolution / 3)` 创建 LOD0/1/2 三份共享网格模板，分辨率依次约为 `1 / 1/2 / 1/4`；九块区域只选择模板，不复制 Height、派生图或材质纹理；
 - `ShadowRenderer` 复用同一 Chunk 布局，按每块独立 Bounds 执行级联视锥测试，再上传相同的 Chunk 坐标后绘制；
 - Terrain Color Pass 已按 Chunk 局部 XZ 范围和 HeightScale 构造保守 AABB，并连同 Terrain 实体 Transform 投影到 Camera Clip Space；八个角点只有全部位于同一裁剪平面外才剔除，穿越边界的 Chunk 继续提交；颜色与 Shadow 通过 `FrustumCulling` 共用同一判定实现；
-- Debug Overview 已显示 Terrain Draw Calls、Candidate/Submitted、Frustum Culled 与 Shared Meshes；完整可见时应为 `9 candidates / 9 submitted / 0 culled / 1 shared mesh`，移动相机后 Submitted 会随可见块数下降；
-- 84 项无窗口回归全部通过，除共享网格和连续边界外，新增覆盖相机视锥内、视锥外、穿越边界及 Terrain Transform 后的 Chunk Bounds；VS2026 `Debug | x64` 回归与最终编辑器目标构建成功；最终 EXE 在默认场景中正常显示连续 Terrain，未出现可见块误删、Shader 错误或崩溃；动态 Submitted/Culled 变化可继续按 README 操作人工观察；
-- 尚未完成距离 LOD 和跨 LOD 接缝策略，因此 P11 不进入已完成里程碑。
+- Color Pass 按 Chunk 世界中心到相机的距离选择 LOD；默认中/远阈值为 `90 / 180` 世界单位，5 单位迟滞带抑制阈值抖动，相邻四方向 Chunk 最多相差一级；Shadow Pass 固定使用 LOD0，避免阴影轮廓随相机距离切换；
+- 每级共享网格四边都带向下延伸的 Skirt，以遮盖不同拓扑边界的 T-Junction 裂缝；这是遮缝策略，不承担几何连续 Morph；
+- Debug Overview 已显示 Candidate/Submitted/Culled、三份 Shared Mesh、LOD0/1/2 可见块数、提交三角形数和可实时调整的 LOD Distances；
+- 88 项无窗口回归全部通过，覆盖 LOD 分辨率、距离阈值、迟滞及相邻级差；VS2026 `Debug | x64` 整解决方案构建成功；最终 EXE 以正确工作目录在 Intel Iris Xe / OpenGL 4.6 下持续运行 15 秒，Terrain、ShadowDepth 和三条 Terrain Compute Shader 均成功加载，无断言、崩溃或 Shader 错误；P11 仍需人工移动相机确认 Skirt 无可见裂缝且 LOD 统计随距离变化后再进入已完成里程碑。
 
 ## 后续任务
 

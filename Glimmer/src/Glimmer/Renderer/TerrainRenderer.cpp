@@ -23,6 +23,9 @@ namespace gl {
 			TerrainRenderer::SamplingMode Sampling =
 				TerrainRenderer::SamplingMode::AutomaticDistance;
 			float DetailDistance = 80.0f;
+			float LODMiddleDistance = 90.0f;
+			float LODFarDistance = 180.0f;
+			float LODHysteresis = 5.0f;
 			float LastGpuMilliseconds = 0.0f;
 			uint64_t GpuTimingSample = 0;
 			bool HasGpuTiming = false;
@@ -154,7 +157,11 @@ namespace gl {
 		if (!runtime.Mesh
 			|| runtime.LoadedMeshResolution != sharedMeshResolution)
 		{
-			runtime.Mesh = CreateRef<TerrainMesh>(sharedMeshResolution);
+			const auto resolutions =
+				TerrainChunkLayout::CalculateLODResolutions(sharedMeshResolution);
+			for (size_t level = 0; level < runtime.LODMeshes.size(); ++level)
+				runtime.LODMeshes[level] = CreateRef<TerrainMesh>(resolutions[level]);
+			runtime.Mesh = runtime.LODMeshes[0];
 			runtime.LoadedMeshResolution = sharedMeshResolution;
 		}
 
@@ -279,6 +286,9 @@ namespace gl {
 			static_cast<int>(s_Data.Sampling));
 		shader->UploadUniformFloat("u_TerrainDetailDistance",
 			s_Data.DetailDistance);
+		const float skirtDepth = std::max(
+			2.0f, std::abs(specification.HeightScale) * 0.08f);
+		shader->UploadUniformFloat("u_SkirtDepth", skirtDepth);
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
 		ShadowRenderer::BindForLighting(shader, 16);
@@ -351,12 +361,31 @@ namespace gl {
 		}
 		const auto chunks = TerrainChunkLayout::Build(
 			terrainWorldSize, runtime.Mesh->GetGridSize());
+		std::array<uint32_t, TerrainChunkLayout::ChunkCount> lodLevels{};
+		for (size_t index = 0; index < chunks.size(); ++index)
+		{
+			const glm::vec4 worldCenter = transform * glm::vec4(
+				chunks[index].LocalOffset.x,
+				(specification.HeightScale * 0.5f),
+				chunks[index].LocalOffset.y, 1.0f);
+			const float distance = glm::distance(
+				cameraPosition, glm::vec3(worldCenter));
+			lodLevels[index] = runtime.HasChunkLODHistory
+				? TerrainChunkLayout::SelectLODLevelWithHysteresis(
+					distance, s_Data.LODMiddleDistance, s_Data.LODFarDistance,
+					runtime.ChunkLODLevels[index], s_Data.LODHysteresis)
+				: TerrainChunkLayout::SelectLODLevel(distance,
+					s_Data.LODMiddleDistance, s_Data.LODFarDistance);
+		}
+		lodLevels = TerrainChunkLayout::StabilizeNeighborLODs(lodLevels);
+		runtime.ChunkLODLevels = lodLevels;
+		runtime.HasChunkLODHistory = true;
 		const float minimumHeight = std::min(0.0f, specification.HeightScale);
 		const float maximumHeight = std::max(0.0f, specification.HeightScale);
-		runtime.Mesh->Bind();
-		s_Data.Stats.SharedMeshes = 1;
-		for (const TerrainChunkRegion& chunk : chunks)
+		s_Data.Stats.SharedMeshes = static_cast<uint32_t>(runtime.LODMeshes.size());
+		for (size_t chunkIndex = 0; chunkIndex < chunks.size(); ++chunkIndex)
 		{
+			const TerrainChunkRegion& chunk = chunks[chunkIndex];
 			++s_Data.Stats.CandidateChunks;
 			const float halfSize = chunk.WorldSize * 0.5f;
 			const glm::vec3 boundsMin(
@@ -373,6 +402,10 @@ namespace gl {
 				++s_Data.Stats.CulledChunks;
 				continue;
 			}
+			const uint32_t lodLevel = lodLevels[chunkIndex];
+			const Ref<TerrainMesh>& lodMesh = runtime.LODMeshes[lodLevel];
+			if (!lodMesh)
+				continue;
 			shader->UploadUniformFloat2(
 				"u_ChunkUVOffset", chunk.UVOffset);
 			shader->UploadUniformFloat2(
@@ -380,12 +413,19 @@ namespace gl {
 			shader->UploadUniformFloat2(
 				"u_ChunkLocalOffset", chunk.LocalOffset);
 			shader->UploadUniformFloat(
-				"u_ChunkLocalScale", chunk.LocalScale);
+				"u_ChunkLocalScale", chunk.WorldSize
+					/ static_cast<float>(lodMesh->GetGridSize()));
 			RenderCommand::DrawIndexed(
-				runtime.Mesh->GetVertexArray(),
-				runtime.Mesh->GetIndexCount());
+				lodMesh->GetVertexArray(), lodMesh->GetIndexCount());
 			++s_Data.Stats.SubmittedChunks;
 			++s_Data.Stats.DrawCalls;
+			switch (lodLevel)
+			{
+			case 0: ++s_Data.Stats.LOD0Chunks; break;
+			case 1: ++s_Data.Stats.LOD1Chunks; break;
+			default: ++s_Data.Stats.LOD2Chunks; break;
+			}
+			s_Data.Stats.SubmittedTriangles += lodMesh->GetIndexCount() / 3u;
 		}
 	}
 
@@ -416,6 +456,18 @@ namespace gl {
 	float TerrainRenderer::GetDetailDistance()
 	{
 		return s_Data.DetailDistance;
+	}
+
+	void TerrainRenderer::SetLODDistances(float middleDistance, float farDistance)
+	{
+		s_Data.LODMiddleDistance = std::clamp(middleDistance, 1.0f, 10000.0f);
+		s_Data.LODFarDistance = std::clamp(
+			farDistance, s_Data.LODMiddleDistance + 1.0f, 20000.0f);
+	}
+
+	glm::vec2 TerrainRenderer::GetLODDistances()
+	{
+		return { s_Data.LODMiddleDistance, s_Data.LODFarDistance };
 	}
 
 	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()
