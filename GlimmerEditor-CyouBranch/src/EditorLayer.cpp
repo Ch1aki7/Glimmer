@@ -463,7 +463,8 @@ namespace gl {
 		if (ShouldVisualizeDistanceFog())
 		{
 			m_DistanceFogEnabled = true;
-			GL_CORE_INFO("Distance fog visualization active.");
+			m_FogColorSource = 1;
+			GL_CORE_INFO("Distance and height fog visualization active with SkyLight color.");
 		}
 		if (m_TerrainSamplingBenchmarkAutorun)
 		{
@@ -614,6 +615,18 @@ namespace gl {
 		RenderPass::Begin(toneMappingPass);
 		auto toneMappingShader = m_ShaderLib.Get("ToneMapping");
 		toneMappingShader->Bind();
+		glm::vec3 resolvedFogColor = m_DistanceFogColor;
+		int resolvedFogColorSource = m_FogColorSource;
+		if (m_FogColorSource == 2 && m_ActiveScene)
+		{
+			Entity directionalLight = m_ActiveScene->GetDirectionalLightEntity();
+			if (directionalLight)
+			{
+				const auto& light = directionalLight
+					.GetComponent<DirectionalLightComponent>();
+				resolvedFogColor = light.Color * std::max(light.Intensity, 0.0f);
+			}
+		}
 		toneMappingShader->UploadUniformFloat("u_Exposure", m_Exposure);
 		toneMappingShader->UploadUniformInt("u_ApplyGrayscale", m_GrayscaleEnabled ? 1 : 0);
 		toneMappingShader->UploadUniformInt("u_DistanceFogEnabled",
@@ -625,7 +638,35 @@ namespace gl {
 		toneMappingShader->UploadUniformFloat("u_DistanceFogEnd",
 			m_DistanceFogEnd);
 		toneMappingShader->UploadUniformFloat3("u_DistanceFogColor",
-			m_DistanceFogColor);
+			resolvedFogColor);
+		toneMappingShader->UploadUniformInt("u_HeightFogEnabled",
+			m_HeightFogEnabled ? 1 : 0);
+		toneMappingShader->UploadUniformFloat("u_HeightFogBaseHeight",
+			m_HeightFogBaseHeight);
+		toneMappingShader->UploadUniformFloat("u_HeightFogFalloff",
+			m_HeightFogFalloff);
+		if (resolvedFogColorSource == 1 && !m_ActiveScene)
+			resolvedFogColorSource = 0;
+		if (resolvedFogColorSource == 1 && m_ActiveScene)
+		{
+			Entity skyLight = m_ActiveScene->GetSkyLightEntity();
+			if (skyLight)
+			{
+				const auto& component = skyLight.GetComponent<SkyLightComponent>();
+				if (Ref<Cubemap> cubemap =
+					AssetManager::GetCubemap(component.CubemapHandle))
+				{
+					cubemap->GetTexture()->Bind(2);
+					toneMappingShader->UploadUniformInt("u_FogSkyLight", 2);
+					toneMappingShader->UploadUniformFloat("u_FogSkyLightIntensity",
+						std::max(component.Intensity, 0.0f));
+				}
+				else resolvedFogColorSource = 0;
+			}
+			else resolvedFogColorSource = 0;
+		}
+		toneMappingShader->UploadUniformInt("u_FogColorSource",
+			resolvedFogColorSource);
 		toneMappingShader->UploadUniformFloat3("u_CameraPosition",
 			postProcessCameraPosition);
 		toneMappingShader->UploadUniformMat4("u_InverseViewProjection",
@@ -864,6 +905,19 @@ namespace gl {
 			m_DistanceFogEnd, m_DistanceFogStart + 1.0f);
 		ImGui::ColorEdit3("Color##DistanceFog",
 			glm::value_ptr(m_DistanceFogColor));
+		const char* fogColorSources[] = {
+			"Manual", "Sky Light", "Directional Light"
+		};
+		ImGui::Combo("Color Source##DistanceFog", &m_FogColorSource,
+			fogColorSources, IM_ARRAYSIZE(fogColorSources));
+		ImGui::Checkbox("Height Fog", &m_HeightFogEnabled);
+		if (m_HeightFogEnabled)
+		{
+			ImGui::DragFloat("Base Height##DistanceFog", &m_HeightFogBaseHeight,
+				0.5f, -1000.0f, 1000.0f);
+			ImGui::DragFloat("Height Falloff##DistanceFog", &m_HeightFogFalloff,
+				0.001f, 0.0f, 1.0f, "%.3f");
+		}
 		ImGui::ColorEdit4("Square Color", glm::value_ptr(m_SquareColor));
 		ImGui::End();
 

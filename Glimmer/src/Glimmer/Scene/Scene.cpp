@@ -178,6 +178,18 @@ namespace gl {
 		}
 		return {};
 	}
+
+	Entity Scene::GetDirectionalLightEntity()
+	{
+		auto view = m_Registry.view<DirectionalLightComponent>();
+		for (auto entity : view)
+		{
+			const auto& light = view.get<DirectionalLightComponent>(entity);
+			if (light.Enabled)
+				return Entity{ entity, this };
+		}
+		return {};
+	}
 	Entity Scene::GetEntityByID(uint32_t id)
 	{
 		entt::entity handle = (entt::entity)id;

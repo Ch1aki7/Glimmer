@@ -13158,15 +13158,30 @@ linearColor = mix(linearColor, fogColor, fogWeight);
 - `Density`：控制距离增加时的指数衰减速度；
 - `Start / End`：控制近景保护区和完全进入远景雾的范围；
 - `Color`：线性 HDR 雾色。
+- `Color Source`：选择 Manual、Sky Light 或 Directional Light；Sky Light 按当前视线方向读取环境 Cubemap 的模糊低 Mip，Directional Light 使用首个启用主光的 Color×Intensity；来源不可用时回退 Manual；
+- `Height Fog`：开启指数高度密度；`Base Height` 是参考雾层高度，`Height Falloff` 越大，雾随世界高度上升衰减越快。
 
 默认参数为 Density `0.012`、Start `60`、End `260`。调试启动可以设置 `GLIMMER_DISTANCE_FOG_VISUALIZE=1`；该开关和全部雾参数当前只存在于编辑器会话，不保存到 Scene YAML。
+
+高度雾不是简单地用片元终点高度乘权重，而是沿相机到片元的整条射线积分指数密度：
+
+```glsl
+float cameraDensity = exp(-falloff * (cameraY - baseHeight));
+float denominator = falloff * (fragmentY - cameraY);
+float heightIntegral = abs(denominator) > epsilon
+    ? cameraDensity * (1.0 - exp(-denominator)) / denominator
+    : cameraDensity;
+```
+
+因此俯视低谷时整段低空路径会积累更多雾，高处山脊和相机附近细节相对清晰；相机穿过 Base Height 时公式连续。实现对指数输入和积分结果进行了钳制，避免极端调试参数生成 Inf/NaN。
 
 ### 验证
 
 - VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；
 - Intel Iris Xe / OpenGL 4.6 下 ToneMapping、Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功编译；
 - 固定 Terrain 相机截图确认近景保留原材质对比度，远景逐步向雾色衰减，天空深度不参与世界位置雾化；无 Shader 错误、断言或崩溃；
-- 下一阶段加入高度密度和环境光色关联，当前距离雾不代表完整大气散射。
+- 高度雾 + SkyLight 色源固定相机截图确认环境色调一致、远处低地衰减增强且近景高处仍保留细节；重新构建回归目标后 88 项无窗口测试继续全部 PASS；
+- 下一阶段校准 ACES/曝光并评估 Bloom，当前实现仍不代表完整大气散射。
 
 ## KB
 

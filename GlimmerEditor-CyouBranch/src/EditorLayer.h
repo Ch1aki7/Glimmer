@@ -48,6 +48,10 @@ namespace gl {
 		float m_DistanceFogStart = 60.0f;
 		float m_DistanceFogEnd = 260.0f;
 		glm::vec3 m_DistanceFogColor = { 0.55f, 0.65f, 0.75f };
+		bool m_HeightFogEnabled = true;
+		float m_HeightFogBaseHeight = 18.0f;
+		float m_HeightFogFalloff = 0.035f;
+		int m_FogColorSource = 0;
 		uint32_t m_FinalSceneTexture = 0;
 
 		// 场景 & 层级面板
