@@ -13303,6 +13303,48 @@ P13A 首先建立不依赖窗口和 GPU 的 `TerrainHydrologyRuntime`，用小�
 - 三格山峰测试中水从高水面流向左右低处，盆地测试中低格蓄水多于两侧高格；
 - 8 条新增水文断言与原有测试合计 96 项具体无窗口断言全部 PASS；VS2026 `Debug | x64` 整解决方案构建成功。
 
+## GPU 水文与 Debug 可视化
+
+P13A 第二阶段将 CPU 参考模型的字段和固定步语义迁移到 GPU。程序化 Terrain 的 Height 保持只读，水文状态采用三组独立 Ping-Pong：
+
+| 字段 | 格式 | 用途 |
+| --- | --- | --- |
+| Water | `R32F × 2` | 当前/下一步水深 |
+| Flux | `RGBA16F × 2` | 左、右、下、上四向流量 |
+| Velocity | `RGBA16F × 2` | XY 保存地形平面速度，ZW 预留 |
+
+```text
+Height(Read) + Water(Read) + Flux(Read)
+  → HydrologyFlux.comp
+  → Flux(Write)
+  → Barrier + Swap
+  → HydrologyUpdate.comp
+  → Water(Write) + Velocity(Write)
+  → Barrier + Swap
+```
+
+两次 Dispatch 之间使用全局 Memory Barrier，避免把 Workgroup 内屏障误当成整张纹理完成信号。普通 PNG/JPG 高度图不是 `R32F` Storage Texture，因此首版只对程序化 Terrain 建立 GPU 水文状态。
+
+### 如何观察
+
+打开 `Debug → Overview`，在 Terrain 区域底部找到 `Runtime Hydrology`：
+
+1. 勾选 `Visualize Water Depth`；初始 Water 为 0，因此画面不变；
+2. 将 `Rainfall` 保持默认 `0.020 depth/s`，勾选 `Play`；
+3. 等待数秒，低地和沟谷会逐渐出现蓝色覆盖；深蓝表示蓄水，偏亮青色表示流速更高；
+4. 取消 `Play` 后点击 `Single Step`，每次只推进一个固定步，便于观察边界变化；
+5. 点击 `Reset` 会把 Water、Flux、Velocity、累加器和统计全部清零；
+6. 暂停后点击 `Validate / Readback`，查看 Water Volume/Error、Depth Min/Max、Max Speed 和 `Finite: PASS`。
+
+水深显示目前是 Terrain Fragment Shader 中的诊断着色，不会抬高网格，也没有折射、反射、透明水面或岸线泡沫。它用于确认流向和蓄水位置，正式水体几何与材质属于后续渲染阶段。
+
+### 当前验证
+
+- Premake VS2026 工程重新生成成功，`Debug | x64` 整解决方案构建成功；
+- 最终编辑器以项目工作目录运行 15 秒，HydrologyFlux、HydrologyUpdate、Terrain 和既有图形 Shader 初始化链路无断言或提前退出；
+- CPU 数值契约及既有功能共 96 项具体无窗口断言全部 PASS；
+- GPU 长时间降雨后的质量误差与洼地视觉分布仍需通过上述 Debug 操作完成最终人工验收，因此 P13A 当前仍为进行中。
+
 ## KB
 
 ### 为什么不用动态库？

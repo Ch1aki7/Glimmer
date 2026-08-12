@@ -1,0 +1,44 @@
+#version 450 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(r32f, binding = 0) readonly uniform image2D u_PreviousWater;
+layout(rgba16f, binding = 1) readonly uniform image2D u_Flux;
+layout(r32f, binding = 2) writeonly uniform image2D u_NextWater;
+layout(rgba16f, binding = 3) writeonly uniform image2D u_NextVelocity;
+
+uniform float u_DeltaTime;
+uniform float u_CellSize;
+uniform float u_RainfallRate;
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_PreviousWater);
+	if (any(greaterThanEqual(cell, size))) return;
+
+	vec4 outgoingFlux = imageLoad(u_Flux, cell);
+	float incomingLeft = cell.x > 0
+		? imageLoad(u_Flux, cell + ivec2(-1, 0)).y : 0.0;
+	float incomingRight = cell.x + 1 < size.x
+		? imageLoad(u_Flux, cell + ivec2(1, 0)).x : 0.0;
+	float incomingDown = cell.y > 0
+		? imageLoad(u_Flux, cell + ivec2(0, -1)).w : 0.0;
+	float incomingUp = cell.y + 1 < size.y
+		? imageLoad(u_Flux, cell + ivec2(0, 1)).z : 0.0;
+	float incoming = incomingLeft + incomingRight + incomingDown + incomingUp;
+	float outgoing = dot(outgoingFlux, vec4(1.0));
+	float previousWater = imageLoad(u_PreviousWater, cell).r;
+	float rainfall = max(u_RainfallRate, 0.0) * u_DeltaTime;
+	float cellArea = u_CellSize * u_CellSize;
+	float water = max(previousWater + rainfall
+		+ (incoming - outgoing) * u_DeltaTime / cellArea, 0.0);
+	imageStore(u_NextWater, cell, vec4(water, 0.0, 0.0, 0.0));
+
+	float averageDepth = max(0.5 * (previousWater + water), 0.000001);
+	vec2 velocity = 0.5 * vec2(
+		outgoingFlux.y - incomingRight + incomingLeft - outgoingFlux.x,
+		outgoingFlux.w - incomingUp + incomingDown - outgoingFlux.z)
+		/ (averageDepth * max(u_CellSize, 0.0001));
+	imageStore(u_NextVelocity, cell, vec4(velocity, 0.0, 0.0));
+}

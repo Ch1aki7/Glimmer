@@ -1,0 +1,58 @@
+#version 450 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(r32f, binding = 0) readonly uniform image2D u_Height;
+layout(r32f, binding = 1) readonly uniform image2D u_Water;
+layout(rgba16f, binding = 2) readonly uniform image2D u_PreviousFlux;
+layout(rgba16f, binding = 3) writeonly uniform image2D u_NextFlux;
+
+uniform float u_DeltaTime;
+uniform float u_CellSize;
+uniform float u_HeightScale;
+uniform float u_Gravity;
+uniform float u_FluxDamping;
+uniform float u_RainfallRate;
+
+float Surface(ivec2 cell)
+{
+	return imageLoad(u_Height, cell).r * u_HeightScale
+		+ imageLoad(u_Water, cell).r
+		+ max(u_RainfallRate, 0.0) * u_DeltaTime;
+}
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_Height);
+	if (any(greaterThanEqual(cell, size))) return;
+
+	float surface = Surface(cell);
+	vec4 previous = imageLoad(u_PreviousFlux, cell);
+	vec4 flux = vec4(0.0);
+	float acceleration = max(u_Gravity, 0.0) * u_DeltaTime
+		/ max(u_CellSize, 0.0001);
+	float damping = clamp(u_FluxDamping, 0.0, 1.0);
+	if (cell.x > 0)
+		flux.x = max(0.0, previous.x * damping
+			+ acceleration * (surface - Surface(cell + ivec2(-1, 0))));
+	if (cell.x + 1 < size.x)
+		flux.y = max(0.0, previous.y * damping
+			+ acceleration * (surface - Surface(cell + ivec2(1, 0))));
+	if (cell.y > 0)
+		flux.z = max(0.0, previous.z * damping
+			+ acceleration * (surface - Surface(cell + ivec2(0, -1))));
+	if (cell.y + 1 < size.y)
+		flux.w = max(0.0, previous.w * damping
+			+ acceleration * (surface - Surface(cell + ivec2(0, 1))));
+
+	float outgoing = dot(flux, vec4(1.0));
+	if (outgoing > 0.0)
+	{
+		float cellArea = u_CellSize * u_CellSize;
+		float available = (imageLoad(u_Water, cell).r
+			+ max(u_RainfallRate, 0.0) * u_DeltaTime) * cellArea;
+		flux *= min(1.0, available / (outgoing * u_DeltaTime));
+	}
+	imageStore(u_NextFlux, cell, flux);
+}

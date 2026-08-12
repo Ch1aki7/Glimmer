@@ -31,6 +31,16 @@ namespace gl {
 			uint64_t GpuTimingSample = 0;
 			bool HasGpuTiming = false;
 			bool PassActive = false;
+			bool HydrologyPlaying = false;
+			bool VisualizeHydrology = false;
+			bool HydrologyReadbackRequested = false;
+			float HydrologyRainfall = 0.02f;
+			float DeltaSeconds = 0.0f;
+			uint64_t HydrologyResetRequest = 0;
+			uint64_t HydrologySingleStepRequest = 0;
+			TerrainHydrologyGPUStatistics HydrologyStats;
+			uint64_t FrameSerial = 0;
+			bool HydrologyFrameActive = false;
 		};
 
 		TerrainRendererData s_Data;
@@ -102,8 +112,11 @@ namespace gl {
 		s_Data.GpuTimingSample = 0;
 	}
 
-	void TerrainRenderer::BeginScene()
+	void TerrainRenderer::BeginScene(float deltaSeconds)
 	{
+		s_Data.DeltaSeconds = std::max(deltaSeconds, 0.0f);
+		++s_Data.FrameSerial;
+		s_Data.HydrologyFrameActive = true;
 		if (!s_Data.Timer)
 			s_Data.Timer = GPUTimer::Create();
 		float elapsedMilliseconds = 0.0f;
@@ -129,6 +142,8 @@ namespace gl {
 
 	void TerrainRenderer::EndScene()
 	{
+		s_Data.HydrologyFrameActive = false;
+		s_Data.HydrologyReadbackRequested = false;
 		if (!s_Data.PassActive || !s_Data.Timer)
 			return;
 		s_Data.Timer->End();
@@ -251,6 +266,51 @@ namespace gl {
 
 		if (!runtime.HeightMap)
 			return false;
+
+		if (specification.Procedural
+			&& runtime.HeightMap->GetFormat() == TextureFormat::R32F)
+		{
+			const auto generationPath =
+				AssetManager::GetFileSystemPath(specification.GenerationShaderHandle);
+			const auto fluxPath = generationPath.parent_path() / "HydrologyFlux.comp";
+			const auto updatePath = generationPath.parent_path() / "HydrologyUpdate.comp";
+			if (!runtime.GPUHydrology
+				|| runtime.HydrologyGenerationVersion != runtime.GenerationVersion)
+			{
+				runtime.GPUHydrology = CreateScope<TerrainHydrologyGPU>(
+					runtime.HeightMap->GetWidth(), runtime.HeightMap->GetHeight(),
+					fluxPath, updatePath);
+				runtime.HydrologyGenerationVersion = runtime.GenerationVersion;
+			}
+			auto& hydrology = *runtime.GPUHydrology;
+			hydrology.GetSettings().RainfallRate = s_Data.HydrologyRainfall;
+			if (s_Data.HydrologyFrameActive
+				&& runtime.HydrologyFrameSerial != s_Data.FrameSerial)
+			{
+				if (runtime.HydrologyResetRequest != s_Data.HydrologyResetRequest)
+				{
+					hydrology.Reset();
+					runtime.HydrologyResetRequest = s_Data.HydrologyResetRequest;
+				}
+				const float worldSize = static_cast<float>(
+					std::max(specification.MeshResolution, 1u));
+				if (runtime.HydrologySingleStepRequest
+					!= s_Data.HydrologySingleStepRequest)
+				{
+					hydrology.SingleStep(runtime.HeightMap,
+						specification.HeightScale, worldSize);
+					runtime.HydrologySingleStepRequest =
+						s_Data.HydrologySingleStepRequest;
+				}
+				if (s_Data.HydrologyPlaying)
+					hydrology.Advance(s_Data.DeltaSeconds, runtime.HeightMap,
+						specification.HeightScale, worldSize);
+				if (s_Data.HydrologyReadbackRequested)
+					hydrology.ReadbackStatistics(worldSize);
+				s_Data.HydrologyStats = hydrology.GetStatistics();
+				runtime.HydrologyFrameSerial = s_Data.FrameSerial;
+			}
+		}
 		return true;
 	}
 
@@ -292,6 +352,17 @@ namespace gl {
 		shader->UploadUniformFloat("u_SkirtDepth", skirtDepth);
 		shader->UploadUniformInt("u_TerrainLODVisualization",
 			s_Data.VisualizeLODs ? 1 : 0);
+		const bool hasHydrology = runtime.GPUHydrology != nullptr;
+		shader->UploadUniformInt("u_HasHydrology", hasHydrology ? 1 : 0);
+		shader->UploadUniformInt("u_HydrologyVisualization",
+			s_Data.VisualizeHydrology && hasHydrology ? 1 : 0);
+		if (hasHydrology)
+		{
+			runtime.GPUHydrology->GetWaterTexture()->Bind(23);
+			runtime.GPUHydrology->GetVelocityTexture()->Bind(24);
+			shader->UploadUniformInt("u_WaterDepthMap", 23);
+			shader->UploadUniformInt("u_WaterVelocityMap", 24);
+		}
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
 		ShadowRenderer::BindForLighting(shader, 16);
@@ -483,6 +554,58 @@ namespace gl {
 	bool TerrainRenderer::IsLODVisualizationEnabled()
 	{
 		return s_Data.VisualizeLODs;
+	}
+
+	void TerrainRenderer::SetHydrologyPlaying(bool playing)
+	{
+		s_Data.HydrologyPlaying = playing;
+	}
+
+	bool TerrainRenderer::IsHydrologyPlaying()
+	{
+		return s_Data.HydrologyPlaying;
+	}
+
+	void TerrainRenderer::RequestHydrologySingleStep()
+	{
+		if (!s_Data.HydrologyPlaying)
+			++s_Data.HydrologySingleStepRequest;
+	}
+
+	void TerrainRenderer::RequestHydrologyReset()
+	{
+		++s_Data.HydrologyResetRequest;
+		s_Data.HydrologyStats = {};
+	}
+
+	void TerrainRenderer::SetHydrologyRainfall(float rainfallRate)
+	{
+		s_Data.HydrologyRainfall = std::clamp(rainfallRate, 0.0f, 5.0f);
+	}
+
+	float TerrainRenderer::GetHydrologyRainfall()
+	{
+		return s_Data.HydrologyRainfall;
+	}
+
+	void TerrainRenderer::SetHydrologyVisualizationEnabled(bool enabled)
+	{
+		s_Data.VisualizeHydrology = enabled;
+	}
+
+	bool TerrainRenderer::IsHydrologyVisualizationEnabled()
+	{
+		return s_Data.VisualizeHydrology;
+	}
+
+	void TerrainRenderer::RequestHydrologyReadback()
+	{
+		s_Data.HydrologyReadbackRequested = true;
+	}
+
+	TerrainHydrologyGPUStatistics TerrainRenderer::GetHydrologyStatistics()
+	{
+		return s_Data.HydrologyStats;
 	}
 
 	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()

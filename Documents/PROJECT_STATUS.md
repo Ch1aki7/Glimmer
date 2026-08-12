@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P13A 固定步长水流核心
-- 主线状态：进行中（CPU 参考模型、独立状态和固定步长状态机已完成；下一步迁移 GPU 水流 Pass 与 Debug 控制）
+- 主线状态：进行中（CPU/GPU 水流字段、固定步长调度和 Debug 控制已落地；待完成 GPU 数值与视觉验收）
 
 ## 使用与更新规则
 
@@ -87,6 +87,10 @@
 - CPU 参考步使用封闭四邻域：先按只读水面高差计算并按可用水量缩放出流，再统一汇总入流/出流更新 Water 和速度；统计记录水量、降雨量、质量误差、最小/最大水深、最大速度和有限性；
 - 新增 8 条水文回归，覆盖暂停、单步、重置、高处向低处流动、非负/有限、封闭边界守恒、固定步长确定性、最大补帧和洼地蓄水；当前 96 项具体无窗口断言全部 PASS；
 - 下一步：以同一字段契约建立 GPU Water/Flux/Velocity Ping-Pong 与独立 Compute Pass，并在 DebugPanel 提供运行控制和统计；CPU 模型继续作为小网格数值基线。
+- GPU 阶段新增 `TerrainHydrologyGPU`：程序化 `R32F` Height 只读，Water 使用 `R32F` Ping-Pong，Flux/Velocity 使用 `RGBA16F` Ping-Pong；每个固定步拆为 HydrologyFlux 与 HydrologyUpdate 两次全局 Dispatch，并在 Pass 间执行 Memory Barrier 和 Swap；普通图片高度图不进入 Storage Image 路径；
+- TerrainRenderer 只在 Color Pass 的首个 Prepare 推进一次水文，Shadow Prepare 不推进；Terrain 重新生成时重建水文资源。Debug → Overview → Runtime Hydrology 提供 Play、暂停态 Single Step、Reset、Rainfall、蓝色水深/流速覆盖与手动 Validate/Readback；质量统计不逐帧读回；
+- 验证：Premake VS2026 重新生成成功，VS2026 `Debug | x64` 整解决方案构建成功；最终编辑器以项目工作目录持续运行 15 秒，HydrologyFlux、HydrologyUpdate 与 Terrain Shader 创建链路无断言或提前退出；96 项具体无窗口断言全部 PASS；
+- 待验收：在 Debug 面板运行降雨后执行手动 Readback，确认 GPU Water/Velocity 有限、质量误差处于明确容差，并用水深覆盖确认高处外流与洼地蓄水；通过后完成 P13A 并提升 P13B。
 
 ## 后续任务
 

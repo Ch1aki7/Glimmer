@@ -39,6 +39,7 @@
 #include "Glimmer/Renderer/FrameBuffer.h"
 #include "Glimmer/Renderer/PostProcessRenderer.h"
 #include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
+#include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 
 #include <imgui.h> // 方便在 Layer 里写 UI
 

@@ -42,6 +42,8 @@ namespace gl {
 			ShadowRenderer::GetStatistics();
 		const TerrainRenderer::Statistics terrainStatistics =
 			TerrainRenderer::GetStatistics();
+		const TerrainHydrologyGPUStatistics hydrologyStatistics =
+			TerrainRenderer::GetHydrologyStatistics();
 		m_InstancingLab.UpdateShadowBenchmark(shadowStatistics);
 		m_PBRMaterialLab.UpdateValidation(statistics);
 		m_TerrainSamplingBenchmark.Update(terrainStatistics);
@@ -143,6 +145,54 @@ namespace gl {
 						TerrainRenderer::SetDetailDistance(detailDistance);
 				}
 				m_TerrainSamplingBenchmark.OnImGuiRender(terrainStatistics);
+				ImGui::SeparatorText("Runtime Hydrology");
+				bool hydrologyPlaying = TerrainRenderer::IsHydrologyPlaying();
+				if (ImGui::Checkbox("Play##Hydrology", &hydrologyPlaying))
+					TerrainRenderer::SetHydrologyPlaying(hydrologyPlaying);
+				ImGui::SameLine();
+				ImGui::BeginDisabled(hydrologyPlaying);
+				if (ImGui::Button("Single Step##Hydrology"))
+					TerrainRenderer::RequestHydrologySingleStep();
+				ImGui::EndDisabled();
+				ImGui::SameLine();
+				if (ImGui::Button("Reset##Hydrology"))
+					TerrainRenderer::RequestHydrologyReset();
+				float rainfall = TerrainRenderer::GetHydrologyRainfall();
+				if (ImGui::DragFloat("Rainfall##Hydrology", &rainfall,
+					0.002f, 0.0f, 5.0f, "%.3f depth/s"))
+					TerrainRenderer::SetHydrologyRainfall(rainfall);
+				bool visualizeHydrology =
+					TerrainRenderer::IsHydrologyVisualizationEnabled();
+				if (ImGui::Checkbox("Visualize Water Depth##Hydrology",
+					&visualizeHydrology))
+					TerrainRenderer::SetHydrologyVisualizationEnabled(
+						visualizeHydrology);
+				if (ImGui::Button("Validate / Readback##Hydrology"))
+					TerrainRenderer::RequestHydrologyReadback();
+				ImGui::Text("Steps / Sim Time: %llu / %.2f s",
+					static_cast<unsigned long long>(hydrologyStatistics.StepCount),
+					hydrologyStatistics.SimulatedTime);
+				ImGui::Text("Accumulator / Dropped: %.4f / %.4f s",
+					hydrologyStatistics.Accumulator,
+					hydrologyStatistics.DroppedTime);
+				if (hydrologyStatistics.ReadbackAvailable)
+				{
+					ImGui::Text("Water Volume / Error: %.6f / %.3e",
+						hydrologyStatistics.WaterVolume,
+						hydrologyStatistics.MassError);
+					ImGui::Text("Depth Min/Max: %.6f / %.6f",
+						hydrologyStatistics.MinimumWaterDepth,
+						hydrologyStatistics.MaximumWaterDepth);
+					ImGui::Text("Max Speed: %.6f",
+						hydrologyStatistics.MaximumSpeed);
+					ImGui::TextColored(
+						hydrologyStatistics.Finite
+							? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
+							: ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+						hydrologyStatistics.Finite ? "Finite: PASS" : "Finite: FAIL");
+				}
+				else
+					ImGui::TextDisabled("Press Validate / Readback for mass statistics");
 				ImGui::EndTabItem();
 			}
 

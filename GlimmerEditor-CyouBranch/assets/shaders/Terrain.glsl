@@ -28,6 +28,7 @@ out vec3 v_Normal;
 out float v_Height;
 out vec2 v_TerrainAnalysis;
 out vec4 v_MaterialWeights;
+out vec2 v_TerrainUV;
 flat out int v_EntityID;
 
 float SampleHeight(vec2 uv)
@@ -63,6 +64,7 @@ void main()
 		? texture(u_TerrainAnalysisMap, uv).rg : vec2(0.5, 0.0);
 	v_MaterialWeights = u_HasDerivedMaps != 0
 		? texture(u_MaterialWeightMap, uv) : vec4(1.0, 0.0, 0.0, 0.0);
+	v_TerrainUV = uv;
 	v_EntityID = u_EntityID;
 	gl_Position = u_ViewProjection * worldPosition;
 }
@@ -78,6 +80,7 @@ in vec3 v_Normal;
 in float v_Height;
 in vec2 v_TerrainAnalysis;
 in vec4 v_MaterialWeights;
+in vec2 v_TerrainUV;
 flat in int v_EntityID;
 
 struct PointLightData { vec4 PositionRange; vec4 ColorIntensity; };
@@ -118,6 +121,10 @@ uniform int u_TerrainSamplingMode;
 uniform float u_TerrainDetailDistance;
 uniform int u_TerrainLODVisualization;
 uniform int u_TerrainLODLevel;
+uniform sampler2D u_WaterDepthMap;
+uniform sampler2D u_WaterVelocityMap;
+uniform int u_HasHydrology;
+uniform int u_HydrologyVisualization;
 uniform sampler2D u_ShadowMaps[4];
 uniform mat4 u_LightViewProjections[4];
 uniform float u_ShadowCascadeSplits[4];
@@ -462,6 +469,15 @@ void main()
 				? vec3(0.12, 1.0, 0.18)
 				: vec3(0.10, 0.28, 1.0));
 		result = mix(result, lodColor, 0.72);
+	}
+	if (u_HydrologyVisualization != 0 && u_HasHydrology != 0)
+	{
+		float waterDepth = max(texture(u_WaterDepthMap, v_TerrainUV).r, 0.0);
+		float speed = length(texture(u_WaterVelocityMap, v_TerrainUV).xy);
+		float waterWeight = clamp(waterDepth * 8.0, 0.0, 0.85);
+		vec3 waterColor = mix(vec3(0.02, 0.18, 0.42),
+			vec3(0.05, 0.75, 1.5), clamp(speed * 0.25, 0.0, 1.0));
+		result = mix(result, waterColor, waterWeight);
 	}
 	o_Color = vec4(max(result, vec3(0.0)), 1.0);
 	o_EntityID = v_EntityID;

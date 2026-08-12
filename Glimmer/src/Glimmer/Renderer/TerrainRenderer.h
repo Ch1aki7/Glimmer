@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Glimmer/Scene/Components.h"
+#include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 
 namespace gl {
 	class TerrainRenderer
@@ -35,7 +36,7 @@ namespace gl {
 
 		static void Init();
 		static void Shutdown();
-		static void BeginScene();
+		static void BeginScene(float deltaSeconds = 0.0f);
 		static void EndScene();
 		static bool Prepare(TerrainComponent& component);
 		static void Draw(TerrainComponent& component, const glm::mat4& transform,
@@ -49,6 +50,16 @@ namespace gl {
 		static glm::vec2 GetLODDistances();
 		static void SetLODVisualizationEnabled(bool enabled);
 		static bool IsLODVisualizationEnabled();
+		static void SetHydrologyPlaying(bool playing);
+		static bool IsHydrologyPlaying();
+		static void RequestHydrologySingleStep();
+		static void RequestHydrologyReset();
+		static void SetHydrologyRainfall(float rainfallRate);
+		static float GetHydrologyRainfall();
+		static void SetHydrologyVisualizationEnabled(bool enabled);
+		static bool IsHydrologyVisualizationEnabled();
+		static void RequestHydrologyReadback();
+		static TerrainHydrologyGPUStatistics GetHydrologyStatistics();
 		static Statistics GetStatistics();
 		static bool IntersectsCameraFrustum(
 			const glm::vec3& boundsMin,

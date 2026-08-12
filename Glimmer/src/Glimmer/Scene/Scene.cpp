@@ -317,7 +317,7 @@ namespace gl {
 			}
 			Renderer3D::FlushOpaqueAndMask();
 
-			TerrainRenderer::BeginScene();
+			TerrainRenderer::BeginScene(ts.GetSeconds());
 			auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 			for (auto entity : terrainView)
 			{
@@ -364,7 +364,7 @@ namespace gl {
 		}
 		Renderer3D::FlushOpaqueAndMask();
 
-		TerrainRenderer::BeginScene();
+		TerrainRenderer::BeginScene(ts.GetSeconds());
 		auto terrainView = m_Registry.view<TransformComponent, TerrainComponent>();
 		for (auto entity : terrainView)
 		{
