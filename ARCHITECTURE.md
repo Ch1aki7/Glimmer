@@ -183,7 +183,9 @@ Framebuffer 支持以下附件格式：
 
 ```mermaid
 flowchart LR
-    ScenePass["Scene Pass\nRGBA16F + EntityID + Depth"] --> Tone["Tone Mapping Pass\nEV / ACES White Point / 可选灰度"]
+    ScenePass["Scene Pass\nRGBA16F + EntityID + Depth"] --> Bloom["Half-res Bloom\nExtract + Ping-Pong Blur"]
+    ScenePass --> Tone["Tone Mapping Pass\nFog / EV / ACES / Gamma"]
+    Bloom --> Tone
     Tone --> Display["Display Framebuffer"]
     Display --> Viewport["ImGui Viewport"]
     ScenePass --> Picking["ReadPixel(EntityID)"]
@@ -192,7 +194,7 @@ flowchart LR
 
 Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Mask 被 `discard` 的像素不写颜色、深度或 EntityID；Blend 的有效 Alpha 小于等于 `1/255` 时同样丢弃，其余透明片元按远到近顺序写入 EntityID。Skybox 使用只读深度和 LessEqual 在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
 
-Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。ToneMapping Pass 同时读取 HDR Color 与 Scene Depth，并从当前编辑/运行相机获得 Inverse ViewProjection 和 Camera Position；Distance/Height Fog 对 `depth < 1` 的几何重建世界位置，在 EV、ACES 与 Gamma 之前在线性 HDR 空间混合。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。Scene 新增只读的 `GetDirectionalLightEntity` 查询以供后处理解析当前主光，不改变 LightEnvironment 上传所有权。ToneMapping 以 `2^EV` 统一缩放场景与雾，再将 ACES 拟合结果按可调 White Point 响应归一，最后只做一次 Gamma。天空深度被显式跳过，全部 Fog/EV/White Point 参数由 Editor Settings 持有，不属于 Scene、Camera 或 Environment 序列化状态。
+Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。Scene Color 先进入两张随视口缩放的半分辨率 `RGBA16F` Bloom FBO：软阈值提取根据 EV 后亮度决定贡献但保留未曝光 Radiance，5 权重高斯模糊以水平/垂直 Ping-Pong 迭代。ToneMapping Pass 同时读取 HDR Color、Bloom 与 Scene Depth，并从当前编辑/运行相机获得 Inverse ViewProjection 和 Camera Position；合成顺序固定为 Scene+Bloom、Distance/Height Fog、EV、ACES White Point、Gamma，因此 Bloom 不重复曝光且远处光晕受雾衰减。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。Scene 新增只读的 `GetDirectionalLightEntity` 查询以供后处理解析当前主光，不改变 LightEnvironment 上传所有权。天空深度被显式跳过，全部 Bloom/Fog/EV/White Point 参数由 Editor Settings 持有，不属于 Scene、Camera 或 Environment 序列化状态。
 
 ### 5.4 光照、PBR、天空盒与地形
 

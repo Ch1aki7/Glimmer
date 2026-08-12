@@ -8,6 +8,8 @@
 #include "Glimmer/Renderer/EditorCamera.h"
 #include "Editor/EditorCommand.h"
 
+#include <array>
+
 namespace gl {
 
 	class EditorLayer : public Layer {
@@ -41,9 +43,15 @@ namespace gl {
 		// 3D 模型
 		Ref<Framebuffer> m_Framebuffer;
 		Ref<Framebuffer> m_DisplayFramebuffer;
+		std::array<Ref<Framebuffer>, 2> m_BloomFramebuffers;
 		bool m_GrayscaleEnabled = false;
 		float m_ExposureEV = 0.0f;
 		float m_ACESWhitePoint = 11.2f;
+		bool m_BloomEnabled = true;
+		float m_BloomThreshold = 1.0f;
+		float m_BloomKnee = 0.5f;
+		float m_BloomIntensity = 0.08f;
+		int m_BloomBlurPasses = 6;
 		bool m_DistanceFogEnabled = false;
 		float m_DistanceFogDensity = 0.012f;
 		float m_DistanceFogStart = 60.0f;

@@ -20,8 +20,11 @@ layout(location = 0) in vec2 v_TexCoord;
 
 uniform sampler2D u_SceneTexture;
 uniform sampler2D u_SceneDepth;
+uniform sampler2D u_BloomTexture;
 uniform float u_ExposureEV;
 uniform float u_ACESWhitePoint;
+uniform int u_BloomEnabled;
+uniform float u_BloomIntensity;
 uniform int u_ApplyGrayscale;
 uniform int u_DistanceFogEnabled;
 uniform float u_DistanceFogDensity;
@@ -59,6 +62,9 @@ void main()
 {
     vec4 sceneColor = texture(u_SceneTexture, v_TexCoord);
     vec3 linearColor = max(sceneColor.rgb, vec3(0.0));
+    if (u_BloomEnabled != 0)
+        linearColor += texture(u_BloomTexture, v_TexCoord).rgb
+            * max(u_BloomIntensity, 0.0);
     float sceneDepth = texture(u_SceneDepth, v_TexCoord).r;
     if (u_DistanceFogEnabled != 0 && sceneDepth < 0.999999)
     {

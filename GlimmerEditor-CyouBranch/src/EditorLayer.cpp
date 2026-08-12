@@ -341,8 +341,16 @@ namespace gl {
 		displayFramebufferSpec.Height = 720;
 		displayFramebufferSpec.Attachments = { { FramebufferTextureFormat::RGBA8 } };
 		m_DisplayFramebuffer = Framebuffer::Create(displayFramebufferSpec);
+		FramebufferSpecification bloomFramebufferSpec;
+		bloomFramebufferSpec.Width = 640;
+		bloomFramebufferSpec.Height = 360;
+		bloomFramebufferSpec.Attachments = { { FramebufferTextureFormat::RGBA16F } };
+		m_BloomFramebuffers[0] = Framebuffer::Create(bloomFramebufferSpec);
+		m_BloomFramebuffers[1] = Framebuffer::Create(bloomFramebufferSpec);
 
 		m_ShaderLib.Load("assets/shaders/ToneMapping.glsl");
+		m_ShaderLib.Load("assets/shaders/BloomExtract.glsl");
+		m_ShaderLib.Load("assets/shaders/BloomBlur.glsl");
 		m_ShaderLib.Load("assets/shaders/Overlay.glsl");
 		m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
 		m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
@@ -519,6 +527,10 @@ namespace gl {
 			{
 				m_Framebuffer->Resize(viewportWidth, viewportHeight);
 				m_DisplayFramebuffer->Resize(viewportWidth, viewportHeight);
+				const uint32_t bloomWidth = std::max(viewportWidth / 2u, 1u);
+				const uint32_t bloomHeight = std::max(viewportHeight / 2u, 1u);
+				m_BloomFramebuffers[0]->Resize(bloomWidth, bloomHeight);
+				m_BloomFramebuffers[1]->Resize(bloomWidth, bloomHeight);
 			}
 
 			m_EditorCamera.SetViewportSize(
@@ -610,6 +622,48 @@ namespace gl {
 		//	RenderPass::End();
 		//}
 
+		uint32_t bloomTexture = 0;
+		if (m_BloomEnabled)
+		{
+			RenderPassSpecification bloomPass;
+			bloomPass.Target = m_BloomFramebuffers[0];
+			bloomPass.ClearColorValue = { 0.0f, 0.0f, 0.0f, 1.0f };
+			RenderPass::Begin(bloomPass);
+			auto bloomExtractShader = m_ShaderLib.Get("BloomExtract");
+			bloomExtractShader->Bind();
+			bloomExtractShader->UploadUniformFloat("u_Threshold", m_BloomThreshold);
+			bloomExtractShader->UploadUniformFloat("u_SoftKnee", m_BloomKnee);
+			bloomExtractShader->UploadUniformFloat("u_ExposureEV", m_ExposureEV);
+			Renderer2D::DrawPostProcess(bloomExtractShader,
+				m_Framebuffer->GetColorAttachmentRendererID());
+			RenderPass::End();
+
+			bool horizontal = true;
+			for (int pass = 0; pass < m_BloomBlurPasses; ++pass)
+			{
+				const uint32_t targetIndex = horizontal ? 1u : 0u;
+				const uint32_t sourceIndex = horizontal ? 0u : 1u;
+				bloomPass.Target = m_BloomFramebuffers[targetIndex];
+				RenderPass::Begin(bloomPass);
+				auto bloomBlurShader = m_ShaderLib.Get("BloomBlur");
+				bloomBlurShader->Bind();
+				bloomBlurShader->UploadUniformInt("u_Horizontal", horizontal ? 1 : 0);
+				const auto& bloomSpecification =
+					m_BloomFramebuffers[targetIndex]->GetSpecification();
+				bloomBlurShader->UploadUniformFloat2("u_TexelSize", {
+					1.0f / static_cast<float>(bloomSpecification.Width),
+					1.0f / static_cast<float>(bloomSpecification.Height)
+				});
+				Renderer2D::DrawPostProcess(bloomBlurShader,
+					m_BloomFramebuffers[sourceIndex]->GetColorAttachmentRendererID());
+				RenderPass::End();
+				horizontal = !horizontal;
+			}
+			const uint32_t finalIndex = m_BloomBlurPasses % 2 == 0 ? 0u : 1u;
+			bloomTexture = m_BloomFramebuffers[finalIndex]
+				->GetColorAttachmentRendererID();
+		}
+
 		RenderPassSpecification toneMappingPass;
 		toneMappingPass.Target = m_DisplayFramebuffer;
 		RenderPass::Begin(toneMappingPass);
@@ -629,6 +683,11 @@ namespace gl {
 		}
 		toneMappingShader->UploadUniformFloat("u_ExposureEV", m_ExposureEV);
 		toneMappingShader->UploadUniformFloat("u_ACESWhitePoint", m_ACESWhitePoint);
+		toneMappingShader->UploadUniformInt("u_BloomEnabled",
+			m_BloomEnabled && bloomTexture != 0 ? 1 : 0);
+		toneMappingShader->UploadUniformFloat("u_BloomIntensity", m_BloomIntensity);
+		if (bloomTexture != 0)
+			toneMappingShader->BindTexture("u_BloomTexture", 3, bloomTexture);
 		toneMappingShader->UploadUniformInt("u_ApplyGrayscale", m_GrayscaleEnabled ? 1 : 0);
 		toneMappingShader->UploadUniformInt("u_DistanceFogEnabled",
 			m_DistanceFogEnabled && hasPostProcessCamera ? 1 : 0);
@@ -897,6 +956,18 @@ namespace gl {
 			0.05f, -10.0f, 10.0f, "%+.2f EV");
 		ImGui::DragFloat("ACES White Point", &m_ACESWhitePoint,
 			0.1f, 1.0f, 32.0f, "%.1f");
+		ImGui::SeparatorText("Bloom");
+		ImGui::Checkbox("Enabled##Bloom", &m_BloomEnabled);
+		if (m_BloomEnabled)
+		{
+			ImGui::DragFloat("Threshold##Bloom", &m_BloomThreshold,
+				0.05f, 0.0f, 20.0f, "%.2f");
+			ImGui::DragFloat("Soft Knee##Bloom", &m_BloomKnee,
+				0.01f, 0.0f, 1.0f, "%.2f");
+			ImGui::DragFloat("Intensity##Bloom", &m_BloomIntensity,
+				0.01f, 0.0f, 2.0f, "%.2f");
+			ImGui::SliderInt("Blur Passes##Bloom", &m_BloomBlurPasses, 1, 12);
+		}
 		ImGui::Checkbox("Grayscale", &m_GrayscaleEnabled);
 		ImGui::SeparatorText("Distance Fog");
 		ImGui::Checkbox("Enabled##DistanceFog", &m_DistanceFogEnabled);

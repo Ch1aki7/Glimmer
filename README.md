@@ -13186,6 +13186,39 @@ float heightIntegral = abs(denominator) > epsilon
 - 高度雾 + SkyLight 色源固定相机截图确认环境色调一致、远处低地衰减增强且近景高处仍保留细节；重新构建回归目标后 88 项无窗口测试继续全部 PASS；
 - 下一阶段校准 ACES/曝光并评估 Bloom，当前实现仍不代表完整大气散射。
 
+## HDR Bloom 后处理
+
+P12 的首版 Bloom 复用现有 HDR Scene Color，不向材质或光源增加专用发光标记。超过软阈值的高亮区域进入半分辨率 `RGBA16F` Ping-Pong 缓冲，经过水平/垂直高斯模糊后加回 Scene HDR。
+
+```text
+Scene RGBA16F
+  → Bloom Extract（EV 后亮度阈值，保留未曝光 Radiance）
+  → Half Resolution RGBA16F
+  → Horizontal / Vertical Gaussian Blur
+  → Scene + Bloom
+  → Distance / Height Fog
+  → 2^EV
+  → ACES White Point
+  → Gamma
+```
+
+提取阶段使用 Threshold 和 Soft Knee。Threshold 决定明确进入 Bloom 的显示亮度，Soft Knee 在阈值附近建立平滑过渡，避免高光边缘突然截断。阈值判断乘当前 EV，使用户调节曝光时 Bloom 感知阈值保持一致；输出仍保存原始 HDR Radiance，因此合成后只统一乘一次 EV。
+
+Settings 的 `Bloom` 区域提供：
+
+- `Enabled`：完全跳过或执行 Bloom Pass；
+- `Threshold`：高光提取阈值，默认 `1.0`；
+- `Soft Knee`：阈值过渡宽度，默认 `0.5`；
+- `Intensity`：加回 Scene HDR 的强度，默认 `0.08`；
+- `Blur Passes`：半分辨率水平/垂直模糊次数，默认 `6`，范围 `1～12`。
+
+### 验证
+
+- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；
+- Intel Iris Xe / OpenGL 4.6 下 BloomExtract、BloomBlur、ToneMapping、Terrain、ShadowDepth 与三条 Terrain Compute Shader 均成功编译；
+- 固定 Terrain 相机画面中，默认参数只在太阳等 HDR 高光周围产生柔和扩散，地形中间调没有整体泛白；高度雾继续衰减远处 Bloom，没有出现光晕穿透雾层；
+- 当前为经典双缓冲高斯 Bloom；Mip Pyramid/Kawase、Lens Dirt 和自动曝光联动属于后续优化，不是首版范围。
+
 ## KB
 
 ### 为什么不用动态库？

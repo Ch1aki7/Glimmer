@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P12 山脉大气表现与后处理
-- 主线状态：进行中（雾与 EV/ACES 显示链已校准；下一步评估并实现首版 Bloom）
+- 主线状态：进行中（距离/高度雾、EV/ACES 与首版 Bloom 已落地；下一步评估 TAA 是否进入 P12）
 
 ## 使用与更新规则
 
@@ -91,7 +91,11 @@
 - ToneMapping 将线性倍率 Exposure 改为摄影式 EV，实际倍率为 `2^EV`；默认 `0 EV` 等价于旧 `1.0×`，范围限制为 `-10..+10 EV`；
 - ACES 拟合曲线新增可调 White Point 并以曲线在白点的响应归一，默认 `11.2`；Scene HDR 与线性雾色先共同乘 EV，再进入同一 ACES，之后只执行一次 Gamma，未增加第二条 Tone Mapping 路径；
 - VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 固定相机验证中 ToneMapping 成功编译，默认 `0 EV / 11.2` 保持既有亮度基线，高光未大面积截白，SkyLight 高度雾仍保留色彩层次；
-- 下一步评估并实现首版 Bloom，P12 暂不进入已完成里程碑。
+- 新增两张随 Viewport 缩放的半分辨率 `RGBA16F` Bloom Ping-Pong FBO；`BloomExtract` 按 EV 后亮度执行 Threshold + Soft Knee 提取，但保留未曝光 HDR Radiance，`BloomBlur` 以 5 权重、水平/垂直交替执行默认 6 次高斯模糊；
+- ToneMapping 合成顺序为 `Scene HDR + Bloom → Distance/Height Fog → 2^EV → ACES White Point → Gamma`；Bloom 只随场景统一曝光一次，并被远景雾共同衰减，不存在第二次 Tone Mapping；
+- Settings 新增 Bloom Enabled、Threshold、Soft Knee、Intensity 与 Blur Passes；默认 `1.0 / 0.5 / 0.08 / 6`，只强调 HDR 高光而不过度抬升地形中间调；
+- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 下 BloomExtract、BloomBlur、ToneMapping 与全套 Terrain/Shadow Shader 均成功编译，固定相机截图中太阳高光出现柔和扩散，地形未整体洗白；
+- 下一步评估 TAA 对当前多 Pass/EntityID/编辑器拾取链路的收益与代价，再决定完成 P12 或实施首版 TAA。
 
 ## 后续任务
 
