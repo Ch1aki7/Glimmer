@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/Cubemap.h"
 #include "Glimmer/Renderer/EnvironmentMapLoader.h"
 #include "Glimmer/Renderer/Shader.h"
+#include "Glimmer/Renderer/Texture.h"
 #include "Glimmer/Renderer/TextureCube.h"
 
 #include <unordered_map>
@@ -17,6 +18,7 @@ namespace gl {
 		{
 			DiffuseIrradianceSettings IrradianceSettings;
 			SpecularPrefilterSettings PrefilterSettings;
+			BrdfLutSettings LutSettings;
 			std::unordered_map<
 				EnvironmentDerivedMapKey,
 				Ref<TextureCube>,
@@ -25,6 +27,7 @@ namespace gl {
 			EnvironmentDerivedMapKey ActiveSpecularKey;
 			Ref<TextureCube> ActiveIrradiance;
 			Ref<TextureCube> ActivePrefilter;
+			Ref<Texture2D> BrdfLut;
 			float ActiveIntensity = 0.0f;
 			bool HasActiveEnvironment = false;
 			EnvironmentLighting::Statistics Stats;
@@ -146,6 +149,34 @@ namespace gl {
 			return texture;
 		}
 
+		Ref<Texture2D> BuildBrdfLut(const BrdfLutSettings& settings)
+		{
+			BrdfLutFloatData lutData;
+			if (!EnvironmentMapLoader::GenerateBrdfLut(
+				settings.Resolution, settings.SampleCount, lutData))
+			{
+				GL_CORE_ERROR("Failed to generate the split-sum BRDF LUT.");
+				return nullptr;
+			}
+
+			TextureSpecification specification;
+			specification.Width = settings.Resolution;
+			specification.Height = settings.Resolution;
+			specification.Format = TextureFormat::RG16F;
+			specification.ColorSpace = TextureColorSpace::Linear;
+			specification.MinFilter = TextureFilter::Linear;
+			specification.MagFilter = TextureFilter::Linear;
+			specification.WrapS = TextureWrap::ClampToEdge;
+			specification.WrapT = TextureWrap::ClampToEdge;
+			Ref<Texture2D> texture = Texture2D::Create(specification);
+			if (!texture)
+				return nullptr;
+			texture->SetData(
+				lutData.Pixels.data(),
+				static_cast<uint32_t>(lutData.Pixels.size() * sizeof(float)));
+			return texture;
+		}
+
 		void ResetActiveEnvironment()
 		{
 			s_Data.ActiveIrradiance.reset();
@@ -170,6 +201,16 @@ namespace gl {
 	void EnvironmentLighting::Init()
 	{
 		s_Data = {};
+		s_Data.BrdfLut = BuildBrdfLut(s_Data.LutSettings);
+		if (s_Data.BrdfLut)
+		{
+			++s_Data.Stats.GenerationCount;
+			++s_Data.Stats.BrdfLutGenerationCount;
+			GL_CORE_INFO(
+				"BRDF LUT generated: resolution={0}, samples={1}",
+				s_Data.LutSettings.Resolution,
+				s_Data.LutSettings.SampleCount);
+		}
 	}
 
 	void EnvironmentLighting::Shutdown()
@@ -299,7 +340,8 @@ namespace gl {
 	void EnvironmentLighting::BindForLighting(
 		const Ref<Shader>& shader,
 		uint32_t diffuseTextureSlot,
-		uint32_t specularTextureSlot)
+		uint32_t specularTextureSlot,
+		uint32_t brdfLutTextureSlot)
 	{
 		if (!shader)
 			return;
@@ -329,6 +371,14 @@ namespace gl {
 			"u_SpecularPrefilterMaxLod", maxLod);
 		if (specularAvailable)
 			s_Data.ActivePrefilter->Bind(specularTextureSlot);
+
+		const bool brdfLutAvailable = s_Data.BrdfLut != nullptr;
+		shader->UploadUniformInt(
+			"u_HasBrdfLut", brdfLutAvailable ? 1 : 0);
+		shader->UploadUniformInt(
+			"u_BrdfLut", static_cast<int>(brdfLutTextureSlot));
+		if (brdfLutAvailable)
+			s_Data.BrdfLut->Bind(brdfLutTextureSlot);
 
 		shader->UploadUniformFloat(
 			"u_SkyLightIntensity",
@@ -368,6 +418,29 @@ namespace gl {
 	SpecularPrefilterSettings EnvironmentLighting::GetPrefilterSettings()
 	{
 		return s_Data.PrefilterSettings;
+	}
+
+	void EnvironmentLighting::SetBrdfLutSettings(
+		const BrdfLutSettings& settings)
+	{
+		BrdfLutSettings sanitized;
+		sanitized.Resolution = std::clamp(settings.Resolution, 16u, 512u);
+		sanitized.SampleCount = std::clamp(
+			settings.SampleCount, 32u, 4096u);
+		if (sanitized == s_Data.LutSettings && s_Data.BrdfLut)
+			return;
+		s_Data.LutSettings = sanitized;
+		s_Data.BrdfLut = BuildBrdfLut(s_Data.LutSettings);
+		if (s_Data.BrdfLut)
+		{
+			++s_Data.Stats.GenerationCount;
+			++s_Data.Stats.BrdfLutGenerationCount;
+		}
+	}
+
+	BrdfLutSettings EnvironmentLighting::GetBrdfLutSettings()
+	{
+		return s_Data.LutSettings;
 	}
 
 	EnvironmentLighting::Statistics EnvironmentLighting::GetStatistics()

@@ -60,6 +60,23 @@ namespace gl {
 				tangent * local.x + bitangent * local.y + normal * local.z);
 		}
 
+		float GeometrySchlickGGXIBL(float normalDotDirection, float roughness)
+		{
+			const float alpha = roughness * roughness;
+			const float k = alpha * 0.5f;
+			return normalDotDirection / glm::max(
+				normalDotDirection * (1.0f - k) + k, 0.000001f);
+		}
+
+		float GeometrySmithIBL(
+			float normalDotView,
+			float normalDotLight,
+			float roughness)
+		{
+			return GeometrySchlickGGXIBL(normalDotView, roughness)
+				* GeometrySchlickGGXIBL(normalDotLight, roughness);
+		}
+
 		glm::vec4 ReadPixel(
 			const FloatImageData& image,
 			uint32_t x,
@@ -548,5 +565,70 @@ namespace gl {
 			}
 		}
 		return prefilter.IsValid();
+	}
+
+	bool EnvironmentMapLoader::GenerateBrdfLut(
+		uint32_t size,
+		uint32_t sampleCount,
+		BrdfLutFloatData& lut)
+	{
+		lut = {};
+		if (size == 0 || sampleCount == 0)
+			return false;
+
+		lut.Size = size;
+		lut.Pixels.resize(static_cast<size_t>(size) * size * 2);
+		const glm::vec3 normal(0.0f, 0.0f, 1.0f);
+		for (uint32_t y = 0; y < size; ++y)
+		{
+			const float roughness =
+				(static_cast<float>(y) + 0.5f) / static_cast<float>(size);
+			for (uint32_t x = 0; x < size; ++x)
+			{
+				const float normalDotView = glm::clamp(
+					(static_cast<float>(x) + 0.5f)
+						/ static_cast<float>(size),
+					0.0001f, 1.0f);
+				const glm::vec3 view(
+					std::sqrt(glm::max(
+						1.0f - normalDotView * normalDotView, 0.0f)),
+					0.0f,
+					normalDotView);
+				glm::vec2 integrated(0.0f);
+				for (uint32_t sample = 0; sample < sampleCount; ++sample)
+				{
+					const float sequenceX =
+						(static_cast<float>(sample) + 0.5f) / sampleCount;
+					const glm::vec3 halfway = ImportanceSampleGGX(
+						sequenceX, RadicalInverse(sample), normal, roughness);
+					const glm::vec3 light = glm::normalize(
+						2.0f * glm::dot(view, halfway) * halfway - view);
+					const float normalDotLight = glm::max(light.z, 0.0f);
+					const float normalDotHalfway = glm::max(halfway.z, 0.0f);
+					const float viewDotHalfway =
+						glm::max(glm::dot(view, halfway), 0.0f);
+					if (normalDotLight <= 0.0f
+						|| normalDotHalfway <= 0.0f
+						|| viewDotHalfway <= 0.0f)
+						continue;
+
+					const float geometry = GeometrySmithIBL(
+						normalDotView, normalDotLight, roughness);
+					const float visibility = geometry * viewDotHalfway
+						/ glm::max(
+							normalDotHalfway * normalDotView, 0.000001f);
+					const float fresnel =
+						std::pow(1.0f - viewDotHalfway, 5.0f);
+					integrated.x += (1.0f - fresnel) * visibility;
+					integrated.y += fresnel * visibility;
+				}
+				integrated /= static_cast<float>(sampleCount);
+				const size_t offset =
+					(static_cast<size_t>(y) * size + x) * 2;
+				lut.Pixels[offset + 0] = integrated.x;
+				lut.Pixels[offset + 1] = integrated.y;
+			}
+		}
+		return lut.IsValid();
 	}
 }

@@ -9,6 +9,7 @@
 namespace gl {
 
 	class Shader;
+	class Texture2D;
 	class TextureCube;
 
 	struct DiffuseIrradianceSettings
@@ -29,6 +30,18 @@ namespace gl {
 		uint32_t SampleCount = 64;
 
 		bool operator==(const SpecularPrefilterSettings& other) const
+		{
+			return Resolution == other.Resolution
+				&& SampleCount == other.SampleCount;
+		}
+	};
+
+	struct BrdfLutSettings
+	{
+		uint32_t Resolution = 64;
+		uint32_t SampleCount = 128;
+
+		bool operator==(const BrdfLutSettings& other) const
 		{
 			return Resolution == other.Resolution
 				&& SampleCount == other.SampleCount;
@@ -75,6 +88,7 @@ namespace gl {
 			uint64_t GenerationCount = 0;
 			uint64_t DiffuseGenerationCount = 0;
 			uint64_t SpecularGenerationCount = 0;
+			uint64_t BrdfLutGenerationCount = 0;
 			uint32_t CacheEntries = 0;
 		};
 
@@ -87,7 +101,8 @@ namespace gl {
 		static void BindForLighting(
 			const Ref<Shader>& shader,
 			uint32_t diffuseTextureSlot,
-			uint32_t specularTextureSlot);
+			uint32_t specularTextureSlot,
+			uint32_t brdfLutTextureSlot);
 
 		static void SetIrradianceSettings(
 			const DiffuseIrradianceSettings& settings);
@@ -95,6 +110,8 @@ namespace gl {
 		static void SetPrefilterSettings(
 			const SpecularPrefilterSettings& settings);
 		static SpecularPrefilterSettings GetPrefilterSettings();
+		static void SetBrdfLutSettings(const BrdfLutSettings& settings);
+		static BrdfLutSettings GetBrdfLutSettings();
 		static Statistics GetStatistics();
 	};
 

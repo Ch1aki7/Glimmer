@@ -64,6 +64,11 @@ AssetRegistry:
     FilePath: textures/pbr/lava/Lava_03_emissive-1K.png
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 6682430369348019365
+    Type: Texture2D
+    FilePath: textures/red-stamp-true-transparent.png
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 7227538360213676180
     Type: Texture2D
     FilePath: textures/Checkerboard.png
@@ -252,3 +257,8 @@ AssetRegistry:
   - Handle: 18232177742706088879
     Type: Shader
     FilePath: shaders/Tunnel.glsl
+  - Handle: 18382381771242719404
+    Type: Texture2D
+    FilePath: textures/exec-99cc6f41-9336-458e-bfc5-65501b2f3de0.png
+    ColorSpace: SRGB
+    Semantic: Color

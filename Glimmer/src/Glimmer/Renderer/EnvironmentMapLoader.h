@@ -36,6 +36,18 @@ namespace gl {
 		bool IsValid() const;
 	};
 
+	struct BrdfLutFloatData
+	{
+		uint32_t Size = 0;
+		std::vector<float> Pixels;
+
+		bool IsValid() const
+		{
+			return Size > 0
+				&& Pixels.size() == static_cast<size_t>(Size) * Size * 2;
+		}
+	};
+
 	class EnvironmentMapLoader
 	{
 	public:
@@ -62,6 +74,10 @@ namespace gl {
 			uint32_t faceSize,
 			uint32_t sampleCount,
 			CubemapMipChainFloatData& prefilter);
+		static bool GenerateBrdfLut(
+			uint32_t size,
+			uint32_t sampleCount,
+			BrdfLutFloatData& lut);
 		static uint32_t SuggestFaceSize(const FloatImageData& source);
 		static glm::vec3 CubemapDirection(
 			TextureCubeFace face,

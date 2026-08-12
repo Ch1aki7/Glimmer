@@ -759,6 +759,37 @@ namespace {
 		context.Check(roughnessBlursFocusedRadiance,
 			"higher prefilter mip levels broaden a focused environment reflection");
 
+		gl::BrdfLutFloatData brdfLut;
+		const bool generatedBrdfLut =
+			gl::EnvironmentMapLoader::GenerateBrdfLut(16, 256, brdfLut);
+		bool brdfLutIsFiniteAndBounded =
+			generatedBrdfLut && brdfLut.IsValid();
+		for (float value : brdfLut.Pixels)
+		{
+			brdfLutIsFiniteAndBounded =
+				brdfLutIsFiniteAndBounded
+				&& std::isfinite(value)
+				&& value >= 0.0f
+				&& value <= 1.05f;
+		}
+		context.Check(brdfLutIsFiniteAndBounded,
+			"split-sum BRDF LUT is finite and bounded");
+		const auto sampleBrdf = [&brdfLut](uint32_t x, uint32_t y)
+		{
+			const size_t offset =
+				(static_cast<size_t>(y) * brdfLut.Size + x) * 2;
+			return glm::vec2(
+				brdfLut.Pixels[offset],
+				brdfLut.Pixels[offset + 1]);
+		};
+		const glm::vec2 smoothFacing = sampleBrdf(15, 0);
+		const glm::vec2 roughFacing = sampleBrdf(15, 15);
+		const glm::vec2 grazing = sampleBrdf(0, 0);
+		context.Check(
+			smoothFacing.x > roughFacing.x
+				&& grazing.y > smoothFacing.y,
+			"BRDF LUT responds to roughness and grazing Fresnel");
+
 		gl::EnvironmentDerivedMapKey cacheKey;
 		cacheKey.SourceHandle = gl::AssetHandle(42);
 		cacheKey.SourceVersion = 3;

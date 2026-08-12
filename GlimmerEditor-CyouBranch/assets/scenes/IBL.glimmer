@@ -1,48 +1,168 @@
 Scene: Untitled
 Version: 6
 Entities:
-  - Entity: 7834017280709574353
+  - Entity: 8619910922231759262
     Components:
-      TagComponent: Sun
+      TagComponent: Sphere Copy Copy Copy
       TransformComponent:
-        Translation: [0, 0, 0]
-        Rotation: [-50, 30, 0]
-        Scale: [1, 1, 1]
-      DirectionalLightComponent:
-        Color: [1, 1, 1]
-        Intensity: 1
-        AmbientIntensity: 0.05
-        Enabled: true
-        CastShadows: true
-        ShadowMapResolution: 2048
-        ShadowCascadeCount: 4
-        ShadowDistance: 80
-        ShadowBias: 0.0015
-        ShadowSplitLambda: 0.65
-        ShadowCascadeBlend: 0.1
-  - Entity: 9769244849998984590
-    Components:
-      TagComponent: Point Light
-      TransformComponent:
-        Translation: [0, 12, 0]
+        Translation: [-18.132595, 55.51503, -4.825]
         Rotation: [0, 0, 0]
-        Scale: [1, 1, 1]
-      PointLightComponent:
-        Color: [1, 1, 1]
-        Intensity: 80
-        Range: 40
-        Enabled: true
-  - Entity: 16649961512409331976
+        Scale: [7.319999, 7.319999, 7.319999]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 25
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 0
+          NormalTexture: 0
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0
+          Roughness: 0.615
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0
+  - Entity: 5848647965114149511
     Components:
-      TagComponent: Sky Light
+      TagComponent: Entity
       TransformComponent:
-        Translation: [0, 0, 0]
+        Translation: [0, 47.27201, -17.507736]
         Rotation: [0, 0, 0]
-        Scale: [1, 1, 1]
-      SkyLightComponent:
-        Cubemap: 1626385373724971314
-        Intensity: 1
-        Enabled: true
+        Scale: [120.60015, 120.60015, 120.60015]
+      ModelRendererComponent:
+        Model: 801164346423064841
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 7
+          BaseColor: [0.50769234, 0.50769234, 0.50769234, 1]
+          BaseColorTexture: 7227538360213676180
+          NormalTexture: 0
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 20
+          Metallic: 0
+          Roughness: 0.5
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5
+  - Entity: 7203686278110826639
+    Components:
+      TagComponent: Sphere Copy Copy
+      TransformComponent:
+        Translation: [-9.575631, 55.51503, -4.825]
+        Rotation: [0, 0, 0]
+        Scale: [7.319999, 7.319999, 7.319999]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 25
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 0
+          NormalTexture: 0
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 1
+          Roughness: 0.338
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0
+  - Entity: 7501780414904298130
+    Components:
+      TagComponent: Sphere Copy
+      TransformComponent:
+        Translation: [-0.345824, 55.51503, -4.825]
+        Rotation: [0, 0, 0]
+        Scale: [7.319999, 7.319999, 7.319999]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 17
+          BaseColor: [0.29230767, 0.07824852, 0.24027486, 1]
+          BaseColorTexture: 0
+          NormalTexture: 0
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0.449
+          Roughness: 0.172
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0
+  - Entity: 2926924348006902803
+    Components:
+      TagComponent: Cube
+      TransformComponent:
+        Translation: [28.060635, 64.830666, -7.0950575]
+        Rotation: [0, 0, 0]
+        Scale: [21.090384, 21.090384, 0.021090383]
+      ModelRendererComponent:
+        Model: 8631387498429252298
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 57
+          BaseColor: [0.6246154, 0.6246154, 0.6246154, 1]
+          BaseColorTexture: 0
+          NormalTexture: 0
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 1
+          Roughness: 0.142
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Blend
+          AlphaCutoff: 0.5
+  - Entity: 14730394099596409345
+    Components:
+      TagComponent: Sphere
+      TransformComponent:
+        Translation: [8.864, 55.51503, -4.825]
+        Rotation: [0, 0, 0]
+        Scale: [7.319999, 7.319999, 7.319999]
+      ModelRendererComponent:
+        Model: 18188504540743061743
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 17
+          BaseColor: [0.6246154, 0.6246154, 0.6246154, 1]
+          BaseColorTexture: 0
+          NormalTexture: 0
+          AOTexture: 0
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0.673
+          Roughness: 0.114
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Blend
+          AlphaCutoff: 0.5
   - Entity: 480778866970688348
     Components:
       TagComponent: Terrain
@@ -89,31 +209,46 @@ Entities:
       SkyLightComponent:
         Cubemap: 1626385373724971314
         Intensity: 1
-        Enabled: true
-  - Entity: 14730394099596409345
+        Enabled: false
+  - Entity: 16649961512409331976
     Components:
-      TagComponent: Sphere
+      TagComponent: Sky Light
       TransformComponent:
-        Translation: [8.864, 55.51503, -4.825]
+        Translation: [0, 0, 0]
         Rotation: [0, 0, 0]
-        Scale: [7.319999, 7.319999, 7.319999]
-      ModelRendererComponent:
-        Model: 18188504540743061743
-      MaterialComponent:
-        Material: 9736745633360246474
-        Overrides:
-          Mask: 17
-          BaseColor: [0.6246154, 0.6246154, 0.6246154, 1]
-          BaseColorTexture: 0
-          NormalTexture: 0
-          AOTexture: 0
-          EmissiveTexture: 0
-          TilingFactor: 1
-          Metallic: 0.673
-          Roughness: 0.114
-          NormalScale: 1
-          AOStrength: 1
-          EmissiveColor: [1, 1, 1]
-          EmissiveStrength: 0
-          AlphaMode: Opaque
-          AlphaCutoff: 0.5
+        Scale: [1, 1, 1]
+      SkyLightComponent:
+        Cubemap: 1626385373724971314
+        Intensity: 1
+        Enabled: true
+  - Entity: 9769244849998984590
+    Components:
+      TagComponent: Point Light
+      TransformComponent:
+        Translation: [0, 12, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      PointLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 80
+        Range: 40
+        Enabled: true
+  - Entity: 7834017280709574353
+    Components:
+      TagComponent: Sun
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [-50, 30, 0]
+        Scale: [1, 1, 1]
+      DirectionalLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 1
+        AmbientIntensity: 0.05
+        Enabled: true
+        CastShadows: true
+        ShadowMapResolution: 2048
+        ShadowCascadeCount: 4
+        ShadowDistance: 80
+        ShadowBias: 0.0015
+        ShadowSplitLambda: 0.15
+        ShadowCascadeBlend: 0.24

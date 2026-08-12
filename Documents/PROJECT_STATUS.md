@@ -5,12 +5,12 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-11
+- 最近更新：2026-08-12
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P10 IBL 环境光照
-- 主线状态：进行中（HDR Cubemap、Diffuse Irradiance 与 Specular Prefilter 已完成；下一步实现 BRDF LUT）
+- 当前主线：P11 Terrain Chunk、LOD 与剔除
+- 主线状态：待开始（先建立固定 3×3 Chunk 与连续边界验证，再接入剔除和距离 LOD）
 
 ## 使用与更新规则
 
@@ -55,44 +55,11 @@
 
 ## 当前主线
 
-### P10：IBL 环境光照
-
-**依赖**：P4 的 PBR、颜色空间和 TextureCube 方向约定稳定。
-
-**状态**：进行中。
-
-**目标**
-
-- 支持 HDR 经纬图导入、浮点 Cubemap 和完整 Mip Chain；
-- 依次实现 Diffuse Irradiance、Specular Prefilter 和 BRDF LUT；
-- 以源环境 Handle、资源版本和生成参数缓存派生贴图；
-- Terrain 与 Model 使用同一 SkyLight 环境数据。
-
-**阶段进展（2026-08-11）**
-
-- HDR 环境源基础已落地：支持直接导入 Radiance `.hdr`，也支持由 `.glsky` 的 `Source` 与 `Resolution` 引用等距柱状 HDR；
-- `EnvironmentMapLoader` 在 Renderer 核心层完成浮点解码、双线性经纬采样和六面转换；输出保持线性高动态范围，不由 EditorLayer 或 OpenGL 后端承担资产算法；
-- `TextureCube` 已支持 `RGBA16F`、显式 Mip 数、逐级上传和完整 `1×1` Mip Chain；既有六面 LDR Cubemap 也会生成 Mip；
-- Cubemap Runtime 暴露来源、HDR 标记和递增版本，Content Browser、Viewport 拖放与 Asset Inspector 已识别 `.hdr`；
-- `EnvironmentLighting` 已实现 `32×32 / 64 samples` 的余弦加权 Diffuse Irradiance，以及 `64×64 / 64 samples`、完整 7 层 Mip Chain 的 GGX Specular Prefilter；Mip 0 保留清晰环境，后续 Mip 随 Roughness 扩散反射；
-- 派生缓存键统一为源 Cubemap Handle、Runtime Version、派生图类型、Resolution 与 Sample Count；Diffuse 和 Specular 可独立命中或失效，正常帧不重复读回、卷积或上传，同一源的旧 Runtime Version 会被移除；
-- Scene 从第一个启用的 SkyLight 提交 Handle/Intensity；PBRModel 分别使用 slot 8/9，Terrain 使用 slot 20/21 采样 Diffuse/Specular 环境图。当前镜面环境项使用 Fresnel 与预过滤颜色的阶段性近似；下一步接入 Split-Sum BRDF LUT 后再完成 P10；
-- 验证：76 项无窗口回归全部 PASS；GTX 1050 / OpenGL 4.6 下 Diffuse、Specular 各生成一次，PBR Material Lab 6/6，PBRModel、Terrain、Shadow 与地形 Compute Shader 均成功加载；构建产物保留，提交：待提交。
-
-**验收**
-
-- 关闭方向光后材质仍有合理环境照明；
-- Roughness 增大时环境反射逐渐模糊；
-- Cubemap 无翻转、明显接缝或重复 Gamma；
-- 同一环境资源不会逐帧卷积或重复生成缓存。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P11：Terrain Chunk、LOD 与剔除
 
 **依赖**：P7 地形生成和 P8 TerrainMaterial 在单块地形上稳定。
+
+**状态**：待开始。
 
 **目标**
 
@@ -106,6 +73,10 @@
 - Chunk 边缘无裂缝和法线断层；
 - 视锥外 Chunk 不提交 DrawCall；
 - LOD 切换不过度跳变，近景精度和远景覆盖可独立调整。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P12：山脉大气表现与后处理
 
@@ -168,6 +139,14 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-12：P10 IBL 环境光照
+
+- 完成 Radiance HDR/等距柱状图导入、线性 `RGBA16F` Cubemap、完整普通 Mip Chain，以及 Model/Terrain 共用 SkyLight 数据链；
+- `EnvironmentLighting` 按源 Handle、Runtime Version、派生图类型与生成参数缓存 `32×32 / 64 samples` Diffuse Irradiance 和 `64×64 / 64 samples`、7 层 GGX Specular Prefilter，正常帧不重复读回或卷积；
+- 新增与具体环境无关、进程级共享的 `64×64 RG16F / 128 samples` Split-Sum BRDF LUT；PBRModel 使用 slot 8/9/10，Terrain 使用 slot 20/21/22，并按 `Prefilter × (F0 × scale + bias)` 完成环境镜面项；
+- GTX 1050 / OpenGL 4.6 下 BRDF LUT 在日志相邻秒内生成一次；Diffuse 与 Specular 各生成一次，PBR Lab 6/6，默认 Terrain、Shadow 与三条 Terrain Compute Shader 均成功加载；
+- 验证：编辑器增量构建成功，78 项无窗口回归全部 PASS，新增覆盖 LUT 有限/有界及 Roughness/掠射角响应；构建产物保留，提交：待提交。
 
 ### 2026-08-11：P8.1 TerrainMaterial 采样优化
 
@@ -418,7 +397,7 @@
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；仍缺少 Chunk/LOD 和固定步长 Runtime Erosion 调度；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
-- SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance 和 GGX Specular Prefilter；尚无 BRDF LUT、持久化磁盘缓存和环境旋转；
+- SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
 - 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 

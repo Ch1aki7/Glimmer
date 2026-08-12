@@ -121,6 +121,8 @@ uniform int u_HasDiffuseIrradiance;
 uniform samplerCube u_SpecularPrefilterMap;
 uniform int u_HasSpecularPrefilter;
 uniform float u_SpecularPrefilterMaxLod;
+uniform sampler2D u_BrdfLut;
+uniform int u_HasBrdfLut;
 uniform float u_SkyLightIntensity;
 
 const float PI = 3.14159265359;
@@ -401,14 +403,17 @@ void main()
 		result = albedo * u_AmbientColorIntensity.rgb
 			* u_AmbientColorIntensity.a * ao;
 	}
-	if (u_HasSpecularPrefilter != 0)
+	if (u_HasSpecularPrefilter != 0 && u_HasBrdfLut != 0)
 	{
 		vec3 reflection = reflect(-viewDirection, normal);
 		vec3 prefiltered = textureLod(
 			u_SpecularPrefilterMap,
 			reflection,
 			roughness * max(u_SpecularPrefilterMaxLod, 0.0)).rgb;
-		result += prefiltered * environmentFresnel
+		vec2 brdf = texture(
+			u_BrdfLut,
+			vec2(max(dot(normal, viewDirection), 0.0), roughness)).rg;
+		result += prefiltered * (reflectance * brdf.x + brdf.y)
 			* max(u_SkyLightIntensity, 0.0) * ao;
 	}
 	if (u_DirectionalDirectionIntensity.w > 0.0)
