@@ -21,7 +21,7 @@ namespace gl {
 			Ref<GPUTimer> Timer;
 			TerrainRenderer::Statistics Stats;
 			TerrainRenderer::SamplingMode Sampling =
-				TerrainRenderer::SamplingMode::AutomaticDistance;
+				TerrainRenderer::SamplingMode::FullFourLayers;
 			float DetailDistance = 80.0f;
 			float LODMiddleDistance = 90.0f;
 			float LODFarDistance = 180.0f;

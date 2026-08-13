@@ -532,6 +532,12 @@ namespace {
 
 	void TestTerrainPresets(TestContext& context)
 	{
+		context.Check(gl::TerrainRenderer::GetSamplingMode()
+			== gl::TerrainRenderer::SamplingMode::FullFourLayers
+			&& gl::TerrainRenderer::Statistics{}.Mode
+				== gl::TerrainRenderer::SamplingMode::FullFourLayers,
+			"terrain material sampling defaults to full four-layer quality");
+
 		const gl::TerrainPreset presets[] = {
 			gl::TerrainPreset::Alpine,
 			gl::TerrainPreset::Plateau,

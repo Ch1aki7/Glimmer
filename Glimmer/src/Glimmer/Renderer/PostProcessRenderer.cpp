@@ -108,6 +108,12 @@ namespace gl {
 		toneMappingPass.Target = m_DisplayFramebuffer;
 		RenderPass::Begin(toneMappingPass);
 		m_ToneMappingShader->Bind();
+		// OpenGL validates sampler types for the whole linked program, even when
+		// the shader branch using a sampler is disabled. Keep the cube sampler on
+		// a distinct unit from every sampler2D instead of relying on GLSL's
+		// default sampler value of zero.
+		m_ToneMappingShader->UploadUniformInt("u_FogSkyLight", 2);
+		m_ToneMappingShader->UploadUniformInt("u_BloomTexture", 3);
 
 		glm::vec3 resolvedFogColor = m_Settings.DistanceFogColor;
 		int resolvedFogColorSource = static_cast<int>(m_Settings.FogColor);
@@ -118,7 +124,6 @@ namespace gl {
 			if (input.SkyLightTexture)
 			{
 				input.SkyLightTexture->Bind(2);
-				m_ToneMappingShader->UploadUniformInt("u_FogSkyLight", 2);
 				m_ToneMappingShader->UploadUniformFloat(
 					"u_FogSkyLightIntensity",
 					std::max(input.SkyLightIntensity, 0.0f));

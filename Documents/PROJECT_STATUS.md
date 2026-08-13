@@ -90,6 +90,8 @@
 - GPU 阶段新增 `TerrainHydrologyGPU`：程序化 `R32F` Height 只读，Water 使用 `R32F` Ping-Pong，Flux/Velocity 使用 `RGBA16F` Ping-Pong；每个固定步拆为 HydrologyFlux 与 HydrologyUpdate 两次全局 Dispatch，并在 Pass 间执行 Memory Barrier 和 Swap；普通图片高度图不进入 Storage Image 路径；
 - TerrainRenderer 只在 Color Pass 的首个 Prepare 推进一次水文，Shadow Prepare 不推进；Terrain 重新生成时重建水文资源。Debug → Overview → Runtime Hydrology 提供 Play、暂停态 Single Step、Reset、Rainfall、蓝色水深/流速覆盖与手动 Validate/Readback；质量统计不逐帧读回；
 - 验证：Premake VS2026 重新生成成功，VS2026 `Debug | x64` 整解决方案构建成功；最终编辑器以项目工作目录持续运行 15 秒，HydrologyFlux、HydrologyUpdate 与 Terrain Shader 创建链路无断言或提前退出；96 项具体无窗口断言全部 PASS；
+- 修复拉取到 GTX 1050 后默认 Manual Fog 黑屏：ToneMapping 的 `sampler2D` 与未显式赋值的 `samplerCube` 曾同时落到 slot 0，NVIDIA 531.29 在最终 Draw 报 `GL_INVALID_OPERATION: program texture usage`；PostProcessRenderer 现每帧固定 Scene Color/Depth/Fog Cube/Bloom 为 slot 0/1/2/3。编辑器增量构建成功，默认配置画面恢复，RenderDoc API Validation 无 High severity 或 sampler 错误；
+- TerrainMaterial 默认采样由 Auto Distance 调整为 Full 4 Layers：完整保留 Grass/Soil/Rock/Snow 的连续地貌权重及各层 Triplanar Albedo/Normal/AO，避免 Top-2 重新归一化压窄过渡带或 Auto 随距离淡出次层细节；三种性能模式仍可在 Debug 切换。新增默认值回归后 97 项断言全部 PASS，编辑器构建及 GTX 1050 运行验证通过；
 - 待验收：在 Debug 面板运行降雨后执行手动 Readback，确认 GPU Water/Velocity 有限、质量误差处于明确容差，并用水深覆盖确认高处外流与洼地蓄水；通过后完成 P13A 并提升 P13B。
 
 ## 后续任务

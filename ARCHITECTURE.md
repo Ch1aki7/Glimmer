@@ -196,7 +196,7 @@ Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite �
 
 Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。引擎侧 `PostProcessRenderer` 持有 Display FBO、两张随视口缩放的半分辨率 `RGBA16F` Bloom FBO、ToneMapping/Bloom Shader 引用、`PostProcessSettings` 和完整后处理执行顺序；Shader 仍注册在编辑器共享的 `ShaderLibrary`，因此沿用现有热重载入口。EditorLayer 只提交 Scene Color/Depth、Camera Position、Inverse ViewProjection、SkyLight Texture/Intensity 和 DirectionalLight Color，不直接实现提取、模糊或显示映射算法。
 
-Scene Color 先进行 Bloom 软阈值提取：根据 EV 后亮度决定贡献但保留未曝光 Radiance，5 权重高斯模糊以水平/垂直 Ping-Pong 迭代。ToneMapping Pass 同时读取 HDR Color、Bloom 与 Scene Depth；合成顺序固定为 Scene+Bloom、Distance/Height Fog、EV、ACES White Point、Gamma，因此 Bloom 不重复曝光且远处光晕受雾衰减。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。天空深度被显式跳过。全部 Bloom/Fog/EV/White Point 参数只存在于 `PostProcessSettings` 运行时实例，并由 Editor Settings UI 编辑，不属于 Scene、Camera 或 Environment 序列化状态。
+Scene Color 先进行 Bloom 软阈值提取：根据 EV 后亮度决定贡献但保留未曝光 Radiance，5 权重高斯模糊以水平/垂直 Ping-Pong 迭代。ToneMapping Pass 同时读取 HDR Color、Bloom 与 Scene Depth；合成顺序固定为 Scene+Bloom、Distance/Height Fog、EV、ACES White Point、Gamma，因此 Bloom 不重复曝光且远处光晕受雾衰减。其采样器槽位由 PostProcessRenderer 每帧完整声明为 Scene Color=0、Scene Depth=1、Fog Cubemap=2、Bloom=3；即使某个效果关闭也不让不同 GLSL sampler 类型依赖默认 slot 0，避免跨驱动的 Program Texture Usage 非法状态。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。天空深度被显式跳过。全部 Bloom/Fog/EV/White Point 参数只存在于 `PostProcessSettings` 运行时实例，并由 Editor Settings UI 编辑，不属于 Scene、Camera 或 Environment 序列化状态。
 
 ### 5.4 光照、PBR、天空盒与地形
 
@@ -229,7 +229,7 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 - `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；Runtime 持有按 `ceil(MeshResolution / 3)`、约二分之一和约四分之一建立的 LOD0/1/2 三份共享 Chunk Mesh，九块区域共用 Height/派生纹理和材质绑定，并通过逐块 Uniform 恢复完整覆盖；Color Pass 先执行 Camera Frustum 剔除，再按 Chunk 世界中心距离选择 LOD，复用上帧级别施加 5 单位迟滞，并把四方向相邻级差限制为 1；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
 - `TerrainSpecification::TerrainMaterialHandle` 引用独立 `.glterrainmat`；Handle 为 0 时 TerrainRenderer 使用内建四层颜色/PBR 参数且不加载具体层纹理，有效 Handle 才从 AssetManager 缓存解析四层参数，并使用纹理单元 4～15 绑定每层 Albedo/Normal/AO；
 - Terrain Shader 以世界坐标对 XY/XZ/YZ 三个平面采样并按法线方向混合，避免陡坡沿网格 UV 拉伸；派生权重再叠加高度、坡度、曲率和 Flow/低地湿度修正，最后进入 Cook–Torrance 直接光与线性 HDR 输出；
-- TerrainRenderer 的采样质量是纯运行时全局状态：Full-4 保留完整基线，Top-2 在最终权重确定后裁剪低贡献层，Dominant Detail 只为主导层读取 Normal/AO，Auto Distance 在近景 Top-2 与远景 Dominant Detail 间平滑衰减次要层细节；默认使用 Auto，距离阈值为 80 世界单位。采样设置、GPU Timer 与 Statistics 不进入 Scene YAML；
+- TerrainRenderer 的采样质量是纯运行时全局状态：Full-4 保留完整基线，Top-2 在最终权重确定后裁剪低贡献层，Dominant Detail 只为主导层读取 Normal/AO，Auto Distance 在近景 Top-2 与远景 Dominant Detail 间平滑衰减次要层细节；默认使用 Full-4，以完整保留四层连续权重和每层 Albedo/Normal/AO 过渡，Auto 的距离阈值仍为 80 世界单位。采样设置、GPU Timer 与 Statistics 不进入 Scene YAML；
 - TerrainRenderer 另持有纯运行时 LOD 可视化开关；Color Pass 在正常 PBR 与级联调试结果之后，以红/绿/蓝覆盖 LOD0/1/2。DebugPanel 和 `GLIMMER_TERRAIN_LOD_VISUALIZE` 只控制该开关，不改变 LOD 选择、Shadow LOD0 路径或 Scene YAML；
 - 参数、Compute Shader 或资源变化时通过 `Invalidate` 使 Runtime 失效。正常帧只采样缓存结果；生成、有限次侵蚀与派生只在 Dirty 或显式 Regenerate 时 Dispatch。
 

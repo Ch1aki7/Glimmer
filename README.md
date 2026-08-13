@@ -12864,7 +12864,9 @@ Debug → Overview → Terrain 的 Sampling 提供四档：
 - Full 4 Layers：完整四层采样，作为最高质量与性能基线；
 - Top 2 Layers：只保留贡献最高的两层，两层仍读取 Albedo、Normal 和 AO；
 - Top 2 + Dominant Normal/AO：两层读取 Albedo，但 Normal/AO 只读取主导层；
-- Auto Distance：默认档位；近景使用 Top-2 完整细节，远景使用主层 Normal/AO。Detail Distance 默认为 80 世界单位，阈值前后各 15% 组成 smoothstep 过渡带，次要层法线和 AO 不会在单个距离点硬切。
+- Auto Distance：性能档位；近景使用 Top-2 完整细节，远景使用主层 Normal/AO。Detail Distance 默认为 80 世界单位，阈值前后各 15% 组成 smoothstep 过渡带，次要层法线和 AO 不会在单个距离点硬切。
+
+当前默认改为 Full 4 Layers。地貌派生权重在进入材质采样前已经结合 Height、Slope、Curvature、Flow/Moisture 并归一化；Full-4 让 Grass、Soil、Rock、Snow 四层都按连续权重贡献 Albedo、Normal、AO、Metallic 和 Roughness。Top-2 会把较弱的两层归零，再对主、次两层重新归一化，因此原本宽而细腻的多层过渡可能变窄；Dominant/Auto 还会减少或随距离淡出次层 Normal/AO，容易使表面细节随相机距离变化。Full-4 视觉最稳定、材质交界最自然，因此作为编辑器默认画质基线；其余档位继续用于低端设备和性能比较。
 
 TerrainMaterialHandle 为 0 时仍走无具体材质纹理的内建颜色路径。它既保持默认编辑器启动轻量，也可作为“不加载 11 张材质纹理”的基础对照；分配 DefaultTerrain.glterrainmat 后才进入完整纹理路径。
 
@@ -12893,6 +12895,8 @@ TerrainSamplingBenchmarkTool 位于编辑器 Debug 目录，只读取 TerrainRen
 | Top 2 + Dominant Normal/AO | 30 | 4.226 ms | 4.006 ms | 5.122 ms | 降低 60.4% |
 
 Full-4、Top-2 和 Auto 固定视口截图已逐档检查，山体轮廓、草/岩混合和 Triplanar 投影方向一致，未发现新增条带接缝。Terrain 图形 Shader 与 GenerateFBM、ThermalErosion、DeriveTerrainMaps 均在 GTX 1050 上成功编译。Premake VS2026 重新生成、Debug x64 全解决方案构建和 64 项无窗口回归全部通过，构建输出目录未清理。
+
+默认档位调整后新增回归断言，确认 TerrainRenderer 运行时状态和 Statistics 都以 Full-4 初始化；当前 97 项具体无窗口断言全部 PASS，VS2026 `Debug | x64` 编辑器目标构建成功，GTX 1050 / OpenGL 4.6 默认场景持续运行并成功加载 Terrain 与相关 Compute Shader。该选择明确偏向画质：既有基准中 Full-4 为 `10.681 ms`，Top-2 为 `6.026 ms`，因此性能受限时仍应手动选择 Top-2、Dominant 或 Auto，而不是误认为默认调整没有成本。
 
 ## HDR 环境 Cubemap 与 Mip Chain 基础
 
@@ -13344,6 +13348,29 @@ Height(Read) + Water(Read) + Flux(Read)
 - 最终编辑器以项目工作目录运行 15 秒，HydrologyFlux、HydrologyUpdate、Terrain 和既有图形 Shader 初始化链路无断言或提前退出；
 - CPU 数值契约及既有功能共 96 项具体无窗口断言全部 PASS；
 - GPU 长时间降雨后的质量误差与洼地视觉分布仍需通过上述 Debug 操作完成最终人工验收，因此 P13A 当前仍为进行中。
+
+## Tone Mapping 跨驱动 Sampler 修复
+
+一次跨电脑拉取后，GTX 1050 / NVIDIA 531.29 上的 Viewport 只显示黑色，而相同代码在另一台电脑上可以正常显示。RenderDoc 证明 Scene、Terrain、Bloom 和最终全屏命令都已提交；真正失败的是 Tone Mapping 的最后一次 `DrawElements(6)`：
+
+```text
+GL_INVALID_OPERATION: State(s) are invalid: program texture usage.
+```
+
+`ToneMapping.glsl` 同时声明 `sampler2D u_SceneTexture` 和 `samplerCube u_FogSkyLight`。旧实现只在 Fog Color Source 选择 Sky Light 时才把 Cube sampler 设置到 slot 2；默认 Manual 模式下它保持 GLSL 默认值 0，与 Scene Texture 的 slot 0 冲突。OpenGL 会验证整个已链接 Program 的 sampler 类型，即使本帧不执行 Cubemap 采样分支；严格驱动因此拒绝 Draw，Display FBO 只留下此前成功写入的黑色 Clear。较宽松驱动或已有 Uniform 状态可能掩盖问题，但不能作为合法行为依赖。
+
+PostProcessRenderer 现在每帧显式声明完整绑定契约：
+
+| Slot | Sampler | 类型 |
+| ---: | --- | --- |
+| 0 | `u_SceneTexture` | `sampler2D` |
+| 1 | `u_SceneDepth` | `sampler2D` |
+| 2 | `u_FogSkyLight` | `samplerCube` |
+| 3 | `u_BloomTexture` | `sampler2D` |
+
+Fog 或 Bloom 关闭时也保留不冲突的 Uniform 槽位；只有实际需要时才绑定对应可选纹理。这样 Shader 热重载、默认设置和不同驱动都不再依赖上一次 Program 状态或 sampler 默认值。
+
+验证：VS2026 `Debug | x64` 编辑器目标增量构建成功，立即重复构建没有重新编译源文件；GTX 1050 默认 Manual Fog 下 Terrain/Skybox 画面恢复；修复后 RenderDoc API Validation 捕获包含最终 Tone Mapping Draw，且没有 High severity、`GL_INVALID_OPERATION` 或 `program texture usage`。`bin`、`bin-int` 均保留。
 
 ## KB
 

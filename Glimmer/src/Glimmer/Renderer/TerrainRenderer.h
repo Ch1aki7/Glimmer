@@ -30,7 +30,7 @@ namespace gl {
 			float GpuMilliseconds = 0.0f;
 			uint64_t GpuTimingSample = 0;
 			bool GpuTimingAvailable = false;
-			SamplingMode Mode = SamplingMode::AutomaticDistance;
+			SamplingMode Mode = SamplingMode::FullFourLayers;
 			float DetailDistance = 80.0f;
 		};
 
