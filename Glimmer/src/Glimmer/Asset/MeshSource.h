@@ -30,7 +30,16 @@ namespace gl {
 	struct MeshMaterialSource
 	{
 		std::string Name;
+		glm::vec4 BaseColorFactor{ 1.0f };
+		glm::vec3 EmissiveFactor{ 0.0f };
+		float MetallicFactor = 0.0f;
+		float RoughnessFactor = 0.5f;
 		std::filesystem::path BaseColorTexturePath;
+		std::filesystem::path NormalTexturePath;
+		std::filesystem::path MetallicTexturePath;
+		std::filesystem::path RoughnessTexturePath;
+		std::filesystem::path AOTexturePath;
+		std::filesystem::path EmissiveTexturePath;
 	};
 
 	struct SubmeshSource

@@ -5315,7 +5315,7 @@ glBindTexture(GL_TEXTURE_2D, 0);解绑当前绑定到 `GL_TEXTURE_2D` 目标的�
 
 ## 加载obj文件
 
-> 历史记录说明：本节保留了早期尝试把 Assimp 全部源码直接塞进 Premake、手写 `config.h` 的失败过程，仅用于解释当时为什么退回 tinyobjloader，不能作为当前构建方式。2026-08-14 起，项目使用文末“模型导入边界与 Assimp 子模块准备”所述的官方 CMake 独立静态库方案；当前真正生效的模型 importer 仍只有 OBJ。
+> 历史记录说明：本节保留了早期尝试把 Assimp 全部源码直接塞进 Premake、手写 `config.h` 的失败过程，仅用于解释当时为什么退回 tinyobjloader，不能作为当前构建方式。2026-08-14 起，项目使用文末“模型导入边界与 Assimp 子模块准备”和“静态 FBX 与 Cerberus PBR 材质加载”所述的官方 CMake 独立静态库方案；当前生效的模型源格式为 OBJ 与静态 FBX。
 
 在我的CG课程中呢，已经学习了如何使用OpenGL渲染obj文件，当时是采用手写解析函数进行加载的，但实际引擎其实需要满足更多要求，比如：如果用这个函数去加载从 Blender、Maya 或网上下载的专业模型，会有大概率报错或显示乱码。原因如下：
 
@@ -13419,7 +13419,7 @@ Glimmer/vendor/assimp-build/vs2026-Debug/lib/assimp-vc145-mtd.lib
 Glimmer/vendor/assimp-build/vs2026-Debug/contrib/zlib/zlibstaticd.lib
 ```
 
-当前能力边界：
+该准备阶段当时的能力边界（已由下一节继续推进）：
 
 - `.obj`：继续支持，现已先转换成 MeshSource，再创建运行时 Mesh；
 - `.fbx`、`.gltf`、`.glb`：Assimp 库本身已经按这些 importer 构建，但 Glimmer 尚未实现 AssimpModelImporter，也没有在 AssetManager 中注册这些扩展名，因此目前仍不能加载；
@@ -13429,7 +13429,66 @@ Glimmer/vendor/assimp-build/vs2026-Debug/contrib/zlib/zlibstaticd.lib
 
 本阶段验证结果：Premake VS2026 工程生成成功；Assimp Debug 静态库完整构建并确认只启用 OBJ/FBX/GLTF，立即重复脚本约 5 秒完成且没有重新编译源文件；OBJ→MeshSource 新增 3 条无窗口回归，连同既有功能共 100 项断言全部 PASS；`GlimmerEditor-CyouBranch` 的 `Debug | x64` 目标构建成功，立即重复构建只检查并输出既有目标。`bin`、`bin-int` 和 Assimp 独立构建产物均保留。
 
-下一步不是立刻在 AssetManager 中加入 `.fbx`，而是实现静态模型范围的 `AssimpModelImporter`，先明确右手/Y-up/米制坐标契约、节点变换、Submesh/Material Slot、外部与嵌入纹理处理，并准备版本化 `.glmesh` 烘焙格式。完成对应样本和回归后，再开放 FBX/glTF 扩展名；Skeleton、Animation 和 Morph Target 应在静态链稳定后分阶段建设。
+下一阶段已在下节完成静态 FBX importer 与外部 PBR 贴图加载；版本化 `.glmesh`、自动 `.glmat` 烘焙、单位归一化、Skeleton、Animation、Morph Target 和 glTF 仍应分阶段建设。
+
+## 静态 FBX 与 Cerberus PBR 材质加载
+
+本阶段把 Assimp 从“可以独立编译”推进到实际引擎数据链。`.fbx` 现在会被 AssetManager 识别为 Model，并通过专用 `AssimpModelImporter` 转换为与 OBJ 共用的 MeshSource：
+
+```text
+FBX + 外部纹理
+  → AssimpModelImporter（仅 importer 私有 Assimp 类型）
+  → MeshSource / SubmeshSource / MeshMaterialSource
+  → Model（按 MaterialIndex 共享纹理解码）
+  → Mesh
+  → Renderer3D / PBRModel
+```
+
+静态导入启用了 Triangulate、JoinIdenticalVertices、GenSmoothNormals、CalcTangentSpace、ImproveCacheLocality、SortByPType、ValidateDataStructure 和 PreTransformVertices。最后一项把 FBX 节点 Transform 烘焙进顶点，因此当前结果适合静态场景模型，但不会保留原节点层级、骨骼或动画。
+
+材质读取支持 BaseColor、Normal、Metallic、Roughness、AO 和 Emissive。Cerberus FBX 本身只保存了 `Textures/Cerberus_A.tga` 的引用，其余贴图不在 FBX 材质连接中；importer 因此只在模型相邻目录、`Textures` 和 `Textures/Raw` 内按受限后缀查找 `_N`、`_M`、`_R`、`_AO`，不会递归扫描整个项目或按模糊名称随机匹配。Cerberus 最终解析到：
+
+```text
+Cerberus_A.tga       Base Color / sRGB
+Cerberus_N.tga       Normal / Linear
+Cerberus_M.tga       Metallic / Linear
+Cerberus_R.tga       Roughness / Linear
+Raw/Cerberus_AO.tga  AO / Linear
+```
+
+Renderer3D 的覆盖顺序是：实体 MaterialInstance 中显式存在的 BaseColor、Normal、AO、Emissive 贴图优先，缺失通道使用模型导入贴图；Metallic/Roughness 当前由模型导入贴图覆盖 `.glmat` 的标量。新采样器使用 unit 11/12，避开已有的 0～3 材质、4～7 CSM 与 8～10 IBL。一个 FBX 材质被多个 Submesh 使用时只解码和上传一套纹理。
+
+### 使用流程
+
+1. 新设备先初始化子模块，并构建对应配置的 Assimp 静态库：
+
+   ```bat
+   git submodule update --init --recursive
+   scripts\Win-BuildAssimp-vs2026.bat Debug
+   ```
+
+2. 把 FBX 连同其相对纹理目录复制到 `GlimmerEditor-CyouBranch/assets` 内。例如应保留 `Cerberus_LP.FBX` 与同级 `Textures` 的关系。Content Browser 出于项目资产边界不会导入 `tmp` 外部路径。
+3. 在实体上添加 Model Renderer 和 Material 组件，把 FBX 拖到 Model，把一个使用 PBRModel Shader 的 `.glmat` 拖到 Material。`.glmat` 提供 Shader 和可编辑覆盖值，FBX 提供缺失的导入纹理。
+4. Content Browser 导入后会把 FBX Handle 写入 AssetRegistry；Scene YAML 仍只保存 ModelHandle/MaterialHandle，不保存 Assimp 对象或 GPU ID。
+
+`tmp/Cerberus_by_Andrew_Maximov` 仅用于本机回归。其许可限定非商业教育用途且纹理体积较大，本次没有把它复制到正式 assets 或加入 Git。
+
+### 当前边界
+
+- 仅开放 `.fbx` 静态网格；`.gltf/.glb` 虽已在 Assimp 构建中启用，但尚未注册；
+- 不支持骨骼、动画、Morph Target、保留节点层级或嵌入纹理；
+- 未额外进行厘米/米单位归一化，使用 Assimp 实际输出；不同 DCC 来源仍需建立明确导入设置；
+- 导入纹理由 Model 运行时持有，尚不生成独立 AssetHandle、`.glmat` 或版本化 `.glmesh`；
+- `.glmat` 目前没有 Metallic/Roughness Texture 字段，只有 FBX 导入回退路径能使用这两张独立贴图；ORM 打包也未实现；
+- Tangent 仍是 vec3，没有保存镜像 UV 所需的 handedness。
+
+### 验证
+
+- Cerberus FBX 被解析为有效三角 Submesh，顶点与索引非空，全部切线有限且长度大于 0.9；
+- Cerberus A/N/M/R/AO 五张 TGA 路径全部解析成功；
+- 103 项无窗口回归断言全部 PASS；
+- GlimmerEditor-CyouBranch `Debug | x64` 成功链接 Assimp 和 zlib，最终 EXE 持续运行 15 秒，无 Shader 断言或提前退出；
+- `bin`、`bin-int` 与 Assimp 独立构建产物均保留。
 
 ## KB
 

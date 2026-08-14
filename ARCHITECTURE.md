@@ -306,9 +306,13 @@ flowchart LR
 
 ### 7.2 Model 源文件导入边界
 
-模型源文件解析与 GPU 资源创建已经分离。`ModelImporter` 按扩展名选择具体 importer，当前唯一生效的 `ObjModelImporter` 使用 tinyobjloader 把 OBJ/MTL 转换为纯 CPU `MeshSource`；后者由若干 `SubmeshSource`、`MeshVertex` 和 `MeshMaterialSource` 组成，不持有 VertexArray、Buffer、Texture 或任何 OpenGL 对象。`Model` 只消费有效 MeshSource，并在运行时为各 Submesh 创建现有 `Mesh`。OBJ 的 MTL BaseColor 路径仍由 Model 直接创建 Texture2D，尚未转成正式 `.glmat`，属于后续资产烘焙要消除的旧边界。
+模型源文件解析与 GPU 资源创建已经分离。`ModelImporter` 按扩展名选择具体 importer：`ObjModelImporter` 使用 tinyobjloader 解析 OBJ/MTL，`AssimpModelImporter` 使用 Assimp 解析静态 FBX；两者都只输出纯 CPU `MeshSource`。`MeshSource` 由 `SubmeshSource`、`MeshVertex` 和 `MeshMaterialSource` 组成，不持有 VertexArray、Buffer、Texture 或 OpenGL 对象；Assimp 的 `aiScene`、`aiMesh` 与 `aiMaterial` 仅存在于 importer 私有实现中，不进入 Renderer、Scene、组件或公共 Model API。
 
-官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，但不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 使用上游 CMake 在 VS2026 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；生成目录位于忽略的 `Glimmer/vendor/assimp-build/`。当前没有 `AssimpModelImporter`，Glimmer 也没有把 `.fbx`、`.gltf` 或 `.glb` 注册为 Model，因此这些格式仍不能进入 AssetManager、Scene 或 Renderer。后续 Assimp 适配器只能依赖其私有头文件并输出 MeshSource，不得把 `aiScene`、`aiMesh` 等类型暴露给 Renderer、Scene 或公共组件。
+静态 FBX 导入会三角化、合并重复顶点、生成缺失法线/切线、改善索引局部性，并通过 `aiProcess_PreTransformVertices` 把节点变换烘焙到顶点。当前不保留节点层级、骨骼、动画、Morph Target 或嵌入纹理，也没有额外执行单位归一化；导入结果使用 Assimp 输出的坐标与单位。`MeshMaterialSource` 可描述 BaseColor、Normal、Metallic、Roughness、AO、Emissive 路径与基础因子。若 FBX 只引用 BaseColor，importer 会在模型相邻、`Textures` 和 `Textures/Raw` 目录内按受限的 `_N/_M/_R/_AO` 约定补全外部贴图。
+
+`Model` 只消费有效 MeshSource，为各 Submesh 创建 GPU `Mesh`，并按 MaterialIndex 共享解码后的导入纹理。Renderer3D 先使用实体 `.glmat`/MaterialInstance 的 BaseColor、Normal、AO、Emissive 通道，缺失时回退到 Mesh 导入通道；导入 Metallic/Roughness 使用独立采样器。材质纹理占 0～3，CSM 占 4～7，IBL 占 8～10，导入 Metallic/Roughness 固定占 11～12，避免 sampler 类型或用途冲突。导入纹理目前仍是 Model 持有的运行时 Texture2D，不是 AssetHandle，也不会自动生成 `.glmat`，属于后续 `.glmesh`/材质烘焙要收口的边界。
+
+官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 使用上游 CMake 在 VS2026 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；Premake 的 Debug 链接 Debug 产物，Release/Dist 链接 Release 产物。AssetManager 当前注册 `.obj` 与 `.fbx` 为 Model；`.gltf`、`.glb` 和内部 `.glmesh` 尚未开放。
 
 ### 7.3 Material 与 MaterialInstance
 
@@ -339,7 +343,7 @@ flowchart LR
 
 ### 8.1 无窗口回归边界
 
-`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。测试文件只创建在系统临时目录，并由测试进程生命周期负责清理。
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 断言仅在本地 `tmp/Cerberus_by_Andrew_Maximov` 样本存在时执行，样本不属于版本化测试资源。
 
 根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 

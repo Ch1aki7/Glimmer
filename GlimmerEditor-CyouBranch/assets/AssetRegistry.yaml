@@ -20,6 +20,11 @@ AssetRegistry:
     FilePath: textures/NoiseTex.png
     ColorSpace: Linear
     Semantic: Normal
+  - Handle: 2698065874526944978
+    Type: Texture2D
+    FilePath: models/Cerberus/Textures/Raw/Cerberus_N.tga
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 3179645585411309739
     Type: Model
     FilePath: models/New Folder/Cube.obj
@@ -59,6 +64,9 @@ AssetRegistry:
   - Handle: 5637376273557172649
     Type: Shader
     FilePath: shaders/Phong.glsl
+  - Handle: 5930054035825619410
+    Type: Model
+    FilePath: models/Cerberus/Cerberus_LP.FBX
   - Handle: 6250739528996233267
     Type: Texture2D
     FilePath: textures/pbr/lava/Lava_03_emissive-1K.png
@@ -182,6 +190,11 @@ AssetRegistry:
     FilePath: textures/STS.png
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 10318089221568011088
+    Type: Texture2D
+    FilePath: models/Cerberus/Textures/Cerberus_A.tga
+    ColorSpace: Linear
+    Semantic: Data
   - Handle: 10352056206108810874
     Type: Texture2D
     FilePath: textures/pbr/lava/Lava_03_normal-1K.png
@@ -238,6 +251,11 @@ AssetRegistry:
   - Handle: 15365846500528399802
     Type: Shader
     FilePath: shaders/PBRModel.glsl
+  - Handle: 15457954737144494823
+    Type: Texture2D
+    FilePath: models/Cerberus/Textures/Cerberus_N.tga
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 16046880885886658744
     Type: Shader
     FilePath: shaders/Skybox.glsl

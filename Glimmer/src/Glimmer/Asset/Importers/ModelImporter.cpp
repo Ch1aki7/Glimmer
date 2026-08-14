@@ -1,6 +1,7 @@
 #include "glpch.h"
 #include "ModelImporter.h"
 
+#include "AssimpModelImporter.h"
 #include "ObjModelImporter.h"
 
 #include <algorithm>
@@ -24,7 +25,8 @@ namespace gl {
 
 	bool ModelImporter::SupportsSource(const std::filesystem::path& path)
 	{
-		return GetLowercaseExtension(path) == ".obj";
+		const std::string extension = GetLowercaseExtension(path);
+		return extension == ".obj" || extension == ".fbx";
 	}
 
 	ModelImportResult ModelImporter::Import(const std::filesystem::path& path)
@@ -32,6 +34,8 @@ namespace gl {
 		const std::string extension = GetLowercaseExtension(path);
 		if (extension == ".obj")
 			return ObjModelImporter::Import(path);
+		if (extension == ".fbx")
+			return AssimpModelImporter::Import(path);
 
 		ModelImportResult result;
 		result.Error = "No model importer is registered for extension '"

@@ -75,10 +75,14 @@ uniform sampler2D u_BaseColorTexture;
 uniform sampler2D u_NormalTexture;
 uniform sampler2D u_AOTexture;
 uniform sampler2D u_EmissiveTexture;
+uniform sampler2D u_MetallicTexture;
+uniform sampler2D u_RoughnessTexture;
 uniform int u_HasBaseColorTexture;
 uniform int u_HasNormalTexture;
 uniform int u_HasAOTexture;
 uniform int u_HasEmissiveTexture;
+uniform int u_HasMetallicTexture;
+uniform int u_HasRoughnessTexture;
 uniform int u_AlphaMode;
 uniform float u_AlphaCutoff;
 uniform sampler2D u_ShadowMaps[4];
@@ -271,6 +275,12 @@ void main()
 	vec3 albedo = linearBaseColor * sampledColor.rgb;
     float metallic = clamp(u_Metallic, 0.0, 1.0);
     float roughness = clamp(u_Roughness, 0.04, 1.0);
+    if (u_HasMetallicTexture != 0)
+        metallic = clamp(texture(
+            u_MetallicTexture, v_TexCoord * u_TilingFactor).r, 0.0, 1.0);
+    if (u_HasRoughnessTexture != 0)
+        roughness = clamp(texture(
+            u_RoughnessTexture, v_TexCoord * u_TilingFactor).r, 0.04, 1.0);
     vec3 normal = normalize(v_WorldNormal);
     if (u_HasNormalTexture != 0)
     {

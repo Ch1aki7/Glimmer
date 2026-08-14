@@ -417,7 +417,7 @@ namespace gl {
 			|| extension == ".jpeg" || extension == ".tga"
 			|| extension == ".bmp")
 			return AssetType::Texture2D;
-		if (extension == ".obj")
+		if (extension == ".obj" || extension == ".fbx")
 			return AssetType::Model;
 		if (extension == ".glsl" || extension == ".comp")
 			return AssetType::Shader;

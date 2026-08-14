@@ -6,8 +6,9 @@ namespace gl {
 
 	Mesh::Mesh(const std::vector<MeshVertex>& vertices,
 		const std::vector<uint32_t>& indices,
-		Ref<Texture2D> texture)
-		: m_Texture(std::move(texture)), m_IndexCount((uint32_t)indices.size())
+		MeshMaterialTextures materialTextures)
+		: m_MaterialTextures(std::move(materialTextures)),
+		  m_IndexCount((uint32_t)indices.size())
 	{
 		if (!vertices.empty())
 		{

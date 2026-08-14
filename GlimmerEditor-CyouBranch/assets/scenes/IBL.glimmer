@@ -252,3 +252,30 @@ Entities:
         ShadowBias: 0.0015
         ShadowSplitLambda: 0.15
         ShadowCascadeBlend: 0.24
+  - Entity: 11654261055357289087
+    Components:
+      TagComponent: gun
+      TransformComponent:
+        Translation: [5.8439093, 63.230556, 21.174866]
+        Rotation: [0, 89.99998, 0]
+        Scale: [0.27000028, 0.27000004, 0.27000028]
+      ModelRendererComponent:
+        Model: 5930054035825619410
+      MaterialComponent:
+        Material: 9736745633360246474
+        Overrides:
+          Mask: 256
+          BaseColor: [1, 1, 1, 1]
+          BaseColorTexture: 0
+          NormalTexture: 2698065874526944978
+          AOTexture: 10318089221568011088
+          EmissiveTexture: 0
+          TilingFactor: 1
+          Metallic: 0
+          Roughness: 0.5
+          NormalScale: 1
+          AOStrength: 1
+          EmissiveColor: [1, 1, 1]
+          EmissiveStrength: 0
+          AlphaMode: Opaque
+          AlphaCutoff: 0.5

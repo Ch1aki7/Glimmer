@@ -89,8 +89,9 @@ namespace {
 		const gl::ModelImportResult imported =
 			gl::ModelImporter::Import(modelPath);
 		context.Check(gl::ModelImporter::SupportsSource(modelPath)
-			&& !gl::ModelImporter::SupportsSource("future-model.fbx"),
-			"model importer advertises only implemented source formats");
+			&& gl::ModelImporter::SupportsSource("static-model.fbx")
+			&& !gl::ModelImporter::SupportsSource("future-model.gltf"),
+			"model importer advertises OBJ and FBX only");
 		context.Check(imported && imported.Source.Submeshes.size() == 1
 			&& imported.Source.Submeshes.front().Vertices.size() == 3
 			&& imported.Source.Submeshes.front().Indices.size() == 3,
@@ -101,6 +102,52 @@ namespace {
 		context.Check(std::isfinite(tangent.x) && std::isfinite(tangent.y)
 			&& std::isfinite(tangent.z) && glm::length(tangent) > 0.9f,
 			"OBJ MeshSource contains a finite normalized tangent");
+	}
+
+	void TestCerberusFBXImport(TestContext& context)
+	{
+		const std::filesystem::path modelPath =
+			std::filesystem::current_path()
+			/ "tmp/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX";
+		if (!std::filesystem::is_regular_file(modelPath))
+			return;
+
+		const gl::ModelImportResult imported =
+			gl::ModelImporter::Import(modelPath);
+		size_t vertexCount = 0;
+		size_t indexCount = 0;
+		bool finiteTangents = static_cast<bool>(imported);
+		for (const gl::SubmeshSource& submesh : imported.Source.Submeshes)
+		{
+			vertexCount += submesh.Vertices.size();
+			indexCount += submesh.Indices.size();
+			for (const gl::MeshVertex& vertex : submesh.Vertices)
+			{
+				finiteTangents = finiteTangents
+					&& std::isfinite(vertex.Tangent.x)
+					&& std::isfinite(vertex.Tangent.y)
+					&& std::isfinite(vertex.Tangent.z)
+					&& glm::length(vertex.Tangent) > 0.9f;
+			}
+		}
+		context.Check(imported && !imported.Source.Submeshes.empty()
+			&& vertexCount > 0 && indexCount > 0 && indexCount % 3 == 0,
+			"Cerberus FBX imports as valid static triangle submeshes");
+		context.Check(finiteTangents,
+			"Cerberus FBX vertices contain finite normalized tangents");
+
+		bool hasCerberusPBRSet = false;
+		for (const gl::MeshMaterialSource& material : imported.Source.Materials)
+		{
+			hasCerberusPBRSet = hasCerberusPBRSet
+				|| (!material.BaseColorTexturePath.empty()
+					&& !material.NormalTexturePath.empty()
+					&& !material.MetallicTexturePath.empty()
+					&& !material.RoughnessTexturePath.empty()
+					&& !material.AOTexturePath.empty());
+		}
+		context.Check(hasCerberusPBRSet,
+			"Cerberus sidecar Albedo Normal Metallic Roughness and AO are resolved");
 	}
 
 	bool SameTerrainSpecification(
@@ -1155,6 +1202,7 @@ int main(int argc, char** argv)
 	std::cout << "Glimmer headless regression tests\n";
 	TestMaterialRoundTrip(context, temporaryDirectory.Path());
 	TestModelImporterFoundation(context, temporaryDirectory.Path());
+	TestCerberusFBXImport(context);
 	TestTerrainMaterialRoundTrip(context, temporaryDirectory.Path());
 	TestTerrainMaterialRegistry(context, temporaryDirectory.Path());
 	TestMaterialOverrideMerge(context, temporaryDirectory.Path());

@@ -147,6 +147,14 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-08-14：静态 FBX 与导入 PBR 材质
+
+- 新增私有 `AssimpModelImporter` 并把 `.fbx` 注册为 Model；静态导入执行三角化、顶点合并、法线/切线补全、缓存局部性优化和节点变换烘焙，只输出既有纯 CPU MeshSource，Assimp 类型未泄漏到 Scene 或 Renderer；
+- MeshMaterialSource 扩展 BaseColor、Normal、Metallic、Roughness、AO、Emissive 路径与因子；除读取 Assimp 材质语义外，可在模型相邻、Textures、Textures/Raw 内按 `_N/_M/_R/_AO` 约定补全外部贴图。Model 按 MaterialIndex 共享加载纹理，Renderer3D 让显式 `.glmat` 通道优先、导入通道回退；
+- PBRModel 新增 Metallic/Roughness 贴图采样，固定使用 texture unit 11/12，保持 0～3 材质、4～7 CSM、8～10 IBL 的现有槽位边界；Content Browser 将 FBX 显示为 Model；
+- 验证：Cerberus FBX 成功产生有效三角 Submesh，全部顶点切线有限且归一化，A/N/M/R/AO 五张 TGA 均被解析；103 项无窗口断言全部 PASS；GlimmerEditor-CyouBranch `Debug | x64` 构建成功并持续运行 15 秒，无 Shader 断言或提前退出；未复制或提交仅限非商业教育用途的 Cerberus 大文件；
+- 当前主线返回 P13A GPU 水文数值与视觉验收；提交：待提交。
+
 ### 2026-08-14：模型导入边界与 Assimp 接入准备
 
 - 补齐官方 `assimp/assimp` Git 子模块并固定到 `v6.0.5`（`392a658`）；新增 VS2026 独立构建脚本，通过 Assimp 官方 CMake、NMake、静态 CRT 和 import-only 配置只构建 OBJ/FBX/glTF importer，生成目录不进入版本控制，也不加入普通 Glimmer 源文件编译；
@@ -418,7 +426,9 @@
 - VS2026 Premake 生成的主入口是 `GlimmerEngine.slnx`；旧 `GlimmerEngine.sln` 可能来自 VS2022 或早期生成，自动验证脚本优先构建 `.slnx`；
 - SPIRV-Cross 上游 Premake 会递归包含 samples/tests，根 Premake 当前通过 `removefiles` 排除；修改依赖生成逻辑时必须复验；
 - GLFW Premake 仍使用已弃用的 `flags`、`NoRuntimeChecks` 和 `NoIncrementalLink` 写法，会产生生成警告。
+- Assimp 是独立生成的静态依赖；新设备在构建 Debug 或 Release/Dist 前必须分别运行 `scripts/Win-BuildAssimp-vs2026.bat Debug` 或 `Release`，生成目录不提交。
 - Model 资源已恢复 Cube、Plane、UV Sphere、bunny、planet、spacecraft、suzanne；注册表中的 `models/New Folder/Cube.obj`、`models/dragon.obj`、`models/UV Sphere.obj` 仍缺少源文件，需要从原设备恢复或移除失效条目。
+- FBX 当前仅支持静态网格并把节点变换烘焙到顶点；尚无单位归一化、保留层级、骨骼/动画、Morph Target、嵌入纹理、自动 `.glmat`/`.glmesh` 烘焙或 glTF/GLB 注册。
 
 ### 编辑器
 
@@ -430,7 +440,7 @@
 
 - Renderer3D 已有 Opaque/Mask/Transparent Queue、状态排序、Opaque Instancing 和 MaterialInstance 缓存；Transparent 首版仍按实体原点而不是 Mesh Bounds 中心排序，且不支持透明实例化或 OIT；
 - AlphaMode Shader 契约当前由 PBRModel 完整实现；自定义 3D Shader 若要正确支持 Mask/Blend，仍需自行声明并使用 `u_AlphaMode`、`u_AlphaCutoff`；
-- PBRModel 已支持 Normal、AO 与 Emissive Texture；Metallic/Roughness 仍为标量，尚未定义独立贴图或 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
+- PBRModel 已支持 BaseColor、Normal、AO、Emissive 以及 FBX 导入的独立 Metallic/Roughness Texture；`.glmat` 尚未暴露 Metallic/Roughness 纹理 Handle，也未定义 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；固定 `3×3` Chunk 与 Color/Shadow Chunk 剔除已落地，仍缺距离 LOD、跨 LOD 接缝策略和固定步长 Runtime Erosion 调度；

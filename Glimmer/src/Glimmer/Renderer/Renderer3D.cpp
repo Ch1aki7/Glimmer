@@ -24,14 +24,18 @@ namespace gl {
 
 	namespace {
 		constexpr uint32_t MaxInstancesPerDraw = 1024;
-		constexpr uint32_t MaterialTextureCount = 4;
+		constexpr uint32_t MaterialTextureCount = 6;
 		enum MaterialTextureSlot : uint32_t
 		{
 			BaseColorSlot = 0,
 			NormalSlot,
 			AOSlot,
-			EmissiveSlot
+			EmissiveSlot,
+			MetallicSlot,
+			RoughnessSlot
 		};
+		constexpr std::array<uint32_t, MaterialTextureCount>
+			MaterialTextureUnits{ 0, 1, 2, 3, 11, 12 };
 
 		uint32_t FloatBits(float value)
 		{
@@ -218,6 +222,10 @@ namespace gl {
 			item.ShaderResource->UploadUniformInt(
 				"u_HasEmissiveTexture", item.HasTextures[EmissiveSlot] ? 1 : 0);
 			item.ShaderResource->UploadUniformInt(
+				"u_HasMetallicTexture", item.HasTextures[MetallicSlot] ? 1 : 0);
+			item.ShaderResource->UploadUniformInt(
+				"u_HasRoughnessTexture", item.HasTextures[RoughnessSlot] ? 1 : 0);
+			item.ShaderResource->UploadUniformInt(
 				"u_AlphaMode", static_cast<int>(item.Material.AlphaMode));
 			item.ShaderResource->UploadUniformFloat(
 				"u_AlphaCutoff", item.Material.AlphaCutoff);
@@ -324,7 +332,9 @@ namespace gl {
 			ResolveMaterialTexture(properties.AOTexture,
 				TextureColorSpace::Linear, TextureSemantic::Data),
 			ResolveMaterialTexture(properties.EmissiveTexture,
-				TextureColorSpace::SRGB, TextureSemantic::Color)
+				TextureColorSpace::SRGB, TextureSemantic::Color),
+			nullptr,
+			nullptr
 		};
 		s_Data.Stats.SubmittedModels++;
 		s_Data.Stats.ImmediateModeShaderBinds++;
@@ -335,8 +345,13 @@ namespace gl {
 				continue;
 
 			std::array<Ref<Texture2D>, MaterialTextureCount> textures = materialTextures;
-			if (!textures[BaseColorSlot])
-				textures[BaseColorSlot] = mesh->GetTexture();
+			const MeshMaterialTextures& imported = mesh->GetMaterialTextures();
+			if (!textures[BaseColorSlot]) textures[BaseColorSlot] = imported.BaseColor;
+			if (!textures[NormalSlot]) textures[NormalSlot] = imported.Normal;
+			if (!textures[AOSlot]) textures[AOSlot] = imported.AmbientOcclusion;
+			if (!textures[EmissiveSlot]) textures[EmissiveSlot] = imported.Emissive;
+			textures[MetallicSlot] = imported.Metallic;
+			textures[RoughnessSlot] = imported.Roughness;
 			std::array<bool, MaterialTextureCount> hasTextures{};
 			for (uint32_t slot = 0; slot < MaterialTextureCount; ++slot)
 			{
@@ -418,6 +433,8 @@ namespace gl {
 				item.ShaderResource->UploadUniformInt("u_NormalTexture", 1);
 				item.ShaderResource->UploadUniformInt("u_AOTexture", 2);
 				item.ShaderResource->UploadUniformInt("u_EmissiveTexture", 3);
+				item.ShaderResource->UploadUniformInt("u_MetallicTexture", 11);
+				item.ShaderResource->UploadUniformInt("u_RoughnessTexture", 12);
 				ShadowRenderer::BindForLighting(item.ShaderResource, 4);
 				EnvironmentLighting::BindForLighting(
 					item.ShaderResource, 8, 9, 10);
@@ -430,7 +447,7 @@ namespace gl {
 				const uint32_t textureID = item.TextureResources[slot]->GetRendererID();
 				if (textureID != boundTextures[slot])
 				{
-					item.TextureResources[slot]->Bind(slot);
+					item.TextureResources[slot]->Bind(MaterialTextureUnits[slot]);
 					boundTextures[slot] = textureID;
 					s_Data.Stats.TextureBinds++;
 				}
@@ -539,6 +556,8 @@ namespace gl {
 				item.ShaderResource->UploadUniformInt("u_NormalTexture", 1);
 				item.ShaderResource->UploadUniformInt("u_AOTexture", 2);
 				item.ShaderResource->UploadUniformInt("u_EmissiveTexture", 3);
+				item.ShaderResource->UploadUniformInt("u_MetallicTexture", 11);
+				item.ShaderResource->UploadUniformInt("u_RoughnessTexture", 12);
 				ShadowRenderer::BindForLighting(item.ShaderResource, 4);
 				EnvironmentLighting::BindForLighting(
 					item.ShaderResource, 8, 9, 10);
@@ -551,7 +570,7 @@ namespace gl {
 				const uint32_t textureID = item.TextureResources[slot]->GetRendererID();
 				if (textureID != boundTextures[slot])
 				{
-					item.TextureResources[slot]->Bind(slot);
+					item.TextureResources[slot]->Bind(MaterialTextureUnits[slot]);
 					boundTextures[slot] = textureID;
 					s_Data.Stats.TextureBinds++;
 				}

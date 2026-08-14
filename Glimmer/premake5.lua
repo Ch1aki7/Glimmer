@@ -32,6 +32,7 @@ project "Glimmer"
         "vendor/glm",
         "vendor/stb_image",
         "vendor/tinyobjloader",
+		"vendor/assimp/include",
         "vendor/entt/src",
 		"vendor/yaml-cpp/include",
 		"vendor/ImGuizmo/src"
@@ -45,6 +46,18 @@ project "Glimmer"
 		"ImGuizmo",
 		"opengl32.lib"
     }
+
+	filter "configurations:Debug"
+		includedirs { "vendor/assimp-build/vs2026-Debug/include" }
+		libdirs { "vendor/assimp-build/vs2026-Debug/lib",
+			"vendor/assimp-build/vs2026-Debug/contrib/zlib" }
+		links { "assimp-vc145-mtd.lib", "zlibstaticd.lib" }
+
+	filter "configurations:Release or Dist"
+		includedirs { "vendor/assimp-build/vs2026-Release/include" }
+		libdirs { "vendor/assimp-build/vs2026-Release/lib",
+			"vendor/assimp-build/vs2026-Release/contrib/zlib" }
+		links { "assimp-vc145-mt.lib", "zlibstatic.lib" }
 
     filter "system:windows"
         buildoptions { "/utf-8" }
