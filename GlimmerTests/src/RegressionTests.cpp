@@ -1,5 +1,6 @@
 #include "Glimmer/Core/Log.h"
 #include "Glimmer/Asset/AssetManager.h"
+#include "Glimmer/Asset/Importers/ModelImporter.h"
 #include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/MaterialInstance.h"
 #include "Glimmer/Renderer/EnvironmentMapLoader.h"
@@ -66,6 +67,40 @@ namespace {
 	{
 		return Near(left.x, right.x) && Near(left.y, right.y)
 			&& Near(left.z, right.z) && Near(left.w, right.w);
+	}
+
+	void TestModelImporterFoundation(
+		TestContext& context,
+		const std::filesystem::path& root)
+	{
+		const std::filesystem::path modelPath = root / "importer-triangle.obj";
+		{
+			std::ofstream stream(modelPath);
+			stream << "v 0 0 0\n"
+				<< "v 1 0 0\n"
+				<< "v 0 1 0\n"
+				<< "vt 0 0\n"
+				<< "vt 1 0\n"
+				<< "vt 0 1\n"
+				<< "vn 0 0 1\n"
+				<< "f 1/1/1 2/2/1 3/3/1\n";
+		}
+
+		const gl::ModelImportResult imported =
+			gl::ModelImporter::Import(modelPath);
+		context.Check(gl::ModelImporter::SupportsSource(modelPath)
+			&& !gl::ModelImporter::SupportsSource("future-model.fbx"),
+			"model importer advertises only implemented source formats");
+		context.Check(imported && imported.Source.Submeshes.size() == 1
+			&& imported.Source.Submeshes.front().Vertices.size() == 3
+			&& imported.Source.Submeshes.front().Indices.size() == 3,
+			"OBJ importer produces a valid CPU MeshSource");
+		const glm::vec3 tangent = imported
+			? imported.Source.Submeshes.front().Vertices.front().Tangent
+			: glm::vec3(0.0f);
+		context.Check(std::isfinite(tangent.x) && std::isfinite(tangent.y)
+			&& std::isfinite(tangent.z) && glm::length(tangent) > 0.9f,
+			"OBJ MeshSource contains a finite normalized tangent");
 	}
 
 	bool SameTerrainSpecification(
@@ -1119,6 +1154,7 @@ int main(int argc, char** argv)
 
 	std::cout << "Glimmer headless regression tests\n";
 	TestMaterialRoundTrip(context, temporaryDirectory.Path());
+	TestModelImporterFoundation(context, temporaryDirectory.Path());
 	TestTerrainMaterialRoundTrip(context, temporaryDirectory.Path());
 	TestTerrainMaterialRegistry(context, temporaryDirectory.Path());
 	TestMaterialOverrideMerge(context, temporaryDirectory.Path());

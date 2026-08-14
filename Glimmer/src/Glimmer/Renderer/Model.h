@@ -1,14 +1,14 @@
 #pragma once
 #include "Mesh.h"
 #include "Glimmer/Renderer/Shader.h"
+#include <filesystem>
 #include <vector>
-#include <string>
 
 namespace gl {
 
 	class Model {
 	public:
-		Model(const std::string& path);
+		explicit Model(const std::filesystem::path& path);
 
 		// 渲染模型的所有子网格
 		const std::vector<Ref<Mesh>>& GetMeshes() const { return m_Meshes; }

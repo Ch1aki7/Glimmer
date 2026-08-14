@@ -3,24 +3,15 @@
 #include "Glimmer/Renderer/VertexArray.h"
 #include "Glimmer/Renderer/Buffer.h"
 #include "Glimmer/Renderer/Texture.h"
+#include "Glimmer/Asset/MeshSource.h"
 
 namespace gl {
 
-	struct Vertex {
-		glm::vec3 Position;
-		glm::vec3 Normal;
-		glm::vec3 Tangent;
-		glm::vec2 TexCoord;
-
-		bool operator==(const Vertex& other) const {
-			return Position == other.Position && Normal == other.Normal
-				&& Tangent == other.Tangent && TexCoord == other.TexCoord;
-		}
-	};
-
 	class Mesh {
 	public:
-		Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, Ref<Texture2D> texture);
+		Mesh(const std::vector<MeshVertex>& vertices,
+			const std::vector<uint32_t>& indices,
+			Ref<Texture2D> texture);
 
 		void Bind() const;
 		uint32_t GetIndexCount() const { return m_IndexCount; }

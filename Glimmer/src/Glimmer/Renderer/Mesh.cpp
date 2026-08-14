@@ -4,14 +4,16 @@
 
 namespace gl {
 
-	Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, Ref<Texture2D> texture)
+	Mesh::Mesh(const std::vector<MeshVertex>& vertices,
+		const std::vector<uint32_t>& indices,
+		Ref<Texture2D> texture)
 		: m_Texture(std::move(texture)), m_IndexCount((uint32_t)indices.size())
 	{
 		if (!vertices.empty())
 		{
 			m_BoundsMin = vertices.front().Position;
 			m_BoundsMax = vertices.front().Position;
-			for (const Vertex& vertex : vertices)
+			for (const MeshVertex& vertex : vertices)
 			{
 				m_BoundsMin = glm::min(m_BoundsMin, vertex.Position);
 				m_BoundsMax = glm::max(m_BoundsMax, vertex.Position);
@@ -21,7 +23,8 @@ namespace gl {
 
 		m_VertexArray = VertexArray::Create();
 
-		auto vbo = VertexBuffer::Create((float*)vertices.data(), (uint32_t)(vertices.size() * sizeof(Vertex)));
+		auto vbo = VertexBuffer::Create((float*)vertices.data(),
+			(uint32_t)(vertices.size() * sizeof(MeshVertex)));
 
 		vbo->SetLayout({
 			{ ShaderDataType::Float3, "a_Position" },

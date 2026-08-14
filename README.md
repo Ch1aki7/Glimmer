@@ -5315,6 +5315,8 @@ glBindTexture(GL_TEXTURE_2D, 0);解绑当前绑定到 `GL_TEXTURE_2D` 目标的�
 
 ## 加载obj文件
 
+> 历史记录说明：本节保留了早期尝试把 Assimp 全部源码直接塞进 Premake、手写 `config.h` 的失败过程，仅用于解释当时为什么退回 tinyobjloader，不能作为当前构建方式。2026-08-14 起，项目使用文末“模型导入边界与 Assimp 子模块准备”所述的官方 CMake 独立静态库方案；当前真正生效的模型 importer 仍只有 OBJ。
+
 在我的CG课程中呢，已经学习了如何使用OpenGL渲染obj文件，当时是采用手写解析函数进行加载的，但实际引擎其实需要满足更多要求，比如：如果用这个函数去加载从 Blender、Maya 或网上下载的专业模型，会有大概率报错或显示乱码。原因如下：
 
 - **多边形限制**：很多 .obj 文件包含**四边形面（Quads）**。你的代码遇到四边形会直接报错退出（redundency.length() >= 5 那段逻辑）。
@@ -13371,6 +13373,63 @@ PostProcessRenderer 现在每帧显式声明完整绑定契约：
 Fog 或 Bloom 关闭时也保留不冲突的 Uniform 槽位；只有实际需要时才绑定对应可选纹理。这样 Shader 热重载、默认设置和不同驱动都不再依赖上一次 Program 状态或 sampler 默认值。
 
 验证：VS2026 `Debug | x64` 编辑器目标增量构建成功，立即重复构建没有重新编译源文件；GTX 1050 默认 Manual Fog 下 Terrain/Skybox 画面恢复；修复后 RenderDoc API Validation 捕获包含最终 Tone Mapping Draw，且没有 High severity、`GL_INVALID_OPERATION` 或 `program texture usage`。`bin`、`bin-int` 均保留。
+
+## 模型导入边界与 Assimp 子模块准备
+
+这一阶段没有直接宣称“FBX 已支持”，而是先解决原模型系统最关键的耦合：旧 `Model.cpp` 同时解析 OBJ、计算切线、读取 MTL 并创建 GPU Mesh，后续若直接加入 Assimp，就会让 FBX 节点、骨骼、动画和材质处理全部进入 Renderer。
+
+当前模型数据链调整为：
+
+```text
+OBJ 源文件
+  → ModelImporter（按扩展名分发）
+  → ObjModelImporter / tinyobjloader
+  → MeshSource（纯 CPU 中间数据）
+  → Model
+  → Mesh / VAO / VBO / IBO
+  → Renderer3D
+```
+
+`MeshSource` 保存源路径、Submesh、统一 `MeshVertex` 和源材质描述，不创建 Texture、Buffer 或任何 OpenGL 对象。`ObjModelImporter` 接管原有 OBJ 三角化、按材质拆分、顶点去重和稳定切线生成；`Model` 只负责把有效 Submesh 转换成运行时 Mesh。因此未来的 `AssimpModelImporter` 只需把 `aiScene` 转换到同一个 MeshSource，Renderer3D 不需要知道源文件来自 OBJ、FBX 还是 glTF。
+
+Assimp 使用官方 Git 子模块并固定在 `v6.0.5`：
+
+```text
+Glimmer/vendor/assimp
+commit 392a658f9c271be965271f45e7521a1b80ea4392
+```
+
+新设备初始化依赖：
+
+```bat
+git submodule update --init --recursive
+```
+
+Assimp 不加入 Glimmer Premake 项目逐文件编译，而是通过上游 CMake 独立生成静态库：
+
+```bat
+scripts\Win-BuildAssimp-vs2026.bat Debug
+scripts\Win-BuildAssimp-vs2026.bat Release
+```
+
+脚本进入 VS2026 x64 Developer Environment，并使用 NMake 生成单配置构建目录。选择 NMake 是因为本机 CMake 4.3.3 配合 `Visual Studio 18 2026` Generator 时，两次停在 `CompilerIdC.vcxproj`；同一编译器在 Developer Environment 下可正常探测和编译。构建固定使用静态 CRT、关闭 Exporter/Tests/Tools/Samples/Docs，并将 importer 缩减为 OBJ、FBX、GLTF。生成结果位于忽略目录：
+
+```text
+Glimmer/vendor/assimp-build/vs2026-Debug/lib/assimp-vc145-mtd.lib
+Glimmer/vendor/assimp-build/vs2026-Debug/contrib/zlib/zlibstaticd.lib
+```
+
+当前能力边界：
+
+- `.obj`：继续支持，现已先转换成 MeshSource，再创建运行时 Mesh；
+- `.fbx`、`.gltf`、`.glb`：Assimp 库本身已经按这些 importer 构建，但 Glimmer 尚未实现 AssimpModelImporter，也没有在 AssetManager 中注册这些扩展名，因此目前仍不能加载；
+- `.glmesh`：尚未实现。MeshSource 目前只存在于内存中，关闭编辑器后仍会重新解析 OBJ；
+- OBJ/MTL 的 BaseColor 纹理仍沿用直接 Texture2D 路径，尚未转换为 AssetHandle 与 `.glmat`，后续烘焙阶段再统一；
+- Assimp 类型不得进入 Scene、Renderer3D、组件或公共 Model API，它只允许存在于 importer 私有实现中。
+
+本阶段验证结果：Premake VS2026 工程生成成功；Assimp Debug 静态库完整构建并确认只启用 OBJ/FBX/GLTF，立即重复脚本约 5 秒完成且没有重新编译源文件；OBJ→MeshSource 新增 3 条无窗口回归，连同既有功能共 100 项断言全部 PASS；`GlimmerEditor-CyouBranch` 的 `Debug | x64` 目标构建成功，立即重复构建只检查并输出既有目标。`bin`、`bin-int` 和 Assimp 独立构建产物均保留。
+
+下一步不是立刻在 AssetManager 中加入 `.fbx`，而是实现静态模型范围的 `AssimpModelImporter`，先明确右手/Y-up/米制坐标契约、节点变换、Submesh/Material Slot、外部与嵌入纹理处理，并准备版本化 `.glmesh` 烘焙格式。完成对应样本和回归后，再开放 FBX/glTF 扩展名；Skeleton、Animation 和 Morph Target 应在静态链稳定后分阶段建设。
 
 ## KB
 

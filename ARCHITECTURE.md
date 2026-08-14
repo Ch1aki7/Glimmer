@@ -304,7 +304,13 @@ flowchart LR
     Handle --> SceneFile[".glimmer 组件字段"]
 ```
 
-### 7.2 Material 与 MaterialInstance
+### 7.2 Model 源文件导入边界
+
+模型源文件解析与 GPU 资源创建已经分离。`ModelImporter` 按扩展名选择具体 importer，当前唯一生效的 `ObjModelImporter` 使用 tinyobjloader 把 OBJ/MTL 转换为纯 CPU `MeshSource`；后者由若干 `SubmeshSource`、`MeshVertex` 和 `MeshMaterialSource` 组成，不持有 VertexArray、Buffer、Texture 或任何 OpenGL 对象。`Model` 只消费有效 MeshSource，并在运行时为各 Submesh 创建现有 `Mesh`。OBJ 的 MTL BaseColor 路径仍由 Model 直接创建 Texture2D，尚未转成正式 `.glmat`，属于后续资产烘焙要消除的旧边界。
+
+官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，但不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 使用上游 CMake 在 VS2026 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；生成目录位于忽略的 `Glimmer/vendor/assimp-build/`。当前没有 `AssimpModelImporter`，Glimmer 也没有把 `.fbx`、`.gltf` 或 `.glb` 注册为 Model，因此这些格式仍不能进入 AssetManager、Scene 或 Renderer。后续 Assimp 适配器只能依赖其私有头文件并输出 MeshSource，不得把 `aiScene`、`aiMesh` 等类型暴露给 Renderer、Scene 或公共组件。
+
+### 7.3 Material 与 MaterialInstance
 
 `.glmat` 是共享 Material Asset，保存 ShaderHandle 与 `MaterialProperties`。`MaterialState` 可以一次捕获或恢复两者，供共享资产编辑事务使用。保存时先写临时文件，再通过备份和替换更新目标；替换失败会恢复原文件并向调用方返回失败。
 

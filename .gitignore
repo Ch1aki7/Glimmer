@@ -420,6 +420,7 @@ FodyWeavers.xsd
 # Self
 bin/
 bin-int/
+Glimmer/vendor/assimp-build/
 !vendor/bin/
 !vendor/bin/**
 .claude/

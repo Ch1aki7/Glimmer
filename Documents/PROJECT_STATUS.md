@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-13
+- 最近更新：2026-08-14
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -146,6 +146,14 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-14：模型导入边界与 Assimp 接入准备
+
+- 补齐官方 `assimp/assimp` Git 子模块并固定到 `v6.0.5`（`392a658`）；新增 VS2026 独立构建脚本，通过 Assimp 官方 CMake、NMake、静态 CRT 和 import-only 配置只构建 OBJ/FBX/glTF importer，生成目录不进入版本控制，也不加入普通 Glimmer 源文件编译；
+- 新增纯 CPU `MeshSource`、`SubmeshSource`、`MeshMaterialSource` 和统一 `ModelImporter` 分发边界；既有 tinyobjloader 逻辑迁入 `ObjModelImporter`，`Model` 只消费导入结果并创建 GPU `Mesh`，为后续 Assimp importer 和内部 `.glmesh` 烘焙隔离第三方格式；
+- 当前资产注册仍只把 `.obj` 认作 Model，Assimp 静态库尚未链接到运行时，FBX/glTF/GLB 仍明确不属于已支持格式；下一阶段需实现 `AssimpModelImporter`、坐标/单位/节点/材质契约和内部二进制资产后再开放扩展名；
+- 验证：Assimp v6.0.5 Debug 静态库在 VS2026 下成功构建，实际输出 `assimp-vc145-mtd.lib` 并只启用 OBJ/FBX/GLTF，立即重复脚本只做约 5 秒配置/目标检查而未重编源文件；新增 3 条 OBJ→MeshSource 回归后 100 项无窗口断言全部 PASS，GlimmerEditor-CyouBranch `Debug | x64` 构建成功，立即重复构建仅检查并输出既有目标；
+- 提交：待提交。
 
 ### 2026-08-13：P12.1 后处理职责收拢
 
