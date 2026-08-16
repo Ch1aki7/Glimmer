@@ -53,6 +53,7 @@ function Assert-BuildSubmodulesInitialized {
         'Glimmer\vendor\GLFW',
         'Glimmer\vendor\imgui',
         'Glimmer\vendor\glm',
+        'Glimmer\vendor\assimp',
         'Glimmer\vendor\entt',
         'Glimmer\vendor\yaml-cpp',
         'Glimmer\vendor\ImGuizmo',
@@ -84,6 +85,11 @@ try {
 
     $resolvedMSBuild = Find-MSBuild
     if (-not $SkipBuild) {
+        $ensureAssimp = Join-Path $repoRoot 'scripts\Win-EnsureAssimp-vs2026.bat'
+        Invoke-Checked 'Ensure Assimp static dependency (Debug)' {
+            & $ensureAssimp Debug
+        }
+
         $solution = if (Test-Path -LiteralPath 'GlimmerEngine.slnx') {
             'GlimmerEngine.slnx'
         } else {

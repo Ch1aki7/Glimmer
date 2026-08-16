@@ -18,11 +18,47 @@ if not exist "%ASSIMP_SOURCE%\CMakeLists.txt" (
     exit /b 1
 )
 
-call "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat" ^
-    -arch=x64 -host_arch=x64 >nul
+set "VS_INSTALL="
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if exist "%VSWHERE%" (
+    set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"
+    for /f "tokens=*" %%I in ('vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set "VS_INSTALL=%%I"
+)
+if not defined VS_INSTALL if defined VSINSTALLDIR set "VS_INSTALL=%VSINSTALLDIR%"
+
+if not defined VS_INSTALL (
+    echo Visual Studio with the x64 C++ toolchain was not found.
+    echo Install the Visual Studio 2026 Desktop development with C++ workload.
+    exit /b 1
+)
+
+set "VS_DEVCMD=%VS_INSTALL%\Common7\Tools\VsDevCmd.bat"
+if not exist "%VS_DEVCMD%" (
+    echo Visual Studio developer command script was not found:
+    echo %VS_DEVCMD%
+    exit /b 1
+)
+
+call "%VS_DEVCMD%" -arch=x64 -host_arch=x64 >nul
 if errorlevel 1 exit /b %errorlevel%
 
-cmake -S "%ASSIMP_SOURCE%" -B "%ASSIMP_BUILD%" -G "NMake Makefiles" ^
+set "CMAKE_EXE=%VS_INSTALL%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+if not exist "%CMAKE_EXE%" (
+    where cmake.exe >nul 2>nul
+    if errorlevel 1 (
+        echo CMake was not found in PATH or the Visual Studio installation.
+        exit /b 1
+    )
+    set "CMAKE_EXE=cmake.exe"
+)
+
+where nmake.exe >nul 2>nul
+if errorlevel 1 (
+    echo NMake was not found after entering the Visual Studio developer environment.
+    exit /b 1
+)
+
+"%CMAKE_EXE%" -S "%ASSIMP_SOURCE%" -B "%ASSIMP_BUILD%" -G "NMake Makefiles" ^
     -DCMAKE_BUILD_TYPE=%BUILD_CONFIG% ^
     -DBUILD_SHARED_LIBS=OFF ^
     -DUSE_STATIC_CRT=ON ^
@@ -30,6 +66,7 @@ cmake -S "%ASSIMP_SOURCE%" -B "%ASSIMP_BUILD%" -G "NMake Makefiles" ^
     -DASSIMP_BUILD_ASSIMP_TOOLS=OFF ^
     -DASSIMP_BUILD_SAMPLES=OFF ^
     -DASSIMP_BUILD_DOCS=OFF ^
+    -DASSIMP_BUILD_USE_CCACHE=OFF ^
     -DASSIMP_NO_EXPORT=ON ^
     -DASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT=OFF ^
     -DASSIMP_BUILD_OBJ_IMPORTER=ON ^
@@ -41,5 +78,5 @@ cmake -S "%ASSIMP_SOURCE%" -B "%ASSIMP_BUILD%" -G "NMake Makefiles" ^
     -DASSIMP_IGNORE_GIT_HASH=ON
 if errorlevel 1 exit /b %errorlevel%
 
-cmake --build "%ASSIMP_BUILD%" --target assimp
+"%CMAKE_EXE%" --build "%ASSIMP_BUILD%" --target assimp
 exit /b %errorlevel%

@@ -312,7 +312,7 @@ flowchart LR
 
 `Model` 只消费有效 MeshSource，为各 Submesh 创建 GPU `Mesh`，并按 MaterialIndex 共享解码后的导入纹理。Renderer3D 先使用实体 `.glmat`/MaterialInstance 的 BaseColor、Normal、AO、Emissive 通道，缺失时回退到 Mesh 导入通道；导入 Metallic/Roughness 使用独立采样器。材质纹理占 0～3，CSM 占 4～7，IBL 占 8～10，导入 Metallic/Roughness 固定占 11～12，避免 sampler 类型或用途冲突。导入纹理目前仍是 Model 持有的运行时 Texture2D，不是 AssetHandle，也不会自动生成 `.glmat`，属于后续 `.glmesh`/材质烘焙要收口的边界。
 
-官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 使用上游 CMake 在 VS2026 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；Premake 的 Debug 链接 Debug 产物，Release/Dist 链接 Release 产物。AssetManager 当前注册 `.obj` 与 `.fbx` 为 Model；`.gltf`、`.glb` 和内部 `.glmesh` 尚未开放。
+官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 通过 `vswhere` 选择 VS 18/2026，并使用上游 CMake 在 x64 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；MSVC 构建显式禁用 Assimp 的 ccache。生成的 `config.h` 与静态库都位于被忽略的 `vendor/assimp-build/vs2026-<Configuration>`。Premake 的 Debug 链接 Debug 产物，Release/Dist 链接 Release 产物，并在 Glimmer PreBuildEvent 中调用快速 Ensure 脚本，只有当前配置的生成头、Assimp 与 zlib 任一缺失时才构建依赖。AssetManager 当前注册 `.obj` 与 `.fbx` 为 Model；`.gltf`、`.glb` 和内部 `.glmesh` 尚未开放。
 
 ### 7.3 Material 与 MaterialInstance
 

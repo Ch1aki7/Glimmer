@@ -52,12 +52,14 @@ project "Glimmer"
 		libdirs { "vendor/assimp-build/vs2026-Debug/lib",
 			"vendor/assimp-build/vs2026-Debug/contrib/zlib" }
 		links { "assimp-vc145-mtd.lib", "zlibstaticd.lib" }
+		prebuildcommands { 'call "%{wks.location}\\scripts\\Win-EnsureAssimp-vs2026.bat" Debug' }
 
 	filter "configurations:Release or Dist"
 		includedirs { "vendor/assimp-build/vs2026-Release/include" }
 		libdirs { "vendor/assimp-build/vs2026-Release/lib",
 			"vendor/assimp-build/vs2026-Release/contrib/zlib" }
 		links { "assimp-vc145-mt.lib", "zlibstatic.lib" }
+		prebuildcommands { 'call "%{wks.location}\\scripts\\Win-EnsureAssimp-vs2026.bat" Release' }
 
     filter "system:windows"
         buildoptions { "/utf-8" }

@@ -12321,6 +12321,7 @@ git submodule update --init --recursive
 
 ```text
 检查递归 Git 子模块
+→ 检查 Assimp Debug 生成头与静态库，缺失时自动构建
 → vendor/bin/premake/premake5.exe vs2026
 → 生成 GlimmerEngine.slnx 与各 vcxproj
 → MSBuild Debug | x64 全解决方案
@@ -13489,6 +13490,56 @@ Renderer3D 的覆盖顺序是：实体 MaterialInstance 中显式存在的 BaseC
 - 103 项无窗口回归断言全部 PASS；
 - GlimmerEditor-CyouBranch `Debug | x64` 成功链接 Assimp 和 zlib，最终 EXE 持续运行 15 秒，无 Shader 断言或提前退出；
 - `bin`、`bin-int` 与 Assimp 独立构建产物均保留。
+
+## Assimp 新设备构建自修复
+
+新设备首次构建时报错：
+
+```text
+fatal error C1083: 无法打开包括文件: "assimp/config.h": No such file or directory
+```
+
+这不是 `vendor/assimp/include` 写错。Assimp 源码子模块只提交 `include/assimp/config.h.in`，上游 CMake 会根据平台与启用的 importer 生成真正的：
+
+```text
+Glimmer/vendor/assimp-build/vs2026-Debug/include/assimp/config.h
+Glimmer/vendor/assimp-build/vs2026-Release/include/assimp/config.h
+```
+
+因此仅拉取子模块、生成 Premake 工程还不够；对应配置的生成目录必须存在。现在 Glimmer 的 VS 工程在 PreBuildEvent 中执行快速检查：
+
+```text
+构建 Glimmer Debug
+  → Win-EnsureAssimp-vs2026.bat Debug
+  → config.h + assimp-vc145-mtd.lib + zlibstaticd.lib 均存在：立即继续
+  → 任一缺失：调用 Win-BuildAssimp-vs2026.bat Debug
+  → 上游 CMake/NMake 构建完成
+  → 编译 Glimmer
+```
+
+Release/Dist 同理使用 Release 产物。构建脚本通过 `vswhere` 查找 VS 18/2026，不再假定安装在 C 盘；CMake 优先使用 VS 自带版本。脚本还显式关闭 Assimp 的 ccache，因为 PATH 中的 MinGW `ccache.exe` 可能错误包裹 MSVC `lib.exe`，出现 CMake 报告链接成功但 `.lib` 实际未生成的情况。
+
+一般操作只需初始化子模块、生成工程并正常构建：
+
+```bat
+git submodule update --init --recursive
+scripts\Win-GenerateProject-vs2026.bat
+```
+
+也可以运行完整自动验证：
+
+```bat
+scripts\Verify-Windows.bat
+```
+
+需要主动重配 Assimp，而不是仅在缺失时补齐，可手动执行：
+
+```bat
+scripts\Win-BuildAssimp-vs2026.bat Debug
+scripts\Win-BuildAssimp-vs2026.bat Release
+```
+
+本次在空的 Debug Assimp 构建目录上验证生成了 `config.h`、`assimp-vc145-mtd.lib` 和 `zlibstaticd.lib`；重新生成 VS2026 工程后，GlimmerEngine `Debug | x64` 整解决方案构建成功，`AssimpModelImporter.cpp` 与最终编辑器链接均通过。
 
 ## KB
 
