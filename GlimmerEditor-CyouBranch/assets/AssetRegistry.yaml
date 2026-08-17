@@ -15,14 +15,14 @@ AssetRegistry:
     FilePath: textures/pbr/brick/brick_4_rough_1k.jpg
     ColorSpace: Linear
     Semantic: Normal
+  - Handle: 2315372430726553758
+    Type: Texture2D
+    FilePath: textures/pbr/ground/Ground054_1K-PNG_NormalDX.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 2471443246612340731
     Type: Texture2D
     FilePath: textures/NoiseTex.png
-    ColorSpace: Linear
-    Semantic: Normal
-  - Handle: 2698065874526944978
-    Type: Texture2D
-    FilePath: models/Cerberus/Textures/Raw/Cerberus_N.tga
     ColorSpace: Linear
     Semantic: Normal
   - Handle: 3179645585411309739
@@ -50,8 +50,8 @@ AssetRegistry:
   - Handle: 4106150851551311864
     Type: Texture2D
     FilePath: textures/pbr/snow/Snow005_1K-PNG_Displacement.png
-    ColorSpace: SRGB
-    Semantic: Color
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 4883067855471021819
     Type: Shader
     FilePath: shaders/InkOutline.glsl
@@ -67,6 +67,11 @@ AssetRegistry:
   - Handle: 5930054035825619410
     Type: Model
     FilePath: models/Cerberus/Cerberus_LP.FBX
+  - Handle: 5943368339387932652
+    Type: Texture2D
+    FilePath: textures/pbr/rock/Rock027_1K-PNG_Displacement.png
+    ColorSpace: Linear
+    Semantic: Height
   - Handle: 6250739528996233267
     Type: Texture2D
     FilePath: textures/pbr/lava/Lava_03_emissive-1K.png
@@ -149,6 +154,11 @@ AssetRegistry:
     FilePath: textures/pbr/snow/Snow005_1K-PNG_NormalGL.png
     ColorSpace: Linear
     Semantic: Normal
+  - Handle: 7752575442528316907
+    Type: Texture2D
+    FilePath: textures/pbr/grass/Grass001_1K-PNG_Displacement.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 7909942403015271490
     Type: Shader
     FilePath: shaders/BlinnPhong.glsl
@@ -193,8 +203,8 @@ AssetRegistry:
   - Handle: 10318089221568011088
     Type: Texture2D
     FilePath: models/Cerberus/Textures/Cerberus_A.tga
-    ColorSpace: Linear
-    Semantic: Data
+    ColorSpace: SRGB
+    Semantic: Color
   - Handle: 10352056206108810874
     Type: Texture2D
     FilePath: textures/pbr/lava/Lava_03_normal-1K.png
@@ -221,6 +231,11 @@ AssetRegistry:
   - Handle: 12085106509985387647
     Type: Model
     FilePath: models/spacecraft.obj
+  - Handle: 13015941880960949643
+    Type: Texture2D
+    FilePath: textures/pbr/ground/Ground054_1K-PNG_Displacement.png
+    ColorSpace: Linear
+    Semantic: Normal
   - Handle: 13472256562800029033
     Type: Texture2D
     FilePath: textures/pbr/brick/factory_brick_nor_dx_1k.png

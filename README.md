@@ -13454,8 +13454,9 @@ Cerberus_A.tga       Base Color / sRGB
 Cerberus_N.tga       Normal / Linear
 Cerberus_M.tga       Metallic / Linear
 Cerberus_R.tga       Roughness / Linear
-Raw/Cerberus_AO.tga  AO / Linear
 ```
+
+当前版本化样本不包含 AO。IBL 示例实体不再用 `Cerberus_A.tga` 冒充 AO，也不再引用不存在的 `Textures/Raw/Cerberus_N.tga`；Normal、Metallic 与 Roughness 均由模型的导入贴图回退路径提供。
 
 Renderer3D 的覆盖顺序是：实体 MaterialInstance 中显式存在的 BaseColor、Normal、AO、Emissive 贴图优先，缺失通道使用模型导入贴图；Metallic/Roughness 当前由模型导入贴图覆盖 `.glmat` 的标量。新采样器使用 unit 11/12，避开已有的 0～3 材质、4～7 CSM 与 8～10 IBL。一个 FBX 材质被多个 Submesh 使用时只解码和上传一套纹理。
 
@@ -13472,7 +13473,7 @@ Renderer3D 的覆盖顺序是：实体 MaterialInstance 中显式存在的 BaseC
 3. 在实体上添加 Model Renderer 和 Material 组件，把 FBX 拖到 Model，把一个使用 PBRModel Shader 的 `.glmat` 拖到 Material。`.glmat` 提供 Shader 和可编辑覆盖值，FBX 提供缺失的导入纹理。
 4. Content Browser 导入后会把 FBX Handle 写入 AssetRegistry；Scene YAML 仍只保存 ModelHandle/MaterialHandle，不保存 Assimp 对象或 GPU ID。
 
-`tmp/Cerberus_by_Andrew_Maximov` 仅用于本机回归。其许可限定非商业教育用途且纹理体积较大，本次没有把它复制到正式 assets 或加入 Git。
+`assets/models/Cerberus` 当前包含版本化的 FBX 与 A/N/M/R 四张 TGA，并作为跨设备回归样本。该资源来源此前标记为仅限非商业教育用途，但仓库中尚未包含原许可说明文件；公开分发或商业使用前必须补齐可再分发许可，无法确认时应从发布资产中移除。
 
 ### 当前边界
 
@@ -13486,8 +13487,8 @@ Renderer3D 的覆盖顺序是：实体 MaterialInstance 中显式存在的 BaseC
 ### 验证
 
 - Cerberus FBX 被解析为有效三角 Submesh，顶点与索引非空，全部切线有限且长度大于 0.9；
-- Cerberus A/N/M/R/AO 五张 TGA 路径全部解析成功；
-- 103 项无窗口回归断言全部 PASS；
+- 正式 assets 中的 Cerberus A/N/M/R 四张 TGA 路径全部解析成功；
+- 104 项无窗口回归断言全部 PASS，测试不再因本机 `tmp` 缺失而静默跳过 FBX；
 - GlimmerEditor-CyouBranch `Debug | x64` 成功链接 Assimp 和 zlib，最终 EXE 持续运行 15 秒，无 Shader 断言或提前退出；
 - `bin`、`bin-int` 与 Assimp 独立构建产物均保留。
 
@@ -13511,13 +13512,16 @@ Glimmer/vendor/assimp-build/vs2026-Release/include/assimp/config.h
 ```text
 构建 Glimmer Debug
   → Win-EnsureAssimp-vs2026.bat Debug
-  → config.h + assimp-vc145-mtd.lib + zlibstaticd.lib 均存在：立即继续
-  → 任一缺失：调用 Win-BuildAssimp-vs2026.bat Debug
+  → 校验 config.h、Assimp/zlib、CMake 配置和 Glimmer 构建指纹
+  → 子模块提交、配置、ccache 状态全部匹配：立即继续
+  → 任一缺失或过期：调用 Win-BuildAssimp-vs2026.bat Debug
   → 上游 CMake/NMake 构建完成
   → 编译 Glimmer
 ```
 
-Release/Dist 同理使用 Release 产物。构建脚本通过 `vswhere` 查找 VS 18/2026，不再假定安装在 C 盘；CMake 优先使用 VS 自带版本。脚本还显式关闭 Assimp 的 ccache，因为 PATH 中的 MinGW `ccache.exe` 可能错误包裹 MSVC `lib.exe`，出现 CMake 报告链接成功但 `.lib` 实际未生成的情况。
+Release/Dist 同理使用 Release 产物。构建脚本通过 `vswhere` 限定查找 VS 18.x/2026，并验证激活的是 v145，不再假定安装在 C 盘；CMake 优先使用 VS 自带版本。脚本还显式关闭 Assimp 的 ccache，因为 PATH 中的 MinGW `ccache.exe` 可能错误包裹 MSVC `lib.exe`，出现 CMake 报告链接成功但 `.lib` 实际未生成的情况。
+
+成功构建后会写入被忽略的 `glimmer-assimp-build.stamp`，记录 Schema、配置、Assimp 子模块提交、工具集与 ccache 状态。Ensure 同时核对该指纹和 `CMakeCache.txt`，所以旧电脑留下的 `ccache=ON` 缓存或更新后的 Assimp 子模块不会再仅凭三个旧文件被误判为可用。PreBuild 路径基于 `$(ProjectDir)`，既支持解决方案构建，也支持单独构建 `Glimmer.vcxproj` 或依赖它的测试工程。
 
 一般操作只需初始化子模块、生成工程并正常构建：
 
@@ -13539,7 +13543,7 @@ scripts\Win-BuildAssimp-vs2026.bat Debug
 scripts\Win-BuildAssimp-vs2026.bat Release
 ```
 
-本次在空的 Debug Assimp 构建目录上验证生成了 `config.h`、`assimp-vc145-mtd.lib` 和 `zlibstaticd.lib`；重新生成 VS2026 工程后，GlimmerEngine `Debug | x64` 整解决方案构建成功，`AssimpModelImporter.cpp` 与最终编辑器链接均通过。
+本次在旧缓存仍为 `ASSIMP_BUILD_USE_CCACHE=ON` 的设备上验证：新版 Ensure 会触发一次原地重配并写入构建指纹，之后快速命中约 118 ms；重新生成 VS2026 工程后，测试工程可脱离解决方案单独构建。回归测试关闭 Debug 增量链接，避免损坏的 `.ilk` 生成无系统导入表的 EXE；定向 Rebuild 后 104 项断言全部通过，完整 `Verify-Windows.ps1` 通过，编辑器保持运行 10 秒无提前退出，`bin` 与其余构建产物均保留。
 
 ## KB
 

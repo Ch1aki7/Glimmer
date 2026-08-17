@@ -69,6 +69,26 @@ namespace {
 			&& Near(left.z, right.z) && Near(left.w, right.w);
 	}
 
+	std::filesystem::path FindRepositoryAsset(
+		const std::filesystem::path& relativePath)
+	{
+		std::error_code error;
+		std::filesystem::path directory =
+			std::filesystem::absolute(std::filesystem::current_path(), error);
+		while (!directory.empty())
+		{
+			const std::filesystem::path candidate = directory / relativePath;
+			if (std::filesystem::is_regular_file(candidate, error))
+				return candidate;
+
+			const std::filesystem::path parent = directory.parent_path();
+			if (parent == directory)
+				break;
+			directory = parent;
+		}
+		return {};
+	}
+
 	void TestModelImporterFoundation(
 		TestContext& context,
 		const std::filesystem::path& root)
@@ -107,9 +127,11 @@ namespace {
 	void TestCerberusFBXImport(TestContext& context)
 	{
 		const std::filesystem::path modelPath =
-			std::filesystem::current_path()
-			/ "tmp/Cerberus_by_Andrew_Maximov/Cerberus_LP.FBX";
-		if (!std::filesystem::is_regular_file(modelPath))
+			FindRepositoryAsset(
+				"GlimmerEditor-CyouBranch/assets/models/Cerberus/Cerberus_LP.FBX");
+		context.Check(!modelPath.empty(),
+			"versioned Cerberus FBX regression asset is available");
+		if (modelPath.empty())
 			return;
 
 		const gl::ModelImportResult imported =
@@ -143,11 +165,10 @@ namespace {
 				|| (!material.BaseColorTexturePath.empty()
 					&& !material.NormalTexturePath.empty()
 					&& !material.MetallicTexturePath.empty()
-					&& !material.RoughnessTexturePath.empty()
-					&& !material.AOTexturePath.empty());
+					&& !material.RoughnessTexturePath.empty());
 		}
 		context.Check(hasCerberusPBRSet,
-			"Cerberus sidecar Albedo Normal Metallic Roughness and AO are resolved");
+			"Cerberus sidecar Albedo Normal Metallic and Roughness are resolved");
 	}
 
 	bool SameTerrainSpecification(
@@ -1195,24 +1216,41 @@ namespace {
 
 int main(int argc, char** argv)
 {
+	std::cout << std::unitbuf;
+	std::cerr << std::unitbuf;
+	std::cout << "[RUN] Log initialization\n";
 	gl::Log::Init();
 	TestContext context;
 	TemporaryDirectory temporaryDirectory;
 
 	std::cout << "Glimmer headless regression tests\n";
+	std::cout << "[RUN] Material round trip\n";
 	TestMaterialRoundTrip(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Model importer foundation\n";
 	TestModelImporterFoundation(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Cerberus FBX import\n";
 	TestCerberusFBXImport(context);
+	std::cout << "[RUN] Terrain material round trip\n";
 	TestTerrainMaterialRoundTrip(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Terrain material registry\n";
 	TestTerrainMaterialRegistry(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Material override merge\n";
 	TestMaterialOverrideMerge(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Scene round trip\n";
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Terrain copy and transactions\n";
 	TestTerrainCopyAndTransactions(context);
+	std::cout << "[RUN] Terrain presets\n";
 	TestTerrainPresets(context);
+	std::cout << "[RUN] Terrain chunk layout\n";
 	TestTerrainChunkLayout(context);
+	std::cout << "[RUN] Terrain hydrology runtime\n";
 	TestTerrainHydrologyRuntime(context);
+	std::cout << "[RUN] Terrain camera frustum culling\n";
 	TestTerrainCameraFrustumCulling(context);
+	std::cout << "[RUN] Shadow frustum culling\n";
 	TestShadowFrustumCulling(context);
+	std::cout << "[RUN] Environment map foundation\n";
 	TestEnvironmentMapFoundation(context, temporaryDirectory.Path());
 
 	if (argc > 1 && std::string(argv[1]) == "--force-failure")

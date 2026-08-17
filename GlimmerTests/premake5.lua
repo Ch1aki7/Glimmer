@@ -4,6 +4,7 @@ project "GlimmerRegressionTests"
     language "C++"
     cppdialect "C++17"
     staticruntime "on"
+    incrementallink "Off"
 
     targetdir ("../bin/" .. outputdir .. "/%{prj.name}")
     objdir ("../bin-int/" .. outputdir .. "/%{prj.name}")
@@ -28,6 +29,12 @@ project "GlimmerRegressionTests"
     links {
         "Glimmer"
     }
+
+    filter "configurations:Debug"
+        editandcontinue "Off"
+        -- Glimmer is a reusable Debug static library compiled with /ZI. The
+        -- regression executable intentionally links with /INCREMENTAL:NO.
+        linkoptions { "/ignore:4075" }
 
     filter "system:windows"
         buildoptions { "/utf-8" }

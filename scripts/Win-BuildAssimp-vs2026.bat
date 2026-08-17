@@ -11,6 +11,7 @@ if /I not "%BUILD_CONFIG%"=="Debug" if /I not "%BUILD_CONFIG%"=="Release" (
     exit /b 2
 )
 set "ASSIMP_BUILD=%ROOT_DIR%\Glimmer\vendor\assimp-build\vs2026-%BUILD_CONFIG%"
+set "BUILD_STAMP=%ASSIMP_BUILD%\glimmer-assimp-build.stamp"
 
 if not exist "%ASSIMP_SOURCE%\CMakeLists.txt" (
     echo Assimp submodule is missing.
@@ -22,7 +23,7 @@ set "VS_INSTALL="
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if exist "%VSWHERE%" (
     set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"
-    for /f "tokens=*" %%I in ('vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set "VS_INSTALL=%%I"
+    for /f "tokens=*" %%I in ('vswhere.exe -latest -version "[18.0,19.0)" -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set "VS_INSTALL=%%I"
 )
 if not defined VS_INSTALL if defined VSINSTALLDIR set "VS_INSTALL=%VSINSTALLDIR%"
 
@@ -41,6 +42,10 @@ if not exist "%VS_DEVCMD%" (
 
 call "%VS_DEVCMD%" -arch=x64 -host_arch=x64 >nul
 if errorlevel 1 exit /b %errorlevel%
+if /I not "%VCToolsVersion:~0,4%"=="14.5" (
+    echo Visual Studio 2026 v145 is required, but the active toolset is %VCToolsVersion%.
+    exit /b 1
+)
 
 set "CMAKE_EXE=%VS_INSTALL%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 if not exist "%CMAKE_EXE%" (
@@ -79,4 +84,20 @@ if errorlevel 1 (
 if errorlevel 1 exit /b %errorlevel%
 
 "%CMAKE_EXE%" --build "%ASSIMP_BUILD%" --target assimp
-exit /b %errorlevel%
+if errorlevel 1 exit /b %errorlevel%
+
+set "ASSIMP_COMMIT="
+for /f "tokens=*" %%I in ('git.exe -C "%ASSIMP_SOURCE%" rev-parse HEAD 2^>nul') do set "ASSIMP_COMMIT=%%I"
+if not defined ASSIMP_COMMIT (
+    echo Could not determine the Assimp submodule revision.
+    exit /b 1
+)
+
+> "%BUILD_STAMP%" (
+    echo Schema=2
+    echo Configuration=%BUILD_CONFIG%
+    echo AssimpCommit=%ASSIMP_COMMIT%
+    echo Toolset=%VCToolsVersion%
+    echo CCache=OFF
+)
+exit /b 0

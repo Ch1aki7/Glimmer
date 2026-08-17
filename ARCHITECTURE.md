@@ -312,7 +312,7 @@ flowchart LR
 
 `Model` 只消费有效 MeshSource，为各 Submesh 创建 GPU `Mesh`，并按 MaterialIndex 共享解码后的导入纹理。Renderer3D 先使用实体 `.glmat`/MaterialInstance 的 BaseColor、Normal、AO、Emissive 通道，缺失时回退到 Mesh 导入通道；导入 Metallic/Roughness 使用独立采样器。材质纹理占 0～3，CSM 占 4～7，IBL 占 8～10，导入 Metallic/Roughness 固定占 11～12，避免 sampler 类型或用途冲突。导入纹理目前仍是 Model 持有的运行时 Texture2D，不是 AssetHandle，也不会自动生成 `.glmat`，属于后续 `.glmesh`/材质烘焙要收口的边界。
 
-官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 通过 `vswhere` 选择 VS 18/2026，并使用上游 CMake 在 x64 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；MSVC 构建显式禁用 Assimp 的 ccache。生成的 `config.h` 与静态库都位于被忽略的 `vendor/assimp-build/vs2026-<Configuration>`。Premake 的 Debug 链接 Debug 产物，Release/Dist 链接 Release 产物，并在 Glimmer PreBuildEvent 中调用快速 Ensure 脚本，只有当前配置的生成头、Assimp 与 zlib 任一缺失时才构建依赖。AssetManager 当前注册 `.obj` 与 `.fbx` 为 Model；`.gltf`、`.glb` 和内部 `.glmesh` 尚未开放。
+官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 通过 `vswhere` 限定选择 VS 18.x/2026 和 v145，并使用上游 CMake 在 x64 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；MSVC 构建显式禁用 Assimp 的 ccache。生成的 `config.h`、静态库、CMake Cache 与 Glimmer 构建指纹都位于被忽略的 `vendor/assimp-build/vs2026-<Configuration>`。Premake 的 Debug 链接 Debug 产物，Release/Dist 链接 Release 产物；基于 `$(ProjectDir)` 的 Glimmer PreBuildEvent 调用快速 Ensure，按产物、配置 Schema、Assimp 子模块提交和 ccache 状态判断是否重建，因此解决方案与单项目构建共用同一依赖边界。AssetManager 当前注册 `.obj` 与 `.fbx` 为 Model；`.gltf`、`.glb` 和内部 `.glmesh` 尚未开放。
 
 ### 7.3 Material 与 MaterialInstance
 
@@ -343,7 +343,7 @@ flowchart LR
 
 ### 8.1 无窗口回归边界
 
-`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 断言仅在本地 `tmp/Cerberus_by_Andrew_Maximov` 样本存在时执行，样本不属于版本化测试资源。
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 测试会向上查找仓库根并使用版本化 `assets/models/Cerberus` 样本，缺失时明确失败，不再依赖或静默跳过本机 `tmp`。测试 Debug 配置关闭增量链接，避免静态依赖更新后复用损坏的 `.ilk`。
 
 根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 

@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-14
+- 最近更新：2026-08-17
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -147,11 +147,18 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-08-17：Assimp 跨设备导入收口
+
+- Ensure 从“只看三个文件”升级为校验产物、Schema、配置、Assimp 子模块提交和 `ccache=OFF` 的构建指纹；Build 限定 VS 18.x/v145，PreBuild 改用 `$(ProjectDir)`，完整解决方案与单项目构建均能定位脚本；
+- Cerberus 回归改用版本化 assets，明确验证静态网格、切线和 A/N/M/R，不再依赖本机 `tmp` 或声称存在未提交的 AO；IBL Gun 移除错误 AO 覆盖和失效 Raw Normal 句柄，Albedo 注册恢复 sRGB/Color；
+- 定位回归 EXE 的 `0xC0000005` 为损坏 Debug 增量链接产物：旧 EXE 的 PE 系统导入表为空。测试目标关闭增量链接并使用 Program Database，定向 Rebuild 后系统导入恢复；
+- 验证：旧 `ccache=ON` Cache 被自动重配，首次 Ensure 约 5.95 秒、后续命中约 118 ms；测试工程可独立构建，Cerberus 正式样本与共 104 项无窗口断言全部 PASS；`Verify-Windows.ps1` 完整通过，编辑器保持运行 10 秒无提前退出，`git diff --check` 通过；当前主线仍为 P13A；提交：待提交。
+
 ### 2026-08-16：Assimp 新设备构建自修复
 
 - 定位新设备的 `assimp/config.h` C1083：Assimp 子模块只提供 `config.h.in`，实际 `config.h` 必须由上游 CMake 写入被忽略的 `vendor/assimp-build/<配置>/include`；仓库已有 Premake include/link 配置，但新设备未生成独立构建目录；
 - `Win-BuildAssimp-vs2026.bat` 改用 `vswhere` 定位 VS 18/2026 和随 VS 安装的 CMake，移除固定 C 盘路径，并显式关闭会错误包裹 MSVC `lib.exe`、造成“日志成功但静态库未落盘”的 MinGW ccache；
-- 新增快速 `Win-EnsureAssimp-vs2026.bat`，Premake 为 Debug 与 Release/Dist 写入对应 PreBuildEvent；正常命中三个产物时立即返回，缺失时才配置并构建。`Verify-Windows.ps1` 现检查 Assimp 子模块并在 Debug 构建前补齐依赖；
+- 新增快速 `Win-EnsureAssimp-vs2026.bat`，Premake 为 Debug 与 Release/Dist 写入对应 PreBuildEvent；后续由 2026-08-17 里程碑补充构建指纹、子模块提交与 CMake 配置校验。`Verify-Windows.ps1` 现检查 Assimp 子模块并在 Debug 构建前补齐依赖；
 - 验证：新建 Debug 构建目录后生成 `config.h`、`assimp-vc145-mtd.lib` 与 `zlibstaticd.lib`；快速 Ensure 命中后不重复编译；重新生成 VS2026 工程，GlimmerEngine `Debug | x64` 整解决方案成功构建，AssimpModelImporter 编译和编辑器最终链接通过；当前主线仍为 P13A；提交：待提交。
 
 ### 2026-08-14：静态 FBX 与导入 PBR 材质
@@ -159,7 +166,7 @@
 - 新增私有 `AssimpModelImporter` 并把 `.fbx` 注册为 Model；静态导入执行三角化、顶点合并、法线/切线补全、缓存局部性优化和节点变换烘焙，只输出既有纯 CPU MeshSource，Assimp 类型未泄漏到 Scene 或 Renderer；
 - MeshMaterialSource 扩展 BaseColor、Normal、Metallic、Roughness、AO、Emissive 路径与因子；除读取 Assimp 材质语义外，可在模型相邻、Textures、Textures/Raw 内按 `_N/_M/_R/_AO` 约定补全外部贴图。Model 按 MaterialIndex 共享加载纹理，Renderer3D 让显式 `.glmat` 通道优先、导入通道回退；
 - PBRModel 新增 Metallic/Roughness 贴图采样，固定使用 texture unit 11/12，保持 0～3 材质、4～7 CSM、8～10 IBL 的现有槽位边界；Content Browser 将 FBX 显示为 Model；
-- 验证：Cerberus FBX 成功产生有效三角 Submesh，全部顶点切线有限且归一化，A/N/M/R/AO 五张 TGA 均被解析；103 项无窗口断言全部 PASS；GlimmerEditor-CyouBranch `Debug | x64` 构建成功并持续运行 15 秒，无 Shader 断言或提前退出；未复制或提交仅限非商业教育用途的 Cerberus 大文件；
+- 验证：Cerberus FBX 成功产生有效三角 Submesh，全部顶点切线有限且归一化；当时的本机 A/N/M/R/AO 验证已由 2026-08-17 版本化 A/N/M/R 回归取代。Cerberus 大文件后来已进入正式 assets，许可风险见技术债；
 - 当前主线返回 P13A GPU 水文数值与视觉验收；提交：待提交。
 
 ### 2026-08-14：模型导入边界与 Assimp 接入准备
@@ -433,7 +440,8 @@
 - VS2026 Premake 生成的主入口是 `GlimmerEngine.slnx`；旧 `GlimmerEngine.sln` 可能来自 VS2022 或早期生成，自动验证脚本优先构建 `.slnx`；
 - SPIRV-Cross 上游 Premake 会递归包含 samples/tests，根 Premake 当前通过 `removefiles` 排除；修改依赖生成逻辑时必须复验；
 - GLFW Premake 仍使用已弃用的 `flags`、`NoRuntimeChecks` 和 `NoIncrementalLink` 写法，会产生生成警告。
-- Assimp 是独立生成且不提交产物的静态依赖；Glimmer 的 PreBuildEvent 与 `Verify-Windows.ps1` 会按当前配置检查 `config.h`、Assimp 和 zlib 静态库，缺失时自动调用 Ensure/Build 脚本。仍可手动运行 `scripts/Win-BuildAssimp-vs2026.bat Debug|Release` 强制重新配置依赖。
+- Assimp 是独立生成且不提交产物的静态依赖；Glimmer 的 PreBuildEvent 与 `Verify-Windows.ps1` 会检查产物、构建 Schema、配置、子模块提交和 ccache 状态，过期时自动调用 Ensure/Build 脚本。仍可手动运行 `scripts/Win-BuildAssimp-vs2026.bat Debug|Release` 强制重新配置依赖。
+- `assets/models/Cerberus` 已提交约 175 MiB 的 FBX/TGA 测试资源，但仓库缺少原许可说明；公开分发或商业使用前必须补齐明确的再分发许可，否则应从发布资产与版本化回归中替换为自有小型样本。
 - Model 资源已恢复 Cube、Plane、UV Sphere、bunny、planet、spacecraft、suzanne；注册表中的 `models/New Folder/Cube.obj`、`models/dragon.obj`、`models/UV Sphere.obj` 仍缺少源文件，需要从原设备恢复或移除失效条目。
 - FBX 当前仅支持静态网格并把节点变换烘焙到顶点；尚无单位归一化、保留层级、骨骼/动画、Morph Target、嵌入纹理、自动 `.glmat`/`.glmesh` 烘焙或 glTF/GLB 注册。
 
