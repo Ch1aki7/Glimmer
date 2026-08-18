@@ -1,0 +1,58 @@
+#version 450 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(r32f, binding = 0) readonly uniform image2D u_PreviousWater;
+layout(rgba16f, binding = 1) readonly uniform image2D u_Flux;
+layout(r32f, binding = 2) readonly uniform image2D u_PreviousSediment;
+layout(r32f, binding = 3) writeonly uniform image2D u_NextSediment;
+
+uniform float u_DeltaTime;
+uniform float u_CellSize;
+uniform float u_RainfallRate;
+
+vec4 SedimentFluxAt(ivec2 cell)
+{
+	float cellArea = u_CellSize * u_CellSize;
+	float sedimentMass = max(imageLoad(u_PreviousSediment, cell).r, 0.0)
+		* cellArea;
+	float availableWaterVolume = (max(imageLoad(u_PreviousWater, cell).r, 0.0)
+		+ max(u_RainfallRate, 0.0) * u_DeltaTime) * cellArea;
+	if (sedimentMass <= 0.0 || availableWaterVolume <= 1.0e-12)
+		return vec4(0.0);
+
+	float concentration = sedimentMass / availableWaterVolume;
+	vec4 sedimentFlux = max(imageLoad(u_Flux, cell), vec4(0.0))
+		* concentration;
+	float outgoingMassRate = dot(sedimentFlux, vec4(1.0));
+	if (outgoingMassRate > 0.0)
+		sedimentFlux *= min(1.0,
+			sedimentMass / (outgoingMassRate * u_DeltaTime));
+	return sedimentFlux;
+}
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_PreviousSediment);
+	if (any(greaterThanEqual(cell, size))) return;
+
+	vec4 outgoingFlux = SedimentFluxAt(cell);
+	float incoming = 0.0;
+	if (cell.x > 0)
+		incoming += SedimentFluxAt(cell + ivec2(-1, 0)).y;
+	if (cell.x + 1 < size.x)
+		incoming += SedimentFluxAt(cell + ivec2(1, 0)).x;
+	if (cell.y > 0)
+		incoming += SedimentFluxAt(cell + ivec2(0, -1)).w;
+	if (cell.y + 1 < size.y)
+		incoming += SedimentFluxAt(cell + ivec2(0, 1)).z;
+
+	float cellArea = u_CellSize * u_CellSize;
+	float previousMass = max(imageLoad(u_PreviousSediment, cell).r, 0.0)
+		* cellArea;
+	float nextMass = max(previousMass
+		+ (incoming - dot(outgoingFlux, vec4(1.0))) * u_DeltaTime, 0.0);
+	imageStore(u_NextSediment, cell,
+		vec4(nextMass / cellArea, 0.0, 0.0, 0.0));
+}

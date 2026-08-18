@@ -795,6 +795,7 @@ namespace {
 		gl::TerrainHydrologyRuntime pausedRuntime(
 			specification, { 0.0f, 1.0f, 0.0f });
 		pausedRuntime.SetWaterDepth({ 0.0f, 1.0f, 0.0f });
+		pausedRuntime.SetSedimentDensity({ 0.0f, 1.0f, 0.0f });
 		context.Check(pausedRuntime.Advance(0.2f) == 0
 			&& pausedRuntime.GetStatistics().StepCount == 0,
 			"paused hydrology does not advance with editor frame time");
@@ -804,6 +805,10 @@ namespace {
 			&& pausedRuntime.GetState().Water[0] > 0.0f
 			&& pausedRuntime.GetState().Water[2] > 0.0f,
 			"single step moves water from higher surface to lower neighbors");
+		context.Check(pausedRuntime.GetState().Sediment[1] < 1.0f
+			&& pausedRuntime.GetState().Sediment[0] > 0.0f
+			&& pausedRuntime.GetState().Sediment[2] > 0.0f,
+			"suspended sediment follows water flux toward downstream cells");
 		const auto& singleStepStats = pausedRuntime.GetStatistics();
 		context.Check(singleStepStats.Finite
 			&& singleStepStats.MinimumWaterDepth >= 0.0f
@@ -812,8 +817,10 @@ namespace {
 		pausedRuntime.Reset();
 		context.Check(pausedRuntime.GetStatistics().StepCount == 0
 			&& Near(pausedRuntime.GetState().Water[1], 1.0f)
-			&& Near(pausedRuntime.GetState().Water[0], 0.0f),
-			"hydrology reset restores the initial water snapshot");
+			&& Near(pausedRuntime.GetState().Water[0], 0.0f)
+			&& Near(pausedRuntime.GetState().Sediment[1], 1.0f)
+			&& Near(pausedRuntime.GetState().Sediment[0], 0.0f),
+			"hydrology reset restores initial water and sediment snapshots");
 
 		gl::TerrainHydrologyRuntime largeFrames(
 			specification, { 0.0f, 1.0f, 0.0f });
@@ -821,6 +828,8 @@ namespace {
 			specification, { 0.0f, 1.0f, 0.0f });
 		largeFrames.SetWaterDepth({ 0.0f, 1.0f, 0.0f });
 		smallFrames.SetWaterDepth({ 0.0f, 1.0f, 0.0f });
+		largeFrames.SetSedimentDensity({ 0.0f, 1.0f, 0.0f });
+		smallFrames.SetSedimentDensity({ 0.0f, 1.0f, 0.0f });
 		largeFrames.Play();
 		smallFrames.Play();
 		for (uint32_t frame = 0; frame < 25; ++frame)
@@ -837,10 +846,21 @@ namespace {
 				largeFrames.GetState().Water[index],
 				smallFrames.GetState().Water[index], 1.0e-6f)
 				&& Near(largeFrames.GetState().Velocity[index],
-					smallFrames.GetState().Velocity[index]);
+					smallFrames.GetState().Velocity[index])
+				&& Near(largeFrames.GetState().Sediment[index],
+					smallFrames.GetState().Sediment[index], 1.0e-6f);
 		}
 		context.Check(partitionIndependent,
-			"fixed hydrology result is independent of frame partitioning");
+			"fixed water and sediment results are independent of frame partitioning");
+		const auto& sedimentStats = largeFrames.GetStatistics();
+		context.Check(sedimentStats.Finite
+			&& sedimentStats.MinimumSediment >= 0.0f
+			&& std::abs(sedimentStats.SedimentMassError) < 1.0e-5
+			&& Near(static_cast<float>(sedimentStats.SedimentBoundaryLoss), 0.0f),
+			"closed sediment transport remains finite non-negative and conservative");
+		context.Check(largeFrames.GetState().Height
+			== std::vector<float>({ 0.0f, 1.0f, 0.0f }),
+			"transport-only sediment does not modify terrain height");
 
 		gl::TerrainHydrologySpecification catchUpSpecification = specification;
 		catchUpSpecification.MaxSubsteps = 2;

@@ -123,6 +123,7 @@ uniform int u_TerrainLODVisualization;
 uniform int u_TerrainLODLevel;
 uniform sampler2D u_WaterDepthMap;
 uniform sampler2D u_WaterVelocityMap;
+uniform sampler2D u_SedimentMap;
 uniform int u_HasHydrology;
 uniform int u_HydrologyVisualization;
 uniform sampler2D u_ShadowMaps[4];
@@ -470,7 +471,7 @@ void main()
 				: vec3(0.10, 0.28, 1.0));
 		result = mix(result, lodColor, 0.72);
 	}
-	if (u_HydrologyVisualization != 0 && u_HasHydrology != 0)
+	if (u_HydrologyVisualization == 1 && u_HasHydrology != 0)
 	{
 		float waterDepth = max(texture(u_WaterDepthMap, v_TerrainUV).r, 0.0);
 		float speed = length(texture(u_WaterVelocityMap, v_TerrainUV).xy);
@@ -478,6 +479,14 @@ void main()
 		vec3 waterColor = mix(vec3(0.02, 0.18, 0.42),
 			vec3(0.05, 0.75, 1.5), clamp(speed * 0.25, 0.0, 1.0));
 		result = mix(result, waterColor, waterWeight);
+	}
+	else if (u_HydrologyVisualization == 2 && u_HasHydrology != 0)
+	{
+		float sediment = max(texture(u_SedimentMap, v_TerrainUV).r, 0.0);
+		float sedimentWeight = clamp(sediment * 0.8, 0.0, 0.88);
+		vec3 sedimentColor = mix(vec3(0.16, 0.055, 0.018),
+			vec3(0.85, 0.34, 0.06), clamp(sediment * 0.25, 0.0, 1.0));
+		result = mix(result, sedimentColor, sedimentWeight);
 	}
 	o_Color = vec4(max(result, vec3(0.0)), 1.0);
 	o_EntityID = v_EntityID;

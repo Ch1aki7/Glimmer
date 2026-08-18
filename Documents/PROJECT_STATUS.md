@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P13B 泥沙输运
-- 主线状态：待开始（P13A 的 CPU/GPU 水流、固定步长与受控 GPU 合约验证已完成）
+- 主线状态：进行中（CPU/GPU 无源泥沙守恒输运与诊断已落地；待建立携沙能力契约）
 
 ## 使用与更新规则
 
@@ -59,7 +59,7 @@
 
 **依赖**：P13A 水深、Flux、Velocity 与固定步长稳定，已满足。
 
-**状态**：待开始。
+**状态**：进行中。
 
 **目标**
 
@@ -79,6 +79,18 @@
 - 在 CPU 参考模型增加独立 Sediment 数组、初始快照和质量统计，先定义无源输运契约；
 - 明确 GPU Sediment Ping-Pong 格式、Texture Slot、Compute Pass 顺序以及与 Water/Velocity 的只读依赖；
 - 用小网格完成方向、守恒、非负和固定步长回归，再迁移到 Compute Shader。
+
+**阶段进展（2026-08-18）**
+
+- `TerrainHydrologyState` 新增独立 Sediment 数组和初始化快照；数值表示每格单位地表面积上的悬浮泥沙质量，不复用 Water、Height 或 Authoring Erosion 状态；
+- 每个固定步在 Water Flux 求解后，将 Sediment 换算为当前水体积中的浓度，以四向 Water Flux 生成泥沙质量流率；总外运按当前可用泥沙质量再次限幅，再统一汇总邻格入流和自身出流；雨水不生成泥沙，封闭边界当前损失为 0；
+- 统计新增初始/当前泥沙质量、边界损失、质量误差和最小/最大密度；Reset 同时恢复 Water 与 Sediment 快照，并保证两类初始质量误差均为 0；
+- 回归覆盖下游迁移、Reset、封闭边界守恒、非负/有限、两种帧划分确定性及 Height 严格不变；107 项无窗口断言全部 PASS，VS2026 `Debug | x64` 编辑器增量构建成功；
+- GPU 新增 `R32F` Sediment Ping-Pong 和 `SedimentTransport.comp`：在 HydrologyFlux、HydrologyUpdate 之后读取旧 Water、当前 Flux 与旧 Sediment，独立写入新 Sediment，再统一 Barrier/Swap；Height 和 Water 均不被该 Pass 写入；
+- Debug 水文诊断升级为 None/Water/Sediment 三种模式，Sediment 固定绑定 Terrain slot 25；一次性 `Apply Seed` 只设置初始悬浮密度，不形成持续源项。Readback 同步报告泥沙质量、误差与范围；
+- GPU Contract 同时验证 Sediment：GTX 1050 / OpenGL 4.6 实测相对泥沙质量误差 `0`，源格 `1→0`、下游低地 `0→1`，两种帧划分最大差值 `0`；SedimentTransport 与 Terrain Shader 编译成功，编辑器增量构建和 107 项无窗口回归全部 PASS；
+- 接通原先未被 Renderer 调用的 Hydrology Compute 热重载轮询，HydrologyFlux、HydrologyUpdate 与 SedimentTransport 均可事务式重载；
+- 下一步：定义只读携沙能力/饱和度诊断场及其数值范围，明确它只为 P13C 的侵蚀/沉积源项提供输入；在 P13B 完成前仍不写 Height。
 
 ## 后续任务
 

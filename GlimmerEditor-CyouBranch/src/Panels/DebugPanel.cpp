@@ -163,12 +163,26 @@ namespace gl {
 				if (ImGui::DragFloat("Rainfall##Hydrology", &rainfall,
 					0.002f, 0.0f, 5.0f, "%.3f depth/s"))
 					TerrainRenderer::SetHydrologyRainfall(rainfall);
-				bool visualizeHydrology =
-					TerrainRenderer::IsHydrologyVisualizationEnabled();
-				if (ImGui::Checkbox("Visualize Water Depth##Hydrology",
-					&visualizeHydrology))
-					TerrainRenderer::SetHydrologyVisualizationEnabled(
-						visualizeHydrology);
+				int visualizationMode = static_cast<int>(
+					TerrainRenderer::GetHydrologyVisualizationMode());
+				const char* visualizationModes[] = {
+					"None", "Water Depth", "Suspended Sediment"
+				};
+				if (ImGui::Combo("Visualization##Hydrology", &visualizationMode,
+					visualizationModes, IM_ARRAYSIZE(visualizationModes)))
+				{
+					TerrainRenderer::SetHydrologyVisualizationMode(
+						static_cast<TerrainRenderer::HydrologyVisualizationMode>(
+							visualizationMode));
+				}
+				float sedimentSeed =
+					TerrainRenderer::GetHydrologySedimentSeedDensity();
+				if (ImGui::DragFloat("Sediment Seed##Hydrology", &sedimentSeed,
+					0.01f, 0.0f, 1000.0f, "%.3f mass/area"))
+					TerrainRenderer::SetHydrologySedimentSeedDensity(sedimentSeed);
+				ImGui::SameLine();
+				if (ImGui::Button("Apply Seed##Hydrology"))
+					TerrainRenderer::RequestHydrologySedimentSeed();
 				if (ImGui::Button("Validate / Readback##Hydrology"))
 					TerrainRenderer::RequestHydrologyReadback();
 				ImGui::SameLine();
@@ -190,6 +204,12 @@ namespace gl {
 						hydrologyStatistics.MaximumWaterDepth);
 					ImGui::Text("Max Speed: %.6f",
 						hydrologyStatistics.MaximumSpeed);
+					ImGui::Text("Sediment Mass / Error: %.6f / %.3e",
+						hydrologyStatistics.SedimentMass,
+						hydrologyStatistics.SedimentMassError);
+					ImGui::Text("Sediment Min/Max: %.6f / %.6f",
+						hydrologyStatistics.MinimumSediment,
+						hydrologyStatistics.MaximumSediment);
 					ImGui::TextColored(
 						hydrologyStatistics.Finite
 							? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
@@ -213,6 +233,13 @@ namespace gl {
 						hydrologyValidation.MaximumRimDepth);
 					ImGui::Text("Frame Partition Delta: %.3e",
 						hydrologyValidation.MaximumPartitionDifference);
+					ImGui::Text("Sediment Mass Error: %.3e",
+						hydrologyValidation.RelativeSedimentMassError);
+					ImGui::Text("Sediment Source / Downstream: %.6f / %.6f",
+						hydrologyValidation.SourceSediment,
+						hydrologyValidation.DownstreamSediment);
+					ImGui::Text("Sediment Partition Delta: %.3e",
+						hydrologyValidation.MaximumSedimentPartitionDifference);
 				}
 				else
 					ImGui::TextDisabled("GPU contract validation not run");

@@ -13554,6 +13554,68 @@ scripts\Win-BuildAssimp-vs2026.bat Release
 
 本次在旧缓存仍为 `ASSIMP_BUILD_USE_CCACHE=ON` 的设备上验证：新版 Ensure 会触发一次原地重配并写入构建指纹，之后快速命中约 118 ms；重新生成 VS2026 工程后，测试工程可脱离解决方案单独构建。回归测试关闭 Debug 增量链接，避免损坏的 `.ilk` 生成无系统导入表的 EXE；定向 Rebuild 后 104 项断言全部通过，完整 `Verify-Windows.ps1` 通过，编辑器保持运行 10 秒无提前退出，`bin` 与其余构建产物均保留。
 
+## CPU 无源泥沙输运
+
+P13B 第一阶段在 `TerrainHydrologyRuntime` 中增加独立的 Sediment 状态。它表示每格单位地表面积上的悬浮泥沙质量，不是地形高度，也不是 Water 的颜色通道；初始化快照、Reset 和统计均与 Water 分离。
+
+每个固定步在水流 Flux 已确定后执行有限体积输运：
+
+```text
+旧 Sediment × CellArea
+  → 当前格悬浮泥沙质量
+÷ ((旧 Water + RainfallDepth) × CellArea)
+  → 水中泥沙浓度
+× 四向 Water Flux
+  → 四向泥沙质量流率
+  → 按当前可用泥沙质量限制总外运
+  → 汇总邻格入流 - 本格出流
+  → 新 Sediment
+```
+
+雨水只稀释浓度，不产生泥沙。首版边界与水文一致，四周封闭，因此 `SedimentBoundaryLoss` 为 0；统计使用“当前质量 + 边界损失 - 初始质量”计算 `SedimentMassError`。逐格外运限幅避免一次固定步带走超过现有质量的泥沙，最终统计同时检查 Sediment 非负和有限。
+
+当前阶段刻意不加入携沙能力、侵蚀或沉积：这些机制会形成 Sediment 与 Height 间的质量交换，需要单独定义源项和地形质量预算。现有 Transport Pass 只搬运既有悬浮泥沙，Height 保持逐值不变，也不会进入 Scene YAML 或污染有限次 Authoring Erosion。
+
+本阶段是 CPU 数值基线，编辑器画面暂时不会显示泥沙。验证覆盖泥沙随水流向下游迁移、Water/Sediment Reset、封闭边界守恒、非负/有限、两种帧划分确定性和 Height 不变；新增 3 项断言后共 107 项无窗口回归全部 PASS，VS2026 `Debug | x64` 编辑器增量构建成功。下一步会按同一质量契约增加 GPU `R32F` Sediment Ping-Pong 和独立 Compute Transport Pass。
+
+## GPU 泥沙输运与诊断显示
+
+P13B 第二阶段把 CPU 的无源守恒契约迁移到 GPU。`TerrainHydrologyGPU` 新增独立 `R32F × 2` Sediment，不复用 Water 或 Terrain 派生图；每个固定步现在包含三个 Compute Pass：
+
+```text
+Height + 旧 Water + 旧 Flux
+  → HydrologyFlux → 当前 Flux
+旧 Water + 当前 Flux
+  → HydrologyUpdate → 新 Water + 新 Velocity
+旧 Water + 当前 Flux + 旧 Sediment
+  → SedimentTransport → 新 Sediment
+  → Barrier → Water / Velocity / Sediment Swap
+```
+
+Sediment Transport 对本格和四邻格使用同一个纯读取流率函数：把悬浮质量除以“旧 Water + 本步 Rainfall”得到浓度，再乘当前 Water Flux 得到质量流率；外运总量不能超过本格现有泥沙。这样无需原子加法，也不会在同一 Dispatch 中依赖其它 Workgroup 的写入结果。Pass 只写 Sediment，不能修改 Height、Water 或 Authoring Erosion。
+
+### 如何查看
+
+打开 `Debug → Overview → Runtime Hydrology`：
+
+1. 将 `Visualization` 选择为 `Suspended Sediment`；
+2. 调整 `Sediment Seed`，默认 `1.0 mass/area`；
+3. 点击 `Apply Seed`，这只写入一次初始状态，不会每帧生成泥沙；
+4. 保持 Rainfall 大于 0 并勾选 `Play`，棕橙色覆盖会随水流重新分布；
+5. 暂停并点击 `Validate / Readback`，查看 Sediment Mass/Error 与 Min/Max；
+6. 点击 `Run GPU Contract` 可检查标准盆地中的守恒、下游迁移和帧划分确定性。
+
+Terrain Shader 固定使用 slot 23/24/25 读取 Water、Velocity 和 Sediment。诊断模式为互斥的 None/Water/Sediment，避免两种覆盖互相污染；棕橙色只是数值可视化，不代表最终泥水材质或地形颜色已经改变。
+
+### 验证
+
+- `SedimentTransport.comp`、HydrologyFlux、HydrologyUpdate 与 Terrain Shader 在 GTX 1050 / OpenGL 4.6 上全部编译成功；
+- GPU Contract：泥沙相对质量误差 `0`，源格从 `1` 降至 `0`、下游低地从 `0` 增至 `1`，两种帧划分最大差值 `0`；既有水量相对误差仍为 `7.38228e-7`；
+- VS2026 `Debug | x64` 编辑器增量构建成功，最终核心库重新链接后的 107 项无窗口回归全部 PASS；
+- 三个水文 Compute Shader 现已实际接入 `ReloadShadersIfChanged` 轮询，修改成功时事务式替换，失败时保留上一有效程序。
+
+当前仍没有携沙能力、侵蚀或沉积源项，因此 P13B 保持进行中。下一步先建立只读 Capacity/Saturation 诊断契约，P13C 才允许根据容量差异交换 Height 与 Sediment 质量。
+
 ## KB
 
 ### 为什么不用动态库？

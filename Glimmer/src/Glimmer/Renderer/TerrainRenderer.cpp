@@ -32,14 +32,17 @@ namespace gl {
 			bool HasGpuTiming = false;
 			bool PassActive = false;
 			bool HydrologyPlaying = false;
-			bool VisualizeHydrology = false;
+			TerrainRenderer::HydrologyVisualizationMode HydrologyVisualization =
+				TerrainRenderer::HydrologyVisualizationMode::None;
 			bool HydrologyReadbackRequested = false;
 			bool HydrologyValidationRequested = false;
 			bool HydrologyEnvironmentValidationChecked = false;
 			float HydrologyRainfall = 0.02f;
+			float HydrologySedimentSeedDensity = 1.0f;
 			float DeltaSeconds = 0.0f;
 			uint64_t HydrologyResetRequest = 0;
 			uint64_t HydrologySingleStepRequest = 0;
+			uint64_t HydrologySedimentSeedRequest = 0;
 			TerrainHydrologyGPUStatistics HydrologyStats;
 			TerrainHydrologyGPUValidationResult HydrologyValidation;
 			uint64_t FrameSerial = 0;
@@ -298,10 +301,13 @@ namespace gl {
 				AssetManager::GetFileSystemPath(specification.GenerationShaderHandle);
 			const auto fluxPath = generationPath.parent_path() / "HydrologyFlux.comp";
 			const auto updatePath = generationPath.parent_path() / "HydrologyUpdate.comp";
+			const auto sedimentPath =
+				generationPath.parent_path() / "SedimentTransport.comp";
 			if (s_Data.HydrologyValidationRequested)
 			{
 				s_Data.HydrologyValidation =
-					TerrainHydrologyGPU::ValidateContract(fluxPath, updatePath);
+					TerrainHydrologyGPU::ValidateContract(
+						fluxPath, updatePath, sedimentPath);
 				s_Data.HydrologyValidationRequested = false;
 				if (s_Data.HydrologyValidation.Passed)
 					GL_CORE_INFO("GPU hydrology contract validation {0}",
@@ -315,10 +321,11 @@ namespace gl {
 			{
 				runtime.GPUHydrology = CreateScope<TerrainHydrologyGPU>(
 					runtime.HeightMap->GetWidth(), runtime.HeightMap->GetHeight(),
-					fluxPath, updatePath);
+					fluxPath, updatePath, sedimentPath);
 				runtime.HydrologyGenerationVersion = runtime.GenerationVersion;
 			}
 			auto& hydrology = *runtime.GPUHydrology;
+			hydrology.ReloadShadersIfChanged();
 			hydrology.GetSettings().RainfallRate = s_Data.HydrologyRainfall;
 			if (s_Data.HydrologyFrameActive
 				&& runtime.HydrologyFrameSerial != s_Data.FrameSerial)
@@ -330,6 +337,14 @@ namespace gl {
 				}
 				const float worldSize = static_cast<float>(
 					std::max(specification.MeshResolution, 1u));
+				if (runtime.HydrologySedimentSeedRequest
+					!= s_Data.HydrologySedimentSeedRequest)
+				{
+					hydrology.SetUniformSedimentDensity(
+						s_Data.HydrologySedimentSeedDensity, worldSize);
+					runtime.HydrologySedimentSeedRequest =
+						s_Data.HydrologySedimentSeedRequest;
+				}
 				if (runtime.HydrologySingleStepRequest
 					!= s_Data.HydrologySingleStepRequest)
 				{
@@ -391,13 +406,16 @@ namespace gl {
 		const bool hasHydrology = runtime.GPUHydrology != nullptr;
 		shader->UploadUniformInt("u_HasHydrology", hasHydrology ? 1 : 0);
 		shader->UploadUniformInt("u_HydrologyVisualization",
-			s_Data.VisualizeHydrology && hasHydrology ? 1 : 0);
+			hasHydrology
+				? static_cast<int>(s_Data.HydrologyVisualization) : 0);
 		if (hasHydrology)
 		{
 			runtime.GPUHydrology->GetWaterTexture()->Bind(23);
 			runtime.GPUHydrology->GetVelocityTexture()->Bind(24);
+			runtime.GPUHydrology->GetSedimentTexture()->Bind(25);
 			shader->UploadUniformInt("u_WaterDepthMap", 23);
 			shader->UploadUniformInt("u_WaterVelocityMap", 24);
+			shader->UploadUniformInt("u_SedimentMap", 25);
 		}
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
@@ -624,14 +642,32 @@ namespace gl {
 		return s_Data.HydrologyRainfall;
 	}
 
-	void TerrainRenderer::SetHydrologyVisualizationEnabled(bool enabled)
+	void TerrainRenderer::SetHydrologyVisualizationMode(
+		HydrologyVisualizationMode mode)
 	{
-		s_Data.VisualizeHydrology = enabled;
+		s_Data.HydrologyVisualization = mode;
 	}
 
-	bool TerrainRenderer::IsHydrologyVisualizationEnabled()
+	TerrainRenderer::HydrologyVisualizationMode
+	TerrainRenderer::GetHydrologyVisualizationMode()
 	{
-		return s_Data.VisualizeHydrology;
+		return s_Data.HydrologyVisualization;
+	}
+
+	void TerrainRenderer::SetHydrologySedimentSeedDensity(float sedimentDensity)
+	{
+		s_Data.HydrologySedimentSeedDensity = std::clamp(
+			sedimentDensity, 0.0f, 1000.0f);
+	}
+
+	float TerrainRenderer::GetHydrologySedimentSeedDensity()
+	{
+		return s_Data.HydrologySedimentSeedDensity;
+	}
+
+	void TerrainRenderer::RequestHydrologySedimentSeed()
+	{
+		++s_Data.HydrologySedimentSeedRequest;
 	}
 
 	void TerrainRenderer::RequestHydrologyReadback()

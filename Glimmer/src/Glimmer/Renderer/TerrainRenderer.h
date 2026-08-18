@@ -15,6 +15,13 @@ namespace gl {
 			AutomaticDistance
 		};
 
+		enum class HydrologyVisualizationMode : int
+		{
+			None = 0,
+			Water,
+			Sediment
+		};
+
 		struct Statistics
 		{
 			uint32_t DrawCalls = 0;
@@ -56,8 +63,11 @@ namespace gl {
 		static void RequestHydrologyReset();
 		static void SetHydrologyRainfall(float rainfallRate);
 		static float GetHydrologyRainfall();
-		static void SetHydrologyVisualizationEnabled(bool enabled);
-		static bool IsHydrologyVisualizationEnabled();
+		static void SetHydrologyVisualizationMode(HydrologyVisualizationMode mode);
+		static HydrologyVisualizationMode GetHydrologyVisualizationMode();
+		static void SetHydrologySedimentSeedDensity(float sedimentDensity);
+		static float GetHydrologySedimentSeedDensity();
+		static void RequestHydrologySedimentSeed();
 		static void RequestHydrologyReadback();
 		static TerrainHydrologyGPUStatistics GetHydrologyStatistics();
 		static void RequestHydrologyContractValidation();

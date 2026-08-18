@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace gl {
 
@@ -26,9 +27,14 @@ namespace gl {
 		double ExpectedWaterVolume = 0.0;
 		double WaterVolume = 0.0;
 		double MassError = 0.0;
+		double InitialSedimentMass = 0.0;
+		double SedimentMass = 0.0;
+		double SedimentMassError = 0.0;
 		float MinimumWaterDepth = 0.0f;
 		float MaximumWaterDepth = 0.0f;
 		float MaximumSpeed = 0.0f;
+		float MinimumSediment = 0.0f;
+		float MaximumSediment = 0.0f;
 		bool Finite = true;
 		bool ReadbackAvailable = false;
 	};
@@ -41,10 +47,17 @@ namespace gl {
 		bool MassConserved = false;
 		bool BasinAccumulation = false;
 		bool FramePartitionIndependent = false;
+		bool SedimentMassConserved = false;
+		bool SedimentMovedDownstream = false;
+		bool SedimentFramePartitionIndependent = false;
 		double RelativeMassError = 0.0;
+		double RelativeSedimentMassError = 0.0;
 		float BasinDepth = 0.0f;
 		float MaximumRimDepth = 0.0f;
 		float MaximumPartitionDifference = 0.0f;
+		float DownstreamSediment = 0.0f;
+		float SourceSediment = 0.0f;
+		float MaximumSedimentPartitionDifference = 0.0f;
 		std::string Message;
 	};
 
@@ -53,18 +66,23 @@ namespace gl {
 	public:
 		TerrainHydrologyGPU(uint32_t width, uint32_t height,
 			std::filesystem::path fluxShaderPath,
-			std::filesystem::path updateShaderPath);
+			std::filesystem::path updateShaderPath,
+			std::filesystem::path sedimentShaderPath);
 
 		uint32_t Advance(float frameDeltaSeconds,
 			const Ref<Texture2D>& heightMap, float heightScale, float worldSize);
 		void SingleStep(const Ref<Texture2D>& heightMap,
 			float heightScale, float worldSize);
 		void Reset();
+		void SetSedimentDensity(const std::vector<float>& sedimentDensity,
+			float worldSize);
+		void SetUniformSedimentDensity(float sedimentDensity, float worldSize);
 		void ReadbackStatistics(float worldSize);
 		bool ReloadShadersIfChanged();
 		static TerrainHydrologyGPUValidationResult ValidateContract(
 			const std::filesystem::path& fluxShaderPath,
-			const std::filesystem::path& updateShaderPath);
+			const std::filesystem::path& updateShaderPath,
+			const std::filesystem::path& sedimentShaderPath);
 
 		const Ref<Texture2D>& GetWaterTexture() const
 		{
@@ -73,6 +91,10 @@ namespace gl {
 		const Ref<Texture2D>& GetVelocityTexture() const
 		{
 			return m_Velocity.ReadTexture();
+		}
+		const Ref<Texture2D>& GetSedimentTexture() const
+		{
+			return m_Sediment.ReadTexture();
 		}
 		TerrainHydrologyGPUSettings& GetSettings() { return m_Settings; }
 		const TerrainHydrologyGPUStatistics& GetStatistics() const
@@ -88,8 +110,10 @@ namespace gl {
 		SimulationGrid m_Water;
 		SimulationGrid m_Flux;
 		SimulationGrid m_Velocity;
+		SimulationGrid m_Sediment;
 		Ref<ComputeShader> m_FluxShader;
 		Ref<ComputeShader> m_UpdateShader;
+		Ref<ComputeShader> m_SedimentShader;
 		TerrainHydrologyGPUSettings m_Settings;
 		TerrainHydrologyGPUStatistics m_Statistics;
 		double m_Accumulator = 0.0;

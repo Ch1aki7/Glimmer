@@ -32,6 +32,12 @@ namespace gl {
 		float MinimumWaterDepth = 0.0f;
 		float MaximumWaterDepth = 0.0f;
 		float MaximumSpeed = 0.0f;
+		double InitialSedimentMass = 0.0;
+		double SedimentMass = 0.0;
+		double SedimentBoundaryLoss = 0.0;
+		double SedimentMassError = 0.0;
+		float MinimumSediment = 0.0f;
+		float MaximumSediment = 0.0f;
 		bool Finite = true;
 	};
 
@@ -41,6 +47,8 @@ namespace gl {
 		std::vector<float> Water;
 		std::vector<glm::vec4> Flux;
 		std::vector<glm::vec2> Velocity;
+		// Suspended sediment mass per unit terrain area.
+		std::vector<float> Sediment;
 	};
 
 	class TerrainHydrologyRuntime
@@ -57,6 +65,7 @@ namespace gl {
 		bool SingleStep();
 		void Reset();
 		void SetWaterDepth(const std::vector<float>& waterDepth);
+		void SetSedimentDensity(const std::vector<float>& sedimentDensity);
 		void SetRainfallRate(float rainfallRate);
 
 		const TerrainHydrologySpecification& GetSpecification() const
@@ -78,6 +87,7 @@ namespace gl {
 		TerrainHydrologyState m_State;
 		std::vector<float> m_InitialHeight;
 		std::vector<float> m_InitialWater;
+		std::vector<float> m_InitialSediment;
 		TerrainHydrologyStatistics m_Statistics;
 		bool m_Playing = false;
 		double m_Accumulator = 0.0;

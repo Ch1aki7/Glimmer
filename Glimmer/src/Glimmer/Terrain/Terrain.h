@@ -16,6 +16,7 @@ namespace gl {
 		Scope<TerrainHydrologyGPU> GPUHydrology;
 		uint64_t HydrologyResetRequest = 0;
 		uint64_t HydrologySingleStepRequest = 0;
+		uint64_t HydrologySedimentSeedRequest = 0;
 		uint64_t HydrologyGenerationVersion = 0;
 		uint64_t HydrologyFrameSerial = 0;
 		Ref<TerrainMesh> Mesh;

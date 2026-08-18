@@ -37,6 +37,7 @@ namespace gl {
 		}
 
 		m_InitialWater.assign(cellCount, 0.0f);
+		m_InitialSediment.assign(cellCount, 0.0f);
 		Reset();
 	}
 
@@ -85,9 +86,13 @@ namespace gl {
 		m_State.Water = m_InitialWater;
 		m_State.Flux.assign(m_State.Height.size(), glm::vec4(0.0f));
 		m_State.Velocity.assign(m_State.Height.size(), glm::vec2(0.0f));
+		m_State.Sediment = m_InitialSediment;
 		m_Statistics = {};
 		UpdateStatistics();
 		m_Statistics.InitialWaterVolume = m_Statistics.WaterVolume;
+		m_Statistics.InitialSedimentMass = m_Statistics.SedimentMass;
+		m_Statistics.MassError = 0.0;
+		m_Statistics.SedimentMassError = 0.0;
 	}
 
 	void TerrainHydrologyRuntime::SetWaterDepth(
@@ -104,6 +109,23 @@ namespace gl {
 		}
 
 		m_InitialWater = waterDepth;
+		Reset();
+	}
+
+	void TerrainHydrologyRuntime::SetSedimentDensity(
+		const std::vector<float>& sedimentDensity)
+	{
+		if (sedimentDensity.size() != m_State.Sediment.size()
+			|| !std::all_of(sedimentDensity.begin(), sedimentDensity.end(),
+				[](float value) {
+					return std::isfinite(value) && value >= 0.0f;
+				}))
+		{
+			throw std::invalid_argument(
+				"Terrain hydrology sediment field is invalid.");
+		}
+
+		m_InitialSediment = sedimentDensity;
 		Reset();
 	}
 
@@ -161,7 +183,30 @@ namespace gl {
 			}
 		}
 
+		std::vector<glm::vec4> sedimentFlux(
+			m_State.Sediment.size(), glm::vec4(0.0f));
+		for (size_t index = 0; index < m_State.Sediment.size(); ++index)
+		{
+			const float sedimentMass = m_State.Sediment[index] * cellArea;
+			const float availableWaterVolume =
+				(m_State.Water[index] + rainfallDepth) * cellArea;
+			if (sedimentMass <= 0.0f || availableWaterVolume <= 1.0e-12f)
+				continue;
+
+			const float concentration = sedimentMass / availableWaterVolume;
+			sedimentFlux[index] = nextFlux[index] * concentration;
+			const float outgoingMassRate = glm::dot(
+				sedimentFlux[index], glm::vec4(1.0f));
+			if (outgoingMassRate > 0.0f)
+			{
+				const float scale = std::min(
+					1.0f, sedimentMass / (outgoingMassRate * deltaSeconds));
+				sedimentFlux[index] *= scale;
+			}
+		}
+
 		std::vector<float> nextWater(m_State.Water.size(), 0.0f);
+		std::vector<float> nextSediment(m_State.Sediment.size(), 0.0f);
 		for (uint32_t y = 0; y < height; ++y)
 		{
 			for (uint32_t x = 0; x < width; ++x)
@@ -197,11 +242,28 @@ namespace gl {
 						+ incomingFromDown - outgoingFlux.z)
 						/ (averageDepth * cellSize)
 				};
+
+				const glm::vec4 outgoingSediment = sedimentFlux[index];
+				float incomingSediment = 0.0f;
+				if (x > 0)
+					incomingSediment += sedimentFlux[Index(x - 1, y)].y;
+				if (x + 1 < width)
+					incomingSediment += sedimentFlux[Index(x + 1, y)].x;
+				if (y > 0)
+					incomingSediment += sedimentFlux[Index(x, y - 1)].w;
+				if (y + 1 < height)
+					incomingSediment += sedimentFlux[Index(x, y + 1)].z;
+				const float outgoingSedimentRate = glm::dot(
+					outgoingSediment, glm::vec4(1.0f));
+				const float sedimentMass = m_State.Sediment[index] * cellArea
+					+ (incomingSediment - outgoingSedimentRate) * deltaSeconds;
+				nextSediment[index] = std::max(sedimentMass / cellArea, 0.0f);
 			}
 		}
 
 		m_State.Flux = std::move(nextFlux);
 		m_State.Water = std::move(nextWater);
+		m_State.Sediment = std::move(nextSediment);
 		++m_Statistics.StepCount;
 		m_Statistics.SimulatedTime += deltaSeconds;
 		m_Statistics.RainfallVolume += static_cast<double>(rainfallDepth)
@@ -214,20 +276,28 @@ namespace gl {
 		const double cellArea = static_cast<double>(m_Specification.CellSize)
 			* m_Specification.CellSize;
 		double waterVolume = 0.0;
+		double sedimentMass = 0.0;
 		float minimumWater = std::numeric_limits<float>::max();
 		float maximumWater = 0.0f;
 		float maximumSpeed = 0.0f;
+		float minimumSediment = std::numeric_limits<float>::max();
+		float maximumSediment = 0.0f;
 		bool finite = true;
 		for (size_t index = 0; index < m_State.Water.size(); ++index)
 		{
 			const float water = m_State.Water[index];
 			const float speed = glm::length(m_State.Velocity[index]);
+			const float sediment = m_State.Sediment[index];
 			finite &= std::isfinite(water) && water >= 0.0f
-				&& std::isfinite(speed);
+				&& std::isfinite(speed)
+				&& std::isfinite(sediment) && sediment >= 0.0f;
 			waterVolume += static_cast<double>(water) * cellArea;
+			sedimentMass += static_cast<double>(sediment) * cellArea;
 			minimumWater = std::min(minimumWater, water);
 			maximumWater = std::max(maximumWater, water);
 			maximumSpeed = std::max(maximumSpeed, speed);
+			minimumSediment = std::min(minimumSediment, sediment);
+			maximumSediment = std::max(maximumSediment, sediment);
 		}
 		m_Statistics.WaterVolume = waterVolume;
 		m_Statistics.MassError = waterVolume
@@ -236,6 +306,13 @@ namespace gl {
 			? 0.0f : minimumWater;
 		m_Statistics.MaximumWaterDepth = maximumWater;
 		m_Statistics.MaximumSpeed = maximumSpeed;
+		m_Statistics.SedimentMass = sedimentMass;
+		m_Statistics.SedimentMassError = sedimentMass
+			+ m_Statistics.SedimentBoundaryLoss
+			- m_Statistics.InitialSedimentMass;
+		m_Statistics.MinimumSediment = m_State.Sediment.empty()
+			? 0.0f : minimumSediment;
+		m_Statistics.MaximumSediment = maximumSediment;
 		m_Statistics.Finite = finite;
 		m_Statistics.Accumulator = m_Accumulator;
 	}
