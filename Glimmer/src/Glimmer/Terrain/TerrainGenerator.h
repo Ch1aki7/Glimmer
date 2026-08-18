@@ -21,6 +21,8 @@ namespace gl {
 			const std::string& derivationShaderPath);
 
 		void Generate(const TerrainSpecification& specification, float worldSize);
+		void DeriveMapsFromHeight(const Ref<Texture2D>& heightMap,
+			float heightScale, float worldSize);
 		void Resize(uint32_t width, uint32_t height);
 		bool ReloadShadersIfChanged();
 
@@ -37,9 +39,12 @@ namespace gl {
 
 	private:
 		void CreateDerivedTextures();
-		void Dispatch2D(const Ref<ComputeShader>& shader);
+		void Dispatch2D(const Ref<ComputeShader>& shader,
+			bool countGenerationDispatch = true);
 		void RunThermalErosion(const TerrainAuthoringSettings& settings);
 		void DeriveMaps(float heightScale, float worldSize);
+		void DeriveMaps(const Ref<Texture2D>& heightMap,
+			float heightScale, float worldSize, bool countGenerationDispatch);
 
 		SimulationGrid m_HeightGrid;
 		Ref<ComputeShader> m_GenerationShader;

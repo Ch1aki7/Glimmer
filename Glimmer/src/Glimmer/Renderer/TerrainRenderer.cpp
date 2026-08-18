@@ -266,6 +266,12 @@ namespace gl {
 						std::max(specification.MeshResolution, 1u)));
 				const TerrainValidationResult second =
 					runtime.Generator->ValidateOutputs();
+				runtime.Generator->DeriveMapsFromHeight(
+					runtime.Generator->GetHeightMap(), specification.HeightScale,
+					static_cast<float>(
+						std::max(specification.MeshResolution, 1u)));
+				const TerrainValidationResult runtimeDerived =
+					runtime.Generator->ValidateOutputs();
 				runtime.HeightMap = runtime.Generator->GetHeightMap();
 				runtime.NormalSlopeMap = runtime.Generator->GetNormalSlopeMap();
 				runtime.AnalysisMap = runtime.Generator->GetAnalysisMap();
@@ -273,7 +279,9 @@ namespace gl {
 				runtime.LastGenerationDispatchCount =
 					runtime.Generator->GetLastDispatchCount();
 				++runtime.GenerationVersion;
-				runtime.ValidationComplete = true;
+				runtime.ValidationComplete = runtimeDerived.Valid;
+				if (second.Hash != runtimeDerived.Hash)
+					runtime.ValidationComplete = false;
 				if (first.Valid && second.Valid && first.Hash == second.Hash)
 				{
 					GL_CORE_INFO(
@@ -361,9 +369,12 @@ namespace gl {
 			if (s_Data.HydrologyFrameActive
 				&& runtime.HydrologyFrameSerial != s_Data.FrameSerial)
 			{
+				bool resetApplied = false;
+				bool hydrologyStepped = false;
 				if (runtime.HydrologyResetRequest != s_Data.HydrologyResetRequest)
 				{
 					hydrology.Reset();
+					resetApplied = true;
 					runtime.HydrologyResetRequest = s_Data.HydrologyResetRequest;
 				}
 				const float worldSize = static_cast<float>(
@@ -381,12 +392,43 @@ namespace gl {
 				{
 					hydrology.SingleStep(runtime.HeightMap,
 						specification.HeightScale, worldSize);
+					hydrologyStepped = true;
 					runtime.HydrologySingleStepRequest =
 						s_Data.HydrologySingleStepRequest;
 				}
 				if (s_Data.HydrologyPlaying)
-					hydrology.Advance(s_Data.DeltaSeconds, runtime.HeightMap,
+				{
+					const uint32_t executedSteps = hydrology.Advance(
+						s_Data.DeltaSeconds, runtime.HeightMap,
 						specification.HeightScale, worldSize);
+					if (executedSteps != 0)
+						hydrologyStepped = true;
+				}
+				runtime.HeightMap = hydrology.GetHeightTexture();
+				bool refreshDerivedMaps = resetApplied;
+				if (hydrologyStepped)
+				{
+					const auto& settings = hydrology.GetSettings();
+					if (settings.MaximumHeightChangePerStep > 0.0f)
+					{
+						if (settings.DepositionRate > 0.0f)
+							refreshDerivedMaps = true;
+						if (settings.ErosionRate > 0.0f
+							&& settings.MaximumErosionDepth > 0.0f)
+							refreshDerivedMaps = true;
+					}
+				}
+				if (refreshDerivedMaps)
+				{
+					runtime.Generator->DeriveMapsFromHeight(
+						runtime.HeightMap, specification.HeightScale, worldSize);
+					runtime.NormalSlopeMap =
+						runtime.Generator->GetNormalSlopeMap();
+					runtime.AnalysisMap = runtime.Generator->GetAnalysisMap();
+					runtime.MaterialWeightMap =
+						runtime.Generator->GetMaterialWeightMap();
+					++s_Data.Stats.RuntimeDerivedMapRefreshes;
+				}
 				if (s_Data.HydrologyReadbackRequested)
 					hydrology.ReadbackStatistics(
 						worldSize, specification.HeightScale);

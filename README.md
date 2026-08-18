@@ -13725,7 +13725,11 @@ Debug 面板新增以下纯运行时参数：
 - `0.04 × 25` 与 `0.01 × 100` 两种帧划分的 Height/Sediment 最大差值均为 `0`，Reset 恢复检查通过；
 - `Verify-Windows.ps1 -SkipGenerate` 增量构建成功，114 项无窗口断言全部 PASS，构建产物保留。
 
-尚需注意：运行时几何与阴影已读取 Runtime Height，但 Normal/Slope、Analysis 和 MaterialWeight 仍由生成器 Height 派生。下一步需要从 Runtime Height 刷新这些派生图，避免长时间侵蚀后几何与光照/材质分层失配；完成该视觉烟雾测试后再决定提供显式 Bake，或继续把结果限定为临时模拟状态。
+运行时派生图刷新现已完成。`TerrainGenerator::DeriveMapsFromHeight` 复用现有 `DeriveTerrainMaps.comp`，但允许输入 `TerrainHydrologyGPU` 的最终 Runtime Height。`TerrainRenderer` 会先完成本帧所有固定水文子步，再最多派生一次 Normal/Slope、Analysis 和 MaterialWeight；因此一个渲染帧即使追赶 4 个模拟步，也不会重复执行 4 次相同派生。Reset 会刷新一次以恢复初始表面；除此以外，未执行固定步或侵蚀/沉积源项关闭时没有额外派生开销。
+
+这意味着侵蚀后的几何轮廓、阴影法线、坡度、曲率/流势和 Grass/Soil/Rock/Snow 分层现在读取同一版本的 Height。观察时可把 TerrainMaterial Sampling 保持为 `Full 4 Layers`，提高侵蚀率后从低角度查看沟槽：除轮廓下降外，陡坡岩石权重和低坡土壤/草地边界也应随新坡度移动；Reset 后两者一起恢复。受控 `GLIMMER_TERRAIN_VALIDATE=1` 验证会实际调用 Runtime Height 派生入口，并要求其有限性、权重归一化和输出哈希与相同 Height 的生成路径一致。
+
+P13C 至此收口。运行时模拟仍是临时状态：不写入 Scene YAML，也没有隐式 Bake；若后续需要保存侵蚀结果，应单独设计显式 Terrain Asset Bake、失败回滚和 Undo/Redo，而不是改变当前 Reset/复制语义。
 
 ## KB
 

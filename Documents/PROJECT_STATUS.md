@@ -9,8 +9,8 @@
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P13C 运行时侵蚀与沉积
-- 主线状态：进行中（CPU 局部侵蚀/沉积质量交换已完成；待迁移 GPU Pass 与场景诊断）
+- 当前主线：P14 简化气候与植被闭环
+- 主线状态：待开始（P13A～P13C 水流、泥沙与运行时侵蚀闭环已完成）
 
 ## 使用与更新规则
 
@@ -55,51 +55,11 @@
 
 ## 当前主线
 
-### P13C：运行时侵蚀与沉积
-
-**依赖**：P13B 泥沙输运、Capacity/Saturation 派生场稳定，已满足。
-
-**状态**：进行中。
-
-**目标**
-
-- 依据 Sediment 与 Capacity 的差异，在 Height 与 Sediment 之间交换质量；
-- 建立侵蚀率、沉积率、可侵蚀层和单步变化上限；
-- 明确运行时结果的 Reset、保留与后续烘焙边界，不污染 Authoring Erosion。
-
-**验收**
-
-- 欠饱和流体侵蚀 Height 并增加 Sediment，过饱和流体沉积且总质量预算可解释；
-- Height、Sediment 长期运行保持有限，Height 单步变化受限且不会穿透可侵蚀下界；
-- Reset 能恢复模拟初态，运行时结果不进入 Scene YAML，除非后续通过显式 Bake 工作流；
-- CPU 小网格与 GPU Contract 对方向、质量交换和帧划分确定性给出一致证据。
-
-**第一步**
-
-- 先在 CPU 参考模型加入只发生局部 Height/Sediment 交换、暂不改变输运顺序的源项；
-- 明确地形高度到单位面积质量的换算、侵蚀下界和总质量统计，再迁移到独立 GPU Erosion/Deposition Pass；
-- 保留 P13B 的 Capacity/Saturation 为只读输入，不在同一 Dispatch 中同时推导容量和写回地形。
-
-**阶段进展（2026-08-18）**
-
-- CPU `TerrainHydrologyRuntime` 已加入可选 Erosion/Deposition 源项；默认速率为 0，因此既有 P13B 模拟与旧场景不会静默改变；
-- Height 通过 `TerrainDensity` 换算为单位面积等效质量：欠饱和时按 `Capacity - Sediment` 从地形转入悬浮泥沙，过饱和时按 `Sediment - Capacity` 反向沉积；
-- 每格交换同时受 Erosion/Deposition Rate、`MaximumHeightChangePerStep`、剩余 `MaximumErosionDepth` 和可用 Sediment 限制；侵蚀下界始终相对初始化 Height 定义；
-- 统计新增 Terrain 等效质量、累计侵蚀/沉积量、Height 范围、单步最大 Height 变化及 Terrain+Sediment 组合质量误差；Reset 恢复 Height/Sediment 初态并清空累计预算；
-- 新增 5 项回归后共 114 项无窗口断言全部 PASS，覆盖欠饱和侵蚀、过饱和沉积、单步限幅、可侵蚀下界、组合质量守恒、Reset 和帧划分确定性；VS2026 `Debug | x64` 编辑器已重新链接成功；
-- GPU `TerrainHydrologyGPU` 已拥有独立 `R32F` Height Ping-Pong；生成器 Height 只作为不可变初始快照和侵蚀下界，`ErosionDeposition.comp` 在 Capacity 之后同步写入新 Height/Sediment，再统一交换；
-- `TerrainRenderer` 的 Color/Shadow 路径已读取 Runtime Height。侵蚀率、沉积率、Terrain Density、最大侵蚀深度和单步 Height 上限均为纯运行时控制，默认速率为 0，不进入 Scene YAML，也没有隐式 Bake；
-- GTX 1050 / OpenGL 4.6 受控 GPU Contract PASS：100 个固定步后组合质量误差 `2.58287e-7`、侵蚀高度 `0.02`、沉积高度 `0.1`，两种帧划分的 Height/Sediment 最大差值均为 `0`，Reset 恢复检查通过；
-- 2026-08-18 再次执行 `Verify-Windows.ps1 -SkipGenerate`：VS2026 `Debug | x64` 增量构建成功，114 项无窗口断言全部 PASS，构建产物保留；
-- 下一步：从 Runtime Height 刷新 Normal/Slope、Analysis 与 MaterialWeight 派生图，完成可见形变的人工烟雾测试；之后明确显式 Bake 入口或继续保持纯临时状态，再收口 P13C。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P14：简化气候与植被闭环
 
-**依赖**：P13 稳定，P8 能接收湿度/植被材质权重。
+**依赖**：P13 已稳定，P8 能接收湿度/植被材质权重，已满足。
+
+**状态**：待开始。
 
 **目标**
 
@@ -112,6 +72,16 @@
 - 湿度能随风输运并在地形抬升区形成更多降雨；
 - 蒸发、水汽、降雨和地表水变化具有可解释统计；
 - 植被响应可复现，不把单株测试实体永久写入默认场景。
+
+**第一步**
+
+- 先定义 Temperature、Humidity、Rainfall 与 Vegetation Potential 的单位、范围、Ping-Pong 所有权和固定步顺序；
+- 建立纯 CPU 小网格参考模型，先验证风向输运、地形抬升和水量来源/去向，再迁移 GPU；
+- 复用 P13 Runtime Height、Water 和 MaterialWeight 边界，不把气候 Runtime 写入 Scene YAML。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P15：统一图像导入与内部纹理资产
 
@@ -146,6 +116,14 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-18：P13C 运行时侵蚀、沉积与派生图闭环
+
+- CPU/GPU 根据 Sediment 与 Capacity 差异在 Height 与 Sediment 间交换等效质量；侵蚀/沉积率默认关闭，并受 Terrain Density、可侵蚀深度和单步 Height 上限约束；
+- GPU 新增独立 Runtime Height Ping-Pong 与 `ErosionDeposition.comp`；生成 Height 保持不可变初态，Reset 恢复全部模拟状态，Runtime 不进入 Scene YAML 且没有隐式 Bake；
+- Terrain Color/Shadow 统一读取 Runtime Height；每帧全部固定子步结束后最多复用一次 `DeriveTerrainMaps.comp`，同步刷新 Normal/Slope、Analysis 和 MaterialWeight，零步进或源项关闭时不增加派生 Dispatch；
+- 验证：114 项无窗口断言全部 PASS；GTX 1050 / OpenGL 4.6 水文 Contract 的组合质量误差 `2.58287e-7`、Height/Sediment 帧划分差值为 `0`、Reset PASS；Terrain GPU 验证通过并实际调用 Runtime Height 派生入口，哈希与生成路径一致；VS2026 `Debug | x64` 增量构建成功；
+- P13C 验收完成，当前主线提升为 P14 简化气候与植被闭环；提交：待提交。
 
 ### 2026-08-18：P13B 泥沙输运与携沙能力契约
 
@@ -474,10 +452,10 @@
 - PBRModel 已支持 BaseColor、Normal、AO、Emissive 以及 FBX 导入的独立 Metallic/Roughness Texture；`.glmat` 尚未暴露 Metallic/Roughness 纹理 Handle，也未定义 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
-- Terrain 已生成 Height、Normal/Slope、Curvature/Flow Potential 与 Material Weights，接入四层 Triplanar PBR 并参与 1～4 级方向光 CSM；固定 `3×3` Chunk 与 Color/Shadow Chunk 剔除已落地，仍缺距离 LOD、跨 LOD 接缝策略和固定步长 Runtime Erosion 调度；
+- Terrain 已完成固定 `3×3` Chunk、三档距离 LOD/迟滞/相邻约束/Skirt、Color/Shadow 剔除、四层 Triplanar PBR、固定步水文与 Runtime Erosion；运行时 Height 会刷新 Normal/Slope、Analysis 和 Material Weights。尚无显式 Bake，模拟结果关闭或重建后丢弃；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
-- 环境模拟尚未定义固定步长调度器、Simulation Asset/Component 边界和质量守恒统计；
+- P13 水文模拟已具备固定步调度、Runtime 所有权和质量统计；P14 气候/植被场仍需定义独立 Ping-Pong、单位、耦合顺序及长期预算；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 
 ## 固定验证清单

@@ -73,6 +73,12 @@ namespace gl {
 		CreateDerivedTextures();
 	}
 
+	void TerrainGenerator::DeriveMapsFromHeight(
+		const Ref<Texture2D>& heightMap, float heightScale, float worldSize)
+	{
+		DeriveMaps(heightMap, heightScale, worldSize, false);
+	}
+
 	bool TerrainGenerator::ReloadShadersIfChanged()
 	{
 		bool changed = false;
@@ -106,14 +112,16 @@ namespace gl {
 		m_MaterialWeightMap->Clear(glm::vec4(0.0f));
 	}
 
-	void TerrainGenerator::Dispatch2D(const Ref<ComputeShader>& shader)
+	void TerrainGenerator::Dispatch2D(const Ref<ComputeShader>& shader,
+		bool countGenerationDispatch)
 	{
 		const auto& specification = m_HeightGrid.GetSpecification();
 		shader->Dispatch(
 			(specification.Width + 7u) / 8u,
 			(specification.Height + 7u) / 8u,
 			1);
-		++m_LastDispatchCount;
+		if (countGenerationDispatch)
+			++m_LastDispatchCount;
 	}
 
 	void TerrainGenerator::RunThermalErosion(
@@ -144,13 +152,19 @@ namespace gl {
 
 	void TerrainGenerator::DeriveMaps(float heightScale, float worldSize)
 	{
+		DeriveMaps(m_HeightGrid.ReadTexture(), heightScale, worldSize, true);
+	}
+
+	void TerrainGenerator::DeriveMaps(const Ref<Texture2D>& heightMap,
+		float heightScale, float worldSize, bool countGenerationDispatch)
+	{
 		m_DerivationShader->Bind();
 		m_DerivationShader->UploadUniformFloat("u_HeightScale",
 			std::max(heightScale, 0.0f));
 		m_DerivationShader->UploadUniformFloat("u_WorldSize",
 			std::max(worldSize, 0.0001f));
 		m_DerivationShader->BindImageTexture(0,
-			m_HeightGrid.ReadTexture()->GetRendererID(), 0,
+			heightMap->GetRendererID(), 0,
 			ImageAccess::Read, ImageFormat::R32F);
 		m_DerivationShader->BindImageTexture(1,
 			m_NormalSlopeMap->GetRendererID(), 0,
@@ -161,7 +175,7 @@ namespace gl {
 		m_DerivationShader->BindImageTexture(3,
 			m_MaterialWeightMap->GetRendererID(), 0,
 			ImageAccess::Write, ImageFormat::RGBA16F);
-		Dispatch2D(m_DerivationShader);
+		Dispatch2D(m_DerivationShader, countGenerationDispatch);
 		ComputeShader::Barrier();
 	}
 

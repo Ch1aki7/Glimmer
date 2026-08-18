@@ -36,6 +36,7 @@ namespace gl {
 			uint32_t LOD2Chunks = 0;
 			uint64_t SubmittedTriangles = 0;
 			uint32_t BoundMaterialTextures = 0;
+			uint32_t RuntimeDerivedMapRefreshes = 0;
 			float GpuMilliseconds = 0.0f;
 			uint64_t GpuTimingSample = 0;
 			bool GpuTimingAvailable = false;
