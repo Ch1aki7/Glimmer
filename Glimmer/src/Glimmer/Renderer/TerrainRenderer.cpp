@@ -34,11 +34,14 @@ namespace gl {
 			bool HydrologyPlaying = false;
 			bool VisualizeHydrology = false;
 			bool HydrologyReadbackRequested = false;
+			bool HydrologyValidationRequested = false;
+			bool HydrologyEnvironmentValidationChecked = false;
 			float HydrologyRainfall = 0.02f;
 			float DeltaSeconds = 0.0f;
 			uint64_t HydrologyResetRequest = 0;
 			uint64_t HydrologySingleStepRequest = 0;
 			TerrainHydrologyGPUStatistics HydrologyStats;
+			TerrainHydrologyGPUValidationResult HydrologyValidation;
 			uint64_t FrameSerial = 0;
 			bool HydrologyFrameActive = false;
 		};
@@ -84,6 +87,22 @@ namespace gl {
 #endif
 		}
 
+		bool ShouldValidateHydrology()
+		{
+#ifdef GL_PLATFORM_WINDOWS
+			char* value = nullptr;
+			size_t length = 0;
+			const bool enabled = _dupenv_s(&value, &length,
+				"GLIMMER_HYDROLOGY_VALIDATE") == 0
+				&& value != nullptr && std::string(value) == "1";
+			std::free(value);
+			return enabled;
+#else
+			const char* value = std::getenv("GLIMMER_HYDROLOGY_VALIDATE");
+			return value && std::string(value) == "1";
+#endif
+		}
+
 		Ref<Texture2D> ResolveLayerTexture(AssetHandle handle,
 			TextureColorSpace colorSpace, TextureSemantic semantic)
 		{
@@ -114,6 +133,11 @@ namespace gl {
 
 	void TerrainRenderer::BeginScene(float deltaSeconds)
 	{
+		if (!s_Data.HydrologyEnvironmentValidationChecked)
+		{
+			s_Data.HydrologyValidationRequested = ShouldValidateHydrology();
+			s_Data.HydrologyEnvironmentValidationChecked = true;
+		}
 		s_Data.DeltaSeconds = std::max(deltaSeconds, 0.0f);
 		++s_Data.FrameSerial;
 		s_Data.HydrologyFrameActive = true;
@@ -274,6 +298,18 @@ namespace gl {
 				AssetManager::GetFileSystemPath(specification.GenerationShaderHandle);
 			const auto fluxPath = generationPath.parent_path() / "HydrologyFlux.comp";
 			const auto updatePath = generationPath.parent_path() / "HydrologyUpdate.comp";
+			if (s_Data.HydrologyValidationRequested)
+			{
+				s_Data.HydrologyValidation =
+					TerrainHydrologyGPU::ValidateContract(fluxPath, updatePath);
+				s_Data.HydrologyValidationRequested = false;
+				if (s_Data.HydrologyValidation.Passed)
+					GL_CORE_INFO("GPU hydrology contract validation {0}",
+						s_Data.HydrologyValidation.Message);
+				else
+					GL_CORE_ERROR("GPU hydrology contract validation {0}",
+						s_Data.HydrologyValidation.Message);
+			}
 			if (!runtime.GPUHydrology
 				|| runtime.HydrologyGenerationVersion != runtime.GenerationVersion)
 			{
@@ -606,6 +642,17 @@ namespace gl {
 	TerrainHydrologyGPUStatistics TerrainRenderer::GetHydrologyStatistics()
 	{
 		return s_Data.HydrologyStats;
+	}
+
+	void TerrainRenderer::RequestHydrologyContractValidation()
+	{
+		s_Data.HydrologyValidationRequested = true;
+	}
+
+	TerrainHydrologyGPUValidationResult
+	TerrainRenderer::GetHydrologyValidationResult()
+	{
+		return s_Data.HydrologyValidation;
 	}
 
 	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()

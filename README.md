@@ -13343,14 +13343,23 @@ Height(Read) + Water(Read) + Flux(Read)
 5. 点击 `Reset` 会把 Water、Flux、Velocity、累加器和统计全部清零；
 6. 暂停后点击 `Validate / Readback`，查看 Water Volume/Error、Depth Min/Max、Max Speed 和 `Finite: PASS`。
 
+`Validate / Readback` 检查当前场景正在运行的水文状态。`Run GPU Contract` 则执行一个独立的受控验证：临时创建 `3×1` 的高-低-高盆地，用同一 GPU 水文实例先后按 `0.04×25` 和 `0.01×100` 两种帧划分运行 100 个固定步，并自动检查：
+
+- Water/Velocity 有限且 Water 非负；
+- 相对质量误差不超过 `2e-3`；
+- 中央低地水深显著高于两侧高地；
+- 两种帧划分的最终 Water 最大差值不超过 `5e-4`。
+
+跨设备或无人值守验证可在启动编辑器前设置 `GLIMMER_HYDROLOGY_VALIDATE=1`。验证只执行一次并输出 `GPU hydrology contract validation PASS/FAIL`，正常帧不会创建临时验证资源或触发同步读回。
+
 水深显示目前是 Terrain Fragment Shader 中的诊断着色，不会抬高网格，也没有折射、反射、透明水面或岸线泡沫。它用于确认流向和蓄水位置，正式水体几何与材质属于后续渲染阶段。
 
 ### 当前验证
 
-- Premake VS2026 工程重新生成成功，`Debug | x64` 整解决方案构建成功；
-- 最终编辑器以项目工作目录运行 15 秒，HydrologyFlux、HydrologyUpdate、Terrain 和既有图形 Shader 初始化链路无断言或提前退出；
-- CPU 数值契约及既有功能共 96 项具体无窗口断言全部 PASS；
-- GPU 长时间降雨后的质量误差与洼地视觉分布仍需通过上述 Debug 操作完成最终人工验收，因此 P13A 当前仍为进行中。
+- Premake VS2026 工程重新生成成功，`Debug | x64` 解决方案及编辑器增量构建成功；
+- 104 项无窗口回归全部 PASS，覆盖 CPU 水文方向、守恒、非负、重置、补帧上限、盆地蓄水和帧划分确定性；
+- GTX 1050 / OpenGL 4.6 以 `GLIMMER_HYDROLOGY_VALIDATE=1` 运行真实 Compute 链路并 PASS：相对质量误差 `7.38228e-7`，中央盆地水深 `0.599998`、两侧最大水深 `6.28643e-7`，两种帧划分最大差值 `0`；
+- HydrologyFlux、HydrologyUpdate、Terrain 和既有图形 Shader 均成功创建，编辑器无断言或提前退出；P13A 数值验收完成。
 
 ## Tone Mapping 跨驱动 Sampler 修复
 

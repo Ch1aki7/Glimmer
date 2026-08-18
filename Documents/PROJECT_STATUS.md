@@ -5,12 +5,12 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-17
+- 最近更新：2026-08-18
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P13A 固定步长水流核心
-- 主线状态：进行中（CPU/GPU 水流字段、固定步长调度和 Debug 控制已落地；待完成 GPU 数值与视觉验收）
+- 当前主线：P13B 泥沙输运
+- 主线状态：待开始（P13A 的 CPU/GPU 水流、固定步长与受控 GPU 合约验证已完成）
 
 ## 使用与更新规则
 
@@ -55,58 +55,34 @@
 
 ## 当前主线
 
-### P13A：固定步长水流核心
-
-**依赖**：P6 Terrain Runtime、P7 派生资源和稳定 GPU Ping-Pong 完成。
-
-**状态**：进行中。
-
-**目标**
-
-- 建立 Rainfall → Flux → WaterDepth/Velocity 流程；
-- 提供 Play、Pause、Single Step、Reset 和统计；
-- 与有限次 Authoring Erosion 分开调度和保存，为泥沙输运保留稳定输入。
-
-**验收**
-
-- 水深和流速保持非负/有限且无 NaN；
-- 无降雨/蒸发边界下质量误差处于明确容差；
-- 洼地能蓄水，高处水流向低处；
-- 固定时间步下结果不依赖编辑器帧率。
-
-**第一步**
-
-- 建立不复用 Authoring Erosion 的 `TerrainHydrologyRuntime`，明确 Water、Flux、Velocity、Sediment 与 Height Ping-Pong 的所有权；
-- 建立固定 `dt` 累加器、最大补帧数和 Play/Pause/Single Step/Reset 状态机；
-- 先用纯 CPU 小网格参考模型验证守恒、非负和确定性，再迁移 Compute Pass。
-
-**阶段进展（2026-08-13）**
-
-- 新增纯 CPU `TerrainHydrologyRuntime`：Height 只读快照与 Water、四向 Flux、Velocity 分离持有；`TerrainRuntime` 仅以独立可选实例拥有水文状态，不复用 `TerrainGenerator` 的 Authoring Height Ping-Pong，也不参与 Scene YAML；
-- 固定步长调度支持 Play/Pause、暂停态 Single Step、Reset、最大补帧数和超额时间丢弃统计；相同模拟时长按 `0.04×25` 与 `0.01×100` 两种帧划分得到相同 Water/Velocity；
-- CPU 参考步使用封闭四邻域：先按只读水面高差计算并按可用水量缩放出流，再统一汇总入流/出流更新 Water 和速度；统计记录水量、降雨量、质量误差、最小/最大水深、最大速度和有限性；
-- 新增 8 条水文回归，覆盖暂停、单步、重置、高处向低处流动、非负/有限、封闭边界守恒、固定步长确定性、最大补帧和洼地蓄水；当前 96 项具体无窗口断言全部 PASS；
-- 下一步：以同一字段契约建立 GPU Water/Flux/Velocity Ping-Pong 与独立 Compute Pass，并在 DebugPanel 提供运行控制和统计；CPU 模型继续作为小网格数值基线。
-- GPU 阶段新增 `TerrainHydrologyGPU`：程序化 `R32F` Height 只读，Water 使用 `R32F` Ping-Pong，Flux/Velocity 使用 `RGBA16F` Ping-Pong；每个固定步拆为 HydrologyFlux 与 HydrologyUpdate 两次全局 Dispatch，并在 Pass 间执行 Memory Barrier 和 Swap；普通图片高度图不进入 Storage Image 路径；
-- TerrainRenderer 只在 Color Pass 的首个 Prepare 推进一次水文，Shadow Prepare 不推进；Terrain 重新生成时重建水文资源。Debug → Overview → Runtime Hydrology 提供 Play、暂停态 Single Step、Reset、Rainfall、蓝色水深/流速覆盖与手动 Validate/Readback；质量统计不逐帧读回；
-- 验证：Premake VS2026 重新生成成功，VS2026 `Debug | x64` 整解决方案构建成功；最终编辑器以项目工作目录持续运行 15 秒，HydrologyFlux、HydrologyUpdate 与 Terrain Shader 创建链路无断言或提前退出；96 项具体无窗口断言全部 PASS；
-- 修复拉取到 GTX 1050 后默认 Manual Fog 黑屏：ToneMapping 的 `sampler2D` 与未显式赋值的 `samplerCube` 曾同时落到 slot 0，NVIDIA 531.29 在最终 Draw 报 `GL_INVALID_OPERATION: program texture usage`；PostProcessRenderer 现每帧固定 Scene Color/Depth/Fog Cube/Bloom 为 slot 0/1/2/3。编辑器增量构建成功，默认配置画面恢复，RenderDoc API Validation 无 High severity 或 sampler 错误；
-- TerrainMaterial 默认采样由 Auto Distance 调整为 Full 4 Layers：完整保留 Grass/Soil/Rock/Snow 的连续地貌权重及各层 Triplanar Albedo/Normal/AO，避免 Top-2 重新归一化压窄过渡带或 Auto 随距离淡出次层细节；三种性能模式仍可在 Debug 切换。新增默认值回归后 97 项断言全部 PASS，编辑器构建及 GTX 1050 运行验证通过；
-- 待验收：在 Debug 面板运行降雨后执行手动 Readback，确认 GPU Water/Velocity 有限、质量误差处于明确容差，并用水深覆盖确认高处外流与洼地蓄水；通过后完成 P13A 并提升 P13B。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
-
 ### P13B：泥沙输运
 
-**依赖**：P13A 水深、Flux、Velocity 与固定步长稳定。
+**依赖**：P13A 水深、Flux、Velocity 与固定步长稳定，已满足。
+
+**状态**：待开始。
 
 **目标**
 
 - 建立 Sediment 状态、携沙能力与随流速输运；
 - 保持泥沙非负、有限，并记录边界流失和质量误差；
 - 暂不修改 Height，先隔离验证输运方向与确定性。
+
+**验收**
+
+- Sediment 在长期运行中保持非负、有限且无 NaN；
+- 无侵蚀/沉积源项时，封闭边界泥沙质量误差处于明确容差；
+- 泥沙随 Water/Velocity 向下游迁移，并在两种帧划分下得到一致结果；
+- 本阶段不修改 Height，也不污染 Authoring Erosion 状态。
+
+**第一步**
+
+- 在 CPU 参考模型增加独立 Sediment 数组、初始快照和质量统计，先定义无源输运契约；
+- 明确 GPU Sediment Ping-Pong 格式、Texture Slot、Compute Pass 顺序以及与 Water/Velocity 的只读依赖；
+- 用小网格完成方向、守恒、非负和固定步长回归，再迁移到 Compute Shader。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P13C：运行时侵蚀与沉积
 
@@ -134,6 +110,27 @@
 - 蒸发、水汽、降雨和地表水变化具有可解释统计；
 - 植被响应可复现，不把单株测试实体永久写入默认场景。
 
+### P15：统一图像导入与内部纹理资产
+
+**依赖**：P13/P14 主线完成。若水材质、专业材质或跨格式资源需求提前成为阻塞，可在不扩散主线的前提下单独提升优先级。
+
+**目标**
+
+- 在引擎核心资产层建立后端无关的 `ImageDecoder` 与 `ImageData`，统一宽高、通道、像素类型、颜色空间、方向和元数据；把文件解码从 `OpenGLTexture2D`、`TextureCube` 与 `EnvironmentMapLoader` 中移出；
+- 将 OpenImageIO 作为编辑器/资产导入依赖，以最小格式集合覆盖 PNG/JPEG/TGA/BMP、Radiance HDR 和 OpenEXR；首版 EXR 仅接收单 Part、非 Deep、RGB/RGBA/Y、HALF/FLOAT 的线性图像；
+- 保留 `AssetRegistry` 对 `TextureColorSpace`、`TextureSemantic`、Normal DX/GL、通道映射和方向的显式契约，不使用文件元数据隐式改写材质语义；
+- 建立版本化内部纹理资产及导入设置，使运行时读取烘焙结果，不要求部署 OpenImageIO 及其格式插件；
+- 按 Texture2D → 等距柱状 HDR/EXR → 六面 Cubemap 的顺序迁移；完成行为一致性回归后再移除 `stb_image`。
+
+**验收**
+
+- `.exr` 可被识别为 Cubemap，并复用现有 TextureCube、Skybox、Irradiance、Prefilter 与 BRDF LUT 链路；`.hdr` 输出保持一致；
+- PNG/JPEG/TGA/BMP 与六面 Cubemap 的尺寸、通道、翻转、颜色空间和采样结果无回归；
+- 图片解码层不依赖 RendererAPI/OpenGL，`Platform/OpenGL` 不再直接调用文件解码库；
+- Windows 新设备可复现构建所需的最小 OpenImageIO 依赖，并可验证版本与构建产物；
+- 发布运行时可在不携带 OpenImageIO/plugin DLL 的情况下加载内部纹理资产；
+- 无窗口回归覆盖 UInt8/Half/Float、1～4 通道、方向、颜色空间和 EXR 高亮值保持。
+
 ### 长期候选
 
 - Vulkan 后端实际实现，而不只是接口预埋；
@@ -146,6 +143,14 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-08-18：P13A 固定步长水流核心
+
+- 建立独立于 Authoring Erosion 和 Scene YAML 的 CPU `TerrainHydrologyRuntime` 与 GPU `TerrainHydrologyGPU`；Height 只读，Water、四向 Flux、二维 Velocity 使用独立状态和固定步长调度；
+- GPU 每步由 HydrologyFlux 与 HydrologyUpdate 两次 Dispatch、全局 Barrier 和 Ping-Pong Swap 组成；TerrainRenderer 仅在 Color 帧首次 Prepare 推进，Debug 提供 Play/Pause、Single Step、Reset、Rainfall、Readback 与水深诊断覆盖；
+- 新增受控 GPU 合约验证：在 `3×1` 盆地中分别以 `0.04×25` 和 `0.01×100` 运行相同 100 步，自动检查有限性、`2e-3` 相对质量误差上限、低地汇聚与帧划分确定性；可从 Debug 按钮或 `GLIMMER_HYDROLOGY_VALIDATE=1` 启动；
+- 验证：GTX 1050 / OpenGL 4.6 实测 PASS，相对质量误差 `7.38228e-7`，盆地水深 `0.599998`、两侧最大水深 `6.28643e-7`，帧划分最大差值 `0`；VS2026 `Debug | x64` 编辑器增量构建成功，104 项无窗口回归全部 PASS；
+- P13A 验收完成，当前主线提升为 P13B 泥沙输运；提交：待提交。
 
 ### 2026-08-17：Assimp 跨设备导入收口
 

@@ -2,8 +2,10 @@
 #include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <sstream>
 #include <vector>
 
 namespace gl {
@@ -124,6 +126,95 @@ namespace gl {
 		const ShaderReloadResult update = m_UpdateShader->ReloadIfChanged();
 		return (flux.Attempted && flux.Success)
 			|| (update.Attempted && update.Success);
+	}
+
+	TerrainHydrologyGPUValidationResult TerrainHydrologyGPU::ValidateContract(
+		const std::filesystem::path& fluxShaderPath,
+		const std::filesystem::path& updateShaderPath)
+	{
+		TerrainHydrologyGPUValidationResult result;
+		result.Attempted = true;
+
+		TextureSpecification heightSpecification;
+		heightSpecification.Width = 3;
+		heightSpecification.Height = 1;
+		heightSpecification.Format = TextureFormat::R32F;
+		heightSpecification.MinFilter = TextureFilter::Nearest;
+		heightSpecification.MagFilter = TextureFilter::Nearest;
+		heightSpecification.WrapS = TextureWrap::ClampToEdge;
+		heightSpecification.WrapT = TextureWrap::ClampToEdge;
+		heightSpecification.Usage = TextureUsage::Sampled
+			| TextureUsage::Storage | TextureUsage::Readback;
+		const Ref<Texture2D> heightMap = Texture2D::Create(heightSpecification);
+		const std::array<float, 3> basinHeight = { 1.0f, 0.0f, 1.0f };
+		heightMap->SetData(basinHeight.data(),
+			static_cast<uint32_t>(sizeof(basinHeight)));
+
+		auto configure = [](TerrainHydrologyGPU& hydrology) {
+			auto& settings = hydrology.GetSettings();
+			settings.FixedTimeStep = 0.01f;
+			settings.MaxSubsteps = 4;
+			settings.Gravity = 9.81f;
+			settings.FluxDamping = 0.98f;
+			settings.RainfallRate = 0.2f;
+		};
+
+		TerrainHydrologyGPU hydrology(
+			3, 1, fluxShaderPath, updateShaderPath);
+		configure(hydrology);
+		for (uint32_t frame = 0; frame < 25; ++frame)
+			hydrology.Advance(0.04f, heightMap, 1.0f, 2.0f);
+		hydrology.ReadbackStatistics(2.0f);
+		const TerrainHydrologyGPUStatistics largeFrameStatistics =
+			hydrology.GetStatistics();
+		std::array<float, 3> largeWater{};
+		hydrology.GetWaterTexture()->GetImageData(
+			largeWater.data(), static_cast<uint32_t>(sizeof(largeWater)));
+
+		hydrology.Reset();
+		for (uint32_t frame = 0; frame < 100; ++frame)
+			hydrology.Advance(0.01f, heightMap, 1.0f, 2.0f);
+		hydrology.ReadbackStatistics(2.0f);
+		const TerrainHydrologyGPUStatistics smallFrameStatistics =
+			hydrology.GetStatistics();
+		std::array<float, 3> smallWater{};
+		hydrology.GetWaterTexture()->GetImageData(
+			smallWater.data(), static_cast<uint32_t>(sizeof(smallWater)));
+
+		result.Finite = largeFrameStatistics.Finite
+			&& smallFrameStatistics.Finite;
+		const double expectedVolume = std::max(
+			largeFrameStatistics.ExpectedWaterVolume, 1.0e-12);
+		result.RelativeMassError = std::abs(largeFrameStatistics.MassError)
+			/ expectedVolume;
+		result.MassConserved = result.RelativeMassError <= 2.0e-3;
+		result.BasinDepth = largeWater[1];
+		result.MaximumRimDepth = std::max(largeWater[0], largeWater[2]);
+		result.BasinAccumulation = result.BasinDepth
+			> result.MaximumRimDepth + 1.0e-4f;
+		for (size_t index = 0; index < largeWater.size(); ++index)
+		{
+			result.MaximumPartitionDifference = std::max(
+				result.MaximumPartitionDifference,
+				std::abs(largeWater[index] - smallWater[index]));
+		}
+		result.FramePartitionIndependent =
+			largeFrameStatistics.StepCount == 100
+			&& smallFrameStatistics.StepCount == 100
+			&& result.MaximumPartitionDifference <= 5.0e-4f;
+		result.Passed = result.Finite && result.MassConserved
+			&& result.BasinAccumulation
+			&& result.FramePartitionIndependent;
+
+		std::ostringstream message;
+		message << (result.Passed ? "PASS" : "FAIL")
+			<< ": finite=" << result.Finite
+			<< ", relativeMassError=" << result.RelativeMassError
+			<< ", basin=" << result.BasinDepth
+			<< ", rimMax=" << result.MaximumRimDepth
+			<< ", partitionDelta=" << result.MaximumPartitionDifference;
+		result.Message = message.str();
+		return result;
 	}
 
 	void TerrainHydrologyGPU::Step(const Ref<Texture2D>& heightMap,

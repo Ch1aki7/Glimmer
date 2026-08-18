@@ -1,6 +1,6 @@
 # Glimmer 项目架构说明
 
-> 本文最近于 2026-08-12 对照当前源码同步，只描述已经落地的结构与数据流。
+> 本文最近于 2026-08-18 对照当前源码同步，只描述已经落地的结构与数据流。
 > 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
 ## 1. 项目定位与当前边界
@@ -241,7 +241,7 @@ P13A 已建立纯 CPU `TerrainHydrologyRuntime` 作为 GPU 数值基线。它持
 
 GPU 路径由同一 `TerrainRuntime` 独占一个 `TerrainHydrologyGPU`。它只接受程序化 Terrain 的 `R32F` Height Storage Texture：Height 始终只读，Water 为 `R32F` Ping-Pong，四向 Flux 与二维 Velocity 分别使用 `RGBA16F` Ping-Pong。每个固定步先 Dispatch `HydrologyFlux.comp`，Barrier 后交换 Flux，再 Dispatch `HydrologyUpdate.comp`，Barrier 后交换 Water/Velocity；两阶段都不在同一 Dispatch 中读取其它 Workgroup 尚未完成的输出。Terrain 生成版本改变时整个 GPU 水文状态重建，TerrainComponent 复制和 Scene YAML 均不携带这些纹理。
 
-`Scene` 将帧 `Timestep` 传给 `TerrainRenderer::BeginScene`。Shadow Pass 可以调用 `Prepare` 创建资源，但只有 BeginScene/EndScene 之间的 Color Pass 首次 Prepare 会消费固定步累加器、Single Step、Reset 或 Readback 请求，避免同一帧因阴影和九个 Chunk 重复推进。DebugPanel 通过 TerrainRenderer 的纯运行时全局入口控制 Play、Single Step、Reset、Rainfall 和水深覆盖；手动 Validate 才同步读回 Water/Velocity 并计算体积、误差、范围和有限性，普通帧不做 GPU Readback。Terrain Fragment Shader 可读取 slot 23/24 的 Water/Velocity 做蓝色诊断覆盖；这不是独立水面几何或最终水材质。
+`Scene` 将帧 `Timestep` 传给 `TerrainRenderer::BeginScene`。Shadow Pass 可以调用 `Prepare` 创建资源，但只有 BeginScene/EndScene 之间的 Color Pass 首次 Prepare 会消费固定步累加器、Single Step、Reset 或 Readback 请求，避免同一帧因阴影和九个 Chunk 重复推进。DebugPanel 通过 TerrainRenderer 的纯运行时全局入口控制 Play、Single Step、Reset、Rainfall 和水深覆盖；手动 Readback 才同步读取场景 Water/Velocity 并计算体积、误差、范围和有限性，普通帧不做 GPU Readback。独立的 GPU Contract 验证创建 `3×1` 临时 R32F 盆地 Height 和水文 Ping-Pong，用同一个实例经 Reset 分别执行 `0.04×25` 与 `0.01×100` 帧划分，检查有限性、相对质量误差、低地汇聚和结果确定性；它只由 Debug 请求或 `GLIMMER_HYDROLOGY_VALIDATE=1` 触发，完成后释放临时资源。Terrain Fragment Shader 可读取 slot 23/24 的 Water/Velocity 做蓝色诊断覆盖；这不是独立水面几何或最终水材质。
 
 `.glterrainmat` 与普通 `.glmat` 是两个注册表类型和两套 YAML 根。TerrainMaterial 固定拥有 Grass、Soil、Rock、Snow 四层；每层保存颜色、Albedo/Normal/AO Handle、Tiling、Metallic、Roughness、NormalScale 和 AOStrength，资产级参数控制三平面锐度与高度/坡度/曲率/湿度混合强度。缺失纹理时使用层颜色、几何法线和 AO=1；存在纹理必须分别满足 sRGB Color、Linear Normal、Linear Data 语义。TerrainMaterial 保存也采用临时文件替换，但不进入 MaterialInstance 或实体 MaterialOverrides 链路。
 
@@ -462,12 +462,12 @@ flowchart LR
 - `EditorLayer` 只负责 Scene、Scene Framebuffer、Camera、后处理输入和面板的生命周期编排，不承载 Bloom/Tone Mapping、Terrain、IBL 或环境模拟算法及其正式业务状态；
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - 新增 3D Shader 必须遵守 `Opaque / Mask / Blend` 契约；若声明支持 AlphaMode，需要消费 `u_AlphaMode`、`u_AlphaCutoff` 并保持 Mask/Blend 的深度和 EntityID 语义。透明对象仍不得进入现有 Opaque Instancing；
-- 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；P13A CPU Hydrology 已使用独立状态集和固定步长调度器，后续 GPU 水流与 Runtime Erosion 必须沿用该边界，不能复用或隐式推进 Authoring 管线；
+- 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；P13A CPU/GPU Hydrology 已使用独立状态集、固定步长调度器与 GPU Ping-Pong，后续 Sediment 和 Runtime Erosion 必须沿用该边界，不能复用或隐式推进 Authoring 管线；
 - IBL 源环境、Diffuse Irradiance 和 Specular Prefilter 已按 Handle、Cubemap Runtime Version、派生图类型与生成参数进入内存派生缓存；BRDF LUT 作为环境无关的进程级共享资源只在初始化或参数变化时生成，禁止逐帧积分，磁盘缓存需另行定义版本化格式；
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已完成 P11；Depth 重建的距离/高度雾、环境关联雾色、EV/ACES White Point 与半分辨率 Bloom 已完成 P12，并由 P12.1 收拢到引擎侧 `PostProcessRenderer`。P13A 的 CPU/GPU Water/Flux/Velocity、固定步调度和诊断覆盖已落地但尚待 GPU 数值/视觉验收；Sediment 与 Runtime Erosion 仍未实现。Metallic/Roughness Texture/ORM、局部场景反射、连续几何 Morph、动态 Chunk 层级和环境模拟目前同样是未实现或未完整实现的后续能力。TAA 尚未实现：当前没有投影 Jitter、Previous ViewProjection、Velocity Attachment、Previous Transform、HDR History、Disocclusion/Clamp 或 Reactive Mask；不得把单纯历史颜色混合描述为已支持。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已完成 P11；Depth 重建的距离/高度雾、环境关联雾色、EV/ACES White Point 与半分辨率 Bloom 已完成 P12，并由 P12.1 收拢到引擎侧 `PostProcessRenderer`。P13A 的 CPU/GPU Water/Flux/Velocity、固定步调度、诊断覆盖和受控 GPU 合约验证已经完成；Sediment 与 Runtime Erosion 仍未实现。Metallic/Roughness Texture/ORM、局部场景反射、连续几何 Morph、动态 Chunk 层级和环境模拟目前同样是未实现或未完整实现的后续能力。TAA 尚未实现：当前没有投影 Jitter、Previous ViewProjection、Velocity Attachment、Previous Transform、HDR History、Disocclusion/Clamp 或 Reactive Mask；不得把单纯历史颜色混合描述为已支持。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

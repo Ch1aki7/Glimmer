@@ -4,6 +4,7 @@
 #include "Glimmer/Simulation/SimulationGrid.h"
 
 #include <filesystem>
+#include <string>
 
 namespace gl {
 
@@ -32,6 +33,21 @@ namespace gl {
 		bool ReadbackAvailable = false;
 	};
 
+	struct TerrainHydrologyGPUValidationResult
+	{
+		bool Attempted = false;
+		bool Passed = false;
+		bool Finite = false;
+		bool MassConserved = false;
+		bool BasinAccumulation = false;
+		bool FramePartitionIndependent = false;
+		double RelativeMassError = 0.0;
+		float BasinDepth = 0.0f;
+		float MaximumRimDepth = 0.0f;
+		float MaximumPartitionDifference = 0.0f;
+		std::string Message;
+	};
+
 	class TerrainHydrologyGPU
 	{
 	public:
@@ -46,6 +62,9 @@ namespace gl {
 		void Reset();
 		void ReadbackStatistics(float worldSize);
 		bool ReloadShadersIfChanged();
+		static TerrainHydrologyGPUValidationResult ValidateContract(
+			const std::filesystem::path& fluxShaderPath,
+			const std::filesystem::path& updateShaderPath);
 
 		const Ref<Texture2D>& GetWaterTexture() const
 		{

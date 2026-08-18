@@ -60,6 +60,8 @@ namespace gl {
 		static bool IsHydrologyVisualizationEnabled();
 		static void RequestHydrologyReadback();
 		static TerrainHydrologyGPUStatistics GetHydrologyStatistics();
+		static void RequestHydrologyContractValidation();
+		static TerrainHydrologyGPUValidationResult GetHydrologyValidationResult();
 		static Statistics GetStatistics();
 		static bool IntersectsCameraFrustum(
 			const glm::vec3& boundsMin,

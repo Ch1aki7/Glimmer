@@ -44,6 +44,8 @@ namespace gl {
 			TerrainRenderer::GetStatistics();
 		const TerrainHydrologyGPUStatistics hydrologyStatistics =
 			TerrainRenderer::GetHydrologyStatistics();
+		const TerrainHydrologyGPUValidationResult hydrologyValidation =
+			TerrainRenderer::GetHydrologyValidationResult();
 		m_InstancingLab.UpdateShadowBenchmark(shadowStatistics);
 		m_PBRMaterialLab.UpdateValidation(statistics);
 		m_TerrainSamplingBenchmark.Update(terrainStatistics);
@@ -169,6 +171,9 @@ namespace gl {
 						visualizeHydrology);
 				if (ImGui::Button("Validate / Readback##Hydrology"))
 					TerrainRenderer::RequestHydrologyReadback();
+				ImGui::SameLine();
+				if (ImGui::Button("Run GPU Contract##Hydrology"))
+					TerrainRenderer::RequestHydrologyContractValidation();
 				ImGui::Text("Steps / Sim Time: %llu / %.2f s",
 					static_cast<unsigned long long>(hydrologyStatistics.StepCount),
 					hydrologyStatistics.SimulatedTime);
@@ -193,6 +198,24 @@ namespace gl {
 				}
 				else
 					ImGui::TextDisabled("Press Validate / Readback for mass statistics");
+				if (hydrologyValidation.Attempted)
+				{
+					ImGui::TextColored(
+						hydrologyValidation.Passed
+							? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
+							: ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+						hydrologyValidation.Passed
+							? "GPU Contract: PASS" : "GPU Contract: FAIL");
+					ImGui::Text("Relative Mass Error: %.3e",
+						hydrologyValidation.RelativeMassError);
+					ImGui::Text("Basin / Rim Max: %.6f / %.6f",
+						hydrologyValidation.BasinDepth,
+						hydrologyValidation.MaximumRimDepth);
+					ImGui::Text("Frame Partition Delta: %.3e",
+						hydrologyValidation.MaximumPartitionDifference);
+				}
+				else
+					ImGui::TextDisabled("GPU contract validation not run");
 				ImGui::EndTabItem();
 			}
 
