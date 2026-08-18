@@ -40,6 +40,11 @@ namespace gl {
 			float HydrologyRainfall = 0.02f;
 			float HydrologySedimentSeedDensity = 1.0f;
 			float HydrologySedimentCapacityScale = 1.0f;
+			float HydrologyErosionRate = 0.0f;
+			float HydrologyDepositionRate = 0.0f;
+			float HydrologyTerrainDensity = 1.0f;
+			float HydrologyMaximumErosionDepth = 1.0f;
+			float HydrologyMaximumHeightChange = 0.01f;
 			float DeltaSeconds = 0.0f;
 			uint64_t HydrologyResetRequest = 0;
 			uint64_t HydrologySingleStepRequest = 0;
@@ -306,11 +311,14 @@ namespace gl {
 				generationPath.parent_path() / "SedimentTransport.comp";
 			const auto capacityPath =
 				generationPath.parent_path() / "SedimentCapacity.comp";
+			const auto erosionPath =
+				generationPath.parent_path() / "ErosionDeposition.comp";
 			if (s_Data.HydrologyValidationRequested)
 			{
 				s_Data.HydrologyValidation =
 					TerrainHydrologyGPU::ValidateContract(
-						fluxPath, updatePath, sedimentPath, capacityPath);
+						fluxPath, updatePath, sedimentPath,
+						capacityPath, erosionPath);
 				s_Data.HydrologyValidationRequested = false;
 				if (s_Data.HydrologyValidation.Passed)
 					GL_CORE_INFO("GPU hydrology contract validation {0}",
@@ -324,12 +332,26 @@ namespace gl {
 			{
 				runtime.GPUHydrology = CreateScope<TerrainHydrologyGPU>(
 					runtime.HeightMap->GetWidth(), runtime.HeightMap->GetHeight(),
-					fluxPath, updatePath, sedimentPath, capacityPath);
+					fluxPath, updatePath, sedimentPath,
+					capacityPath, erosionPath);
+				runtime.GPUHydrology->SetInitialHeightMap(
+					runtime.HeightMap, specification.HeightScale,
+					static_cast<float>(
+						std::max(specification.MeshResolution, 1u)));
 				runtime.HydrologyGenerationVersion = runtime.GenerationVersion;
 			}
 			auto& hydrology = *runtime.GPUHydrology;
 			hydrology.ReloadShadersIfChanged();
 			hydrology.GetSettings().RainfallRate = s_Data.HydrologyRainfall;
+			hydrology.GetSettings().ErosionRate = s_Data.HydrologyErosionRate;
+			hydrology.GetSettings().DepositionRate =
+				s_Data.HydrologyDepositionRate;
+			hydrology.GetSettings().TerrainDensity =
+				s_Data.HydrologyTerrainDensity;
+			hydrology.GetSettings().MaximumErosionDepth =
+				s_Data.HydrologyMaximumErosionDepth;
+			hydrology.GetSettings().MaximumHeightChangePerStep =
+				s_Data.HydrologyMaximumHeightChange;
 			if (hydrology.GetSettings().SedimentCapacityScale
 				!= s_Data.HydrologySedimentCapacityScale)
 			{
@@ -366,10 +388,12 @@ namespace gl {
 					hydrology.Advance(s_Data.DeltaSeconds, runtime.HeightMap,
 						specification.HeightScale, worldSize);
 				if (s_Data.HydrologyReadbackRequested)
-					hydrology.ReadbackStatistics(worldSize);
+					hydrology.ReadbackStatistics(
+						worldSize, specification.HeightScale);
 				s_Data.HydrologyStats = hydrology.GetStatistics();
 				runtime.HydrologyFrameSerial = s_Data.FrameSerial;
 			}
+			runtime.HeightMap = hydrology.GetHeightTexture();
 		}
 		return true;
 	}
@@ -664,6 +688,61 @@ namespace gl {
 	float TerrainRenderer::GetHydrologySedimentCapacityScale()
 	{
 		return s_Data.HydrologySedimentCapacityScale;
+	}
+
+	void TerrainRenderer::SetHydrologyErosionRate(float erosionRate)
+	{
+		s_Data.HydrologyErosionRate = std::clamp(
+			erosionRate, 0.0f, 1000.0f);
+	}
+
+	float TerrainRenderer::GetHydrologyErosionRate()
+	{
+		return s_Data.HydrologyErosionRate;
+	}
+
+	void TerrainRenderer::SetHydrologyDepositionRate(float depositionRate)
+	{
+		s_Data.HydrologyDepositionRate = std::clamp(
+			depositionRate, 0.0f, 1000.0f);
+	}
+
+	float TerrainRenderer::GetHydrologyDepositionRate()
+	{
+		return s_Data.HydrologyDepositionRate;
+	}
+
+	void TerrainRenderer::SetHydrologyTerrainDensity(float terrainDensity)
+	{
+		s_Data.HydrologyTerrainDensity = std::clamp(
+			terrainDensity, 1.0e-6f, 1000000.0f);
+	}
+
+	float TerrainRenderer::GetHydrologyTerrainDensity()
+	{
+		return s_Data.HydrologyTerrainDensity;
+	}
+
+	void TerrainRenderer::SetHydrologyMaximumErosionDepth(float depth)
+	{
+		s_Data.HydrologyMaximumErosionDepth = std::clamp(
+			depth, 0.0f, 10000.0f);
+	}
+
+	float TerrainRenderer::GetHydrologyMaximumErosionDepth()
+	{
+		return s_Data.HydrologyMaximumErosionDepth;
+	}
+
+	void TerrainRenderer::SetHydrologyMaximumHeightChange(float heightChange)
+	{
+		s_Data.HydrologyMaximumHeightChange = std::clamp(
+			heightChange, 0.0f, 1000.0f);
+	}
+
+	float TerrainRenderer::GetHydrologyMaximumHeightChange()
+	{
+		return s_Data.HydrologyMaximumHeightChange;
 	}
 
 	void TerrainRenderer::SetHydrologyVisualizationMode(

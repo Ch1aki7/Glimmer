@@ -67,6 +67,16 @@ namespace gl {
 		static float GetHydrologyRainfall();
 		static void SetHydrologySedimentCapacityScale(float capacityScale);
 		static float GetHydrologySedimentCapacityScale();
+		static void SetHydrologyErosionRate(float erosionRate);
+		static float GetHydrologyErosionRate();
+		static void SetHydrologyDepositionRate(float depositionRate);
+		static float GetHydrologyDepositionRate();
+		static void SetHydrologyTerrainDensity(float terrainDensity);
+		static float GetHydrologyTerrainDensity();
+		static void SetHydrologyMaximumErosionDepth(float depth);
+		static float GetHydrologyMaximumErosionDepth();
+		static void SetHydrologyMaximumHeightChange(float heightChange);
+		static float GetHydrologyMaximumHeightChange();
 		static void SetHydrologyVisualizationMode(HydrologyVisualizationMode mode);
 		static HydrologyVisualizationMode GetHydrologyVisualizationMode();
 		static void SetHydrologySedimentSeedDensity(float sedimentDensity);

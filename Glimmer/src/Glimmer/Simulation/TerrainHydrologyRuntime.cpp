@@ -23,10 +23,20 @@ namespace gl {
 			|| specification.MaxSubsteps == 0
 			|| specification.Gravity < 0.0f
 			|| specification.SedimentCapacityScale < 0.0f
+			|| specification.ErosionRate < 0.0f
+			|| specification.DepositionRate < 0.0f
+			|| specification.TerrainDensity <= 0.0f
+			|| specification.MaximumErosionDepth < 0.0f
+			|| specification.MaximumHeightChangePerStep < 0.0f
 			|| !std::isfinite(specification.CellSize)
 			|| !std::isfinite(specification.FixedTimeStep)
 			|| !std::isfinite(specification.Gravity)
-			|| !std::isfinite(specification.SedimentCapacityScale))
+			|| !std::isfinite(specification.SedimentCapacityScale)
+			|| !std::isfinite(specification.ErosionRate)
+			|| !std::isfinite(specification.DepositionRate)
+			|| !std::isfinite(specification.TerrainDensity)
+			|| !std::isfinite(specification.MaximumErosionDepth)
+			|| !std::isfinite(specification.MaximumHeightChangePerStep))
 		{
 			throw std::invalid_argument(
 				"Terrain hydrology specification is invalid.");
@@ -100,8 +110,10 @@ namespace gl {
 		UpdateStatistics();
 		m_Statistics.InitialWaterVolume = m_Statistics.WaterVolume;
 		m_Statistics.InitialSedimentMass = m_Statistics.SedimentMass;
+		m_Statistics.InitialTerrainMass = m_Statistics.TerrainMass;
 		m_Statistics.MassError = 0.0;
 		m_Statistics.SedimentMassError = 0.0;
+		m_Statistics.TerrainSedimentMassError = 0.0;
 	}
 
 	void TerrainHydrologyRuntime::SetWaterDepth(
@@ -282,11 +294,74 @@ namespace gl {
 		m_State.Water = std::move(nextWater);
 		m_State.Sediment = std::move(nextSediment);
 		UpdateSedimentDiagnostics();
+		ApplyErosionDeposition(deltaSeconds);
+		UpdateSedimentDiagnostics();
 		++m_Statistics.StepCount;
 		m_Statistics.SimulatedTime += deltaSeconds;
 		m_Statistics.RainfallVolume += static_cast<double>(rainfallDepth)
 			* cellArea * m_State.Water.size();
 		UpdateStatistics();
+	}
+
+	void TerrainHydrologyRuntime::ApplyErosionDeposition(float deltaSeconds)
+	{
+		const float erosionRate = std::max(m_Specification.ErosionRate, 0.0f);
+		const float depositionRate =
+			std::max(m_Specification.DepositionRate, 0.0f);
+		const float terrainDensity =
+			std::max(m_Specification.TerrainDensity, 1.0e-6f);
+		const float maximumHeightChange = std::max(
+			m_Specification.MaximumHeightChangePerStep, 0.0f);
+		if ((erosionRate <= 0.0f && depositionRate <= 0.0f)
+			|| maximumHeightChange <= 0.0f)
+		{
+			m_Statistics.MaximumAbsoluteHeightChangePerStep = 0.0f;
+			return;
+		}
+
+		const double cellArea = static_cast<double>(m_Specification.CellSize)
+			* m_Specification.CellSize;
+		float largestHeightChange = 0.0f;
+		for (size_t index = 0; index < m_State.Height.size(); ++index)
+		{
+			const float sediment = m_State.Sediment[index];
+			const float capacity = m_State.SedimentCapacity[index];
+			const float erosionFloor = m_InitialHeight[index]
+				- m_Specification.MaximumErosionDepth;
+			float transferDensity = 0.0f;
+
+			if (capacity > sediment && erosionRate > 0.0f)
+			{
+				const float availableTerrainDensity = std::max(
+					(m_State.Height[index] - erosionFloor) * terrainDensity,
+					0.0f);
+				transferDensity = std::min({
+					(capacity - sediment) * erosionRate * deltaSeconds,
+					maximumHeightChange * terrainDensity,
+					availableTerrainDensity
+				});
+				m_State.Height[index] -= transferDensity / terrainDensity;
+				m_State.Sediment[index] += transferDensity;
+				m_Statistics.CumulativeErodedMass +=
+					static_cast<double>(transferDensity) * cellArea;
+			}
+			else if (sediment > capacity && depositionRate > 0.0f)
+			{
+				transferDensity = std::min({
+					(sediment - capacity) * depositionRate * deltaSeconds,
+					maximumHeightChange * terrainDensity,
+					sediment
+				});
+				m_State.Height[index] += transferDensity / terrainDensity;
+				m_State.Sediment[index] -= transferDensity;
+				m_Statistics.CumulativeDepositedMass +=
+					static_cast<double>(transferDensity) * cellArea;
+			}
+
+			largestHeightChange = std::max(
+				largestHeightChange, transferDensity / terrainDensity);
+		}
+		m_Statistics.MaximumAbsoluteHeightChangePerStep = largestHeightChange;
 	}
 
 	void TerrainHydrologyRuntime::UpdateSedimentDiagnostics()
@@ -313,6 +388,7 @@ namespace gl {
 			* m_Specification.CellSize;
 		double waterVolume = 0.0;
 		double sedimentMass = 0.0;
+		double terrainMass = 0.0;
 		float minimumWater = std::numeric_limits<float>::max();
 		float maximumWater = 0.0f;
 		float maximumSpeed = 0.0f;
@@ -322,6 +398,8 @@ namespace gl {
 		float maximumCapacity = 0.0f;
 		float minimumSaturation = std::numeric_limits<float>::max();
 		float maximumSaturation = 0.0f;
+		float minimumTerrainHeight = std::numeric_limits<float>::max();
+		float maximumTerrainHeight = -std::numeric_limits<float>::max();
 		bool finite = true;
 		for (size_t index = 0; index < m_State.Water.size(); ++index)
 		{
@@ -330,13 +408,19 @@ namespace gl {
 			const float sediment = m_State.Sediment[index];
 			const float capacity = m_State.SedimentCapacity[index];
 			const float saturation = m_State.SedimentSaturation[index];
+			const float terrainHeight = m_State.Height[index];
 			finite &= std::isfinite(water) && water >= 0.0f
 				&& std::isfinite(speed)
 				&& std::isfinite(sediment) && sediment >= 0.0f
 				&& std::isfinite(capacity) && capacity >= 0.0f
-				&& std::isfinite(saturation) && saturation >= 0.0f;
+				&& std::isfinite(saturation) && saturation >= 0.0f
+				&& std::isfinite(terrainHeight)
+				&& terrainHeight >= m_InitialHeight[index]
+					- m_Specification.MaximumErosionDepth - 1.0e-6f;
 			waterVolume += static_cast<double>(water) * cellArea;
 			sedimentMass += static_cast<double>(sediment) * cellArea;
+			terrainMass += static_cast<double>(terrainHeight)
+				* m_Specification.TerrainDensity * cellArea;
 			minimumWater = std::min(minimumWater, water);
 			maximumWater = std::max(maximumWater, water);
 			maximumSpeed = std::max(maximumSpeed, speed);
@@ -346,6 +430,8 @@ namespace gl {
 			maximumCapacity = std::max(maximumCapacity, capacity);
 			minimumSaturation = std::min(minimumSaturation, saturation);
 			maximumSaturation = std::max(maximumSaturation, saturation);
+			minimumTerrainHeight = std::min(minimumTerrainHeight, terrainHeight);
+			maximumTerrainHeight = std::max(maximumTerrainHeight, terrainHeight);
 		}
 		m_Statistics.WaterVolume = waterVolume;
 		m_Statistics.MassError = waterVolume
@@ -358,6 +444,11 @@ namespace gl {
 		m_Statistics.SedimentMassError = sedimentMass
 			+ m_Statistics.SedimentBoundaryLoss
 			- m_Statistics.InitialSedimentMass;
+		m_Statistics.TerrainMass = terrainMass;
+		m_Statistics.TerrainSedimentMassError = terrainMass + sedimentMass
+			+ m_Statistics.SedimentBoundaryLoss
+			- m_Statistics.InitialTerrainMass
+			- m_Statistics.InitialSedimentMass;
 		m_Statistics.MinimumSediment = m_State.Sediment.empty()
 			? 0.0f : minimumSediment;
 		m_Statistics.MaximumSediment = maximumSediment;
@@ -367,6 +458,10 @@ namespace gl {
 		m_Statistics.MinimumSedimentSaturation = m_State.Sediment.empty()
 			? 0.0f : minimumSaturation;
 		m_Statistics.MaximumSedimentSaturation = maximumSaturation;
+		m_Statistics.MinimumTerrainHeight = m_State.Height.empty()
+			? 0.0f : minimumTerrainHeight;
+		m_Statistics.MaximumTerrainHeight = m_State.Height.empty()
+			? 0.0f : maximumTerrainHeight;
 		m_Statistics.Finite = finite;
 		m_Statistics.Accumulator = m_Accumulator;
 	}

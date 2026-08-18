@@ -1,0 +1,60 @@
+#version 450 core
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(r32f, binding = 0) uniform readonly image2D u_InitialHeight;
+layout(r32f, binding = 1) uniform readonly image2D u_Height;
+layout(r32f, binding = 2) uniform readonly image2D u_Sediment;
+layout(r32f, binding = 3) uniform readonly image2D u_Capacity;
+layout(r32f, binding = 4) uniform writeonly image2D u_NextHeight;
+layout(r32f, binding = 5) uniform writeonly image2D u_NextSediment;
+
+uniform float u_DeltaTime;
+uniform float u_HeightScale;
+uniform float u_ErosionRate;
+uniform float u_DepositionRate;
+uniform float u_TerrainDensity;
+uniform float u_MaximumErosionDepth;
+uniform float u_MaximumHeightChange;
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 dimensions = imageSize(u_Height);
+	if (any(greaterThanEqual(cell, dimensions)))
+		return;
+
+	float heightScale = max(abs(u_HeightScale), 1.0e-6);
+	float terrainDensity = max(u_TerrainDensity, 1.0e-6);
+	float initialHeight = imageLoad(u_InitialHeight, cell).r * heightScale;
+	float height = imageLoad(u_Height, cell).r * heightScale;
+	float sediment = max(imageLoad(u_Sediment, cell).r, 0.0);
+	float capacity = max(imageLoad(u_Capacity, cell).r, 0.0);
+	float maximumTransfer = max(u_MaximumHeightChange, 0.0)
+		* terrainDensity;
+
+	if (capacity > sediment && u_ErosionRate > 0.0)
+	{
+		float erosionFloor = initialHeight - max(u_MaximumErosionDepth, 0.0);
+		float availableTerrain = max(height - erosionFloor, 0.0)
+			* terrainDensity;
+		float transfer = min(
+			(capacity - sediment) * u_ErosionRate * max(u_DeltaTime, 0.0),
+			min(maximumTransfer, availableTerrain));
+		height -= transfer / terrainDensity;
+		sediment += transfer;
+	}
+	else if (sediment > capacity && u_DepositionRate > 0.0)
+	{
+		float transfer = min(
+			(sediment - capacity) * u_DepositionRate * max(u_DeltaTime, 0.0),
+			min(maximumTransfer, sediment));
+		height += transfer / terrainDensity;
+		sediment -= transfer;
+	}
+
+	imageStore(u_NextHeight, cell,
+		vec4(height / heightScale, 0.0, 0.0, 0.0));
+	imageStore(u_NextSediment, cell,
+		vec4(max(sediment, 0.0), 0.0, 0.0, 0.0));
+}

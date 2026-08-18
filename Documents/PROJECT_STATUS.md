@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P13C 运行时侵蚀与沉积
-- 主线状态：待开始（P13B 的泥沙输运、携沙能力与饱和度契约已完成）
+- 主线状态：进行中（CPU 局部侵蚀/沉积质量交换已完成；待迁移 GPU Pass 与场景诊断）
 
 ## 使用与更新规则
 
@@ -59,7 +59,7 @@
 
 **依赖**：P13B 泥沙输运、Capacity/Saturation 派生场稳定，已满足。
 
-**状态**：待开始。
+**状态**：进行中。
 
 **目标**
 
@@ -79,6 +79,19 @@
 - 先在 CPU 参考模型加入只发生局部 Height/Sediment 交换、暂不改变输运顺序的源项；
 - 明确地形高度到单位面积质量的换算、侵蚀下界和总质量统计，再迁移到独立 GPU Erosion/Deposition Pass；
 - 保留 P13B 的 Capacity/Saturation 为只读输入，不在同一 Dispatch 中同时推导容量和写回地形。
+
+**阶段进展（2026-08-18）**
+
+- CPU `TerrainHydrologyRuntime` 已加入可选 Erosion/Deposition 源项；默认速率为 0，因此既有 P13B 模拟与旧场景不会静默改变；
+- Height 通过 `TerrainDensity` 换算为单位面积等效质量：欠饱和时按 `Capacity - Sediment` 从地形转入悬浮泥沙，过饱和时按 `Sediment - Capacity` 反向沉积；
+- 每格交换同时受 Erosion/Deposition Rate、`MaximumHeightChangePerStep`、剩余 `MaximumErosionDepth` 和可用 Sediment 限制；侵蚀下界始终相对初始化 Height 定义；
+- 统计新增 Terrain 等效质量、累计侵蚀/沉积量、Height 范围、单步最大 Height 变化及 Terrain+Sediment 组合质量误差；Reset 恢复 Height/Sediment 初态并清空累计预算；
+- 新增 5 项回归后共 114 项无窗口断言全部 PASS，覆盖欠饱和侵蚀、过饱和沉积、单步限幅、可侵蚀下界、组合质量守恒、Reset 和帧划分确定性；VS2026 `Debug | x64` 编辑器已重新链接成功；
+- GPU `TerrainHydrologyGPU` 已拥有独立 `R32F` Height Ping-Pong；生成器 Height 只作为不可变初始快照和侵蚀下界，`ErosionDeposition.comp` 在 Capacity 之后同步写入新 Height/Sediment，再统一交换；
+- `TerrainRenderer` 的 Color/Shadow 路径已读取 Runtime Height。侵蚀率、沉积率、Terrain Density、最大侵蚀深度和单步 Height 上限均为纯运行时控制，默认速率为 0，不进入 Scene YAML，也没有隐式 Bake；
+- GTX 1050 / OpenGL 4.6 受控 GPU Contract PASS：100 个固定步后组合质量误差 `2.58287e-7`、侵蚀高度 `0.02`、沉积高度 `0.1`，两种帧划分的 Height/Sediment 最大差值均为 `0`，Reset 恢复检查通过；
+- 2026-08-18 再次执行 `Verify-Windows.ps1 -SkipGenerate`：VS2026 `Debug | x64` 增量构建成功，114 项无窗口断言全部 PASS，构建产物保留；
+- 下一步：从 Runtime Height 刷新 Normal/Slope、Analysis 与 MaterialWeight 派生图，完成可见形变的人工烟雾测试；之后明确显式 Bake 入口或继续保持纯临时状态，再收口 P13C。
 
 ## 后续任务
 

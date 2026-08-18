@@ -874,6 +874,91 @@ namespace {
 			== std::vector<float>({ 0.0f, 1.0f, 0.0f }),
 			"transport-only sediment does not modify terrain height");
 
+		gl::TerrainHydrologySpecification erosionSpecification;
+		erosionSpecification.Width = 2;
+		erosionSpecification.Height = 1;
+		erosionSpecification.CellSize = 1.0f;
+		erosionSpecification.FixedTimeStep = 0.01f;
+		erosionSpecification.MaxSubsteps = 4;
+		erosionSpecification.FluxDamping = 0.0f;
+		erosionSpecification.SedimentCapacityScale = 100.0f;
+		erosionSpecification.ErosionRate = 10.0f;
+		erosionSpecification.DepositionRate = 0.0f;
+		erosionSpecification.TerrainDensity = 2.0f;
+		erosionSpecification.MaximumErosionDepth = 0.005f;
+		erosionSpecification.MaximumHeightChangePerStep = 0.002f;
+		gl::TerrainHydrologyRuntime erosionRuntime(
+			erosionSpecification, { 1.0f, 0.0f });
+		erosionRuntime.SetWaterDepth({ 1.0f, 0.0f });
+		context.Check(erosionRuntime.SingleStep()
+			&& erosionRuntime.GetState().Height[0] < 1.0f
+			&& erosionRuntime.GetState().Sediment[0] > 0.0f
+			&& erosionRuntime.GetStatistics().CumulativeErodedMass > 0.0
+			&& erosionRuntime.GetStatistics().MaximumAbsoluteHeightChangePerStep
+				<= erosionSpecification.MaximumHeightChangePerStep + 1.0e-6f,
+			"undersaturated moving water erodes terrain within the per-step limit");
+		for (uint32_t step = 0; step < 20; ++step)
+			erosionRuntime.SingleStep();
+		context.Check(erosionRuntime.GetState().Height[0]
+				>= 1.0f - erosionSpecification.MaximumErosionDepth - 1.0e-6f
+			&& std::abs(
+				erosionRuntime.GetStatistics().TerrainSedimentMassError) < 1.0e-5,
+			"runtime erosion respects the erodible floor and combined mass budget");
+		erosionRuntime.Reset();
+		context.Check(Near(erosionRuntime.GetState().Height[0], 1.0f)
+			&& Near(erosionRuntime.GetState().Sediment[0], 0.0f)
+			&& Near(static_cast<float>(
+				erosionRuntime.GetStatistics().CumulativeErodedMass), 0.0f),
+			"hydrology reset restores pre-erosion terrain and sediment");
+
+		gl::TerrainHydrologySpecification depositionSpecification;
+		depositionSpecification.Width = 1;
+		depositionSpecification.Height = 1;
+		depositionSpecification.CellSize = 1.0f;
+		depositionSpecification.FixedTimeStep = 0.01f;
+		depositionSpecification.ErosionRate = 0.0f;
+		depositionSpecification.DepositionRate = 10.0f;
+		depositionSpecification.TerrainDensity = 2.0f;
+		depositionSpecification.MaximumHeightChangePerStep = 0.002f;
+		gl::TerrainHydrologyRuntime depositionRuntime(
+			depositionSpecification, { 0.0f });
+		depositionRuntime.SetWaterDepth({ 1.0f });
+		depositionRuntime.SetSedimentDensity({ 1.0f });
+		context.Check(depositionRuntime.SingleStep()
+			&& depositionRuntime.GetState().Height[0] > 0.0f
+			&& depositionRuntime.GetState().Sediment[0] < 1.0f
+			&& depositionRuntime.GetStatistics().CumulativeDepositedMass > 0.0
+			&& std::abs(
+				depositionRuntime.GetStatistics().TerrainSedimentMassError) < 1.0e-5,
+			"oversaturated water deposits sediment within the combined mass budget");
+
+		gl::TerrainHydrologyRuntime erosionLargeFrames(
+			erosionSpecification, { 1.0f, 0.0f });
+		gl::TerrainHydrologyRuntime erosionSmallFrames(
+			erosionSpecification, { 1.0f, 0.0f });
+		erosionLargeFrames.SetWaterDepth({ 1.0f, 0.0f });
+		erosionSmallFrames.SetWaterDepth({ 1.0f, 0.0f });
+		erosionLargeFrames.Play();
+		erosionSmallFrames.Play();
+		for (uint32_t frame = 0; frame < 25; ++frame)
+			erosionLargeFrames.Advance(0.04f);
+		for (uint32_t frame = 0; frame < 100; ++frame)
+			erosionSmallFrames.Advance(0.01f);
+		bool erosionPartitionIndependent =
+			erosionLargeFrames.GetStatistics().StepCount
+				== erosionSmallFrames.GetStatistics().StepCount;
+		for (size_t index = 0;
+			index < erosionLargeFrames.GetState().Height.size(); ++index)
+		{
+			erosionPartitionIndependent &= Near(
+				erosionLargeFrames.GetState().Height[index],
+				erosionSmallFrames.GetState().Height[index], 1.0e-6f)
+				&& Near(erosionLargeFrames.GetState().Sediment[index],
+					erosionSmallFrames.GetState().Sediment[index], 1.0e-6f);
+		}
+		context.Check(erosionPartitionIndependent,
+			"runtime erosion and deposition are independent of frame partitioning");
+
 		gl::TerrainHydrologySpecification catchUpSpecification = specification;
 		catchUpSpecification.MaxSubsteps = 2;
 		gl::TerrainHydrologyRuntime catchUpRuntime(

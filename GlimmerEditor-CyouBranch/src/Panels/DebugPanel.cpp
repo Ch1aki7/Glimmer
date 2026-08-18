@@ -189,6 +189,40 @@ namespace gl {
 					TerrainRenderer::SetHydrologySedimentCapacityScale(
 						capacityScale);
 				}
+				float erosionRate = TerrainRenderer::GetHydrologyErosionRate();
+				if (ImGui::DragFloat("Erosion Rate##Hydrology", &erosionRate,
+					0.01f, 0.0f, 1000.0f, "%.3f /s"))
+					TerrainRenderer::SetHydrologyErosionRate(erosionRate);
+				float depositionRate =
+					TerrainRenderer::GetHydrologyDepositionRate();
+				if (ImGui::DragFloat(
+					"Deposition Rate##Hydrology", &depositionRate,
+					0.01f, 0.0f, 1000.0f, "%.3f /s"))
+				{
+					TerrainRenderer::SetHydrologyDepositionRate(
+						depositionRate);
+				}
+				float terrainDensity =
+					TerrainRenderer::GetHydrologyTerrainDensity();
+				if (ImGui::DragFloat("Terrain Density##Hydrology",
+					&terrainDensity, 0.01f, 0.000001f, 1000000.0f, "%.3f"))
+					TerrainRenderer::SetHydrologyTerrainDensity(terrainDensity);
+				float maximumErosionDepth =
+					TerrainRenderer::GetHydrologyMaximumErosionDepth();
+				if (ImGui::DragFloat("Max Erosion Depth##Hydrology",
+					&maximumErosionDepth, 0.01f, 0.0f, 10000.0f, "%.3f"))
+				{
+					TerrainRenderer::SetHydrologyMaximumErosionDepth(
+						maximumErosionDepth);
+				}
+				float maximumHeightChange =
+					TerrainRenderer::GetHydrologyMaximumHeightChange();
+				if (ImGui::DragFloat("Max Height Step##Hydrology",
+					&maximumHeightChange, 0.0001f, 0.0f, 1000.0f, "%.5f"))
+				{
+					TerrainRenderer::SetHydrologyMaximumHeightChange(
+						maximumHeightChange);
+				}
 				ImGui::SameLine();
 				if (ImGui::Button("Apply Seed##Hydrology"))
 					TerrainRenderer::RequestHydrologySedimentSeed();
@@ -225,6 +259,14 @@ namespace gl {
 					ImGui::Text("Saturation Min/Max: %.6f / %.6f",
 						hydrologyStatistics.MinimumSedimentSaturation,
 						hydrologyStatistics.MaximumSedimentSaturation);
+					ImGui::Text("Terrain Height Min/Max: %.6f / %.6f",
+						hydrologyStatistics.MinimumTerrainHeight,
+						hydrologyStatistics.MaximumTerrainHeight);
+					ImGui::Text("Net Eroded / Deposited: %.6f / %.6f",
+						hydrologyStatistics.ErodedMass,
+						hydrologyStatistics.DepositedMass);
+					ImGui::Text("Terrain + Sediment Error: %.3e",
+						hydrologyStatistics.TerrainSedimentMassError);
 					ImGui::TextColored(
 						hydrologyStatistics.Finite
 							? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
@@ -261,6 +303,16 @@ namespace gl {
 					ImGui::Text("Capacity / Saturation Delta: %.3e / %.3e",
 						hydrologyValidation.MaximumCapacityPartitionDifference,
 						hydrologyValidation.MaximumSaturationPartitionDifference);
+					ImGui::Text("Erosion Mass Error: %.3e",
+						hydrologyValidation.RelativeTerrainSedimentMassError);
+					ImGui::Text("Eroded / Deposited Height: %.6f / %.6f",
+						hydrologyValidation.ErodedHeight,
+						hydrologyValidation.DepositedHeight);
+					ImGui::Text("Erosion Height / Sediment Delta: %.3e / %.3e",
+						hydrologyValidation.MaximumErosionHeightPartitionDifference,
+						hydrologyValidation.MaximumErosionSedimentPartitionDifference);
+					ImGui::Text("Erosion Reset: %s",
+						hydrologyValidation.ErosionResetValid ? "PASS" : "FAIL");
 				}
 				else
 					ImGui::TextDisabled("GPU contract validation not run");

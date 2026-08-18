@@ -13650,6 +13650,83 @@ Debug → Overview → Runtime Hydrology 新增 `Capacity Scale`，Visualization
 
 P13B 至此完成。下一阶段 P13C 会把 Capacity 与 Sediment 的差异作为侵蚀/沉积源项输入，并先在 CPU 参考模型定义 Height 与 Sediment 的质量交换、单步限幅和 Reset 契约。
 
+## CPU 运行时侵蚀与沉积质量契约
+
+P13C 第一阶段只扩展 CPU `TerrainHydrologyRuntime`，先验证地形与悬浮泥沙之间的质量交换，不立即修改 GPU Height Texture。侵蚀/沉积源项位于水与泥沙输运完成之后：
+
+```text
+Water / Sediment Transport 完成
+  → 计算 Capacity 与 Saturation
+  → 欠饱和：Height → Sediment
+  → 过饱和：Sediment → Height
+  → 重新计算 Capacity 与 Saturation
+```
+
+Height 本身是长度，Sediment 是单位地表面积上的悬浮质量，两者不能直接相加。因此新增 `TerrainDensity`，使用以下等效预算：
+
+```text
+TerrainMassPerArea = Height × TerrainDensity
+CombinedMass = Σ((Height × TerrainDensity + Sediment) × CellArea)
+```
+
+欠饱和时的候选侵蚀量由 `(Capacity - Sediment) × ErosionRate × dt` 决定；过饱和时的候选沉积量由 `(Sediment - Capacity) × DepositionRate × dt` 决定。实际交换还会经过以下限制：
+
+- 每个固定步的 Height 绝对变化不超过 `MaximumHeightChangePerStep`；
+- 侵蚀后的 Height 不低于“初始 Height - MaximumErosionDepth”；
+- 沉积量不超过当前格已有 Sediment；
+- 所有参数、Height 和 Sediment 必须保持有限，Sediment 不得为负。
+
+`ErosionRate` 和 `DepositionRate` 默认均为 0，意味着新增能力是显式启用的，不会改变旧场景和 P13B 的无源输运结果。Reset 会恢复初始化时的 Height、Water、Sediment，并清空累计 Eroded/Deposited Mass。
+
+统计新增 Initial/Current Terrain Mass、Cumulative Eroded/Deposited Mass、Terrain+Sediment Mass Error、Height Min/Max 和当前固定步最大 Height 变化。原有 `SedimentMassError` 仍只描述悬浮泥沙相对初态的变化；启用侵蚀后它可以非零，应使用组合误差判断局部质量交换是否守恒。
+
+验证结果：
+
+- 欠饱和流动会降低 Height 并增加 Sediment；
+- 过饱和静水会减少 Sediment 并抬高 Height；
+- 高侵蚀率仍受单步变化和可侵蚀层下界约束；
+- Reset 完整恢复侵蚀前状态；
+- 两种帧划分执行相同固定步数后 Height/Sediment 一致；
+- 新增 5 项后共 114 项无窗口断言全部 PASS，VS2026 `Debug | x64` 编辑器已重新链接成功，构建产物保留。
+
+CPU 契约现已迁移到 GPU；下节说明编辑器中的运行时 Height 链路和验证方式。
+
+## GPU 运行时侵蚀与沉积
+
+P13C 的 GPU 阶段把地形 Height 从只读生成结果改为 `TerrainHydrologyGPU` 独占的运行时 Ping-Pong。生成器 Height 仍是不可变初始快照和侵蚀下界；模拟不会把结果写回生成器，也不会污染有限次 Authoring Erosion。
+
+固定步执行顺序为：
+
+```text
+Flux → Water/Velocity + Sediment Transport
+     → Capacity/Saturation
+     → ErosionDeposition（同时写 Next Height 与 Next Sediment）
+     → Barrier → 统一交换 Height/Sediment
+     → 重算 Capacity/Saturation
+```
+
+`ErosionDeposition.comp` 不在同一纹理上原地读写。它读取 Initial Height、Current Height、Sediment 和 Capacity，同时输出 Next Height 与 Next Sediment；全局 Barrier 完成后才交换两组状态，因此 Color/Shadow 绕过不了同一份已完成的 Runtime Height，也不会观察到只更新一半的质量交换。
+
+Debug 面板新增以下纯运行时参数：
+
+- `Erosion Rate`、`Deposition Rate`：控制容量缺口或超额在每秒转换的比例，默认均为 0；
+- `Terrain Density`：把 Height 长度换算为单位面积等效质量；
+- `Max Erosion Depth`：相对初始化 Height 的最大可侵蚀层；
+- `Max Height Step`：每个固定步允许的最大 Height 绝对变化。
+
+启用水文后提高侵蚀/沉积速率，并使用 `Single Step` 或 `Play` 推进即可观察地形高度变化；`Readback` 可检查 Height Min/Max、Net Eroded/Deposited Mass 和 Terrain+Sediment Combined Error。这里的 Eroded/Deposited 是相对初始 Height 的净变化，不是跨帧累计吞吐量。`Reset` 会用初始化时缓存的数据恢复两张 Runtime Height，并清空 Water、Flux、Velocity、Sediment 与诊断场。
+
+当前持久化边界保持保守：Runtime Height 不进入 Scene YAML，复制 Terrain 不携带模拟纹理，也没有自动 Bake。生成器版本变化会重建整个水文状态。初始化时为建立可恢复快照会同步读回一次生成器 Height，普通帧和 Reset 不再读回；只有显式 `Readback` 才同步获取 GPU 统计。
+
+验证结果：
+
+- GTX 1050 / OpenGL 4.6 上五个水文 Compute Shader 与 Terrain Shader 编译成功；
+- 受控 GPU Contract 执行 100 个固定步：组合质量误差 `2.58287e-7`、侵蚀高度 `0.02`、沉积高度 `0.1`；
+- `0.04 × 25` 与 `0.01 × 100` 两种帧划分的 Height/Sediment 最大差值均为 `0`，Reset 恢复检查通过；
+- `Verify-Windows.ps1 -SkipGenerate` 增量构建成功，114 项无窗口断言全部 PASS，构建产物保留。
+
+尚需注意：运行时几何与阴影已读取 Runtime Height，但 Normal/Slope、Analysis 和 MaterialWeight 仍由生成器 Height 派生。下一步需要从 Runtime Height 刷新这些派生图，避免长时间侵蚀后几何与光照/材质分层失配；完成该视觉烟雾测试后再决定提供显式 Bake，或继续把结果限定为临时模拟状态。
+
 ## KB
 
 ### 为什么不用动态库？

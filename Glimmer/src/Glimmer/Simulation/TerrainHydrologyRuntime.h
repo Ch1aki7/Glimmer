@@ -18,6 +18,11 @@ namespace gl {
 		float FluxDamping = 0.995f;
 		float RainfallRate = 0.0f;
 		float SedimentCapacityScale = 1.0f;
+		float ErosionRate = 0.0f;
+		float DepositionRate = 0.0f;
+		float TerrainDensity = 1.0f;
+		float MaximumErosionDepth = 1.0f;
+		float MaximumHeightChangePerStep = 0.01f;
 	};
 
 	struct TerrainHydrologyStatistics
@@ -37,12 +42,20 @@ namespace gl {
 		double SedimentMass = 0.0;
 		double SedimentBoundaryLoss = 0.0;
 		double SedimentMassError = 0.0;
+		double InitialTerrainMass = 0.0;
+		double TerrainMass = 0.0;
+		double CumulativeErodedMass = 0.0;
+		double CumulativeDepositedMass = 0.0;
+		double TerrainSedimentMassError = 0.0;
 		float MinimumSediment = 0.0f;
 		float MaximumSediment = 0.0f;
 		float MinimumSedimentCapacity = 0.0f;
 		float MaximumSedimentCapacity = 0.0f;
 		float MinimumSedimentSaturation = 0.0f;
 		float MaximumSedimentSaturation = 0.0f;
+		float MinimumTerrainHeight = 0.0f;
+		float MaximumTerrainHeight = 0.0f;
+		float MaximumAbsoluteHeightChangePerStep = 0.0f;
 		bool Finite = true;
 	};
 
@@ -89,6 +102,7 @@ namespace gl {
 
 	private:
 		void Step(float deltaSeconds);
+		void ApplyErosionDeposition(float deltaSeconds);
 		void UpdateSedimentDiagnostics();
 		void UpdateStatistics();
 		size_t Index(uint32_t x, uint32_t y) const;
