@@ -809,6 +809,9 @@ namespace {
 			&& pausedRuntime.GetState().Sediment[0] > 0.0f
 			&& pausedRuntime.GetState().Sediment[2] > 0.0f,
 			"suspended sediment follows water flux toward downstream cells");
+		context.Check(pausedRuntime.GetStatistics().MaximumSedimentCapacity > 0.0f
+			&& pausedRuntime.GetStatistics().MaximumSedimentSaturation <= 1000.0f,
+			"sediment capacity and saturation are finite derived diagnostics");
 		const auto& singleStepStats = pausedRuntime.GetStatistics();
 		context.Check(singleStepStats.Finite
 			&& singleStepStats.MinimumWaterDepth >= 0.0f
@@ -821,6 +824,11 @@ namespace {
 			&& Near(pausedRuntime.GetState().Sediment[1], 1.0f)
 			&& Near(pausedRuntime.GetState().Sediment[0], 0.0f),
 			"hydrology reset restores initial water and sediment snapshots");
+		pausedRuntime.SetSedimentCapacityScale(0.0f);
+		context.Check(Near(
+			pausedRuntime.GetStatistics().MaximumSedimentCapacity, 0.0f)
+			&& Near(pausedRuntime.GetStatistics().MaximumSedimentSaturation, 1000.0f),
+			"zero capacity scale reports bounded oversaturation without changing mass");
 
 		gl::TerrainHydrologyRuntime largeFrames(
 			specification, { 0.0f, 1.0f, 0.0f });
@@ -848,7 +856,11 @@ namespace {
 				&& Near(largeFrames.GetState().Velocity[index],
 					smallFrames.GetState().Velocity[index])
 				&& Near(largeFrames.GetState().Sediment[index],
-					smallFrames.GetState().Sediment[index], 1.0e-6f);
+					smallFrames.GetState().Sediment[index], 1.0e-6f)
+				&& Near(largeFrames.GetState().SedimentCapacity[index],
+					smallFrames.GetState().SedimentCapacity[index], 1.0e-6f)
+				&& Near(largeFrames.GetState().SedimentSaturation[index],
+					smallFrames.GetState().SedimentSaturation[index], 1.0e-5f);
 		}
 		context.Check(partitionIndependent,
 			"fixed water and sediment results are independent of frame partitioning");

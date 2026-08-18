@@ -17,6 +17,7 @@ namespace gl {
 		float Gravity = 9.81f;
 		float FluxDamping = 0.995f;
 		float RainfallRate = 0.0f;
+		float SedimentCapacityScale = 1.0f;
 	};
 
 	struct TerrainHydrologyStatistics
@@ -38,6 +39,10 @@ namespace gl {
 		double SedimentMassError = 0.0;
 		float MinimumSediment = 0.0f;
 		float MaximumSediment = 0.0f;
+		float MinimumSedimentCapacity = 0.0f;
+		float MaximumSedimentCapacity = 0.0f;
+		float MinimumSedimentSaturation = 0.0f;
+		float MaximumSedimentSaturation = 0.0f;
 		bool Finite = true;
 	};
 
@@ -49,6 +54,9 @@ namespace gl {
 		std::vector<glm::vec2> Velocity;
 		// Suspended sediment mass per unit terrain area.
 		std::vector<float> Sediment;
+		// Derived diagnostics; neither field modifies Height or Sediment.
+		std::vector<float> SedimentCapacity;
+		std::vector<float> SedimentSaturation;
 	};
 
 	class TerrainHydrologyRuntime
@@ -66,6 +74,7 @@ namespace gl {
 		void Reset();
 		void SetWaterDepth(const std::vector<float>& waterDepth);
 		void SetSedimentDensity(const std::vector<float>& sedimentDensity);
+		void SetSedimentCapacityScale(float capacityScale);
 		void SetRainfallRate(float rainfallRate);
 
 		const TerrainHydrologySpecification& GetSpecification() const
@@ -80,6 +89,7 @@ namespace gl {
 
 	private:
 		void Step(float deltaSeconds);
+		void UpdateSedimentDiagnostics();
 		void UpdateStatistics();
 		size_t Index(uint32_t x, uint32_t y) const;
 

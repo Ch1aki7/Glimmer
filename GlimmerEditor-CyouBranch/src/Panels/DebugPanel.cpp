@@ -166,7 +166,8 @@ namespace gl {
 				int visualizationMode = static_cast<int>(
 					TerrainRenderer::GetHydrologyVisualizationMode());
 				const char* visualizationModes[] = {
-					"None", "Water Depth", "Suspended Sediment"
+					"None", "Water Depth", "Suspended Sediment",
+					"Sediment Capacity", "Sediment Saturation"
 				};
 				if (ImGui::Combo("Visualization##Hydrology", &visualizationMode,
 					visualizationModes, IM_ARRAYSIZE(visualizationModes)))
@@ -180,6 +181,14 @@ namespace gl {
 				if (ImGui::DragFloat("Sediment Seed##Hydrology", &sedimentSeed,
 					0.01f, 0.0f, 1000.0f, "%.3f mass/area"))
 					TerrainRenderer::SetHydrologySedimentSeedDensity(sedimentSeed);
+				float capacityScale =
+					TerrainRenderer::GetHydrologySedimentCapacityScale();
+				if (ImGui::DragFloat("Capacity Scale##Hydrology", &capacityScale,
+					0.01f, 0.0f, 1000.0f, "%.3f"))
+				{
+					TerrainRenderer::SetHydrologySedimentCapacityScale(
+						capacityScale);
+				}
 				ImGui::SameLine();
 				if (ImGui::Button("Apply Seed##Hydrology"))
 					TerrainRenderer::RequestHydrologySedimentSeed();
@@ -210,6 +219,12 @@ namespace gl {
 					ImGui::Text("Sediment Min/Max: %.6f / %.6f",
 						hydrologyStatistics.MinimumSediment,
 						hydrologyStatistics.MaximumSediment);
+					ImGui::Text("Capacity Min/Max: %.6f / %.6f",
+						hydrologyStatistics.MinimumSedimentCapacity,
+						hydrologyStatistics.MaximumSedimentCapacity);
+					ImGui::Text("Saturation Min/Max: %.6f / %.6f",
+						hydrologyStatistics.MinimumSedimentSaturation,
+						hydrologyStatistics.MaximumSedimentSaturation);
 					ImGui::TextColored(
 						hydrologyStatistics.Finite
 							? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
@@ -240,6 +255,12 @@ namespace gl {
 						hydrologyValidation.DownstreamSediment);
 					ImGui::Text("Sediment Partition Delta: %.3e",
 						hydrologyValidation.MaximumSedimentPartitionDifference);
+					ImGui::Text("Capacity / Saturation Max: %.6f / %.6f",
+						hydrologyValidation.MaximumSedimentCapacity,
+						hydrologyValidation.MaximumSedimentSaturation);
+					ImGui::Text("Capacity / Saturation Delta: %.3e / %.3e",
+						hydrologyValidation.MaximumCapacityPartitionDifference,
+						hydrologyValidation.MaximumSaturationPartitionDifference);
 				}
 				else
 					ImGui::TextDisabled("GPU contract validation not run");

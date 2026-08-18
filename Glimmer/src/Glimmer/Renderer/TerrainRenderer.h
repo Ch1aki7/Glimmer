@@ -19,7 +19,9 @@ namespace gl {
 		{
 			None = 0,
 			Water,
-			Sediment
+			Sediment,
+			SedimentCapacity,
+			SedimentSaturation
 		};
 
 		struct Statistics
@@ -63,6 +65,8 @@ namespace gl {
 		static void RequestHydrologyReset();
 		static void SetHydrologyRainfall(float rainfallRate);
 		static float GetHydrologyRainfall();
+		static void SetHydrologySedimentCapacityScale(float capacityScale);
+		static float GetHydrologySedimentCapacityScale();
 		static void SetHydrologyVisualizationMode(HydrologyVisualizationMode mode);
 		static HydrologyVisualizationMode GetHydrologyVisualizationMode();
 		static void SetHydrologySedimentSeedDensity(float sedimentDensity);

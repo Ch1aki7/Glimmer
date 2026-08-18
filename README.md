@@ -13614,7 +13614,41 @@ Terrain Shader 固定使用 slot 23/24/25 读取 Water、Velocity 和 Sediment�
 - VS2026 `Debug | x64` 编辑器增量构建成功，最终核心库重新链接后的 107 项无窗口回归全部 PASS；
 - 三个水文 Compute Shader 现已实际接入 `ReloadShadersIfChanged` 轮询，修改成功时事务式替换，失败时保留上一有效程序。
 
-当前仍没有携沙能力、侵蚀或沉积源项，因此 P13B 保持进行中。下一步先建立只读 Capacity/Saturation 诊断契约，P13C 才允许根据容量差异交换 Height 与 Sediment 质量。
+该阶段仍没有侵蚀或沉积源项。后续只读 Capacity/Saturation 诊断已经完成 P13B；只有 P13C 才允许根据容量差异交换 Height 与 Sediment 质量。
+
+## 泥沙携沙能力与饱和度诊断
+
+P13B 最后阶段为 CPU/GPU 水文状态增加两个只读派生场：
+
+```text
+Capacity = CapacityScale × WaterDepth × Speed
+Saturation = Sediment / Capacity
+```
+
+Capacity 表示当前水流每单位地表面积可承载的悬浮质量；Saturation 小于 1 表示欠饱和，接近 1 表示接近平衡，大于 1 表示过饱和。为了避免干格除零，Capacity 小于 `1e-6` 且仍有 Sediment 时使用上限 `1000` 表示强过饱和；没有 Sediment 时为 0。这个上限只是稳定的诊断编码，不是侵蚀率。
+
+CPU `TerrainHydrologyRuntime` 在 Water、Velocity、Sediment 完成固定步更新后重新计算两个数组，并将 Min/Max 与有限性纳入统计。改变 Capacity Scale 会立即重算派生场，但不会改变 Water、Sediment 或 Height。
+
+GPU 使用独立 `SedimentCapacity.comp`，在 Water/Velocity/Sediment 完成 Swap 后读取最终状态，写入单缓冲 `R32F` Capacity 与 Saturation。派生结果没有下一步历史依赖，因此不使用 Ping-Pong；它们也不会写回 Height 或参与 P13B 的泥沙质量预算。四个水文 Compute Shader 均进入原有事务式热重载轮询。
+
+Terrain Shader 的诊断纹理槽位现为：
+
+- 23：Water Depth；
+- 24：Water Velocity；
+- 25：Suspended Sediment；
+- 26：Sediment Capacity；
+- 27：Sediment Saturation。
+
+Debug → Overview → Runtime Hydrology 新增 `Capacity Scale`，Visualization 增加 `Sediment Capacity` 和 `Sediment Saturation`。容量模式使用绿青色强调高承载区域；饱和度模式以蓝色表示欠饱和、浅色表示接近平衡、红色表示过饱和。点击 `Validate / Readback` 可查看 Capacity/Saturation Min/Max，`Run GPU Contract` 同时检查其有限性和帧划分确定性。
+
+验证结果：
+
+- 109 项无窗口断言全部 PASS，包括 CPU 派生场有限/有界、零 Capacity Scale 和两种帧划分一致性；
+- VS2026 `Debug | x64` 编辑器增量构建成功；
+- GTX 1050 / OpenGL 4.6 上四个 Compute Shader 和 Terrain Shader 编译成功；
+- GPU Contract PASS：水量相对误差 `7.38228e-7`、泥沙质量误差 `0`、`capacityMax=0.0411786`、`saturationMax=1000`，Water、Sediment、Capacity、Saturation 的帧划分最大差值均为 `0`。
+
+P13B 至此完成。下一阶段 P13C 会把 Capacity 与 Sediment 的差异作为侵蚀/沉积源项输入，并先在 CPU 参考模型定义 Height 与 Sediment 的质量交换、单步限幅和 Reset 契约。
 
 ## KB
 

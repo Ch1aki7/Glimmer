@@ -124,6 +124,8 @@ uniform int u_TerrainLODLevel;
 uniform sampler2D u_WaterDepthMap;
 uniform sampler2D u_WaterVelocityMap;
 uniform sampler2D u_SedimentMap;
+uniform sampler2D u_SedimentCapacityMap;
+uniform sampler2D u_SedimentSaturationMap;
 uniform int u_HasHydrology;
 uniform int u_HydrologyVisualization;
 uniform sampler2D u_ShadowMaps[4];
@@ -487,6 +489,29 @@ void main()
 		vec3 sedimentColor = mix(vec3(0.16, 0.055, 0.018),
 			vec3(0.85, 0.34, 0.06), clamp(sediment * 0.25, 0.0, 1.0));
 		result = mix(result, sedimentColor, sedimentWeight);
+	}
+	else if (u_HydrologyVisualization == 3 && u_HasHydrology != 0)
+	{
+		float capacity = max(
+			texture(u_SedimentCapacityMap, v_TerrainUV).r, 0.0);
+		float capacityWeight = clamp(capacity * 4.0, 0.0, 0.88);
+		vec3 capacityColor = mix(vec3(0.08, 0.22, 0.08),
+			vec3(0.15, 1.0, 0.75), clamp(capacity * 0.5, 0.0, 1.0));
+		result = mix(result, capacityColor, capacityWeight);
+	}
+	else if (u_HydrologyVisualization == 4 && u_HasHydrology != 0)
+	{
+		float saturation = max(
+			texture(u_SedimentSaturationMap, v_TerrainUV).r, 0.0);
+		vec3 underSaturated = vec3(0.05, 0.25, 1.0);
+		vec3 equilibrium = vec3(0.95, 0.95, 0.85);
+		vec3 overSaturated = vec3(1.0, 0.08, 0.03);
+		vec3 saturationColor = saturation <= 1.0
+			? mix(underSaturated, equilibrium, saturation)
+			: mix(equilibrium, overSaturated,
+				clamp(log2(saturation) * 0.25, 0.0, 1.0));
+		float saturationWeight = saturation > 0.0 ? 0.82 : 0.0;
+		result = mix(result, saturationColor, saturationWeight);
 	}
 	o_Color = vec4(max(result, vec3(0.0)), 1.0);
 	o_EntityID = v_EntityID;
