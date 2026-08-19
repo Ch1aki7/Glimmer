@@ -38,6 +38,8 @@ namespace gl {
 		double AtmosphericWaterVolume = 0.0;
 		double SurfaceWaterVolume = 0.0;
 		double RainfallVolume = 0.0;
+		double EvaporationVolume = 0.0;
+		double WaterSourceVolume = 0.0;
 		float MinimumTemperature = 0.0f;
 		float MaximumTemperature = 0.0f;
 		float MinimumAtmosphericMoisture = 0.0f;
@@ -70,7 +72,8 @@ namespace gl {
 		TerrainClimateGPU(uint32_t width, uint32_t height,
 			std::filesystem::path sourceShaderPath,
 			std::filesystem::path advectionShaderPath,
-			std::filesystem::path responseShaderPath);
+			std::filesystem::path responseShaderPath,
+			std::filesystem::path waterSourceShaderPath);
 
 		uint32_t Advance(float frameDeltaSeconds,
 			const Ref<Texture2D>& heightMap,
@@ -87,7 +90,8 @@ namespace gl {
 		static TerrainClimateGPUValidationResult ValidateContract(
 			const std::filesystem::path& sourceShaderPath,
 			const std::filesystem::path& advectionShaderPath,
-			const std::filesystem::path& responseShaderPath);
+			const std::filesystem::path& responseShaderPath,
+			const std::filesystem::path& waterSourceShaderPath);
 
 		const Ref<Texture2D>& GetTemperatureTexture() const
 		{
@@ -100,6 +104,14 @@ namespace gl {
 		const Ref<Texture2D>& GetRainfallTexture() const
 		{
 			return m_Rainfall;
+		}
+		const Ref<Texture2D>& GetEvaporationTexture() const
+		{
+			return m_Evaporation;
+		}
+		const Ref<Texture2D>& GetWaterSourceTexture() const
+		{
+			return m_WaterSource;
 		}
 		const Ref<Texture2D>& GetVegetationPotentialTexture() const
 		{
@@ -123,10 +135,13 @@ namespace gl {
 		SimulationGrid m_AtmosphericMoisture;
 		SimulationGrid m_VegetationPotential;
 		Ref<Texture2D> m_Rainfall;
+		Ref<Texture2D> m_Evaporation;
+		Ref<Texture2D> m_WaterSource;
 		Ref<Texture2D> m_ZeroSurfaceWater;
 		Ref<ComputeShader> m_SourceShader;
 		Ref<ComputeShader> m_AdvectionShader;
 		Ref<ComputeShader> m_ResponseShader;
+		Ref<ComputeShader> m_WaterSourceShader;
 		TerrainClimateGPUSettings m_Settings;
 		TerrainClimateGPUStatistics m_Statistics;
 		double m_Accumulator = 0.0;

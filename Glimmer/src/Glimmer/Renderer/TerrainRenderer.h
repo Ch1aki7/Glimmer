@@ -3,6 +3,7 @@
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 #include "Glimmer/Simulation/TerrainClimateGPU.h"
+#include "Glimmer/Simulation/TerrainEnvironmentGPU.h"
 
 namespace gl {
 	class TerrainRenderer
@@ -111,6 +112,7 @@ namespace gl {
 		static TerrainClimateGPUStatistics GetClimateStatistics();
 		static void RequestClimateContractValidation();
 		static TerrainClimateGPUValidationResult GetClimateValidationResult();
+		static TerrainEnvironmentGPUStatistics GetEnvironmentStatistics();
 		static Statistics GetStatistics();
 		static bool IntersectsCameraFrustum(
 			const glm::vec3& boundsMin,

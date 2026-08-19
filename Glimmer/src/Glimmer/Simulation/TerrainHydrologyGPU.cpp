@@ -53,6 +53,8 @@ namespace gl {
 		  m_Flux(MakeGrid(width, height, TextureFormat::RGBA16F)),
 		  m_Velocity(MakeGrid(width, height, TextureFormat::RGBA16F)),
 		  m_Sediment(MakeGrid(width, height, TextureFormat::R32F)),
+		  m_WaterSourceBudget(MakeGrid(width, height, TextureFormat::R32F)),
+		  m_ZeroWaterSource(MakeDiagnosticTexture(width, height)),
 		  m_SedimentCapacity(MakeDiagnosticTexture(width, height)),
 		  m_SedimentSaturation(MakeDiagnosticTexture(width, height)),
 		  m_FluxShader(ComputeShader::Create(fluxShaderPath.string())),
@@ -65,7 +67,8 @@ namespace gl {
 	}
 
 	uint32_t TerrainHydrologyGPU::Advance(float frameDeltaSeconds,
-		const Ref<Texture2D>& heightMap, float heightScale, float worldSize)
+		const Ref<Texture2D>& heightMap, float heightScale, float worldSize,
+		const Ref<Texture2D>& waterSource)
 	{
 		if (!std::isfinite(frameDeltaSeconds) || frameDeltaSeconds <= 0.0f)
 			return 0;
@@ -76,7 +79,7 @@ namespace gl {
 		while (m_Accumulator + std::numeric_limits<double>::epsilon()
 			>= fixedTimeStep && steps < std::max(m_Settings.MaxSubsteps, 1u))
 		{
-			Step(heightMap, heightScale, worldSize);
+			Step(heightMap, heightScale, worldSize, waterSource);
 			m_Accumulator -= fixedTimeStep;
 			++steps;
 		}
@@ -92,9 +95,10 @@ namespace gl {
 	}
 
 	void TerrainHydrologyGPU::SingleStep(const Ref<Texture2D>& heightMap,
-		float heightScale, float worldSize)
+		float heightScale, float worldSize,
+		const Ref<Texture2D>& waterSource)
 	{
-		Step(heightMap, heightScale, worldSize);
+		Step(heightMap, heightScale, worldSize, waterSource);
 	}
 
 	void TerrainHydrologyGPU::Reset()
@@ -114,6 +118,8 @@ namespace gl {
 		m_Flux.Clear();
 		m_Velocity.Clear();
 		m_Sediment.Clear();
+		m_WaterSourceBudget.Clear();
+		m_ZeroWaterSource->Clear(glm::vec4(0.0f));
 		m_SedimentCapacity->Clear(glm::vec4(0.0f));
 		m_SedimentSaturation->Clear(glm::vec4(0.0f));
 		m_Accumulator = 0.0;
@@ -215,6 +221,7 @@ namespace gl {
 		std::vector<float> capacity(cellCount);
 		std::vector<float> saturation(cellCount);
 		std::vector<float> terrainHeight(cellCount);
+		std::vector<float> waterSourceBudget(cellCount);
 		m_Water.ReadTexture()->GetImageData(
 			water.data(), static_cast<uint32_t>(water.size() * sizeof(float)));
 		m_Velocity.ReadTexture()->GetImageData(velocity.data(),
@@ -227,11 +234,15 @@ namespace gl {
 			static_cast<uint32_t>(saturation.size() * sizeof(float)));
 		m_Height.ReadTexture()->GetImageData(terrainHeight.data(),
 			static_cast<uint32_t>(terrainHeight.size() * sizeof(float)));
+		m_WaterSourceBudget.ReadTexture()->GetImageData(
+			waterSourceBudget.data(), static_cast<uint32_t>(
+				waterSourceBudget.size() * sizeof(float)));
 
 		const double cellSize = static_cast<double>(std::max(worldSize, 0.0001f))
 			/ std::max(specification.Width - 1u, 1u);
 		const double cellArea = cellSize * cellSize;
 		double volume = 0.0;
+		double appliedSourceVolume = 0.0;
 		double sedimentMass = 0.0;
 		double initialTerrainMass = 0.0;
 		double terrainMass = 0.0;
@@ -272,6 +283,9 @@ namespace gl {
 				&& currentHeight >= initialHeight
 					- m_Settings.MaximumErosionDepth - 1.0e-5f;
 			volume += static_cast<double>(depth) * cellArea;
+			finite &= std::isfinite(waterSourceBudget[index]);
+			appliedSourceVolume += static_cast<double>(
+				waterSourceBudget[index]) * cellArea;
 			sedimentMass += static_cast<double>(sedimentDensity) * cellArea;
 			initialTerrainMass += static_cast<double>(initialHeight)
 				* terrainDensity * cellArea;
@@ -295,6 +309,7 @@ namespace gl {
 			minimumTerrainHeight = std::min(minimumTerrainHeight, currentHeight);
 			maximumTerrainHeight = std::max(maximumTerrainHeight, currentHeight);
 		}
+		m_Statistics.ExpectedWaterVolume = appliedSourceVolume;
 		m_Statistics.WaterVolume = volume;
 		m_Statistics.MassError = volume - m_Statistics.ExpectedWaterVolume;
 		m_Statistics.MinimumWaterDepth = cellCount ? minimumWater : 0.0f;
@@ -553,6 +568,37 @@ namespace gl {
 			&& erosionSmallStatistics.StepCount == 100
 			&& result.MaximumErosionHeightPartitionDifference <= 5.0e-4f
 			&& result.MaximumErosionSedimentPartitionDifference <= 5.0e-4f;
+
+		const Ref<Texture2D> waterSource = Texture2D::Create(heightSpecification);
+		TerrainHydrologyGPU sourceSinkHydrology(
+			3, 1, fluxShaderPath, updateShaderPath,
+			sedimentShaderPath, capacityShaderPath, erosionShaderPath);
+		sourceSinkHydrology.SetInitialHeightMap(heightMap, 1.0f, 2.0f);
+		auto& sourceSinkSettings = sourceSinkHydrology.GetSettings();
+		sourceSinkSettings.FixedTimeStep = 1.0f;
+		sourceSinkSettings.Gravity = 0.0f;
+		sourceSinkSettings.RainfallRate = 0.0f;
+		std::array<float, 3> sourceDepth = { 0.1f, 0.1f, 0.1f };
+		waterSource->SetData(sourceDepth.data(),
+			static_cast<uint32_t>(sizeof(sourceDepth)));
+		sourceSinkHydrology.SingleStep(heightMap, 1.0f, 2.0f, waterSource);
+		std::array<float, 3> sinkDepth = { -0.04f, -0.04f, -0.04f };
+		waterSource->SetData(sinkDepth.data(),
+			static_cast<uint32_t>(sizeof(sinkDepth)));
+		sourceSinkHydrology.SingleStep(heightMap, 1.0f, 2.0f, waterSource);
+		sourceSinkHydrology.ReadbackStatistics(2.0f, 1.0f);
+		std::array<float, 3> sourceSinkWater{};
+		sourceSinkHydrology.GetWaterTexture()->GetImageData(
+			sourceSinkWater.data(),
+			static_cast<uint32_t>(sizeof(sourceSinkWater)));
+		result.SourceSinkFinalDepth = sourceSinkWater[0];
+		result.SourceSinkMassError =
+			sourceSinkHydrology.GetStatistics().MassError;
+		result.WaterSourceSinkValid =
+			sourceSinkHydrology.GetStatistics().Finite
+			&& std::all_of(sourceSinkWater.begin(), sourceSinkWater.end(),
+				[](float value) { return std::abs(value - 0.06f) <= 1.0e-5f; })
+			&& std::abs(result.SourceSinkMassError) <= 1.0e-5;
 		result.Passed = result.Finite && result.MassConserved
 			&& result.BasinAccumulation
 			&& result.FramePartitionIndependent
@@ -563,7 +609,8 @@ namespace gl {
 			&& result.SedimentCapacityFramePartitionIndependent
 			&& result.ErosionDepositionValid
 			&& result.ErosionDepositionFramePartitionIndependent
-			&& result.ErosionResetValid;
+			&& result.ErosionResetValid
+			&& result.WaterSourceSinkValid;
 
 		std::ostringstream message;
 		message << (result.Passed ? "PASS" : "FAIL")
@@ -591,13 +638,16 @@ namespace gl {
 			<< result.MaximumErosionHeightPartitionDifference
 			<< ", erosionSedimentPartitionDelta="
 			<< result.MaximumErosionSedimentPartitionDifference
-			<< ", erosionReset=" << result.ErosionResetValid;
+			<< ", erosionReset=" << result.ErosionResetValid
+			<< ", sourceSinkDepth=" << result.SourceSinkFinalDepth
+			<< ", sourceSinkMassError=" << result.SourceSinkMassError;
 		result.Message = message.str();
 		return result;
 	}
 
 	void TerrainHydrologyGPU::Step(const Ref<Texture2D>& heightMap,
-		float heightScale, float worldSize)
+		float heightScale, float worldSize,
+		const Ref<Texture2D>& waterSource)
 	{
 		if (!heightMap || heightMap->GetFormat() != TextureFormat::R32F
 			|| !m_InitialHeightTexture || m_InitialHeightData.empty())
@@ -605,6 +655,7 @@ namespace gl {
 		const float deltaSeconds = std::max(m_Settings.FixedTimeStep, 1.0e-6f);
 		const float cellSize = std::max(worldSize, 0.0001f)
 			/ std::max(m_Height.GetSpecification().Width - 1u, 1u);
+		const Ref<Texture2D>& source = ResolveWaterSource(waterSource);
 
 		m_FluxShader->Bind();
 		m_FluxShader->UploadUniformFloat("u_DeltaTime", deltaSeconds);
@@ -624,6 +675,8 @@ namespace gl {
 			ImageAccess::Read, ImageFormat::RGBA16F);
 		m_FluxShader->BindImageTexture(3, m_Flux.WriteTexture()->GetRendererID(), 0,
 			ImageAccess::Write, ImageFormat::RGBA16F);
+		m_FluxShader->BindImageTexture(4, source->GetRendererID(), 0,
+			ImageAccess::Read, ImageFormat::R32F);
 		Dispatch(m_FluxShader);
 		ComputeShader::Barrier();
 		m_Flux.Swap();
@@ -641,6 +694,14 @@ namespace gl {
 			ImageAccess::Write, ImageFormat::R32F);
 		m_UpdateShader->BindImageTexture(3, m_Velocity.WriteTexture()->GetRendererID(), 0,
 			ImageAccess::Write, ImageFormat::RGBA16F);
+		m_UpdateShader->BindImageTexture(4, source->GetRendererID(), 0,
+			ImageAccess::Read, ImageFormat::R32F);
+		m_UpdateShader->BindImageTexture(5,
+			m_WaterSourceBudget.ReadTexture()->GetRendererID(), 0,
+			ImageAccess::Read, ImageFormat::R32F);
+		m_UpdateShader->BindImageTexture(6,
+			m_WaterSourceBudget.WriteTexture()->GetRendererID(), 0,
+			ImageAccess::Write, ImageFormat::R32F);
 		Dispatch(m_UpdateShader);
 		ComputeShader::Barrier();
 
@@ -661,24 +722,33 @@ namespace gl {
 		m_SedimentShader->BindImageTexture(3,
 			m_Sediment.WriteTexture()->GetRendererID(), 0,
 			ImageAccess::Write, ImageFormat::R32F);
+		m_SedimentShader->BindImageTexture(4, source->GetRendererID(), 0,
+			ImageAccess::Read, ImageFormat::R32F);
 		Dispatch(m_SedimentShader);
 		ComputeShader::Barrier();
 
 		m_Water.Swap();
 		m_Velocity.Swap();
 		m_Sediment.Swap();
+		m_WaterSourceBudget.Swap();
 		UpdateSedimentDiagnostics();
 		ApplyErosionDeposition(deltaSeconds, heightScale);
 		UpdateSedimentDiagnostics();
 
 		++m_Statistics.StepCount;
 		m_Statistics.SimulatedTime += deltaSeconds;
-		const double cellArea = static_cast<double>(cellSize) * cellSize;
-		m_Statistics.ExpectedWaterVolume +=
-			static_cast<double>(std::max(m_Settings.RainfallRate, 0.0f))
-			* deltaSeconds * cellArea * m_Water.GetSpecification().Width
-			* m_Water.GetSpecification().Height;
 		m_Statistics.ReadbackAvailable = false;
+	}
+
+	const Ref<Texture2D>& TerrainHydrologyGPU::ResolveWaterSource(
+		const Ref<Texture2D>& waterSource) const
+	{
+		const auto& specification = m_Water.GetSpecification();
+		if (waterSource && waterSource->GetFormat() == TextureFormat::R32F
+			&& waterSource->GetWidth() == specification.Width
+			&& waterSource->GetHeight() == specification.Height)
+			return waterSource;
+		return m_ZeroWaterSource;
 	}
 
 	void TerrainHydrologyGPU::ApplyErosionDeposition(

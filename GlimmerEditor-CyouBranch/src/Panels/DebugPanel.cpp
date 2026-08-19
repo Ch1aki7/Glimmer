@@ -50,6 +50,8 @@ namespace gl {
 			TerrainRenderer::GetClimateStatistics();
 		const TerrainClimateGPUValidationResult climateValidation =
 			TerrainRenderer::GetClimateValidationResult();
+		const TerrainEnvironmentGPUStatistics environmentStatistics =
+			TerrainRenderer::GetEnvironmentStatistics();
 		m_InstancingLab.UpdateShadowBenchmark(shadowStatistics);
 		m_PBRMaterialLab.UpdateValidation(statistics);
 		m_TerrainSamplingBenchmark.Update(terrainStatistics);
@@ -317,6 +319,9 @@ namespace gl {
 						hydrologyValidation.MaximumErosionSedimentPartitionDifference);
 					ImGui::Text("Erosion Reset: %s",
 						hydrologyValidation.ErosionResetValid ? "PASS" : "FAIL");
+					ImGui::Text("Source/Sink Depth / Error: %.6f / %.3e",
+						hydrologyValidation.SourceSinkFinalDepth,
+						hydrologyValidation.SourceSinkMassError);
 				}
 				else
 					ImGui::TextDisabled("GPU contract validation not run");
@@ -373,6 +378,14 @@ namespace gl {
 					climateStatistics.DroppedTime);
 				if (climateStatistics.ReadbackAvailable)
 				{
+					if (environmentStatistics.ReadbackAvailable)
+					{
+						ImGui::Text("Total Water / Expected: %.6f / %.6f",
+							environmentStatistics.TotalWaterVolume,
+							environmentStatistics.ExpectedTotalWaterVolume);
+						ImGui::Text("Coupled Water Error: %.3e",
+							environmentStatistics.MassError);
+					}
 					ImGui::Text("Temperature Min/Max: %.3f / %.3f C",
 						climateStatistics.MinimumTemperature,
 						climateStatistics.MaximumTemperature);
@@ -382,6 +395,9 @@ namespace gl {
 					ImGui::Text("Rainfall Volume / Max: %.6f / %.6f",
 						climateStatistics.RainfallVolume,
 						climateStatistics.MaximumRainfall);
+					ImGui::Text("Evaporation / Net Surface Source: %.6f / %.6f",
+						climateStatistics.EvaporationVolume,
+						climateStatistics.WaterSourceVolume);
 					ImGui::Text("Vegetation Min/Max: %.3f / %.3f",
 						climateStatistics.MinimumVegetationPotential,
 						climateStatistics.MaximumVegetationPotential);

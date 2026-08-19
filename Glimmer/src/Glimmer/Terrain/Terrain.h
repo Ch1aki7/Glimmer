@@ -6,6 +6,7 @@
 #include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
 #include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 #include "Glimmer/Simulation/TerrainClimateGPU.h"
+#include "Glimmer/Simulation/TerrainEnvironmentGPU.h"
 
 #include <array>
 
@@ -16,6 +17,7 @@ namespace gl {
 		Scope<TerrainHydrologyRuntime> Hydrology;
 		Scope<TerrainHydrologyGPU> GPUHydrology;
 		Scope<TerrainClimateGPU> GPUClimate;
+		Scope<TerrainEnvironmentGPU> GPUEnvironment;
 		uint64_t HydrologyResetRequest = 0;
 		uint64_t HydrologySingleStepRequest = 0;
 		uint64_t HydrologySedimentSeedRequest = 0;

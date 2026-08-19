@@ -6,6 +6,7 @@ layout(r32f, binding = 0) readonly uniform image2D u_PreviousWater;
 layout(rgba16f, binding = 1) readonly uniform image2D u_Flux;
 layout(r32f, binding = 2) readonly uniform image2D u_PreviousSediment;
 layout(r32f, binding = 3) writeonly uniform image2D u_NextSediment;
+layout(r32f, binding = 4) readonly uniform image2D u_WaterSource;
 
 uniform float u_DeltaTime;
 uniform float u_CellSize;
@@ -16,8 +17,11 @@ vec4 SedimentFluxAt(ivec2 cell)
 	float cellArea = u_CellSize * u_CellSize;
 	float sedimentMass = max(imageLoad(u_PreviousSediment, cell).r, 0.0)
 		* cellArea;
-	float availableWaterVolume = (max(imageLoad(u_PreviousWater, cell).r, 0.0)
-		+ max(u_RainfallRate, 0.0) * u_DeltaTime) * cellArea;
+	float previousWater = max(imageLoad(u_PreviousWater, cell).r, 0.0);
+	float requestedSource = max(u_RainfallRate, 0.0) * u_DeltaTime
+		+ imageLoad(u_WaterSource, cell).r;
+	float appliedSource = max(requestedSource, -previousWater);
+	float availableWaterVolume = (previousWater + appliedSource) * cellArea;
 	if (sedimentMass <= 0.0 || availableWaterVolume <= 1.0e-12)
 		return vec4(0.0);
 

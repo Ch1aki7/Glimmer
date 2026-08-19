@@ -1,0 +1,20 @@
+#version 450 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(r32f, binding = 0) readonly uniform image2D u_Rainfall;
+layout(r32f, binding = 1) readonly uniform image2D u_Evaporation;
+layout(r32f, binding = 2) writeonly uniform image2D u_WaterSource;
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_WaterSource);
+	if (any(greaterThanEqual(cell, size)))
+		return;
+
+	float rainfall = max(imageLoad(u_Rainfall, cell).r, 0.0);
+	float evaporation = max(imageLoad(u_Evaporation, cell).r, 0.0);
+	imageStore(u_WaterSource, cell,
+		vec4(rainfall - evaporation, 0.0, 0.0, 0.0));
+}

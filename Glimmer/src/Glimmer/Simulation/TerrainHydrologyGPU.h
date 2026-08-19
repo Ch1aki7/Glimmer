@@ -72,6 +72,7 @@ namespace gl {
 		bool ErosionDepositionValid = false;
 		bool ErosionDepositionFramePartitionIndependent = false;
 		bool ErosionResetValid = false;
+		bool WaterSourceSinkValid = false;
 		double RelativeMassError = 0.0;
 		double RelativeSedimentMassError = 0.0;
 		float BasinDepth = 0.0f;
@@ -89,6 +90,8 @@ namespace gl {
 		float DepositedHeight = 0.0f;
 		float MaximumErosionHeightPartitionDifference = 0.0f;
 		float MaximumErosionSedimentPartitionDifference = 0.0f;
+		float SourceSinkFinalDepth = 0.0f;
+		double SourceSinkMassError = 0.0;
 		std::string Message;
 	};
 
@@ -103,9 +106,11 @@ namespace gl {
 			std::filesystem::path erosionShaderPath);
 
 		uint32_t Advance(float frameDeltaSeconds,
-			const Ref<Texture2D>& heightMap, float heightScale, float worldSize);
+			const Ref<Texture2D>& heightMap, float heightScale, float worldSize,
+			const Ref<Texture2D>& waterSource = nullptr);
 		void SingleStep(const Ref<Texture2D>& heightMap,
-			float heightScale, float worldSize);
+			float heightScale, float worldSize,
+			const Ref<Texture2D>& waterSource = nullptr);
 		void Reset();
 		void SetInitialHeightMap(const Ref<Texture2D>& heightMap,
 			float heightScale, float worldSize);
@@ -155,7 +160,10 @@ namespace gl {
 
 	private:
 		void Step(const Ref<Texture2D>& heightMap,
-			float heightScale, float worldSize);
+			float heightScale, float worldSize,
+			const Ref<Texture2D>& waterSource);
+		const Ref<Texture2D>& ResolveWaterSource(
+			const Ref<Texture2D>& waterSource) const;
 		void UpdateSedimentDiagnostics();
 		void ApplyErosionDeposition(float deltaSeconds, float heightScale);
 		void Dispatch(const Ref<ComputeShader>& shader) const;
@@ -165,6 +173,8 @@ namespace gl {
 		SimulationGrid m_Flux;
 		SimulationGrid m_Velocity;
 		SimulationGrid m_Sediment;
+		SimulationGrid m_WaterSourceBudget;
+		Ref<Texture2D> m_ZeroWaterSource;
 		Ref<Texture2D> m_SedimentCapacity;
 		Ref<Texture2D> m_SedimentSaturation;
 		Ref<ComputeShader> m_FluxShader;

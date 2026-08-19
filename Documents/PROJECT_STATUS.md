@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P14 简化气候与植被闭环
-- 主线状态：进行中（CPU/GPU 气候场与诊断已完成，下一步建立 Rainfall → Hydrology Water 耦合）
+- 主线状态：进行中（CPU/GPU 气候场与守恒水文耦合已完成，下一步让气候场驱动 Terrain Material Weight）
 
 ## 使用与更新规则
 
@@ -59,7 +59,7 @@
 
 **依赖**：P13 已稳定，P8 能接收湿度/植被材质权重，已满足。
 
-**状态**：进行中。CPU 基线、GPU 场、Terrain Runtime 所有权、诊断和受控 GPU Contract 已完成；水文反馈与植被实例化尚未完成。
+**状态**：进行中。CPU 基线、GPU 场、Terrain Runtime 所有权、诊断、受控 GPU Contract 和水文守恒耦合已完成；材质反馈与植被实例化尚未完成。
 
 **目标**
 
@@ -88,11 +88,18 @@
 - DebugPanel 已提供 Play、Single Step、Reset、Wind、Initial Moisture、显式 Readback 和四种 Terrain 诊断着色；
 - GTX 1050 / OpenGL 4.6 受控 `3×1` GPU Contract PASS：下风向湿度 `1`、迎风坡/平地最大降雨 `0.2/0`、帧划分差值 `0`。
 
+**气候—水文耦合阶段已完成（2026-08-19）**
+
+- Climate 新增逐格 Evaporation 和有符号 `WaterSource = Rainfall - Evaporation` 两张 `R32F` 输出；Climate 不写 Water，Hydrology 仍是 Water Ping-Pong 的唯一写入者；
+- Hydrology 的 Flux、Update 与 Sediment Transport 统一消费空间 Source/Sink；负源项按当前可用水深限幅，Update 同步累计实际应用量，显式 Readback 由 GPU 预算场重建 Expected Water；
+- 新增 `TerrainEnvironmentGPU`，统一拥有固定步累加器，每个子步严格执行 Climate → Barrier → Hydrology；两个既有 Play/Single Step 入口都进入同一耦合时钟；
+- Debug Readback 同时给出 Atmospheric+Surface Total Water、Expected Total 与误差；GTX 1050 Source/Sink Contract 得到最终水深 `0.06`、预算误差 `0`，原水文相对质量误差保持 `9.83321e-7`。
+
 **下一步**
 
-- 为 P13 Hydrology 增加显式空间 Water Source/Sink 输入，统一接收 Climate Rainfall 和 Evaporation，禁止两个 Runtime 共同写 Water Texture；
-- 定义同一固定步中的 Climate/Hydrology 执行顺序和跨系统 Barrier，并扩展总水量预算 Contract；
-- 将 Humidity、Temperature 和 VegetationPotential 作为 Terrain Material Weight 的附加输入；完成耦合验证后再建设物种资产和植被实例化。
+- 将 Humidity、Temperature 和 VegetationPotential 作为 Terrain Material Weight 的附加输入，先定义原地貌权重与动态生态权重的组合契约；
+- 为动态材质权重补充确定性与归一化验证，避免气候步直接重复执行完整地形派生；
+- 完成材质反馈后再建设物种资产、分布规则和 GPU 植被实例化，不把单株测试实体永久写入默认场景。
 
 ## 后续任务
 

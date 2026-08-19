@@ -42,6 +42,7 @@
 #include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 #include "Glimmer/Simulation/TerrainClimateRuntime.h"
 #include "Glimmer/Simulation/TerrainClimateGPU.h"
+#include "Glimmer/Simulation/TerrainEnvironmentGPU.h"
 
 #include <imgui.h> // 方便在 Layer 里写 UI
 

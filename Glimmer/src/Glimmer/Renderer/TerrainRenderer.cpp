@@ -63,6 +63,7 @@ namespace gl {
 			uint64_t ClimateSingleStepRequest = 0;
 			TerrainClimateGPUStatistics ClimateStats;
 			TerrainClimateGPUValidationResult ClimateValidation;
+			TerrainEnvironmentGPUStatistics EnvironmentStats;
 			uint64_t FrameSerial = 0;
 			bool HydrologyFrameActive = false;
 		};
@@ -400,75 +401,6 @@ namespace gl {
 				hydrology.SetSedimentCapacityScale(
 					s_Data.HydrologySedimentCapacityScale);
 			}
-			if (s_Data.HydrologyFrameActive
-				&& runtime.HydrologyFrameSerial != s_Data.FrameSerial)
-			{
-				bool resetApplied = false;
-				bool hydrologyStepped = false;
-				if (runtime.HydrologyResetRequest != s_Data.HydrologyResetRequest)
-				{
-					hydrology.Reset();
-					resetApplied = true;
-					runtime.HydrologyResetRequest = s_Data.HydrologyResetRequest;
-				}
-				const float worldSize = static_cast<float>(
-					std::max(specification.MeshResolution, 1u));
-				if (runtime.HydrologySedimentSeedRequest
-					!= s_Data.HydrologySedimentSeedRequest)
-				{
-					hydrology.SetUniformSedimentDensity(
-						s_Data.HydrologySedimentSeedDensity, worldSize);
-					runtime.HydrologySedimentSeedRequest =
-						s_Data.HydrologySedimentSeedRequest;
-				}
-				if (runtime.HydrologySingleStepRequest
-					!= s_Data.HydrologySingleStepRequest)
-				{
-					hydrology.SingleStep(runtime.HeightMap,
-						specification.HeightScale, worldSize);
-					hydrologyStepped = true;
-					runtime.HydrologySingleStepRequest =
-						s_Data.HydrologySingleStepRequest;
-				}
-				if (s_Data.HydrologyPlaying)
-				{
-					const uint32_t executedSteps = hydrology.Advance(
-						s_Data.DeltaSeconds, runtime.HeightMap,
-						specification.HeightScale, worldSize);
-					if (executedSteps != 0)
-						hydrologyStepped = true;
-				}
-				runtime.HeightMap = hydrology.GetHeightTexture();
-				bool refreshDerivedMaps = resetApplied;
-				if (hydrologyStepped)
-				{
-					const auto& settings = hydrology.GetSettings();
-					if (settings.MaximumHeightChangePerStep > 0.0f)
-					{
-						if (settings.DepositionRate > 0.0f)
-							refreshDerivedMaps = true;
-						if (settings.ErosionRate > 0.0f
-							&& settings.MaximumErosionDepth > 0.0f)
-							refreshDerivedMaps = true;
-					}
-				}
-				if (refreshDerivedMaps)
-				{
-					runtime.Generator->DeriveMapsFromHeight(
-						runtime.HeightMap, specification.HeightScale, worldSize);
-					runtime.NormalSlopeMap =
-						runtime.Generator->GetNormalSlopeMap();
-					runtime.AnalysisMap = runtime.Generator->GetAnalysisMap();
-					runtime.MaterialWeightMap =
-						runtime.Generator->GetMaterialWeightMap();
-					++s_Data.Stats.RuntimeDerivedMapRefreshes;
-				}
-				if (s_Data.HydrologyReadbackRequested)
-					hydrology.ReadbackStatistics(
-						worldSize, specification.HeightScale);
-				s_Data.HydrologyStats = hydrology.GetStatistics();
-				runtime.HydrologyFrameSerial = s_Data.FrameSerial;
-			}
 			runtime.HeightMap = hydrology.GetHeightTexture();
 
 			const auto climateSourcePath =
@@ -477,12 +409,14 @@ namespace gl {
 				generationPath.parent_path() / "ClimateAdvection.comp";
 			const auto climateResponsePath =
 				generationPath.parent_path() / "ClimateResponse.comp";
+			const auto climateWaterSourcePath =
+				generationPath.parent_path() / "ClimateWaterSource.comp";
 			if (s_Data.ClimateValidationRequested)
 			{
 				s_Data.ClimateValidation =
 					TerrainClimateGPU::ValidateContract(
 						climateSourcePath, climateAdvectionPath,
-						climateResponsePath);
+						climateResponsePath, climateWaterSourcePath);
 				s_Data.ClimateValidationRequested = false;
 				if (s_Data.ClimateValidation.Passed)
 					GL_CORE_INFO("GPU climate contract validation {0}",
@@ -496,44 +430,96 @@ namespace gl {
 			{
 				runtime.GPUClimate = CreateScope<TerrainClimateGPU>(
 					runtime.HeightMap->GetWidth(), runtime.HeightMap->GetHeight(),
-					climateSourcePath, climateAdvectionPath, climateResponsePath);
+					climateSourcePath, climateAdvectionPath, climateResponsePath,
+					climateWaterSourcePath);
 				runtime.ClimateGenerationVersion = runtime.GenerationVersion;
+				runtime.GPUEnvironment.reset();
 			}
 			auto& climate = *runtime.GPUClimate;
 			climate.ReloadShadersIfChanged();
 			climate.GetSettings().WindVelocity = s_Data.ClimateWindVelocity;
 			climate.GetSettings().InitialAtmosphericMoisture =
 				s_Data.ClimateInitialMoisture;
+			const float worldSize = static_cast<float>(
+				std::max(specification.MeshResolution, 1u));
+			if (!runtime.GPUEnvironment)
+			{
+				runtime.GPUEnvironment = CreateScope<TerrainEnvironmentGPU>(
+					runtime.HeightMap->GetWidth(), runtime.HeightMap->GetHeight());
+				runtime.GPUEnvironment->Reset(climate, hydrology, worldSize);
+			}
 			if (s_Data.HydrologyFrameActive
 				&& runtime.ClimateFrameSerial != s_Data.FrameSerial)
 			{
-				const Ref<Texture2D> surfaceWater = runtime.GPUHydrology
-					? runtime.GPUHydrology->GetWaterTexture() : nullptr;
-				if (runtime.ClimateResetRequest != s_Data.ClimateResetRequest)
+				auto& environment = *runtime.GPUEnvironment;
+				bool resetApplied = false;
+				bool environmentStepped = false;
+				if (runtime.ClimateResetRequest != s_Data.ClimateResetRequest
+					|| runtime.HydrologyResetRequest != s_Data.HydrologyResetRequest)
 				{
-					climate.Reset();
+					environment.Reset(climate, hydrology, worldSize);
+					resetApplied = true;
 					runtime.ClimateResetRequest = s_Data.ClimateResetRequest;
+					runtime.HydrologyResetRequest = s_Data.HydrologyResetRequest;
 				}
-				const float worldSize = static_cast<float>(
-					std::max(specification.MeshResolution, 1u));
-				if (runtime.ClimateSingleStepRequest
-					!= s_Data.ClimateSingleStepRequest)
+				if (runtime.HydrologySedimentSeedRequest
+					!= s_Data.HydrologySedimentSeedRequest)
 				{
-					climate.SingleStep(runtime.HeightMap, surfaceWater,
+					hydrology.SetUniformSedimentDensity(
+						s_Data.HydrologySedimentSeedDensity, worldSize);
+					runtime.HydrologySedimentSeedRequest =
+						s_Data.HydrologySedimentSeedRequest;
+				}
+				if (runtime.ClimateSingleStepRequest != s_Data.ClimateSingleStepRequest
+					|| runtime.HydrologySingleStepRequest
+						!= s_Data.HydrologySingleStepRequest)
+				{
+					environment.SingleStep(climate, hydrology,
 						specification.HeightScale, worldSize);
+					environmentStepped = true;
 					runtime.ClimateSingleStepRequest =
 						s_Data.ClimateSingleStepRequest;
+					runtime.HydrologySingleStepRequest =
+						s_Data.HydrologySingleStepRequest;
 				}
-				if (s_Data.ClimatePlaying)
+				if (s_Data.ClimatePlaying || s_Data.HydrologyPlaying)
 				{
-					climate.Advance(s_Data.DeltaSeconds,
-						runtime.HeightMap, surfaceWater,
-						specification.HeightScale, worldSize);
+					environmentStepped = environment.Advance(
+						s_Data.DeltaSeconds, climate, hydrology,
+						specification.HeightScale, worldSize) != 0
+						|| environmentStepped;
 				}
-				if (s_Data.ClimateReadbackRequested)
-					climate.ReadbackStatistics(surfaceWater, worldSize);
+				runtime.HeightMap = hydrology.GetHeightTexture();
+				bool refreshDerivedMaps = resetApplied;
+				if (environmentStepped)
+				{
+					const auto& settings = hydrology.GetSettings();
+					refreshDerivedMaps = settings.MaximumHeightChangePerStep > 0.0f
+						&& (settings.DepositionRate > 0.0f
+							|| (settings.ErosionRate > 0.0f
+								&& settings.MaximumErosionDepth > 0.0f));
+				}
+				if (refreshDerivedMaps)
+				{
+					runtime.Generator->DeriveMapsFromHeight(runtime.HeightMap,
+						specification.HeightScale, worldSize);
+					runtime.NormalSlopeMap = runtime.Generator->GetNormalSlopeMap();
+					runtime.AnalysisMap = runtime.Generator->GetAnalysisMap();
+					runtime.MaterialWeightMap =
+						runtime.Generator->GetMaterialWeightMap();
+					++s_Data.Stats.RuntimeDerivedMapRefreshes;
+				}
+				if (s_Data.ClimateReadbackRequested
+					|| s_Data.HydrologyReadbackRequested)
+				{
+					environment.ReadbackStatistics(climate, hydrology,
+						worldSize, specification.HeightScale);
+				}
 				s_Data.ClimateStats = climate.GetStatistics();
+				s_Data.HydrologyStats = hydrology.GetStatistics();
+				s_Data.EnvironmentStats = environment.GetStatistics();
 				runtime.ClimateFrameSerial = s_Data.FrameSerial;
+				runtime.HydrologyFrameSerial = s_Data.FrameSerial;
 			}
 		}
 		return true;
@@ -1025,6 +1011,11 @@ namespace gl {
 	TerrainRenderer::GetClimateValidationResult()
 	{
 		return s_Data.ClimateValidation;
+	}
+
+	TerrainEnvironmentGPUStatistics TerrainRenderer::GetEnvironmentStatistics()
+	{
+		return s_Data.EnvironmentStats;
 	}
 
 	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()

@@ -8,6 +8,7 @@ layout(r32f, binding = 2) readonly uniform image2D u_PreviousTemperature;
 layout(r32f, binding = 3) readonly uniform image2D u_PreviousMoisture;
 layout(r32f, binding = 4) writeonly uniform image2D u_NextTemperature;
 layout(r32f, binding = 5) writeonly uniform image2D u_NextMoisture;
+layout(r32f, binding = 6) writeonly uniform image2D u_Evaporation;
 
 uniform float u_DeltaTime;
 uniform float u_HeightScale;
@@ -56,4 +57,6 @@ void main()
 		vec4(temperature, 0.0, 0.0, 0.0));
 	imageStore(u_NextMoisture, cell,
 		vec4(moisture + evaporation, 0.0, 0.0, 0.0));
+	imageStore(u_Evaporation, cell,
+		vec4(evaporation, 0.0, 0.0, 0.0));
 }

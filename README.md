@@ -13814,9 +13814,42 @@ Terrain Shader 使用 slot 28～31 读取四个气候场。若水文与气候诊
 - `GLIMMER_CLIMATE_VALIDATE=1` 实际执行 GPU Contract 并 PASS：Downwind Moisture `1`，Rising/Flat Rain `0.2/0`，Frame Partition Delta `0`；
 - 构建产物和中间文件保留，没有删除 `bin`。
 
-当前耦合边界仍是单向读取：Evaporation 不会从 P13 Water 扣除，Rainfall 也尚未加入 P13 Water，因此不能把 GPU 统计解释为完整水循环守恒。下一步会给 Hydrology 增加明确的二维 Source/Sink 输入，由 Hydrology 成为 Water Ping-Pong 的唯一写入者，再扩展跨系统总水量 Contract。
+气候与水文的双向守恒耦合已经落地，具体执行顺序、所有权和验证方式见下一节。
 
 已导入的 Quaternius Ultimate Nature Pack 同时包含 OBJ、FBX 和 Blend。当前引擎可使用 OBJ/FBX；Blend 作为源文件保留。整包尚未自动写入 AssetRegistry，也没有被气候 Runtime 硬编码引用。植被实例化阶段应先从 CommonTree/Birch/Willow、Bush 和 Grass 中各选少量代表模型，再建立物种参数、LOD 和实例批次。
+
+## GPU 气候—水文守恒耦合
+
+本阶段没有让 Climate 和 Hydrology 同时修改 Water。`TerrainClimateGPU` 新增 Evaporation 与有符号 WaterSource 两张 `R32F` 输出，最后一个独立 Compute Pass 执行：
+
+```text
+WaterSource = Rainfall - Evaporation
+```
+
+Climate 只描述本步每个格点应增加或移除的水深。Hydrology 的 Flux、Water Update 和 Sediment Transport 读取同一 Source/Sink；负值最多移除当前可用水深，最终只有 HydrologyUpdate 写 Water。Update 同时把实际应用值累加到独立 WaterSourceBudget Ping-Pong，显式 Readback 因而能从 GPU 的真实限幅结果重建 Expected Water，而不是在 CPU 上假设请求量全部成功。
+
+`TerrainEnvironmentGPU` 负责统一调度。原 Hydrology 和 Climate 的 Play/Single Step 按钮仍保留，但都会进入同一个固定步累加器：
+
+```text
+ClimateSource → ClimateAdvection → ClimateResponse
+  → ClimateWaterSource → Barrier
+  → HydrologyFlux → HydrologyUpdate → Sediment/Erosion
+```
+
+这保证当前水面先参与蒸发和降雨计算，完整 WaterSource 对后续水流可见，并避免两个 Runtime 使用不同 Accumulator 时出现重复推进或少推进。任一 Reset 会共同恢复气候、水文和预算；Runtime 仍不序列化，也不会污染 TerrainComponent 或 Scene YAML。
+
+在 Debug → Overview 中点击 Hydrology 的 `Validate / Readback` 或 Climate 的 `Readback`，会同步更新两侧统计。Climate 区域额外显示 Atmospheric + Surface 的 Total Water、Expected Total 和 Coupled Water Error。Hydrology 的标量 Rainfall 仍作为明确的外部水源保留并计入 Expected Total；若只观察封闭自然水循环，可把它设为 `0`。
+
+验证结果：
+
+- VS2026 `Debug | x64` 全解决方案增量构建成功，114 项无窗口回归全部 PASS；
+- GTX 1050 / OpenGL 4.6 上新增 `ClimateWaterSource` 与修改后的三个水文 Shader 全部编译成功；
+- 原 GPU 水文 Contract 保持 PASS，相对水量误差 `9.83321e-7`；
+- 新增空间 Source/Sink Contract 先施加 `+0.10`、再施加 `-0.04`，最终水深 `0.06`，预算误差 `0`；
+- GPU 气候 Contract 保持 PASS：Downwind Moisture `1`、Rising/Flat Rain `0.2/0`、Frame Partition Delta `0`；
+- 构建产物和中间文件保留，没有删除 `bin`。
+
+下一阶段不直接创建植被实体，而是先把 Humidity、Temperature 与 VegetationPotential 接入 Terrain Material Weight，定义动态生态权重与既有 Height/Slope/Curvature 权重的组合和归一化规则。
 
 ## KB
 

@@ -6,6 +6,7 @@ layout(r32f, binding = 0) readonly uniform image2D u_Height;
 layout(r32f, binding = 1) readonly uniform image2D u_Water;
 layout(rgba16f, binding = 2) readonly uniform image2D u_PreviousFlux;
 layout(rgba16f, binding = 3) writeonly uniform image2D u_NextFlux;
+layout(r32f, binding = 4) readonly uniform image2D u_WaterSource;
 
 uniform float u_DeltaTime;
 uniform float u_CellSize;
@@ -14,11 +15,19 @@ uniform float u_Gravity;
 uniform float u_FluxDamping;
 uniform float u_RainfallRate;
 
+float AppliedSource(ivec2 cell)
+{
+	float previousWater = max(imageLoad(u_Water, cell).r, 0.0);
+	float requested = max(u_RainfallRate, 0.0) * u_DeltaTime
+		+ imageLoad(u_WaterSource, cell).r;
+	return max(requested, -previousWater);
+}
+
 float Surface(ivec2 cell)
 {
 	return imageLoad(u_Height, cell).r * u_HeightScale
 		+ imageLoad(u_Water, cell).r
-		+ max(u_RainfallRate, 0.0) * u_DeltaTime;
+		+ AppliedSource(cell);
 }
 
 void main()
@@ -50,8 +59,8 @@ void main()
 	if (outgoing > 0.0)
 	{
 		float cellArea = u_CellSize * u_CellSize;
-		float available = (imageLoad(u_Water, cell).r
-			+ max(u_RainfallRate, 0.0) * u_DeltaTime) * cellArea;
+		float available = (max(imageLoad(u_Water, cell).r, 0.0)
+			+ AppliedSource(cell)) * cellArea;
 		flux *= min(1.0, available / (outgoing * u_DeltaTime));
 	}
 	imageStore(u_NextFlux, cell, flux);

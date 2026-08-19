@@ -62,15 +62,20 @@ namespace gl {
 		uint32_t width, uint32_t height,
 		std::filesystem::path sourceShaderPath,
 		std::filesystem::path advectionShaderPath,
-		std::filesystem::path responseShaderPath)
+		std::filesystem::path responseShaderPath,
+		std::filesystem::path waterSourceShaderPath)
 		: m_Temperature(MakeClimateGrid(width, height)),
 		  m_AtmosphericMoisture(MakeClimateGrid(width, height)),
 		  m_VegetationPotential(MakeClimateGrid(width, height)),
 		  m_Rainfall(MakeClimateTexture(width, height)),
+		  m_Evaporation(MakeClimateTexture(width, height)),
+		  m_WaterSource(MakeClimateTexture(width, height)),
 		  m_ZeroSurfaceWater(MakeClimateTexture(width, height)),
 		  m_SourceShader(ComputeShader::Create(sourceShaderPath.string())),
 		  m_AdvectionShader(ComputeShader::Create(advectionShaderPath.string())),
-		  m_ResponseShader(ComputeShader::Create(responseShaderPath.string()))
+		  m_ResponseShader(ComputeShader::Create(responseShaderPath.string())),
+		  m_WaterSourceShader(
+			  ComputeShader::Create(waterSourceShaderPath.string()))
 	{
 		Reset();
 	}
@@ -125,6 +130,8 @@ namespace gl {
 			glm::vec4(initialMoisture, 0.0f, 0.0f, 0.0f));
 		m_VegetationPotential.Clear();
 		m_Rainfall->Clear(glm::vec4(0.0f));
+		m_Evaporation->Clear(glm::vec4(0.0f));
+		m_WaterSource->Clear(glm::vec4(0.0f));
 		m_ZeroSurfaceWater->Clear(glm::vec4(0.0f));
 		m_Accumulator = 0.0;
 		m_Statistics = {};
@@ -157,6 +164,8 @@ namespace gl {
 		std::vector<float> temperature(cellCount);
 		std::vector<float> moisture(cellCount);
 		std::vector<float> rainfall(cellCount);
+		std::vector<float> evaporation(cellCount);
+		std::vector<float> waterSource(cellCount);
 		std::vector<float> vegetation(cellCount);
 		std::vector<float> water(cellCount, 0.0f);
 		m_Temperature.ReadTexture()->GetImageData(
@@ -167,6 +176,10 @@ namespace gl {
 			static_cast<uint32_t>(moisture.size() * sizeof(float)));
 		m_Rainfall->GetImageData(rainfall.data(),
 			static_cast<uint32_t>(rainfall.size() * sizeof(float)));
+		m_Evaporation->GetImageData(evaporation.data(),
+			static_cast<uint32_t>(evaporation.size() * sizeof(float)));
+		m_WaterSource->GetImageData(waterSource.data(),
+			static_cast<uint32_t>(waterSource.size() * sizeof(float)));
 		m_VegetationPotential.ReadTexture()->GetImageData(
 			vegetation.data(),
 			static_cast<uint32_t>(vegetation.size() * sizeof(float)));
@@ -184,6 +197,10 @@ namespace gl {
 			std::accumulate(water.begin(), water.end(), 0.0) * cellArea;
 		m_Statistics.RainfallVolume =
 			std::accumulate(rainfall.begin(), rainfall.end(), 0.0) * cellArea;
+		m_Statistics.EvaporationVolume =
+			std::accumulate(evaporation.begin(), evaporation.end(), 0.0) * cellArea;
+		m_Statistics.WaterSourceVolume =
+			std::accumulate(waterSource.begin(), waterSource.end(), 0.0) * cellArea;
 		m_Statistics.MinimumTemperature =
 			*std::min_element(temperature.begin(), temperature.end());
 		m_Statistics.MaximumTemperature =
@@ -209,6 +226,12 @@ namespace gl {
 				[](float value) {
 					return std::isfinite(value) && value >= 0.0f;
 				})
+			&& std::all_of(evaporation.begin(), evaporation.end(),
+				[](float value) {
+					return std::isfinite(value) && value >= 0.0f;
+				})
+			&& std::all_of(waterSource.begin(), waterSource.end(),
+				[](float value) { return std::isfinite(value); })
 			&& std::all_of(vegetation.begin(), vegetation.end(),
 				[](float value) {
 					return std::isfinite(value)
@@ -224,15 +247,19 @@ namespace gl {
 			m_AdvectionShader->ReloadIfChanged();
 		const ShaderReloadResult response =
 			m_ResponseShader->ReloadIfChanged();
+		const ShaderReloadResult waterSource =
+			m_WaterSourceShader->ReloadIfChanged();
 		return (source.Attempted && source.Success)
 			|| (advection.Attempted && advection.Success)
-			|| (response.Attempted && response.Success);
+			|| (response.Attempted && response.Success)
+			|| (waterSource.Attempted && waterSource.Success);
 	}
 
 	TerrainClimateGPUValidationResult TerrainClimateGPU::ValidateContract(
 		const std::filesystem::path& sourceShaderPath,
 		const std::filesystem::path& advectionShaderPath,
-		const std::filesystem::path& responseShaderPath)
+		const std::filesystem::path& responseShaderPath,
+		const std::filesystem::path& waterSourceShaderPath)
 	{
 		TerrainClimateGPUValidationResult result;
 		result.Attempted = true;
@@ -255,7 +282,8 @@ namespace gl {
 		};
 
 		TerrainClimateGPU transport(3, 1,
-			sourceShaderPath, advectionShaderPath, responseShaderPath);
+			sourceShaderPath, advectionShaderPath, responseShaderPath,
+			waterSourceShaderPath);
 		configureTransport(transport);
 		transport.SetAtmosphericMoisture({ 1.0f, 0.0f, 0.0f });
 		transport.SingleStep(flatHeight, nullptr, 1.0f, 2.0f);
@@ -268,9 +296,11 @@ namespace gl {
 			&& transported[0] < transported[1];
 
 		TerrainClimateGPU rising(3, 1,
-			sourceShaderPath, advectionShaderPath, responseShaderPath);
+			sourceShaderPath, advectionShaderPath, responseShaderPath,
+			waterSourceShaderPath);
 		TerrainClimateGPU flat(3, 1,
-			sourceShaderPath, advectionShaderPath, responseShaderPath);
+			sourceShaderPath, advectionShaderPath, responseShaderPath,
+			waterSourceShaderPath);
 		configureTransport(rising);
 		configureTransport(flat);
 		rising.GetSettings().OrographicRainRate = 1.0f;
@@ -293,9 +323,11 @@ namespace gl {
 			result.RisingTerrainRainfall > result.FlatTerrainRainfall + 1.0e-6f;
 
 		TerrainClimateGPU largeFrames(3, 1,
-			sourceShaderPath, advectionShaderPath, responseShaderPath);
+			sourceShaderPath, advectionShaderPath, responseShaderPath,
+			waterSourceShaderPath);
 		TerrainClimateGPU smallFrames(3, 1,
-			sourceShaderPath, advectionShaderPath, responseShaderPath);
+			sourceShaderPath, advectionShaderPath, responseShaderPath,
+			waterSourceShaderPath);
 		configureTransport(largeFrames);
 		configureTransport(smallFrames);
 		largeFrames.GetSettings().FixedTimeStep = 0.25f;
@@ -401,6 +433,9 @@ namespace gl {
 		m_SourceShader->BindImageTexture(5,
 			m_AtmosphericMoisture.WriteTexture()->GetRendererID(), 0,
 			ImageAccess::Write, ImageFormat::R32F);
+		m_SourceShader->BindImageTexture(6,
+			m_Evaporation->GetRendererID(), 0,
+			ImageAccess::Write, ImageFormat::R32F);
 		Dispatch(m_SourceShader);
 		ComputeShader::Barrier();
 		m_Temperature.Swap();
@@ -478,6 +513,19 @@ namespace gl {
 		ComputeShader::Barrier();
 		m_AtmosphericMoisture.Swap();
 		m_VegetationPotential.Swap();
+
+		m_WaterSourceShader->Bind();
+		m_WaterSourceShader->BindImageTexture(0,
+			m_Rainfall->GetRendererID(), 0,
+			ImageAccess::Read, ImageFormat::R32F);
+		m_WaterSourceShader->BindImageTexture(1,
+			m_Evaporation->GetRendererID(), 0,
+			ImageAccess::Read, ImageFormat::R32F);
+		m_WaterSourceShader->BindImageTexture(2,
+			m_WaterSource->GetRendererID(), 0,
+			ImageAccess::Write, ImageFormat::R32F);
+		Dispatch(m_WaterSourceShader);
+		ComputeShader::Barrier();
 
 		++m_Statistics.StepCount;
 		m_Statistics.SimulatedTime += deltaSeconds;
