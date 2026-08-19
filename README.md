@@ -13838,6 +13838,8 @@ ClimateSource → ClimateAdvection → ClimateResponse
 
 这保证当前水面先参与蒸发和降雨计算，完整 WaterSource 对后续水流可见，并避免两个 Runtime 使用不同 Accumulator 时出现重复推进或少推进。任一 Reset 会共同恢复气候、水文和预算；Runtime 仍不序列化，也不会污染 TerrainComponent 或 Scene YAML。
 
+Temperature 诊断的高度梯度由 `Temperature Lapse` 控制，单位是摄氏度/世界单位，温差近似为 `Lapse × HeightScale`。默认 `0.0065` 接近常见大气递减率，但当 Terrain 的 HeightScale 只有几十时色差会很弱；可在 Debug → Runtime Climate 中先设为 `0.05～0.10`。该值实时影响后续温度松弛，不改变地形几何；若要立即观察完整梯度，可修改后执行 Reset 再 Play 若干步。
+
 在 Debug → Overview 中点击 Hydrology 的 `Validate / Readback` 或 Climate 的 `Readback`，会同步更新两侧统计。Climate 区域额外显示 Atmospheric + Surface 的 Total Water、Expected Total 和 Coupled Water Error。Hydrology 的标量 Rainfall 仍作为明确的外部水源保留并计入 Expected Total；若只观察封闭自然水循环，可把它设为 `0`。
 
 验证结果：

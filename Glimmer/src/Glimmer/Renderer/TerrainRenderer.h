@@ -106,6 +106,8 @@ namespace gl {
 		static glm::vec2 GetClimateWindVelocity();
 		static void SetClimateInitialMoisture(float moistureDepth);
 		static float GetClimateInitialMoisture();
+		static void SetClimateTemperatureLapseRate(float lapseRate);
+		static float GetClimateTemperatureLapseRate();
 		static void SetClimateVisualizationMode(ClimateVisualizationMode mode);
 		static ClimateVisualizationMode GetClimateVisualizationMode();
 		static void RequestClimateReadback();

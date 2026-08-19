@@ -351,6 +351,17 @@ namespace gl {
 				{
 					TerrainRenderer::SetClimateInitialMoisture(initialMoisture);
 				}
+				float temperatureLapseRate =
+					TerrainRenderer::GetClimateTemperatureLapseRate();
+				if (ImGui::DragFloat("Temperature Lapse##Climate",
+					&temperatureLapseRate, 0.001f, 0.0f, 1.0f,
+					"%.4f C/unit"))
+				{
+					TerrainRenderer::SetClimateTemperatureLapseRate(
+						temperatureLapseRate);
+				}
+				ImGui::TextDisabled(
+					"Small terrains: try 0.05 - 0.10 C/unit");
 				int climateVisualization = static_cast<int>(
 					TerrainRenderer::GetClimateVisualizationMode());
 				const char* climateVisualizationModes[] = {

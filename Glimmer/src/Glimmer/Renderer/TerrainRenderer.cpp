@@ -59,6 +59,7 @@ namespace gl {
 			bool ClimateEnvironmentValidationChecked = false;
 			glm::vec2 ClimateWindVelocity = { 1.0f, 0.0f };
 			float ClimateInitialMoisture = 0.01f;
+			float ClimateTemperatureLapseRate = 0.0065f;
 			uint64_t ClimateResetRequest = 0;
 			uint64_t ClimateSingleStepRequest = 0;
 			TerrainClimateGPUStatistics ClimateStats;
@@ -440,6 +441,8 @@ namespace gl {
 			climate.GetSettings().WindVelocity = s_Data.ClimateWindVelocity;
 			climate.GetSettings().InitialAtmosphericMoisture =
 				s_Data.ClimateInitialMoisture;
+			climate.GetSettings().TemperatureLapseRate =
+				s_Data.ClimateTemperatureLapseRate;
 			const float worldSize = static_cast<float>(
 				std::max(specification.MeshResolution, 1u));
 			if (!runtime.GPUEnvironment)
@@ -978,6 +981,17 @@ namespace gl {
 	float TerrainRenderer::GetClimateInitialMoisture()
 	{
 		return s_Data.ClimateInitialMoisture;
+	}
+
+	void TerrainRenderer::SetClimateTemperatureLapseRate(float lapseRate)
+	{
+		s_Data.ClimateTemperatureLapseRate = std::isfinite(lapseRate)
+			? std::clamp(lapseRate, 0.0f, 1.0f) : 0.0065f;
+	}
+
+	float TerrainRenderer::GetClimateTemperatureLapseRate()
+	{
+		return s_Data.ClimateTemperatureLapseRate;
 	}
 
 	void TerrainRenderer::SetClimateVisualizationMode(

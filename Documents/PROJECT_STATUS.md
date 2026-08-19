@@ -94,6 +94,7 @@
 - Hydrology 的 Flux、Update 与 Sediment Transport 统一消费空间 Source/Sink；负源项按当前可用水深限幅，Update 同步累计实际应用量，显式 Readback 由 GPU 预算场重建 Expected Water；
 - 新增 `TerrainEnvironmentGPU`，统一拥有固定步累加器，每个子步严格执行 Climate → Barrier → Hydrology；两个既有 Play/Single Step 入口都进入同一耦合时钟；
 - Debug Readback 同时给出 Atmospheric+Surface Total Water、Expected Total 与误差；GTX 1050 Source/Sink Contract 得到最终水深 `0.06`、预算误差 `0`，原水文相对质量误差保持 `9.83321e-7`。
+- Debug Climate 暴露 `Temperature Lapse`（摄氏度/世界单位）；默认保留物理近似值 `0.0065`，小尺度 Terrain 可提高到 `0.05～0.10` 放大可视温度梯度，不需要改变 Terrain 几何比例。
 
 **下一步**
 
