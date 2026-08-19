@@ -5,12 +5,12 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-18
+- 最近更新：2026-08-19
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P14 简化气候与植被闭环
-- 主线状态：待开始（P13A～P13C 水流、泥沙与运行时侵蚀闭环已完成）
+- 主线状态：进行中（CPU/GPU 气候场与诊断已完成，下一步建立 Rainfall → Hydrology Water 耦合）
 
 ## 使用与更新规则
 
@@ -59,7 +59,7 @@
 
 **依赖**：P13 已稳定，P8 能接收湿度/植被材质权重，已满足。
 
-**状态**：待开始。
+**状态**：进行中。CPU 基线、GPU 场、Terrain Runtime 所有权、诊断和受控 GPU Contract 已完成；水文反馈与植被实例化尚未完成。
 
 **目标**
 
@@ -73,11 +73,26 @@
 - 蒸发、水汽、降雨和地表水变化具有可解释统计；
 - 植被响应可复现，不把单株测试实体永久写入默认场景。
 
-**第一步**
+**已完成阶段（2026-08-19）**
 
-- 先定义 Temperature、Humidity、Rainfall 与 Vegetation Potential 的单位、范围、Ping-Pong 所有权和固定步顺序；
-- 建立纯 CPU 小网格参考模型，先验证风向输运、地形抬升和水量来源/去向，再迁移 GPU；
-- 复用 P13 Runtime Height、Water 和 MaterialWeight 边界，不把气候 Runtime 写入 Scene YAML。
+- 新增纯 CPU `TerrainClimateRuntime`，Temperature 使用摄氏度，AtmosphericMoisture、Rainfall 与 SurfaceWater 使用米水当量，VegetationPotential 固定在 `[0, 1]`；
+- 固定步顺序为温度松弛 → 蒸发 → 保守迎风湿度输运 → 饱和/地形抬升降雨 → 植被潜力响应，封闭边界下统计大气与地表总水量预算；
+- 无窗口回归覆盖暂停/单步、风向输运、水量守恒、蒸发转移、迎风坡降雨、植被响应、Reset 与帧划分确定性；
+- CPU Runtime 保持独立，不进入 Scene YAML，不创建单株植被实体，也不依赖具体模型资源。
+
+**GPU 场阶段已完成（2026-08-19）**
+
+- 新增 `TerrainClimateGPU`，由 `TerrainRuntime` 独占 Temperature、AtmosphericMoisture、VegetationPotential 三组 `R32F` Ping-Pong 和 Rainfall 派生纹理；
+- 三段 Compute 固定执行 Temperature/Evaporation → Conservative Upwind Advection → Condensation/Orographic Rain/Vegetation Response，每段 Barrier 后才交换所有权；
+- TerrainRenderer 按 GenerationVersion 重建气候 Runtime，并通过 FrameSerial 保证 Shadow 与九个 Chunk 的重复 Prepare 不会重复推进；
+- DebugPanel 已提供 Play、Single Step、Reset、Wind、Initial Moisture、显式 Readback 和四种 Terrain 诊断着色；
+- GTX 1050 / OpenGL 4.6 受控 `3×1` GPU Contract PASS：下风向湿度 `1`、迎风坡/平地最大降雨 `0.2/0`、帧划分差值 `0`。
+
+**下一步**
+
+- 为 P13 Hydrology 增加显式空间 Water Source/Sink 输入，统一接收 Climate Rainfall 和 Evaporation，禁止两个 Runtime 共同写 Water Texture；
+- 定义同一固定步中的 Climate/Hydrology 执行顺序和跨系统 Barrier，并扩展总水量预算 Contract；
+- 将 Humidity、Temperature 和 VegetationPotential 作为 Terrain Material Weight 的附加输入；完成耦合验证后再建设物种资产和植被实例化。
 
 ## 后续任务
 
@@ -455,7 +470,7 @@
 - Terrain 已完成固定 `3×3` Chunk、三档距离 LOD/迟滞/相邻约束/Skirt、Color/Shadow 剔除、四层 Triplanar PBR、固定步水文与 Runtime Erosion；运行时 Height 会刷新 Normal/Slope、Analysis 和 Material Weights。尚无显式 Bake，模拟结果关闭或重建后丢弃；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
-- P13 水文模拟已具备固定步调度、Runtime 所有权和质量统计；P14 气候/植被场仍需定义独立 Ping-Pong、单位、耦合顺序及长期预算；
+- P14 已完成 CPU/GPU 场、TerrainRuntime 所有权、固定步调度、四场诊断和 GPU 趋势 Contract；Rainfall/Evaporation 到 P13 Water 的守恒耦合、材质权重反馈和植被实例化仍未实现；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 
 ## 固定验证清单

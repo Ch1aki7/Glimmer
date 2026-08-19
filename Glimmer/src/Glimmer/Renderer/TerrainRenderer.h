@@ -2,6 +2,7 @@
 
 #include "Glimmer/Scene/Components.h"
 #include "Glimmer/Simulation/TerrainHydrologyGPU.h"
+#include "Glimmer/Simulation/TerrainClimateGPU.h"
 
 namespace gl {
 	class TerrainRenderer
@@ -22,6 +23,15 @@ namespace gl {
 			Sediment,
 			SedimentCapacity,
 			SedimentSaturation
+		};
+
+		enum class ClimateVisualizationMode : int
+		{
+			None = 0,
+			Temperature,
+			AtmosphericMoisture,
+			Rainfall,
+			VegetationPotential
 		};
 
 		struct Statistics
@@ -87,6 +97,20 @@ namespace gl {
 		static TerrainHydrologyGPUStatistics GetHydrologyStatistics();
 		static void RequestHydrologyContractValidation();
 		static TerrainHydrologyGPUValidationResult GetHydrologyValidationResult();
+		static void SetClimatePlaying(bool playing);
+		static bool IsClimatePlaying();
+		static void RequestClimateSingleStep();
+		static void RequestClimateReset();
+		static void SetClimateWindVelocity(const glm::vec2& velocity);
+		static glm::vec2 GetClimateWindVelocity();
+		static void SetClimateInitialMoisture(float moistureDepth);
+		static float GetClimateInitialMoisture();
+		static void SetClimateVisualizationMode(ClimateVisualizationMode mode);
+		static ClimateVisualizationMode GetClimateVisualizationMode();
+		static void RequestClimateReadback();
+		static TerrainClimateGPUStatistics GetClimateStatistics();
+		static void RequestClimateContractValidation();
+		static TerrainClimateGPUValidationResult GetClimateValidationResult();
 		static Statistics GetStatistics();
 		static bool IntersectsCameraFrustum(
 			const glm::vec3& boundsMin,

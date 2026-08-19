@@ -1,0 +1,59 @@
+#version 450 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(r32f, binding = 0) readonly uniform image2D u_Height;
+layout(r32f, binding = 1) readonly uniform image2D u_SurfaceWater;
+layout(r32f, binding = 2) readonly uniform image2D u_PreviousTemperature;
+layout(r32f, binding = 3) readonly uniform image2D u_PreviousMoisture;
+layout(r32f, binding = 4) writeonly uniform image2D u_NextTemperature;
+layout(r32f, binding = 5) writeonly uniform image2D u_NextMoisture;
+
+uniform float u_DeltaTime;
+uniform float u_HeightScale;
+uniform float u_SeaLevelTemperature;
+uniform float u_TemperatureLapseRate;
+uniform float u_TemperatureRelaxationRate;
+uniform float u_SaturationReferenceTemperature;
+uniform float u_SaturationMoistureDepth;
+uniform float u_SaturationTemperatureSensitivity;
+uniform float u_EvaporationRate;
+
+float SaturationMoisture(float temperature)
+{
+	float exponent = clamp(u_SaturationTemperatureSensitivity
+		* (temperature - u_SaturationReferenceTemperature), -20.0, 20.0);
+	return max(u_SaturationMoistureDepth, 0.0) * exp(exponent);
+}
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_Height);
+	if (any(greaterThanEqual(cell, size)))
+		return;
+
+	float terrainHeight = imageLoad(u_Height, cell).r * u_HeightScale;
+	float previousTemperature = imageLoad(u_PreviousTemperature, cell).r;
+	float targetTemperature = u_SeaLevelTemperature
+		- max(u_TemperatureLapseRate, 0.0) * terrainHeight;
+	float temperatureBlend = clamp(
+		max(u_TemperatureRelaxationRate, 0.0) * u_DeltaTime, 0.0, 1.0);
+	float temperature = mix(
+		previousTemperature, targetTemperature, temperatureBlend);
+
+	float moisture = max(imageLoad(u_PreviousMoisture, cell).r, 0.0);
+	float saturation = SaturationMoisture(temperature);
+	float relativeHumidity = saturation > 1.0e-8
+		? clamp(moisture / saturation, 0.0, 1.0) : 1.0;
+	float temperatureFactor = clamp((temperature + 5.0) / 25.0, 0.0, 2.0);
+	float surfaceWater = max(imageLoad(u_SurfaceWater, cell).r, 0.0);
+	float evaporation = min(surfaceWater,
+		max(u_EvaporationRate, 0.0) * temperatureFactor
+			* (1.0 - relativeHumidity) * u_DeltaTime);
+
+	imageStore(u_NextTemperature, cell,
+		vec4(temperature, 0.0, 0.0, 0.0));
+	imageStore(u_NextMoisture, cell,
+		vec4(moisture + evaporation, 0.0, 0.0, 0.0));
+}

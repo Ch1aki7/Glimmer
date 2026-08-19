@@ -13731,6 +13731,93 @@ Debug 面板新增以下纯运行时参数：
 
 P13C 至此收口。运行时模拟仍是临时状态：不写入 Scene YAML，也没有隐式 Bake；若后续需要保存侵蚀结果，应单独设计显式 Terrain Asset Bake、失败回滚和 Undo/Redo，而不是改变当前 Reset/复制语义。
 
+## CPU 简化气候与植被潜力基线
+
+P14 第一阶段新增核心侧 `TerrainClimateRuntime`，先用纯 CPU 小网格固定气候场的单位、更新顺序和预算，再迁移 Compute Shader。该类位于 `Glimmer/Simulation`，不依赖编辑器、OpenGL 或具体植被模型，也不进入 Scene YAML。
+
+场定义如下：
+
+- `TerrainHeight`：米；
+- `Temperature`：摄氏度；
+- `AtmosphericMoisture`：每个二维空气柱包含的米水当量；
+- `SurfaceWater` 与 `Rainfall`：米水深；
+- `VegetationPotential`：`[0, 1]` 的环境适生度，不代表树木数量或实体实例。
+
+使用统一水当量后，蒸发和降雨都是封闭系统内的显式转移：
+
+```text
+Temperature Relaxation
+  → SurfaceWater --Evaporation--> AtmosphericMoisture
+  → Conservative Upwind Moisture Advection
+  → AtmosphericMoisture --Condensation/Orographic Rain--> SurfaceWater
+  → Vegetation Potential Response
+```
+
+湿度输运按水平风向执行显式迎风通量，并按 CFL 比例限幅；封闭边界会保留原本越界的水汽，而不是悄悄丢失质量。饱和水汽随温度指数变化，超过饱和值的部分按凝结率降雨；同时使用 `dot(WindVelocity, TerrainGradient)` 估算迎风坡抬升，只在风沿坡向上时增加降雨。植被潜力由地表水适宜度和温度适宜度相乘，再按响应速率平滑靠近目标。
+
+`Play/Pause/SingleStep/Reset`、固定时间步、最大追赶子步和 Dropped Time 与 P13 水文调度保持同类语义。统计同时给出大气水量、地表水量、累计蒸发/降雨、总水量误差以及各场范围；蒸发和降雨累计值用于解释内部通量，不能作为系统质量增减重复计入预算。
+
+验证结果：
+
+- 新增 9 项无窗口断言，覆盖暂停与单步、风向输运、封闭水量守恒、蒸发转移、迎风坡降雨、植被响应、Reset 和帧划分确定性；
+- 重新运行 VS2026 Premake 生成，新增源文件已进入工程；
+- `Verify-Windows.ps1 -SkipGenerate` 完成 `Debug | x64` 全解决方案增量构建，123 项无窗口断言全部 PASS；
+- 构建产物和中间文件保留，没有删除 `bin`。
+
+这些场现已迁移到 GPU；下一节说明运行方式与诊断入口。
+
+## GPU 气候场与地形诊断
+
+`TerrainClimateGPU` 由每个 `TerrainRuntime` 独立拥有，不进入 TerrainComponent 和 Scene YAML。它使用以下资源：
+
+- Temperature：`R32F` Ping-Pong；
+- AtmosphericMoisture：`R32F` Ping-Pong；
+- VegetationPotential：`R32F` Ping-Pong；
+- Rainfall：单张 `R32F` 派生纹理；
+- SurfaceWater：只读引用 P13 Hydrology Water；没有水文 Runtime 时读取气候内部零纹理。
+
+固定步拆成三个全局 Compute Pass：
+
+```text
+ClimateSource
+  Temperature Relaxation + Evaporation
+  → Barrier → swap Temperature/Moisture
+
+ClimateAdvection
+  Conservative Upwind Moisture Transport
+  → Barrier → swap Moisture
+
+ClimateResponse
+  Condensation + Orographic Rain + Vegetation Response
+  → Barrier → swap Moisture/Vegetation
+```
+
+三个 Pass 都只读 Current、只写 Next。湿度输运会根据 `abs(WindVelocity) × dt / CellSize` 计算 CFL 比例，总比例超过 1 时统一缩放；边界没有下风格时保留本格水汽，因此不会因 Clamp 采样隐式丢失。Response 通过世界高度梯度和 `dot(Wind, Gradient)` 判断迎风坡，只让正向抬升增加降雨。
+
+TerrainRenderer 使用 GenerationVersion 管理气候资源重建，并以 ClimateFrameSerial 保证 Shadow Pass 和九个 Chunk 的重复 Prepare 不会让模拟在同一帧推进多次。三个 Compute Shader 都参与事务式热重载。
+
+在 Debug → Overview → Runtime Climate 中可以：
+
+- Play、Single Step、Reset；
+- 修改二维 Wind Velocity；
+- 修改 Initial Moisture，修改后需 Reset 才会作为新初值应用；
+- 选择 Temperature、Atmospheric Moisture、Rainfall 或 Vegetation Potential 诊断；
+- 点击 Readback 查看温度、湿度、降雨和植被范围；
+- 点击 Run GPU Contract 执行受控 `3×1` 数值验证。
+
+Terrain Shader 使用 slot 28～31 读取四个气候场。若水文与气候诊断同时启用，水文诊断优先；诊断关闭时不改变正常 Terrain PBR 颜色。当前 Temperature 用蓝—绿—红表示，Moisture 用褐—青表示，Rainfall 用暗紫—亮青表示，VegetationPotential 用褐—绿表示。
+
+验证结果：
+
+- VS2026 `Debug | x64` 全解决方案增量构建成功，123 项无窗口断言全部 PASS；
+- GTX 1050 / OpenGL 4.6 上 `ClimateSource`、`ClimateAdvection`、`ClimateResponse` 和修改后的 Terrain Shader 编译成功；
+- `GLIMMER_CLIMATE_VALIDATE=1` 实际执行 GPU Contract 并 PASS：Downwind Moisture `1`，Rising/Flat Rain `0.2/0`，Frame Partition Delta `0`；
+- 构建产物和中间文件保留，没有删除 `bin`。
+
+当前耦合边界仍是单向读取：Evaporation 不会从 P13 Water 扣除，Rainfall 也尚未加入 P13 Water，因此不能把 GPU 统计解释为完整水循环守恒。下一步会给 Hydrology 增加明确的二维 Source/Sink 输入，由 Hydrology 成为 Water Ping-Pong 的唯一写入者，再扩展跨系统总水量 Contract。
+
+已导入的 Quaternius Ultimate Nature Pack 同时包含 OBJ、FBX 和 Blend。当前引擎可使用 OBJ/FBX；Blend 作为源文件保留。整包尚未自动写入 AssetRegistry，也没有被气候 Runtime 硬编码引用。植被实例化阶段应先从 CommonTree/Birch/Willow、Bush 和 Grass 中各选少量代表模型，再建立物种参数、LOD 和实例批次。
+
 ## KB
 
 ### 为什么不用动态库？

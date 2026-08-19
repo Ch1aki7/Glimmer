@@ -15,6 +15,7 @@
 #include "Glimmer/Terrain/TerrainChunkLayout.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
 #include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
+#include "Glimmer/Simulation/TerrainClimateRuntime.h"
 #include "Editor/EditorCommand.h"
 
 #include <cmath>
@@ -986,6 +987,137 @@ namespace {
 			"rainfall volume is included in hydrology mass accounting");
 	}
 
+	void TestTerrainClimateRuntime(TestContext& context)
+	{
+		gl::TerrainClimateSpecification transportSpecification;
+		transportSpecification.Width = 3;
+		transportSpecification.Height = 1;
+		transportSpecification.CellSize = 1.0f;
+		transportSpecification.FixedTimeStep = 1.0f;
+		transportSpecification.MaxSubsteps = 4;
+		transportSpecification.WindVelocity = { 1.0f, 0.0f };
+		transportSpecification.TemperatureRelaxationRate = 0.0f;
+		transportSpecification.EvaporationRate = 0.0f;
+		transportSpecification.CondensationRate = 0.0f;
+		transportSpecification.OrographicRainRate = 0.0f;
+		transportSpecification.VegetationResponseRate = 0.0f;
+
+		gl::TerrainClimateRuntime transportRuntime(
+			transportSpecification, { 0.0f, 0.0f, 0.0f });
+		transportRuntime.SetAtmosphericMoisture({ 1.0f, 0.0f, 0.0f });
+		context.Check(transportRuntime.Advance(1.0f) == 0
+			&& transportRuntime.GetStatistics().StepCount == 0,
+			"paused climate does not advance with editor frame time");
+		context.Check(transportRuntime.SingleStep()
+			&& Near(transportRuntime.GetState().AtmosphericMoisture[0], 0.0f)
+			&& Near(transportRuntime.GetState().AtmosphericMoisture[1], 1.0f)
+			&& Near(transportRuntime.GetState().AtmosphericMoisture[2], 0.0f),
+			"conservative upwind transport follows the configured wind direction");
+		context.Check(transportRuntime.GetStatistics().Finite
+			&& std::abs(transportRuntime.GetStatistics().WaterBudgetError)
+				< 1.0e-6,
+			"closed climate transport remains finite and conserves total water");
+		transportRuntime.Reset();
+		context.Check(transportRuntime.GetStatistics().StepCount == 0
+			&& Near(transportRuntime.GetState().AtmosphericMoisture[0], 1.0f)
+			&& Near(transportRuntime.GetState().AtmosphericMoisture[1], 0.0f),
+			"climate reset restores the configured initial fields");
+
+		gl::TerrainClimateSpecification evaporationSpecification =
+			transportSpecification;
+		evaporationSpecification.Width = 1;
+		evaporationSpecification.WindVelocity = { 0.0f, 0.0f };
+		evaporationSpecification.EvaporationRate = 0.1f;
+		gl::TerrainClimateRuntime evaporationRuntime(
+			evaporationSpecification, { 0.0f });
+		evaporationRuntime.SetSurfaceWater({ 0.2f });
+		context.Check(evaporationRuntime.SingleStep()
+			&& Near(evaporationRuntime.GetState().SurfaceWater[0], 0.1f)
+			&& Near(
+				evaporationRuntime.GetState().AtmosphericMoisture[0], 0.1f)
+			&& Near(static_cast<float>(
+				evaporationRuntime.GetStatistics().CumulativeEvaporationVolume),
+				0.1f),
+			"evaporation transfers water from the surface into atmospheric moisture");
+
+		gl::TerrainClimateSpecification rainSpecification =
+			transportSpecification;
+		rainSpecification.SaturationMoistureDepth = 10.0f;
+		rainSpecification.OrographicRainRate = 1.0f;
+		gl::TerrainClimateRuntime risingTerrain(
+			rainSpecification, { 0.0f, 1.0f, 2.0f });
+		gl::TerrainClimateRuntime flatTerrain(
+			rainSpecification, { 0.0f, 0.0f, 0.0f });
+		risingTerrain.SetAtmosphericMoisture({ 0.1f, 0.1f, 0.1f });
+		flatTerrain.SetAtmosphericMoisture({ 0.1f, 0.1f, 0.1f });
+		risingTerrain.SingleStep();
+		flatTerrain.SingleStep();
+		context.Check(risingTerrain.GetStatistics().MaximumRainfall > 0.0f
+			&& Near(flatTerrain.GetStatistics().MaximumRainfall, 0.0f),
+			"windward terrain lift produces rain while flat terrain does not");
+		context.Check(std::abs(
+			risingTerrain.GetStatistics().WaterBudgetError) < 1.0e-6,
+			"orographic rainfall transfers atmospheric water without creating mass");
+
+		gl::TerrainClimateSpecification vegetationSpecification =
+			transportSpecification;
+		vegetationSpecification.Width = 2;
+		vegetationSpecification.WindVelocity = { 0.0f, 0.0f };
+		vegetationSpecification.VegetationResponseRate = 1.0f;
+		gl::TerrainClimateRuntime vegetationRuntime(
+			vegetationSpecification, { 0.0f, 0.0f });
+		vegetationRuntime.SetTemperature({ 18.0f, 18.0f });
+		vegetationRuntime.SetSurfaceWater({ 0.02f, 0.0f });
+		context.Check(vegetationRuntime.SingleStep()
+			&& Near(vegetationRuntime.GetState().VegetationPotential[0], 1.0f)
+			&& Near(vegetationRuntime.GetState().VegetationPotential[1], 0.0f),
+			"vegetation potential responds to local water and temperature");
+
+		gl::TerrainClimateSpecification fixedStepSpecification =
+			transportSpecification;
+		fixedStepSpecification.FixedTimeStep = 0.25f;
+		fixedStepSpecification.WindVelocity = { 0.5f, 0.0f };
+		fixedStepSpecification.EvaporationRate = 0.01f;
+		fixedStepSpecification.CondensationRate = 0.5f;
+		fixedStepSpecification.OrographicRainRate = 0.1f;
+		fixedStepSpecification.VegetationResponseRate = 0.5f;
+		gl::TerrainClimateRuntime largeFrameRuntime(
+			fixedStepSpecification, { 0.0f, 1.0f, 0.0f });
+		gl::TerrainClimateRuntime smallFrameRuntime(
+			fixedStepSpecification, { 0.0f, 1.0f, 0.0f });
+		largeFrameRuntime.SetAtmosphericMoisture({ 0.03f, 0.01f, 0.0f });
+		smallFrameRuntime.SetAtmosphericMoisture({ 0.03f, 0.01f, 0.0f });
+		largeFrameRuntime.SetSurfaceWater({ 0.02f, 0.01f, 0.0f });
+		smallFrameRuntime.SetSurfaceWater({ 0.02f, 0.01f, 0.0f });
+		largeFrameRuntime.Play();
+		smallFrameRuntime.Play();
+		largeFrameRuntime.Advance(1.0f);
+		for (uint32_t frame = 0; frame < 4; ++frame)
+			smallFrameRuntime.Advance(0.25f);
+		bool partitionIndependent =
+			largeFrameRuntime.GetStatistics().StepCount
+				== smallFrameRuntime.GetStatistics().StepCount;
+		for (size_t index = 0;
+			index < largeFrameRuntime.GetState().Temperature.size(); ++index)
+		{
+			partitionIndependent &= Near(
+				largeFrameRuntime.GetState().Temperature[index],
+				smallFrameRuntime.GetState().Temperature[index], 1.0e-6f)
+				&& Near(
+					largeFrameRuntime.GetState().AtmosphericMoisture[index],
+					smallFrameRuntime.GetState().AtmosphericMoisture[index],
+					1.0e-6f)
+				&& Near(largeFrameRuntime.GetState().SurfaceWater[index],
+					smallFrameRuntime.GetState().SurfaceWater[index], 1.0e-6f)
+				&& Near(
+					largeFrameRuntime.GetState().VegetationPotential[index],
+					smallFrameRuntime.GetState().VegetationPotential[index],
+					1.0e-6f);
+		}
+		context.Check(partitionIndependent,
+			"fixed climate results are independent of frame partitioning");
+	}
+
 	void TestShadowFrustumCulling(TestContext& context)
 	{
 		const glm::mat4 identity(1.0f);
@@ -1363,6 +1495,8 @@ int main(int argc, char** argv)
 	TestTerrainChunkLayout(context);
 	std::cout << "[RUN] Terrain hydrology runtime\n";
 	TestTerrainHydrologyRuntime(context);
+	std::cout << "[RUN] Terrain climate runtime\n";
+	TestTerrainClimateRuntime(context);
 	std::cout << "[RUN] Terrain camera frustum culling\n";
 	TestTerrainCameraFrustumCulling(context);
 	std::cout << "[RUN] Shadow frustum culling\n";

@@ -128,6 +128,12 @@ uniform sampler2D u_SedimentCapacityMap;
 uniform sampler2D u_SedimentSaturationMap;
 uniform int u_HasHydrology;
 uniform int u_HydrologyVisualization;
+uniform sampler2D u_TemperatureMap;
+uniform sampler2D u_AtmosphericMoistureMap;
+uniform sampler2D u_RainfallMap;
+uniform sampler2D u_VegetationPotentialMap;
+uniform int u_HasClimate;
+uniform int u_ClimateVisualization;
 uniform sampler2D u_ShadowMaps[4];
 uniform mat4 u_LightViewProjections[4];
 uniform float u_ShadowCascadeSplits[4];
@@ -512,6 +518,43 @@ void main()
 				clamp(log2(saturation) * 0.25, 0.0, 1.0));
 		float saturationWeight = saturation > 0.0 ? 0.82 : 0.0;
 		result = mix(result, saturationColor, saturationWeight);
+	}
+	else if (u_ClimateVisualization == 1 && u_HasClimate != 0)
+	{
+		float temperature = texture(u_TemperatureMap, v_TerrainUV).r;
+		float normalizedTemperature = clamp((temperature + 20.0) / 60.0, 0.0, 1.0);
+		vec3 cold = vec3(0.05, 0.22, 1.0);
+		vec3 temperate = vec3(0.25, 0.9, 0.35);
+		vec3 hot = vec3(1.0, 0.12, 0.03);
+		vec3 temperatureColor = normalizedTemperature < 0.5
+			? mix(cold, temperate, normalizedTemperature * 2.0)
+			: mix(temperate, hot, (normalizedTemperature - 0.5) * 2.0);
+		result = mix(result, temperatureColor, 0.86);
+	}
+	else if (u_ClimateVisualization == 2 && u_HasClimate != 0)
+	{
+		float moisture = max(
+			texture(u_AtmosphericMoistureMap, v_TerrainUV).r, 0.0);
+		float weight = clamp(moisture / 0.02, 0.0, 1.0);
+		result = mix(result,
+			mix(vec3(0.12, 0.05, 0.02), vec3(0.1, 0.75, 1.0), weight),
+			0.86);
+	}
+	else if (u_ClimateVisualization == 3 && u_HasClimate != 0)
+	{
+		float rainfall = max(texture(u_RainfallMap, v_TerrainUV).r, 0.0);
+		float weight = clamp(rainfall / 0.005, 0.0, 1.0);
+		result = mix(result,
+			mix(vec3(0.05, 0.04, 0.12), vec3(0.15, 0.9, 1.5), weight),
+			0.86);
+	}
+	else if (u_ClimateVisualization == 4 && u_HasClimate != 0)
+	{
+		float vegetation = clamp(
+			texture(u_VegetationPotentialMap, v_TerrainUV).r, 0.0, 1.0);
+		result = mix(result,
+			mix(vec3(0.18, 0.06, 0.015), vec3(0.05, 0.85, 0.12), vegetation),
+			0.86);
 	}
 	o_Color = vec4(max(result, vec3(0.0)), 1.0);
 	o_EntityID = v_EntityID;

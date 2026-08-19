@@ -1,6 +1,6 @@
 # Glimmer 项目架构说明
 
-> 本文最近于 2026-08-18 对照当前源码同步，只描述已经落地的结构与数据流。
+> 本文最近于 2026-08-19 对照当前源码同步，只描述已经落地的结构与数据流。
 > 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
 ## 1. 项目定位与当前边界
@@ -240,6 +240,10 @@ Color Pass 和 ShadowRenderer 都使用同一个 `TerrainChunkLayout`，按每�
 P13A～P13C 的纯 CPU `TerrainHydrologyRuntime` 是 GPU 数值基线。它持有独立的 Height 初始快照，以及 Water、四方向 Flux、二维 Velocity 和 Sediment；Sediment 表示单位地表面积上的悬浮质量。该运行时由 `TerrainRuntime::Hydrology` 独立拥有，默认可为空，不随 TerrainComponent 复制或序列化，也不复用 `TerrainGenerator` 的 Height Ping-Pong。每个固定步先从同一旧状态计算四邻域水出流并按可用水量缩放；再以旧 Sediment 质量除以当前可用水体积得到浓度，用同一四向 Water Flux 计算泥沙质量流率，并按可用泥沙质量二次限幅；最后统一汇总邻格入流和自身出流。完成输运状态更新后，CPU 由 `CapacityScale × WaterDepth × Speed` 派生 Capacity，并由 `Sediment / Capacity` 派生 Saturation。
 
 CPU P13C 源项在派生 Capacity 后执行局部 Height/Sediment 交换，再重算诊断场。Height 通过 `TerrainDensity` 转换为单位面积等效质量：欠饱和格按容量缺口和 ErosionRate 将地形质量转入 Sediment，过饱和格按容量超额和 DepositionRate 将 Sediment 转回 Height；两条路径都受单步最大 Height 变化限制，侵蚀额外受相对初始 Height 的 MaximumErosionDepth 限制，沉积额外受当前可用 Sediment 限制。默认两项速率为 0。统计分别保留 Sediment 单项误差和 Terrain+Sediment 组合质量误差，并记录累计侵蚀/沉积质量；Reset 恢复 Height/Water/Sediment 初始快照和预算。CPU 实例当前只用于无窗口参考测试，不与场景 GPU Height 做逐帧同步。
+
+P14 的纯 CPU `TerrainClimateRuntime` 是气候与植被闭环的数值基线，目前不挂入 `TerrainRuntime`。它持有不可变 TerrainHeight，以及 Temperature、AtmosphericMoisture、SurfaceWater、Rainfall 和 VegetationPotential；温度单位为摄氏度，三个水相关场统一使用米水当量，植被潜力限制在 `[0, 1]`。每个固定步按温度松弛、地表蒸发、保守迎风湿度输运、饱和/迎风坡抬升降雨、植被潜力响应执行。蒸发只在 SurfaceWater 与 AtmosphericMoisture 间转移，降雨执行反向转移；封闭输运边界保留越界通量，因此统计可直接检查大气水与地表水总预算。该 Runtime 支持 Pause、SingleStep、Reset、最大追赶步数和帧划分确定性，不创建植被实体、不读取模型资产、不序列化。
+
+P14 GPU 路径由 `TerrainRuntime::GPUClimate` 独占。Temperature、AtmosphericMoisture 和 VegetationPotential 各使用 `R32F` `SimulationGrid` Ping-Pong，Rainfall 是单张只读派生纹理；缺少 GPU Hydrology 时使用气候 Runtime 自有的零 SurfaceWater 纹理。每个固定步依次 Dispatch `ClimateSource.comp`、`ClimateAdvection.comp` 和 `ClimateResponse.comp`，分别完成温度/蒸发、封闭边界保守迎风输运、饱和与地形抬升降雨/植被响应。每个 Pass 后执行全局 Barrier 并只交换对应 Ping-Pong；Response 最多使用 image binding 0～7。TerrainRenderer 以 GenerationVersion 重建气候资源，以独立 ClimateFrameSerial 保证每个 Color Frame 最多推进一次，并提供 Play、SingleStep、Reset、Wind、Initial Moisture、显式 Readback 和四种 Terrain Shader 诊断。气候纹理绑定到 Terrain slot 28～31，Hydrology 诊断优先于 Climate 诊断；正常 PBR 不读取这些诊断分支。受控 GPU Contract 通过 Debug 请求或 `GLIMMER_CLIMATE_VALIDATE=1` 执行，使用 `3×1` 网格检查风向输运、迎风坡相对降雨、有限性和帧划分一致性。当前 GPU Evaporation 读取 SurfaceWater、Rainfall 独立输出，但尚不回写 P13 Water；下一阶段必须通过单一水文 Source/Sink 接口耦合，禁止 Climate 与 Hydrology 共同写 Water Ping-Pong。
 
 GPU 路径由同一 `TerrainRuntime` 独占一个 `TerrainHydrologyGPU`。Water、Sediment 和 Runtime Height 分别使用 `R32F` Ping-Pong，四向 Flux 与二维 Velocity 分别使用 `RGBA16F` Ping-Pong；程序化 Terrain 的生成器 Height 保持不可变，只在运行时创建或生成版本变化时读回一次作为两张 Runtime Height 的初始数据和侵蚀下界。每个固定步先 Dispatch `HydrologyFlux.comp` 并交换 Flux，再由 `HydrologyUpdate.comp` 写新 Water/Velocity；`SedimentTransport.comp` 在交换 Water 前读取旧 Water、当前 Flux 与旧 Sediment，按照浓度和可用质量限幅计算邻格质量交换，只写新 Sediment。交换 Water、Velocity 和 Sediment 后，`SedimentCapacity.comp` 写出只读 Capacity/Saturation；`ErosionDeposition.comp` 再读取初始/当前 Height、Sediment 与 Capacity，同时写入下一张 Height 和 Sediment，Barrier 后统一交换二者并重算诊断场。每个 Pass 后都执行全局 Barrier；任何阶段都不在同一 Dispatch 中读写同一纹理或读取其它 Workgroup 尚未完成的输出。五个 Compute Shader 均由 TerrainRenderer 在正常 Prepare 中轮询事务式热重载。Terrain 生成版本改变时整个 GPU 水文状态重建，Reset 从缓存的初始 Height 恢复两张 Runtime Height 并清空其它状态；TerrainComponent 复制和 Scene YAML 均不携带这些纹理。
 

@@ -1,0 +1,53 @@
+#version 450 core
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(r32f, binding = 0) readonly uniform image2D u_PreviousMoisture;
+layout(r32f, binding = 1) writeonly uniform image2D u_NextMoisture;
+
+uniform float u_DeltaTime;
+uniform float u_CellSize;
+uniform vec2 u_WindVelocity;
+
+bool Inside(ivec2 cell, ivec2 size)
+{
+	return all(greaterThanEqual(cell, ivec2(0)))
+		&& all(lessThan(cell, size));
+}
+
+void main()
+{
+	ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize(u_PreviousMoisture);
+	if (!Inside(cell, size))
+		return;
+
+	vec2 fraction = abs(u_WindVelocity) * max(u_DeltaTime, 0.0)
+		/ max(u_CellSize, 0.0001);
+	float fractionSum = fraction.x + fraction.y;
+	if (fractionSum > 1.0)
+		fraction /= fractionSum;
+
+	ivec2 direction = ivec2(
+		u_WindVelocity.x > 0.0 ? 1 : (u_WindVelocity.x < 0.0 ? -1 : 0),
+		u_WindVelocity.y > 0.0 ? 1 : (u_WindVelocity.y < 0.0 ? -1 : 0));
+	float retained = 1.0;
+	if (direction.x != 0 && Inside(cell + ivec2(direction.x, 0), size))
+		retained -= fraction.x;
+	if (direction.y != 0 && Inside(cell + ivec2(0, direction.y), size))
+		retained -= fraction.y;
+
+	float moisture = max(imageLoad(u_PreviousMoisture, cell).r, 0.0)
+		* max(retained, 0.0);
+	ivec2 upstreamX = cell - ivec2(direction.x, 0);
+	if (direction.x != 0 && Inside(upstreamX, size))
+		moisture += max(imageLoad(u_PreviousMoisture, upstreamX).r, 0.0)
+			* fraction.x;
+	ivec2 upstreamY = cell - ivec2(0, direction.y);
+	if (direction.y != 0 && Inside(upstreamY, size))
+		moisture += max(imageLoad(u_PreviousMoisture, upstreamY).r, 0.0)
+			* fraction.y;
+
+	imageStore(u_NextMoisture, cell,
+		vec4(max(moisture, 0.0), 0.0, 0.0, 0.0));
+}

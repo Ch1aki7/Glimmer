@@ -5,6 +5,7 @@
 #include "Glimmer/Terrain/TerrainGenerator.h"
 #include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
 #include "Glimmer/Simulation/TerrainHydrologyGPU.h"
+#include "Glimmer/Simulation/TerrainClimateGPU.h"
 
 #include <array>
 
@@ -14,11 +15,16 @@ namespace gl {
 		Scope<TerrainGenerator> Generator;
 		Scope<TerrainHydrologyRuntime> Hydrology;
 		Scope<TerrainHydrologyGPU> GPUHydrology;
+		Scope<TerrainClimateGPU> GPUClimate;
 		uint64_t HydrologyResetRequest = 0;
 		uint64_t HydrologySingleStepRequest = 0;
 		uint64_t HydrologySedimentSeedRequest = 0;
 		uint64_t HydrologyGenerationVersion = 0;
 		uint64_t HydrologyFrameSerial = 0;
+		uint64_t ClimateResetRequest = 0;
+		uint64_t ClimateSingleStepRequest = 0;
+		uint64_t ClimateGenerationVersion = 0;
+		uint64_t ClimateFrameSerial = 0;
 		Ref<TerrainMesh> Mesh;
 		std::array<Ref<TerrainMesh>, 3> LODMeshes;
 		std::array<uint32_t, 9> ChunkLODLevels{};

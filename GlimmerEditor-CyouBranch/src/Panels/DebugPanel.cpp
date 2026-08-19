@@ -46,6 +46,10 @@ namespace gl {
 			TerrainRenderer::GetHydrologyStatistics();
 		const TerrainHydrologyGPUValidationResult hydrologyValidation =
 			TerrainRenderer::GetHydrologyValidationResult();
+		const TerrainClimateGPUStatistics climateStatistics =
+			TerrainRenderer::GetClimateStatistics();
+		const TerrainClimateGPUValidationResult climateValidation =
+			TerrainRenderer::GetClimateValidationResult();
 		m_InstancingLab.UpdateShadowBenchmark(shadowStatistics);
 		m_PBRMaterialLab.UpdateValidation(statistics);
 		m_TerrainSamplingBenchmark.Update(terrainStatistics);
@@ -316,6 +320,98 @@ namespace gl {
 				}
 				else
 					ImGui::TextDisabled("GPU contract validation not run");
+				ImGui::SeparatorText("Runtime Climate");
+				bool climatePlaying = TerrainRenderer::IsClimatePlaying();
+				if (ImGui::Checkbox("Play##Climate", &climatePlaying))
+					TerrainRenderer::SetClimatePlaying(climatePlaying);
+				ImGui::SameLine();
+				ImGui::BeginDisabled(climatePlaying);
+				if (ImGui::Button("Single Step##Climate"))
+					TerrainRenderer::RequestClimateSingleStep();
+				ImGui::EndDisabled();
+				ImGui::SameLine();
+				if (ImGui::Button("Reset##Climate"))
+					TerrainRenderer::RequestClimateReset();
+				glm::vec2 windVelocity =
+					TerrainRenderer::GetClimateWindVelocity();
+				if (ImGui::DragFloat2("Wind Velocity##Climate",
+					&windVelocity.x, 0.05f, -100.0f, 100.0f, "%.2f m/s"))
+				{
+					TerrainRenderer::SetClimateWindVelocity(windVelocity);
+				}
+				float initialMoisture =
+					TerrainRenderer::GetClimateInitialMoisture();
+				if (ImGui::DragFloat("Initial Moisture##Climate",
+					&initialMoisture, 0.0001f, 0.0f, 10.0f, "%.4f m"))
+				{
+					TerrainRenderer::SetClimateInitialMoisture(initialMoisture);
+				}
+				int climateVisualization = static_cast<int>(
+					TerrainRenderer::GetClimateVisualizationMode());
+				const char* climateVisualizationModes[] = {
+					"None", "Temperature", "Atmospheric Moisture",
+					"Rainfall", "Vegetation Potential"
+				};
+				if (ImGui::Combo("Visualization##Climate",
+					&climateVisualization, climateVisualizationModes,
+					IM_ARRAYSIZE(climateVisualizationModes)))
+				{
+					TerrainRenderer::SetClimateVisualizationMode(
+						static_cast<TerrainRenderer::ClimateVisualizationMode>(
+							climateVisualization));
+				}
+				if (ImGui::Button("Readback##Climate"))
+					TerrainRenderer::RequestClimateReadback();
+				ImGui::SameLine();
+				if (ImGui::Button("Run GPU Contract##Climate"))
+					TerrainRenderer::RequestClimateContractValidation();
+				ImGui::Text("Steps / Sim Time: %llu / %.2f s",
+					static_cast<unsigned long long>(climateStatistics.StepCount),
+					climateStatistics.SimulatedTime);
+				ImGui::Text("Accumulator / Dropped: %.4f / %.4f s",
+					climateStatistics.Accumulator,
+					climateStatistics.DroppedTime);
+				if (climateStatistics.ReadbackAvailable)
+				{
+					ImGui::Text("Temperature Min/Max: %.3f / %.3f C",
+						climateStatistics.MinimumTemperature,
+						climateStatistics.MaximumTemperature);
+					ImGui::Text("Moisture Min/Max: %.6f / %.6f m",
+						climateStatistics.MinimumAtmosphericMoisture,
+						climateStatistics.MaximumAtmosphericMoisture);
+					ImGui::Text("Rainfall Volume / Max: %.6f / %.6f",
+						climateStatistics.RainfallVolume,
+						climateStatistics.MaximumRainfall);
+					ImGui::Text("Vegetation Min/Max: %.3f / %.3f",
+						climateStatistics.MinimumVegetationPotential,
+						climateStatistics.MaximumVegetationPotential);
+					ImGui::TextColored(
+						climateStatistics.Finite
+							? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
+							: ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+						climateStatistics.Finite
+							? "Finite: PASS" : "Finite: FAIL");
+				}
+				else
+					ImGui::TextDisabled("Press Readback for climate statistics");
+				if (climateValidation.Attempted)
+				{
+					ImGui::TextColored(
+						climateValidation.Passed
+							? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
+							: ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+						climateValidation.Passed
+							? "GPU Contract: PASS" : "GPU Contract: FAIL");
+					ImGui::Text("Downwind Moisture: %.6f",
+						climateValidation.DownwindMoisture);
+					ImGui::Text("Rising / Flat Rain: %.6f / %.6f",
+						climateValidation.RisingTerrainRainfall,
+						climateValidation.FlatTerrainRainfall);
+					ImGui::Text("Frame Partition Delta: %.3e",
+						climateValidation.MaximumPartitionDifference);
+				}
+				else
+					ImGui::TextDisabled("GPU climate contract validation not run");
 				ImGui::EndTabItem();
 			}
 

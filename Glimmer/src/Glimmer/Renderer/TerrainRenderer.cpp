@@ -51,6 +51,18 @@ namespace gl {
 			uint64_t HydrologySedimentSeedRequest = 0;
 			TerrainHydrologyGPUStatistics HydrologyStats;
 			TerrainHydrologyGPUValidationResult HydrologyValidation;
+			bool ClimatePlaying = false;
+			TerrainRenderer::ClimateVisualizationMode ClimateVisualization =
+				TerrainRenderer::ClimateVisualizationMode::None;
+			bool ClimateReadbackRequested = false;
+			bool ClimateValidationRequested = false;
+			bool ClimateEnvironmentValidationChecked = false;
+			glm::vec2 ClimateWindVelocity = { 1.0f, 0.0f };
+			float ClimateInitialMoisture = 0.01f;
+			uint64_t ClimateResetRequest = 0;
+			uint64_t ClimateSingleStepRequest = 0;
+			TerrainClimateGPUStatistics ClimateStats;
+			TerrainClimateGPUValidationResult ClimateValidation;
 			uint64_t FrameSerial = 0;
 			bool HydrologyFrameActive = false;
 		};
@@ -112,6 +124,22 @@ namespace gl {
 #endif
 		}
 
+		bool ShouldValidateClimate()
+		{
+#ifdef GL_PLATFORM_WINDOWS
+			char* value = nullptr;
+			size_t length = 0;
+			const bool enabled = _dupenv_s(&value, &length,
+				"GLIMMER_CLIMATE_VALIDATE") == 0
+				&& value != nullptr && std::string(value) == "1";
+			std::free(value);
+			return enabled;
+#else
+			const char* value = std::getenv("GLIMMER_CLIMATE_VALIDATE");
+			return value && std::string(value) == "1";
+#endif
+		}
+
 		Ref<Texture2D> ResolveLayerTexture(AssetHandle handle,
 			TextureColorSpace colorSpace, TextureSemantic semantic)
 		{
@@ -147,6 +175,11 @@ namespace gl {
 			s_Data.HydrologyValidationRequested = ShouldValidateHydrology();
 			s_Data.HydrologyEnvironmentValidationChecked = true;
 		}
+		if (!s_Data.ClimateEnvironmentValidationChecked)
+		{
+			s_Data.ClimateValidationRequested = ShouldValidateClimate();
+			s_Data.ClimateEnvironmentValidationChecked = true;
+		}
 		s_Data.DeltaSeconds = std::max(deltaSeconds, 0.0f);
 		++s_Data.FrameSerial;
 		s_Data.HydrologyFrameActive = true;
@@ -177,6 +210,7 @@ namespace gl {
 	{
 		s_Data.HydrologyFrameActive = false;
 		s_Data.HydrologyReadbackRequested = false;
+		s_Data.ClimateReadbackRequested = false;
 		if (!s_Data.PassActive || !s_Data.Timer)
 			return;
 		s_Data.Timer->End();
@@ -436,6 +470,71 @@ namespace gl {
 				runtime.HydrologyFrameSerial = s_Data.FrameSerial;
 			}
 			runtime.HeightMap = hydrology.GetHeightTexture();
+
+			const auto climateSourcePath =
+				generationPath.parent_path() / "ClimateSource.comp";
+			const auto climateAdvectionPath =
+				generationPath.parent_path() / "ClimateAdvection.comp";
+			const auto climateResponsePath =
+				generationPath.parent_path() / "ClimateResponse.comp";
+			if (s_Data.ClimateValidationRequested)
+			{
+				s_Data.ClimateValidation =
+					TerrainClimateGPU::ValidateContract(
+						climateSourcePath, climateAdvectionPath,
+						climateResponsePath);
+				s_Data.ClimateValidationRequested = false;
+				if (s_Data.ClimateValidation.Passed)
+					GL_CORE_INFO("GPU climate contract validation {0}",
+						s_Data.ClimateValidation.Message);
+				else
+					GL_CORE_ERROR("GPU climate contract validation {0}",
+						s_Data.ClimateValidation.Message);
+			}
+			if (!runtime.GPUClimate
+				|| runtime.ClimateGenerationVersion != runtime.GenerationVersion)
+			{
+				runtime.GPUClimate = CreateScope<TerrainClimateGPU>(
+					runtime.HeightMap->GetWidth(), runtime.HeightMap->GetHeight(),
+					climateSourcePath, climateAdvectionPath, climateResponsePath);
+				runtime.ClimateGenerationVersion = runtime.GenerationVersion;
+			}
+			auto& climate = *runtime.GPUClimate;
+			climate.ReloadShadersIfChanged();
+			climate.GetSettings().WindVelocity = s_Data.ClimateWindVelocity;
+			climate.GetSettings().InitialAtmosphericMoisture =
+				s_Data.ClimateInitialMoisture;
+			if (s_Data.HydrologyFrameActive
+				&& runtime.ClimateFrameSerial != s_Data.FrameSerial)
+			{
+				const Ref<Texture2D> surfaceWater = runtime.GPUHydrology
+					? runtime.GPUHydrology->GetWaterTexture() : nullptr;
+				if (runtime.ClimateResetRequest != s_Data.ClimateResetRequest)
+				{
+					climate.Reset();
+					runtime.ClimateResetRequest = s_Data.ClimateResetRequest;
+				}
+				const float worldSize = static_cast<float>(
+					std::max(specification.MeshResolution, 1u));
+				if (runtime.ClimateSingleStepRequest
+					!= s_Data.ClimateSingleStepRequest)
+				{
+					climate.SingleStep(runtime.HeightMap, surfaceWater,
+						specification.HeightScale, worldSize);
+					runtime.ClimateSingleStepRequest =
+						s_Data.ClimateSingleStepRequest;
+				}
+				if (s_Data.ClimatePlaying)
+				{
+					climate.Advance(s_Data.DeltaSeconds,
+						runtime.HeightMap, surfaceWater,
+						specification.HeightScale, worldSize);
+				}
+				if (s_Data.ClimateReadbackRequested)
+					climate.ReadbackStatistics(surfaceWater, worldSize);
+				s_Data.ClimateStats = climate.GetStatistics();
+				runtime.ClimateFrameSerial = s_Data.FrameSerial;
+			}
 		}
 		return true;
 	}
@@ -479,6 +578,7 @@ namespace gl {
 		shader->UploadUniformInt("u_TerrainLODVisualization",
 			s_Data.VisualizeLODs ? 1 : 0);
 		const bool hasHydrology = runtime.GPUHydrology != nullptr;
+		const bool hasClimate = runtime.GPUClimate != nullptr;
 		shader->UploadUniformInt("u_HasHydrology", hasHydrology ? 1 : 0);
 		shader->UploadUniformInt("u_HydrologyVisualization",
 			hasHydrology
@@ -495,6 +595,20 @@ namespace gl {
 			shader->UploadUniformInt("u_SedimentMap", 25);
 			shader->UploadUniformInt("u_SedimentCapacityMap", 26);
 			shader->UploadUniformInt("u_SedimentSaturationMap", 27);
+		}
+		shader->UploadUniformInt("u_HasClimate", hasClimate ? 1 : 0);
+		shader->UploadUniformInt("u_ClimateVisualization",
+			static_cast<int>(s_Data.ClimateVisualization));
+		if (hasClimate)
+		{
+			runtime.GPUClimate->GetTemperatureTexture()->Bind(28);
+			runtime.GPUClimate->GetAtmosphericMoistureTexture()->Bind(29);
+			runtime.GPUClimate->GetRainfallTexture()->Bind(30);
+			runtime.GPUClimate->GetVegetationPotentialTexture()->Bind(31);
+			shader->UploadUniformInt("u_TemperatureMap", 28);
+			shader->UploadUniformInt("u_AtmosphericMoistureMap", 29);
+			shader->UploadUniformInt("u_RainfallMap", 30);
+			shader->UploadUniformInt("u_VegetationPotentialMap", 31);
 		}
 		runtime.HeightMap->Bind(0);
 		shader->UploadUniformInt("u_HeightMap", 0);
@@ -834,6 +948,83 @@ namespace gl {
 	TerrainRenderer::GetHydrologyValidationResult()
 	{
 		return s_Data.HydrologyValidation;
+	}
+
+	void TerrainRenderer::SetClimatePlaying(bool playing)
+	{
+		s_Data.ClimatePlaying = playing;
+	}
+
+	bool TerrainRenderer::IsClimatePlaying()
+	{
+		return s_Data.ClimatePlaying;
+	}
+
+	void TerrainRenderer::RequestClimateSingleStep()
+	{
+		if (!s_Data.ClimatePlaying)
+			++s_Data.ClimateSingleStepRequest;
+	}
+
+	void TerrainRenderer::RequestClimateReset()
+	{
+		++s_Data.ClimateResetRequest;
+		s_Data.ClimateStats = {};
+	}
+
+	void TerrainRenderer::SetClimateWindVelocity(const glm::vec2& velocity)
+	{
+		if (std::isfinite(velocity.x) && std::isfinite(velocity.y))
+			s_Data.ClimateWindVelocity = velocity;
+	}
+
+	glm::vec2 TerrainRenderer::GetClimateWindVelocity()
+	{
+		return s_Data.ClimateWindVelocity;
+	}
+
+	void TerrainRenderer::SetClimateInitialMoisture(float moistureDepth)
+	{
+		s_Data.ClimateInitialMoisture = std::isfinite(moistureDepth)
+			? std::clamp(moistureDepth, 0.0f, 10.0f) : 0.0f;
+	}
+
+	float TerrainRenderer::GetClimateInitialMoisture()
+	{
+		return s_Data.ClimateInitialMoisture;
+	}
+
+	void TerrainRenderer::SetClimateVisualizationMode(
+		ClimateVisualizationMode mode)
+	{
+		s_Data.ClimateVisualization = mode;
+	}
+
+	TerrainRenderer::ClimateVisualizationMode
+	TerrainRenderer::GetClimateVisualizationMode()
+	{
+		return s_Data.ClimateVisualization;
+	}
+
+	void TerrainRenderer::RequestClimateReadback()
+	{
+		s_Data.ClimateReadbackRequested = true;
+	}
+
+	TerrainClimateGPUStatistics TerrainRenderer::GetClimateStatistics()
+	{
+		return s_Data.ClimateStats;
+	}
+
+	void TerrainRenderer::RequestClimateContractValidation()
+	{
+		s_Data.ClimateValidationRequested = true;
+	}
+
+	TerrainClimateGPUValidationResult
+	TerrainRenderer::GetClimateValidationResult()
+	{
+		return s_Data.ClimateValidation;
 	}
 
 	TerrainRenderer::Statistics TerrainRenderer::GetStatistics()
