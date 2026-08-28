@@ -1,175 +1,103 @@
 # Glimmer
 
-目标技术栈
+## 项目概览
 
-1. **核心语言**：Modern C++（大量使用 C++11/14/17 的智能指针、Lambda、模板元编程）。
-2. **构建系统**：**Premake**（用于一键生成 Visual Studio 或 Xcode 的工程文件，比 CMake 更适合游戏引擎）。
-3. **窗口与输入**：**GLFW**（跨平台的窗口创建库，处理键盘/鼠标/手柄输入，行业标配）。
-4. **图形 API**：**OpenGL**（主要教学用，后期架构设计为随时可无缝切换到 Vulkan 或 DirectX 11/12）。
-5. **数学库**：**GLM** (OpenGL Mathematics)（处理 Vector3、四元数、矩阵乘法，和 Unity 的 Mathf、Vector3 用法非常像）。
-6. **UI 库（极度重要）**：**Dear ImGui**（C++ 界最著名的即时渲染 UI 库，Hazel Editor 的所有面板、按钮、节点连线全是用它画出来的）。
-7. **日志系统**：**spdlog**（极速的多线程 C++ 日志库，用于在控制台输出带颜色的 Debug 信息）。
-8. **事件系统**：自定义的宏定义与事件总线（Event Bus，处理窗口缩放、按键按下等底层事件）。
+Glimmer 是我用 C++17 一点点搭出来的图形与游戏引擎。刚开始时，我只是想弄清楚一个引擎怎样接管程序入口、维持主循环，再把第一个三角形送上屏幕。写到现在，项目里已经有了 Scene/ECS、资产与材质系统、2D/3D 渲染、编辑器，还有程序化地形、水文和简化气候模拟。回头看，这些东西几乎都不是事先规划好的，多半是旧代码真的撑不住下一个功能时，才被迫补上的。
 
-目标流程
+这份 README 记录的是开发过程，并没有按照使用手册的方式维护。后面的章节基本按照实现顺序保留下来：当时碰到了什么问题，为什么选择这种做法，以及后来又怎样推翻或补全它。部分早期代码已经不是今天的最终写法，但它们能说明项目是怎么走到这里的。
 
-阶段一：奠基（架构与核心层构建）
+### 目前做到哪里
 
-- **目标**：搭好骨架，让引擎能跨平台运行（Windows/Mac），并能弹出一个黑色的窗口。
-- **关键内容**：搭建 Premake 构建系统（这是大型 C++ 项目的基础，不用手动去配置几百个包含目录）。设计引擎的“入口点（Entry Point）”，隐藏 C++ 原生的 main() 函数，让用户只需要继承 Application 类就能跑起游戏。引入 spdlog，打造一个带颜色、能分类过滤的核心日志系统。设计事件系统（Event System）：使用阻塞（Blocking）和分发（Dispatcher）机制，处理鼠标点击、窗口拖拽。集成 GLFW 库，成功弹出一个窗口！实现 Layer（图层）机制，分离游戏逻辑层和 UI 叠加层（Overlay）。
+Glimmer 核心会编译成一个静态库。上层应用通过 `Application`、`Layer`、Scene/ECS 和渲染接口来组织逻辑。现在的开发与验证都放在 Windows 上，基线环境是 Visual Studio 2026 和 `Debug | x64`，真正能运行的图形后端也只有 OpenGL。Vulkan 目前只有枚举、接口和依赖预埋，还不能称为支持。
 
-阶段二：点亮屏幕（图形学与渲染架构）
+平时主要使用 `GlimmerEditor-CyouBranch` 开发和验证完整功能；`Sandbox` 留给较小的引擎示例与 Renderer2D 测试。工程由 Premake 生成，窗口和输入交给 GLFW，编辑器界面使用 Dear ImGui。GLM、EnTT 和 spdlog 分别处理数学、ECS 与日志，这几项依赖到现在仍是项目的基础。
 
-- **目标**：不仅能画出三角形，还要设计一套**与具体图形 API（OpenGL/Vulkan）解耦**的高级渲染架构。
-- **关键内容**：集成 ImGui，终于能在黑色窗口上画出调试按钮和性能监控面板了。数学基础：引入 GLM，学习正交摄像机（Orthographic Camera）和透视摄像机（Perspective Camera）的矩阵推导（投影矩阵 * 视图矩阵 * 模型矩阵）。编写 Shader 类：从硬盘读取 .glsl 文件，编译并绑定到显卡。**架构神来之笔**：抽象出 RendererAPI、VertexArray、Buffer 等基类。这意味着上层写游戏逻辑时完全不知道底层是 OpenGL 还是 DX，这叫“渲染器后端解耦（Render Backend Agnostic）”。最终：在屏幕上成功画出一个贴着木箱子纹理的旋转正方形！
+### 开发时在想什么
 
-阶段三：起飞（2D 批处理渲染器 Batch Renderer）
+功能少的时候，能跑起来就很让人满足。功能多起来以后，最磨人的问题反而变成了：一份状态到底归谁管，数据在哪一层被改掉，编辑模式和运行模式会不会互相污染。这类问题通常不会立刻报错，却很容易在几周后的重构里一起爆出来。
 
-- **目标**：性能优化！从“画一个正方形”进化到“一帧瞬间画出 10000 个精灵图且完全不卡”。
-- **关键内容**：如果不做批处理，画 10000 棵草需要向显卡发送 10000 次渲染指令（Draw Call），游戏直接卡死。Cherno 手写了一个非常硬核的 **2D 批处理渲染器（Batch Renderer 2D）**。原理：在内存中把这 10000 棵草的顶点数据拼成一个超级巨大的数组（Buffer），然后只用 **1 次 Draw Call** 发送给显卡！这极大提升了引擎性能。实现纹理槽位（Texture Slots）管理：一次 Draw Call 最多绑定 32 张不同的贴图。
-
-阶段四：灵魂注入（实体组件系统 ECS 与场景管理）
-
-- **目标**：抛弃 Hardcode（硬编码），让引擎像 Unity 一样好用，拥有 GameObject 和挂载脚本的能力。
-
-- **关键内容**：
-
-  不再使用传统的面向对象继承（OOP），而是引入 **ECS（Entity-Component-System）** 架构。
-
-  使用第三方神库 **EnTT** 作为底层的 ECS 管理器。实现 Scene（场景类）和 Entity（实体类）。
-
-  实现各种核心组件：TransformComponent（位置、旋转、缩放）、SpriteRendererComponent（图片渲染）、CameraComponent（摄像机属性）。此时，引擎内部终于有了”往场景里添加一个物体，然后给它挂组件”的概念。
-
-阶段五：惊艳亮相（Hazel Editor 可视化编辑器）
-
-- **目标**：打造一个长得极像 Unity 的独立编辑器软件！
-
-- **关键内容**：
-
-  使用 ImGui 的高级功能（Docking 停靠分支），实现编辑器窗口的拖拽、吸附。
-
-  **Viewport（视口）面板**：把 OpenGL 渲染出的游戏画面，映射到一个 UI 窗口里（Framebuffer 技术），并在上面覆盖网格线（Grid）。
-
-  **Scene Hierarchy（层级面板）**：显示场景里所有的 Entity，点击可以选中。
-
-  **Inspector（属性面板）**：选中 Entity 后，利用 C++ 的反射/宏魔法，在面板上自动生成 Transform 的 XYZ 滑动条、颜色选择器、添加组件按钮。
-
-  **Gizmos（小部件）**：集成 ImGuizmo 库，实现像 Unity 那样的拖拽箭头移动/旋转/缩放物体的功能！
+所以我后来养成了一个习惯：新系统先做一个规模很小、但可以完整验证的版本，确认数据流和所有权没有含糊的地方，再继续加功能。抽象也只做到当前问题真正需要的程度。OpenGL 之外的后端可以预留接口，但没有跑通就不会写成 `已经支持`。这样推进不算快，不过出问题时至少知道该从哪里查，也能用已有回归确认这次修改有没有把旧功能带坏。
 
 ## Hello World!
 
-在 Glimmer/src 文件夹下，右键新建一个类 Application.h 和 Application.cpp。
+这一章记录的是 Glimmer 第一次真正跑起来的样子。那时还没有窗口、事件和渲染器，目标很小：把引擎编译成库，再让另一个项目创建 `Application` 并进入主循环。代码简单得有些寒酸，但它先验证了一件重要的事：引擎和使用引擎的程序可以分开编译。
 
-```
-// Application.h
-namespace gl { // 属于 Glimmer 引擎的命名空间
+### 最早的应用骨架
+
+第一版 `Application` 只保留构造、析构和 `Run()`。循环里暂时什么也不做，甚至没有正常关闭的条件。这个版本当然不能长期使用，我当时只是想先看见进程稳定地跑起来。
+
+```cpp
+// Glimmer/Core/Application.h
+namespace gl {
     class Application {
     public:
         Application();
         virtual ~Application();
         void Run();
     };
-    // 提供给外部创建应用的接口
-    Application* CreateApplication(); 
+
+    Application* CreateApplication();
 }
 ```
 
-```
-// Application.cpp
-#include "Application.h"
-#include <iostream>
-
-namespace gl {
-    Application::Application() {}
-    Application::~Application() {}
-
-    void Application::Run() {
-        while (true) {
-            // 这里将是未来游戏的心脏：Game Loop
-        }
+```cpp
+// 早期 Application.cpp 的核心逻辑
+void gl::Application::Run()
+{
+    while (true)
+    {
+        // 窗口更新、事件和渲染都还没有接进来
     }
 }
 ```
 
-在 Sandbox/src 下新建一个 SandboxApp.cpp。这是用引擎写的“第一款游戏”：
+`Sandbox` 是第一个使用这套接口的宿主。它继承 `Application`，再实现引擎约定的 `CreateApplication()`。返回类型写成 `Application*`，调用方因此只需要认识引擎接口，不需要知道创建出来的具体子类。
 
-```
-// SandboxApp.cpp
-#include <Application.h>
-#include <iostream>
+```cpp
+#include <Glimmer.h>
 
-// 继承 Glimmer 的引擎基类
-class Sandbox : public gl::Application {
-public:
-    Sandbox() {
-        std::cout << "Glimmer Engine Initialized! Hello World!" << std::endl;
-    }
-    ~Sandbox() {}
+class Sandbox : public gl::Application
+{
 };
 
-// 告诉引擎，我要启动这个沙盒游戏
-gl::Application* gl::CreateApplication() {
+gl::Application* gl::CreateApplication()
+{
     return new Sandbox();
 }
 
-// 真正的入口点！
-int main() {
+int main()
+{
     gl::Application* app = gl::CreateApplication();
     app->Run();
     delete app;
-    return 0;
 }
 ```
 
-![image-20260324181422163](README.assets/image-20260324181422163.png)
+![第一次运行 Glimmer 应用](README.assets/image-20260324181422163.png)
 
-当我们按下 F5 时，C++ 编译器到底干了什么？
+### 从源码到 Sandbox.exe
 
-1. **编译引擎 (Build Glimmer)**：编译器首先来到 Glimmer 项目。它读取了 Application.cpp，把里面的 C++ 源码翻译成计算机认识的机器码。因为我们在 premake5.lua 中把 Glimmer 设置为了 kind "StaticLib"（静态库）。所以，编译器并没有生成一个可以双击运行的 .exe 程序，而是把所有机器码打包压缩成了一个 **Glimmer.lib** 文件（放在了隐藏的 bin 目录下）。*这就好比 Unity 官方写好了引擎的底层代码，打包成了一个巨大的 UnityEngine.dll 供你调用。*
-2. **编译游戏 (Build Sandbox)**：接着，编译器来到 Sandbox 项目。它读取了 SandboxApp.cpp。当编译器看到 #include <Application.h> 时，它会去 Glimmer/src 目录下找到这个头文件（因为我们在 Premake 里配置了 includedirs）。头文件就像一本“说明书”，告诉 Sandbox：“Glimmer 引擎里确实有一个叫 Application 的类，你可以用它。”
-3. **最终链接 (Linking)**：Sandbox 的代码编译完后，它只是知道了引擎长什么样，但**没有引擎的实际运行逻辑**。这时候，**链接器（Linker）**出场了！因为我们在 Premake 中写了 links { "Glimmer" }。链接器把刚刚生成的 Glimmer.lib（引擎的肉体）和 Sandbox 编译出的机器码死死地缝合在一起！最后，生成了一个完整的、包含引擎所有底层的 **Sandbox.exe**。你双击运行的，正是这个文件。
+按下 F5 后，Visual Studio 会先编译 `Glimmer`。这个项目在 Premake 中被声明为静态库，所以产物是 `Glimmer.lib`，它本身不能直接运行。随后 `SandboxApp.cpp` 被编译，头文件负责告诉编译器有哪些公开接口，链接阶段再从 `Glimmer.lib` 中找到这些接口的实现，最后生成 `Sandbox.exe`。
 
-代码逻辑层面（控制权反转）
+我最开始对这段流程的理解很模糊，总觉得 `#include` 之后代码就已经连在一起了。真正拆成两个工程后才看清：头文件解决的是编译时的声明，`links { "Glimmer" }` 解决的是链接时的实现。少掉任何一边，报错发生的阶段都不一样。
 
-这是引擎开发中最精妙、最核心的架构设计思想：**控制反转（Inversion of Control, IoC）**。
+### 跑通后留下的问题
 
-```
-// 在 SandboxApp.cpp 中 (游戏的入口点)
+这时的控制关系已经有了雏形：宿主负责创建自己的 `Application` 子类，进入 `Run()` 后，程序的持续更新交给引擎。多态在这里没有什么神秘的，它只是让引擎可以拿着 `Application*` 工作，同时允许 `Sandbox` 决定自己要装入哪些内容。
 
-int main() {
-    // 1. 游戏向引擎请求：给我创建一个应用实例！
-    gl::Application* app = gl::CreateApplication(); 
-    
-    // 2. 游戏把控制权交还给引擎的 Run() 函数！
-    app->Run(); 
-    
-    // 3. 游戏结束，清理内存
-    delete app;
-    return 0;
-}
-```
-
-多态的威力（虚函数与指针）
-
-```
-// SandboxApp.cpp 中
-gl::Application* gl::CreateApplication() {
-    return new Sandbox(); // 返回的竟然是 Sandbox！
-}
-```
-
-- CreateApplication 是定义在 Glimmer 引擎里的函数。它规定：**必须返回一个 gl::Application 类型的指针。**
-- 但是，我们在 Sandbox 里实现这个函数时，new 出来的却是 Sandbox 类！
-- **为什么可以这样？** 因为 class Sandbox : public gl::Application（Sandbox 继承了 Application）。
-- 这就是 C++ 的多态性（Polymorphism）。引擎拿到这个指针后，以为自己在操作一个普通的 Application，但实际上它在操作你写的 Sandbox 游戏！这就允许引擎在未来去调用 Sandbox 重写的那些虚函数（比如 virtual void OnUpdate()）。
-
-**引擎被打包成了库 -> 游戏链接了这个库 -> 游戏在** **main** **函数里把控制权上交给了引擎 -> 引擎开始死循环接管世界！**
+不过 `main()` 仍然写在 `SandboxApp.cpp` 里。每建一个新宿主，都要重复创建、运行和销毁应用的代码，而且客户端也知道了太多初始化细节。下一章的入口点改造，就是从这个别扭之处开始的。
 
 ## 入口点
 
-目前的 main 函数写在 SandboxApp.cpp 里，这意味着用户（游戏开发者）必须知道怎么初始化引擎、怎么调用 Run()，但是这都是可以再次简化的，所以创建EntryPoint.h，这个文件将包含真正的 int main()。
+上一章虽然跑通了 `Sandbox`，但 `main()` 还留在客户端。新建一个应用时，创建实例、进入循环、释放实例这套代码都要再抄一遍。更麻烦的是，初始化顺序也暴露给了客户端。日志或性能采样一旦加入，每个宿主都有可能写出不同的启动流程。
 
-```
+这一章要解决的就是这个问题：`main()` 由引擎提供，客户端只负责说明自己想创建哪一种 `Application`。
+
+### 把启动流程收回引擎
+
+`EntryPoint.h` 保存 Windows 入口。它先初始化日志，再调用客户端实现的 `CreateApplication()`，等主循环结束后销毁实例。当前源码还在创建、运行和关闭三个阶段外包了一层性能采样宏；`GL_PROFILE` 关闭时，这些宏不会生成实际代码。
+
+```cpp
 #pragma once
 
 #ifdef GL_PLATFORM_WINDOWS
@@ -178,5679 +106,1421 @@ extern gl::Application* gl::CreateApplication();
 
 int main(int argc, char** argv)
 {
+    gl::Log::Init();
+
     auto app = gl::CreateApplication();
-
     app->Run();
-
     delete app;
 }
 
 #endif
 ```
 
-以及最重要的注入宏定义，不然等于没写，可以在visual studio每个项目加入预处理器定义，这里我采用在premake.lua脚本添加
+客户端现在只需要包含一次入口头文件，并实现工厂函数。`Sandbox` 可以装入 `Sandbox2D`，编辑器也可以创建自己的 `GlimmerEditor`，启动和关闭过程仍由同一份代码处理。
 
+```cpp
+#include <Glimmer.h>
+#include "Glimmer/Core/EntryPoint.h"
+
+class Sandbox : public gl::Application
+{
+public:
+    Sandbox()
+    {
+        PushLayer(new gl::Sandbox2D());
+    }
+};
+
+gl::Application* gl::CreateApplication()
+{
+    return new Sandbox();
+}
 ```
-workspace "GlimmerEngine"
-    -- ... (前面的配置不变) ...
 
--- 1. 引擎项目
-project "Glimmer"
-    -- ... (前面的配置不变) ...
+这里有个容易忽略的限制：`EntryPoint.h` 含有 `main()` 的定义，只能被一个可执行目标中的一个源文件包含。它不是普通的公共头文件，随手放进多个 `.cpp` 会直接造成重复符号。
 
-    -- 【新增】：告诉编译器，如果我们是在 Windows 上编译，就定义 GL_PLATFORM_WINDOWS
-    filter "system:windows"
-        systemversion "latest"
-        defines {
-            "GL_PLATFORM_WINDOWS",
-            "GL_BUILD_DLL" -- 预留，虽然我们现在是静态库
-        }
+### 平台开关放进构建配置
 
--- 2. 沙盒项目
-project "Sandbox"
-    -- ... (前面的配置不变) ...
+入口目前只支持 Windows，因此引擎和所有宿主都要看到 `GL_PLATFORM_WINDOWS`。我没有在 Visual Studio 的项目属性里逐个添加，而是让 Premake 在生成工程时统一写入：
 
-    -- 【新增】：沙盒也需要知道自己是在 Windows 上
-    filter "system:windows"
-        systemversion "latest"
-        defines {
-            "GL_PLATFORM_WINDOWS"
-        }
+```lua
+filter "system:windows"
+    systemversion "latest"
+    defines { "GL_PLATFORM_WINDOWS" }
 ```
+
+使用项目自己的宏还有一个实际好处：源码判断的是 Glimmer 允许启用的实现，不是编译器碰巧运行在哪个系统上。现在 `Core.h` 对非 Windows 平台仍会报错，所以这只是把边界说清楚，并不表示其他平台已经能运行。
+
+做到这里，职责终于比较顺手了。引擎决定程序怎样启动，宿主决定启动哪一个应用。后面再往入口里加入日志或采样，也不需要同时修改 `Sandbox` 和两个编辑器宿主。
 
 ## 日志系统
 
-首先引入子模块
+最早调试时，我直接把文字写到 `std::cout`。窗口和渲染代码一多，这种做法很快就失去作用：消息没有级别，也看不出是引擎内部还是客户端打出来的。Glimmer 因此接入了 spdlog，并把日志初始化放到 `EntryPoint.h`，保证 `Application` 创建前就能记录启动错误。
 
-```
-git submodule add https://github.com/gabime/spdlog.git Glimmer/vendor/spdlog
-```
+spdlog 作为仓库子模块放在 `Glimmer/vendor/spdlog`，Premake 将它的 `include` 目录同时提供给引擎和宿主。格式写法可参考 [spdlog 的 Custom formatting 文档](https://github.com/gabime/spdlog/wiki/Custom-formatting)。
 
-然后告诉premake引擎现在需要包含这个新文件夹
+### Core 和 Client 分开
 
-```
-project "Glimmer"
-    -- ... 其他配置不变 ...
-    includedirs {
-        "%{prj.name}/src",
-        "%{prj.name}/vendor/spdlog/include" -- 新增这一行
-    }
-    
-        includedirs {
-        "Glimmer/src", -- 沙盒需要引用引擎的代码
-        "Glimmer/vendor/spdlog/include"
-    }
-```
+`Log` 持有两个 logger。`GLIMMER` 用于引擎内部，`APP` 留给宿主代码。两边都输出到带颜色的控制台，默认开放到 `trace` 级别。
 
-新建 Log.h 和 Log.cpp
-
-```
-#pragma once
-#include "spdlog/spdlog.h"
-#include <memory>
-
+```cpp
 namespace gl {
-	class Log
-	{
+    class Log
+    {
     public:
         static void Init();
-        inline static std::shared_ptr<spdlog::logger>& GetCoreLogger() { return s_CoreLogger; }
-        inline static std::shared_ptr<spdlog::logger>& GetClientLogger() { return s_ClientLogger; }
+
+        static std::shared_ptr<spdlog::logger>& GetCoreLogger();
+        static std::shared_ptr<spdlog::logger>& GetClientLogger();
+
     private:
         static std::shared_ptr<spdlog::logger> s_CoreLogger;
         static std::shared_ptr<spdlog::logger> s_ClientLogger;
-	};
+    };
+}
+```
+
+调用处使用两组宏。名字看起来只差一个 `CORE`，但日志一多以后，这个区别很有用；看到前缀就能先判断问题属于引擎还是应用。
+
+```cpp
+#define GL_CORE_TRACE(...) ::gl::Log::GetCoreLogger()->trace(__VA_ARGS__)
+#define GL_CORE_ERROR(...) ::gl::Log::GetCoreLogger()->error(__VA_ARGS__)
+#define GL_CORE_WARN(...)  ::gl::Log::GetCoreLogger()->warn(__VA_ARGS__)
+#define GL_CORE_INFO(...)  ::gl::Log::GetCoreLogger()->info(__VA_ARGS__)
+
+#define GL_TRACE(...)      ::gl::Log::GetClientLogger()->trace(__VA_ARGS__)
+#define GL_ERROR(...)      ::gl::Log::GetClientLogger()->error(__VA_ARGS__)
+#define GL_WARN(...)       ::gl::Log::GetClientLogger()->warn(__VA_ARGS__)
+#define GL_INFO(...)       ::gl::Log::GetClientLogger()->info(__VA_ARGS__)
+```
+
+初始化时统一设置时间、logger 名称和正文格式：
+
+```cpp
+void gl::Log::Init()
+{
+    spdlog::set_pattern("%^[%T] %n: %v%$");
+
+    s_CoreLogger = spdlog::stdout_color_mt("GLIMMER");
+    s_CoreLogger->set_level(spdlog::level::trace);
+
+    s_ClientLogger = spdlog::stdout_color_mt("APP");
+    s_ClientLogger->set_level(spdlog::level::trace);
+}
+```
+
+### 一次编码问题
+
+接入后第一次构建并不顺利。MSVC 报出了 `Unicode support requires compiling with /utf-8`，原因是 Windows 中文环境的默认代码页与 spdlog/fmt 期望的 UTF-8 源文件不一致。最后没有去改第三方库，而是在 Premake 的 Windows 配置里统一加入：
+
+```lua
+filter "system:windows"
+    buildoptions { "/utf-8" }
+```
+
+这个改动后来也保护了源码里的中文注释和字符串。编码问题最烦人的地方是，它经常只在另一台机器上出现；把选项写进生成脚本，比依赖某台电脑的 Visual Studio 设置可靠得多。
+
+### 启动时留下一个明确标记
+
+日志跑通后，我用原始字符串写了一段 Glimmer ASCII 标题，并在 `Log::Init()` 末尾通过 `GL_CORE_INFO` 输出。它没有功能价值，但很适合作为启动检查：标题能完整显示，至少说明 logger 创建、颜色输出和多行原始字符串都在正常工作。
+
+![Glimmer 日志与启动标题](README.assets/image-20260325164801944.png)
+
+后来事件对象也需要直接写进日志，这又碰到了 fmt 的类型格式化限制。那个问题放在下一章记录，因为修复最终落在 `Event.h` 中。
+
+## 事件系统
+
+窗口库会报告关闭、缩放、按键和鼠标动作，但上层不应该到处直接依赖 GLFW 回调。事件系统放在两者中间：平台层创建 Glimmer 事件，`Application` 接收后再交给 Layer。当前实现是同步分发，没有事件队列；事件产生后会沿着同一条调用栈立即处理。
+
+### 事件怎样表示
+
+所有事件都继承 `Event`。`EventType` 表示具体类型，`EventCategory` 用位掩码描述所属分组，`Handled` 则记录事件是否已经被消费。比如 `MouseButtonPressedEvent` 同时属于 Mouse 和 Input，只需要把两个分类位做按位或。
+
+```cpp
+#define BIT(x) (1 << x)
+
+enum class EventType
+{
+    // 本章只摘录会用到的类型
+    None = 0,
+    WindowClose, WindowResize,
+    KeyPressed, KeyReleased, KeyTyped,
+    MouseButtonPressed, MouseButtonReleased,
+    MouseMoved, MouseScrolled
 };
 
-```
+enum EventCategory
+{
+    None = 0,
+    EventCategoryApplication = BIT(0),
+    EventCategoryInput       = BIT(1),
+    EventCategoryKeyboard    = BIT(2),
+    EventCategoryMouse       = BIT(3),
+    EventCategoryMouseDevice = BIT(4)
+};
 
-https://github.com/gabime/spdlog/wiki/Custom-formatting在wiki中可以查看格式设置
+class Event
+{
+public:
+    bool Handled = false;
 
-```
-#include "Log.h"
-#include "spdlog/sinks/stdout_color_sinks.h"
+    virtual EventType GetEventType() const = 0;
+    virtual const char* GetName() const = 0;
+    virtual int GetCategoryFlags() const = 0;
+    virtual std::string ToString() const { return GetName(); }
 
-namespace gl {
-    std::shared_ptr<spdlog::logger> Log::s_CoreLogger;
-    std::shared_ptr<spdlog::logger> Log::s_ClientLogger;
-
-    void Log::Init() {
-        spdlog::set_pattern("%^[%T] %n: %v%$"); // 设置日志格式：时间-名称-内容
-        s_CoreLogger = spdlog::stdout_color_mt("GLIMMER");
-        s_CoreLogger->set_level(spdlog::level::trace);
-
-        s_ClientLogger = spdlog::stdout_color_mt("APP");
-        s_ClientLogger->set_level(spdlog::level::trace);
+    bool IsInCategory(EventCategory category)
+    {
+        return GetCategoryFlags() & category;
     }
+};
+```
+
+每个具体事件都要提供类型和分类。手写这些重复函数既无聊又容易漏，所以当前代码用 `EVENT_CLASS_TYPE` 与 `EVENT_CLASS_CATEGORY` 两个宏生成它们。宏在这里承担的是样板代码，不负责隐藏事件数据。
+
+```cpp
+class KeyPressedEvent : public KeyEvent
+{
+public:
+    KeyPressedEvent(int keycode, int repeatCount)
+        : KeyEvent(keycode), m_RepeatCount(repeatCount) {}
+
+    int GetRepeatCount() const { return m_RepeatCount; }
+
+    EVENT_CLASS_TYPE(KeyPressed)
+
+private:
+    int m_RepeatCount;
+};
+```
+
+目前的事件文件按 Application、Keyboard 和 Mouse 分开。分类不是文件目录的替代品，它主要用于上层一次判断一组输入，例如 ImGui 想拦截全部鼠标事件时，不必枚举每一种鼠标动作。
+
+### 分发与停止传播
+
+`EventDispatcher` 持有一个 `Event&`。`Dispatch<T>()` 先比较运行时类型，匹配后才把事件交给回调；回调返回的布尔值会写入 `Handled`。
+
+```cpp
+class EventDispatcher
+{
+public:
+    explicit EventDispatcher(Event& event)
+        : m_Event(event) {}
+
+    template<typename T>
+    bool Dispatch(std::function<bool(T&)> func)
+    {
+        if (m_Event.GetEventType() == T::GetStaticType())
+        {
+            m_Event.Handled = func(*(T*)&m_Event);
+            return true;
+        }
+        return false;
+    }
+
+private:
+    Event& m_Event;
+};
+```
+
+`Application::OnEvent()` 会先处理窗口关闭。随后事件从 LayerStack 顶部向下传递，让 UI 和其他 Overlay 比场景层更早收到输入。某一层把 `Handled` 设为 `true` 后，循环立即停止。
+
+```cpp
+EventDispatcher dispatcher(e);
+dispatcher.Dispatch<WindowCloseEvent>(
+    [this](WindowCloseEvent& event)
+    {
+        return OnWindowClose(event);
+    });
+
+for (auto it = m_LayerStack.end(); it != m_LayerStack.begin(); )
+{
+    (*--it)->OnEvent(e);
+    if (e.Handled)
+        break;
 }
 ```
 
-出现'Unicode support requires compiling with /utf-8'报错
+这个顺序后来变得很重要。没有它时，在 ImGui 面板上点击按钮也可能把同一次鼠标输入传给场景；有了逆序传播和 `Handled`，上层可以明确截住事件。
 
-这是因为中文版 Windows 的 Visual Studio (MSVC) 使用的是 GBK（或者叫 System Codepage）编码。当 spdlog 发现你没有开启 UTF-8 支持时，它就会通过 static_assert 故意让编译失败，以防你的日志输出变成乱码。
+### fmt 不认识 Event
 
-修改 **premake5.lua**
+事件刚写完时，我想直接输出一个 `WindowResizeEvent`：
 
-```
-workspace "GlimmerEngine"
-    -- ... (之前的配置) ...
-
-    -- 【新增】：为 MSVC 编译器开启 UTF-8 支持
-    filter "system:windows"
-        buildoptions { "/utf-8" } -- 这一行是解决报错的关键
-        systemversion "latest"
-        defines {
-            "GL_PLATFORM_WINDOWS"
-        }
+```cpp
+WindowResizeEvent event(1920, 1080);
+GL_TRACE("{}", event);
 ```
 
-测试
+结果 fmt 12 报出 `type_is_unformattable_for`。`Event` 虽然实现了 `operator<<` 和 `ToString()`，fmt 仍然不知道怎样格式化这个自定义类型。临时写成 `event.ToString()` 可以通过，但每个调用点都这样写很别扭。
 
-![image-20260325162630699](README.assets/image-20260325162630699.png)
+![fmt 无法格式化 Event 的编译错误](README.assets/image-20260326113548656.png)
 
-在Log.h中定义新的宏
+最后在 `Event.h` 中为 `Event` 派生类型补了 formatter，统一复用 `ToString()`：
 
-```
-// 引擎层日志宏 (Core)
-#define GL_CORE_ERROR(...)  ::gl::Log::GetCoreLogger()->error(__VA_ARGS__)
-#define GL_CORE_WARN(...)   ::gl::Log::GetCoreLogger()->warn(__VA_ARGS__)
-#define GL_CORE_INFO(...)   ::gl::Log::GetCoreLogger()->info(__VA_ARGS__)
-
-// 游戏层日志宏 (Client)
-#define GL_ERROR(...)       ::gl::Log::GetClientLogger()->error(__VA_ARGS__)
-#define GL_INFO(...)        ::gl::Log::GetClientLogger()->info(__VA_ARGS__)
-```
-
-在Log.cpp加入
-
-```
-        GL_CORE_INFO(R"(
- ****** ****** ****** ****** ****** ****** ****** ****** ****** ****** 
-////// ////// ////// ////// ////// ////// ////// ////// ////// //////                                                                        
-                                                                       
-   ********  **       ** ****     **** ****     **** ******** *******  
-  **//////**/**      /**/**/**   **/**/**/**   **/**/**///// /**////** 
- **      // /**      /**/**//** ** /**/**//** ** /**/**      /**   /** 
-/**         /**      /**/** //***  /**/** //***  /**/******* /*******  
-/**    *****/**      /**/**  //*   /**/**  //*   /**/**////  /**///**  
-//**  ////**/**      /**/**   /    /**/**   /    /**/**      /**  //** 
- //******** /********/**/**        /**/**        /**/********/**   //**
-  ////////  //////// // //         // //         // //////// //     //                                                                       
-                                                                       
- ****** ****** ****** ****** ****** ****** ****** ****** ****** ****** 
-////// ////// ////// ////// ////// ////// ////// ////// ////// ////// 
-)");
-```
-
-这样就可以实现立体艺术字
-
-<img src="README.assets/image-20260325164801944.png" alt="image-20260325164801944" style="zoom:67%;" />
-
-##  事件系统
-
-在游戏引擎架构中，**事件系统（Event System）** 被称为引擎的“神经系统”。
-
-它的核心作用是**解耦（Decoupling）**：让底层的窗口（如 GLFW 窗口）在发生动作（点击、缩放）时，不需要知道谁在处理这些动作，只需要把“信号”发出去，让上层的游戏逻辑（Sandbox）去监听并执行。
-
-###  核心组成部分
-
-- **EventType (枚举)**：定义具体的事件类型（如 KeyPressed, MouseButtonPressed, WindowClose）。
-- **EventCategory (位掩码枚举)**：将事件分类（如 Keyboard, Mouse, Input）。一个事件可以属于多个分类（例如“按下鼠标”既属于 Mouse 也属于 Input）。
-- **Event (基类)**：所有事件的祖先，定义了获取类型、分类、是否被处理（Handled）的接口。
-- **EventDispatcher (分发器)**：核心逻辑。它像一个过滤器，根据事件的类型，把它交给正确的函数去处理
-
-```
-#pragma once
-#include "Core.h"  // 我们需要在这里定义位操作宏
-
-namespace gl {
-
-    // 事件类型枚举
-    enum class EventType {
-        None = 0,
-        WindowClose, WindowResize, WindowFocus, WindowLostFocus, WindowMoved,
-        AppTick, AppUpdate, AppRender,
-        KeyPressed, KeyReleased, KeyTyped,
-        MouseButtonPressed, MouseButtonReleased, MouseMoved, MouseScrolled
-    };
-
-    // 事件分类（使用位移操作，方便一个事件属于多个分类）
-    enum EventCategory {
-        None = 0,
-        EventCategoryApplication = BIT(0),
-        EventCategoryInput = BIT(1),
-        EventCategoryKeyboard = BIT(2),
-        EventCategoryMouse = BIT(3),
-        EventCategoryMouseDevice = BIT(4)
-    };
-
-    // 为了方便子类实现，定义的辅助宏
-#define EVENT_CLASS_TYPE(type) static EventType GetStaticType() { return EventType::##type; }\
-                               virtual EventType GetEventType() const override { return GetStaticType(); }\
-                               virtual const char* GetName() const override { return #type; }
-
-#define EVENT_CLASS_CATEGORY(category) virtual int GetCategoryFlags() const override { return category; }
-
-    // 事件基类
-    class Event {
-    public:
-        bool Handled = false; // 如果被处理了，就不再传给下一层
-
-        virtual EventType GetEventType() const = 0;
-        virtual const char* GetName() const = 0;
-        virtual int GetCategoryFlags() const = 0;
-        virtual std::string ToString() const { return GetName(); }
-
-        // 检查该事件是否属于某个分类
-        inline bool IsInCategory(EventCategory category) {
-            return GetCategoryFlags() & category;
-        }
-    };
-
-    // 事件分发器：根据类型执行对应的函数
-    class EventDispatcher {
-        template<typename T>
-        using EventFn = std::function<bool(T&)>;
-    public:
-        EventDispatcher(Event& event) : m_Event(event) {}
-
-        template<typename T>
-        bool Dispatch(EventFn<T> func) {
-            if (m_Event.GetEventType() == T::GetStaticType()) {
-                m_Event.Handled = func(*(T*)&m_Event);
-                return true;
-            }
-            return false;
-        }
-    private:
-        Event& m_Event;
-    };
-
-    // 方便 spdlog 直接打印事件对象
-    inline std::ostream& operator<<(std::ostream& os, const Event& e) {
-        return os << e.ToString();
-    }
-}
-```
-
- Core.h，用来放引擎最基础的宏定义
-
-```
-#pragma once
-
-// BIT(x) 宏： 1 << 0 = 1, 1 << 1 = 2, 1 << 2 = 4...
-// 用于 EventCategory 的位掩码判定
-#define BIT(x) (1 << x)
-```
-
-同理编写各种事件，目前包含KeyEvent、MoudeEvent、ApplicationEvent，这里需要注意头文件的作用情况
-
-```
-#pragma once
-#include "Glimmer/Events/Event.h"
-
-namespace gl {
-
-    class KeyEvent : public Event {
-    public:
-        inline int GetKeyCode() const { return m_KeyCode; }
-        EVENT_CLASS_CATEGORY(EventCategoryKeyboard | EventCategoryInput)
-    protected:
-        KeyEvent(int keycode) : m_KeyCode(keycode) {}
-        int m_KeyCode;
-    };
-
-    class KeyPressedEvent : public KeyEvent {
-    public:
-        KeyPressedEvent(int keycode, int repeatCount)
-            : KeyEvent(keycode), m_RepeatCount(repeatCount) {}
-
-        inline int GetRepeatCount() const { return m_RepeatCount; }
-
-        std::string ToString() const override {
-            std::stringstream ss;
-            ss << "KeyPressedEvent: " << m_KeyCode << " (" << m_RepeatCount << " repeats)";
-            return ss.str();
-        }
-
-        EVENT_CLASS_TYPE(KeyPressed)
-    private:
-        int m_RepeatCount;
-    };
-}#pragma once
-#include "Glimmer/Events/Event.h"
-
-namespace gl {
-
-    class KeyEvent : public Event {
-    public:
-        inline int GetKeyCode() const { return m_KeyCode; }
-        EVENT_CLASS_CATEGORY(EventCategoryKeyboard | EventCategoryInput)
-    protected:
-        KeyEvent(int keycode) : m_KeyCode(keycode) {}
-        int m_KeyCode;
-    };
-
-    class KeyPressedEvent : public KeyEvent {
-    public:
-        KeyPressedEvent(int keycode, int repeatCount)
-            : KeyEvent(keycode), m_RepeatCount(repeatCount) {}
-
-        inline int GetRepeatCount() const { return m_RepeatCount; }
-
-        std::string ToString() const override {
-            std::stringstream ss;
-            ss << "KeyPressedEvent: " << m_KeyCode << " (" << m_RepeatCount << " repeats)";
-            return ss.str();
-        }
-
-        EVENT_CLASS_TYPE(KeyPressed)
-    private:
-        int m_RepeatCount;
-    };
-}
-```
-
-最后尝试在Application调试
-
-```
-    void Application::Run() {
-
-        WindowResizeEvent e(1920, 1080);
-        GL_TRACE("{0}", e);
-
-        while (true) {
-            // 这里将是未来游戏的心脏：Game Loop
-        }
-    }
-```
-
-但是出现报错
-
-```
-1>E:\Zaproject\Engine\Glimmer\Glimmer\vendor\spdlog\include\spdlog\fmt\bundled\base.h(2310,45): error C2079: “_”使用未定义的 struct“fmt::v12::detail::type_is_unformattable_for<T,char>”
-1>        with
-1>        [
-1>            T=gl::WindowResizeEvent
-1>        ]
-```
-
-回头检查了很多次，很奇怪，宏就是无法识别e作为传输对象，只有加上ToString才可以通过
-
-![image-20260326113548656](README.assets/image-20260326113548656.png)
-
-查了一些资料，找到了原因：fmt 12+（新版）不认识你的 Event 类，不知道怎么格式化它
-
-需要**在 Event.h 末尾**加一段 fmt 格式化支持代码
-
-```
-#include <spdlog/fmt/fmt.h>
-
+```cpp
 template<typename T>
-struct fmt::formatter<T, std::enable_if_t<std::is_base_of_v<gl::Event, T>, char>>
+struct fmt::formatter<
+    T,
+    std::enable_if_t<std::is_base_of_v<gl::Event, T>, char>>
     : fmt::formatter<std::string>
 {
-    auto format(const T& e, format_context& ctx) const
+    auto format(const T& event, format_context& ctx) const
     {
-        return formatter<std::string>::format(e.ToString(), ctx);
+        return formatter<std::string>::format(event.ToString(), ctx);
     }
 };
 ```
 
-之后就不会进行报错
+![Event 可以直接写入日志](README.assets/image-20260326114511827.png)
 
-![image-20260326114511827](README.assets/image-20260326114511827.png)
+这次报错让我意识到，能被 `std::ostream` 输出，不等于能被 fmt 自动格式化。把适配放在事件类型旁边以后，日志调用保持简洁，新的事件子类也会沿用同一套字符串输出规则。
 
 ## 预编译头文件 (PCH)
 
-在上一节的事件系统可以看到，如果你使用了某个标准库的功能（比如 std::function）却没有包含对应的头文件（<functional>），编译器会变得非常混乱。它不认识 std::function，导致后面的**模板解析全部失败**，进而引发了一连串莫名其妙的错误（甚至连 spdlog 和系统的 <ratio> 库都会跟着报废）。这在之后模块越来越多的情况下是难以进行管理的，因此为了彻底解决“漏掉头文件”的问题并大幅提升编译速度，正式引入“预编译头文件 (PCH)”
+事件系统加入 `std::function`、字符串流和日志以后，很多 `.cpp` 都在反复解析同一批标准库头文件。构建还能完成，只是每加一个源文件，等待时间都会多一点。PCH 就是在这个阶段接进来的：把稳定且高频使用的头文件预先编译，后续编译单元直接复用结果。
 
-在 Glimmer/src 下创建 glpch.h。把所有常用的标准库全放进去。
+我起初还把 PCH 当成了防止漏写 `#include` 的办法，后来发现这正好反了。某个头文件因为 PCH 碰巧提供了 `std::string`，并不代表它的依赖写对了；一旦被另一个目标单独包含，问题还是会出现。PCH 负责速度，头文件仍要能够说明自己的直接依赖。
 
-```
+### Glimmer 的 PCH 内容
+
+`glpch.h` 放在 `Glimmer/src`，里面主要是常用标准库、日志与性能采样基础。Windows SDK 只在 Windows 配置下进入 PCH。
+
+```cpp
 #pragma once
 
-#include <iostream>
-#include <memory>
-#include <utility>
 #include <algorithm>
 #include <functional>
-
-#include <string>
+#include <iostream>
+#include <memory>
 #include <sstream>
-#include <vector>
+#include <string>
 #include <unordered_map>
-#include <unordered_set>
+#include <vector>
+
+#include "Glimmer/Core/Core.h"
+#include "Glimmer/Core/Log.h"
+#include "Glimmer/Debug/Instrumentor.h"
 
 #ifdef GL_PLATFORM_WINDOWS
 #include <Windows.h>
 #endif
 ```
 
-在 Glimmer/src 下创建 glpch.cpp。
-*(注意：这是给 Visual Studio 用的，它需要一个空的源文件来触发编译 PCH)*。
+Visual Studio 需要一个源文件创建预编译产物，因此 `glpch.cpp` 只有一行：
 
-```
+```cpp
 #include "glpch.h"
 ```
 
-修改 premake5.lua 启用 PCH，需要告诉 Premake 哪个是 PCH 文件。
+Premake 把头文件和创建源文件绑定到 `Glimmer` 静态库目标。这里的路径相对于 `Glimmer/premake5.lua`：
 
-```
-project "Glimmer"
-    -- ... 之前的配置 ...
-
-    pchheader "glpch.h" -- 告诉编译器 PCH 的名字
-    pchsource "Glimmer/src/glpch.cpp" -- 只有 Glimmer 项目需要这个源文件
-
-    files {
-        "%{prj.name}/src/**.h",
-        "%{prj.name}/src/**.cpp",
-    }
-    -- ...
+```lua
+pchheader "glpch.h"
+pchsource "src/glpch.cpp"
 ```
 
-**所有属于 Glimmer 项目内部的 .cpp 源文件**（即 Glimmer/src 下的所有文件），都**必须**在第一行写上 #include "glpch.h"。
+### 使用边界
 
-- **原因**：你在 Premake 里为 Glimmer 项目开启了 PCH。如果编译器在 Glimmer 项目的 .cpp 文件里第一行没看到这个头文件，它就会报错（报错代码通常是 C1010）。
+引擎实现文件通常把 `#include "glpch.h"` 放在最前面，否则 MSVC 可能报 C1010。`Sandbox` 和编辑器是独立目标，不应该直接使用引擎私有 PCH；它们可以按需要建立自己的预编译头。
 
-**绝对不要包含 glpch.h 的文件**
+头文件则应直接包含对外接口真正需要的标准库或类型声明。仓库里仍有少数早期头文件直接包含 `glpch.h`，新增代码不再沿用这个写法。否则编译可能暂时变快了，模块边界却会越来越难看清。
 
-1. 引擎内部的 .h 头文件 (重要！)
+PCH 接入后没有改变任何运行时行为，收益都发生在编译阶段。它不是什么复杂功能，但项目变大以后，不再反复解析 `<Windows.h>` 和常用 STL 头文件，体感非常明显。
 
-   **永远不要在 .h 文件里 #include "glpch.h"。**
+## 窗口与 GLFW
 
-   **原因**：头文件是被别人引用的。如果你在 Event.h 里写了 glpch.h，而外部的 Sandbox 项目引用了 Event.h，但 Sandbox 没有配置这个 PCH，它就会报错找不到 glpch.h。
+只有主循环还不够，图形程序至少需要一个窗口和对应的图形上下文。Glimmer 使用 GLFW 创建 Windows 窗口、轮询系统消息，并交换前后缓冲区。GLFW 作为静态库项目接入 Premake，`Glimmer` 同时链接 Windows 的 `opengl32.lib`。
 
-   **做法**：在 .h 里，如果你需要 std::string，就直接包含 #include <string>。
+我没有把 GLFW 调用直接塞进 `Application`。当时最直接的原因不是未来要支持多少平台，而是 `Application` 已经开始负责主循环和生命周期，再让它保存 GLFW 细节，很快就会变成谁都不敢改的文件。
 
-2. Sandbox 项目的所有文件
+### Window 接口
 
-   **绝对不要在 Sandbox 里的任何文件包含 glpch.h。**
+`Window` 描述上层实际需要的操作：更新窗口、查询尺寸、接收事件、控制 VSync，以及在少数平台集成场景下取得原生句柄。
 
-   **原因**：glpch.h 是属于 Glimmer 引擎项目的内部私有财产。Sandbox 是另一个独立的工程，它有自己的编译环境。它甚至不需要 PCH，或者它可能有自己的一套 sandpch.h。
-
-启用过后编译速度真起飞了
-
-## 窗口和GLFW
-
-引入 **GLFW** 是 Glimmer 引擎从“控制台黑框框”向“真正的图形化软件”跨越的关键一步。
-
-我们将遵循工业级引擎的开发模式：**不要直接在 Application 里写 GLFW 代码**，而是先建立一个**窗口抽象层（Window Abstraction）**。这样未来你想把底层换成 DirectX 或支持手机端时，只需要增加一个实现类，而不需要改动引擎核心逻辑。
-
-添加子模块
-
-```
-git submodule add https://github.com/glfw/glfw.git .\Glimmer\vendor\GLFW
-```
-
-在 **Glimmer/vendor/GLFW/** 目录下新建文件 **premake5.lua**：
-
-
-
-**修改 premake5.lua**：
-我们需要告诉 Glimmer 项目去哪里找 GLFW。
-
-```
--- Glimmer 项目配置中增加：
-project "Glimmer"
-    -- ...
-    includedirs {
-        "%{prj.name}/src",
-        "%{prj.name}/vendor/spdlog/include",
-        "%{prj.name}/vendor/GLFW/include" -- 新增
-    }
-
-    filter "system:windows"
-        systemversion "latest"
-        defines { "GL_PLATFORM_WINDOWS" }
-        
-        -- 新增链接项
-        links { 
-            "GLFW", 
-            "opengl32.lib" -- Windows 自带的 OpenGL 驱动库
-        }
-
-        libdirs {
-            "Glimmer/vendor/GLFW/lib" -- 告诉 Premake 去哪里找 glfw3.lib
-        }
-```
-
-定义窗口接口 (Window.h)
-
-在 Glimmer/src/Glimmer 下创建 Window.h。这是一个纯虚基类，定义了所有平台窗口都必须有的功能。
-
-**Glimmer/src/Glimmer/Window.h**:
-
-
-
-Windows 平台的具体实现 (WindowsWindow.h/cpp)
-
-我们在 Glimmer/src/Platform/Windows 目录下专门存放 Windows 特有的代码。
-
-**Glimmer/src/Platform/Windows/WindowsWindow.h**:
-
-
-
-实现窗口初始化 (WindowsWindow.cpp)
-
-在这里，我们将调用 GLFW 的 API 来真正弹出一个窗口，并设置 **VSync（垂直同步）**。
-
-**Glimmer/src/Platform/Windows/WindowsWindow.cpp**:
-
-
-
-在 Application 中接入窗口
-
-**Glimmer/src/Glimmer/Application.h**:
-
-```
-    private:
-        std::unique_ptr<Window> m_Window; // 引擎持有的窗口指针
-        bool m_Running = true;
-```
-
-**Glimmer/src/Glimmer/Application.cpp**:
-
-```
-// Application.cpp
-#include "glpch.h"
-#include "Application.h"
-
+```cpp
 namespace gl {
-    Application::Application() {
-        m_Window = std::unique_ptr<Window>(Window::Create());
-    }
-    Application::~Application() {}
+    struct WindowProps
+    {
+        std::string Title;
+        unsigned int Width;
+        unsigned int Height;
 
-    void Application::Run() {
+        WindowProps(const std::string& title = "Glimmer Engine",
+                    unsigned int width = 1280,
+                    unsigned int height = 720)
+            : Title(title), Width(width), Height(height) {}
+    };
 
-        while (m_Running) {
-            m_Window->OnUpdate();
-        }
-    }
+    class Window
+    {
+    public:
+        using EventCallbackFn = std::function<void(Event&)>;
+
+        virtual ~Window() = default;
+        virtual void OnUpdate() = 0;
+
+        virtual unsigned int GetWidth() const = 0;
+        virtual unsigned int GetHeight() const = 0;
+        virtual void SetEventCallback(const EventCallbackFn& callback) = 0;
+        virtual void SetVSync(bool enabled) = 0;
+        virtual bool IsVSync() const = 0;
+        virtual void* GetNativeWindow() const = 0;
+
+        static Window* Create(const WindowProps& props = WindowProps());
+    };
 }
 ```
 
-现在运行可以生成一个全黑的窗口了！
+这个接口为其他平台留出了位置，但当前工厂只有一个实现：
 
-![image-20260326132003846](README.assets/image-20260326132003846.png)
+```cpp
+gl::Window* gl::Window::Create(const WindowProps& props)
+{
+    return new WindowsWindow(props);
+}
+```
+
+所以这里的抽象只是隔开了依赖，还不能当作跨平台支持。`Application` 拿到返回值后立即交给 `std::unique_ptr<Window>` 管理，上层不需要包含 `WindowsWindow.h` 或 GLFW 头文件。
+
+### WindowsWindow 做了什么
+
+`WindowsWindow` 保存 `GLFWwindow*`、窗口属性和一个 `GraphicsContext`。初始化时，它只调用一次 `glfwInit()`，创建窗口，然后建立 `OpenGLContext`。OpenGL 上下文负责把窗口设为当前上下文、通过 Glad 加载函数地址，并输出显卡信息。VSync 默认开启。
+
+每帧末尾，窗口只做两件事：处理系统消息，再交换缓冲区。
+
+```cpp
+void WindowsWindow::OnUpdate()
+{
+    glfwPollEvents();
+    m_Context->SwapBuffers();
+}
+
+void WindowsWindow::SetVSync(bool enabled)
+{
+    glfwSwapInterval(enabled ? 1 : 0);
+    m_Data.VSync = enabled;
+}
+```
+
+`Application::Run()` 把 `m_Window->OnUpdate()` 放在循环末尾。从这一步开始，程序终于不再只是任务管理器里的一个进程，而是能显示一个 1280×720 的黑色窗口。
+
+![Glimmer 创建的第一个 GLFW 窗口](README.assets/image-20260326132003846.png)
+
+这个黑窗口当时已经足够让我高兴一阵子。不过它还不会把关闭、缩放或输入动作交给引擎。窗口能显示和窗口能参与应用逻辑，是两件不同的事。
 
 ## 窗口事件
 
-目前窗口虽然能弹出来，但它就像一个植物人，对外界的点击、缩放、关闭毫无反应。我们要利用 GLFW 的**回调（Callbacks）**机制，将系统的原生消息转化为我们之前写好的 Event 类，并传回给 Application。
+窗口创建完成后，下一步是把 GLFW 回调转换为前面定义的 Glimmer 事件。平台层负责翻译，不直接决定游戏如何响应；`Application` 只接收 `Event&`，也不需要知道事件最初来自 GLFW。
 
-在 WindowsWindow.cpp 中绑定 GLFW 回调
+### 给 C 回调补上对象上下文
 
-这是最关键的一步。GLFW 是 C 语言写的，它使用全局函数作为回调，而我们的引擎是 C++ 面向对象的。我们利用 glfwSetWindowUserPointer 将我们的 WindowData 结构体塞进 GLFW 窗口里。
+GLFW 的回调是普通函数指针，不能直接保存 `WindowsWindow` 的 `this`。`WindowsWindow::Init()` 因此把成员 `m_Data` 的地址存进 GLFW 窗口：
 
-修改 **WindowsWindow.cpp** 的 Init 函数：
-
-引入三类事件文件
-
+```cpp
+glfwSetWindowUserPointer(m_Window, &m_Data);
 ```
-// 设置窗口缩放回调
-glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* window, int width, int height) {
-    // 从“口袋”里掏出我们的 Data
-    WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-    data.Width = width;
-    data.Height = height;
 
-    WindowResizeEvent event(width, height);
-    data.EventCallback(event); // 触发回调！
+`WindowData` 保存窗口尺寸、VSync 状态和上层注册的事件回调。它是 `WindowsWindow` 的成员，在 GLFW 窗口销毁前一直有效。
+
+```cpp
+struct WindowData
+{
+    std::string Title;
+    unsigned int Width;
+    unsigned int Height;
+    bool VSync;
+    EventCallbackFn EventCallback;
+};
+```
+
+回调触发时，再通过 `glfwGetWindowUserPointer()` 取回这个地址。窗口缩放的转换过程很直接：更新缓存尺寸，构造 `WindowResizeEvent`，然后交给上层回调。
+
+```cpp
+glfwSetWindowSizeCallback(
+    m_Window,
+    [](GLFWwindow* window, int width, int height)
+    {
+        WindowData& data =
+            *(WindowData*)glfwGetWindowUserPointer(window);
+
+        data.Width = width;
+        data.Height = height;
+
+        WindowResizeEvent event(width, height);
+        data.EventCallback(event);
     });
 ```
 
-（我们在之后通过 glfwSetWindowUserPointer 和 glfwGetWindowUserPointer 获取了 m_Data,并将其复制到一个名为data的引用上：WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window); ） 
+关闭、按键、字符输入、鼠标按钮、滚轮和光标移动都沿用同一套做法。GLFW 的 action 会在平台层转换为 `KeyPressedEvent`、`KeyReleasedEvent` 或对应的鼠标事件。这样 GLFW 常量和回调签名不会继续向 `Application` 扩散。
 
-调用出来的 OnEvent( ) 就相当于 data.EventCallback( )，然而 OnEvent 在定义上是需要参数的，所以 data.EventCallback(event) == OnEvent(event) ,这个 event ，就是我们用占位符延缓的参数（ 这个参数被标明会在后续使用） 
+### Application 接住事件
 
-在使用 Event 对象作为 OnEvent 的参数填入之后，event这个参数参与到 OnEvent 函数体内的操作中去，完成我们定义的操作。
+窗口创建后，`Application` 用一个捕获 `this` 的 Lambda 注册自己的 `OnEvent()`：
 
-![image-20260326151138428](README.assets/image-20260326151138428.png)
-
-其余同理
-
-在 Application 中接收事件
-
-现在 WindowsWindow 会疯狂地向外发送事件，我们需要在 Application 里接住它们并决定如何处理。
-
-**Application.h**:
-
-```
-class Application {
-    public:
-        // ...
-        void OnEvent(Event& e); // 处理事件的中心枢纽
-    private:
-        bool OnWindowClose(WindowCloseEvent& e); // 专门处理关闭的逻辑
-        // ...
-    };
-```
-
-**Application.cpp**:
-
-```
-// 在构造函数里绑定回调
-Application::Application() {
-    m_Window = std::unique_ptr<Window>(Window::Create());
-    
-    // 使用 Lambda 表达式把事件传给 OnEvent
-    m_Window->SetEventCallback([this](Event& e) {
-        this->OnEvent(e);
+```cpp
+m_Window->SetEventCallback(
+    [this](Event& event)
+    {
+        OnEvent(event);
     });
+```
+
+这里的 Lambda 没有复杂技巧。它只是把 C++ 成员函数和 `Window` 保存的通用回调类型接在一起，比单独维护静态转发函数更容易读。
+
+`OnEvent()` 首先尝试分发窗口关闭事件。匹配成功后，`OnWindowClose()` 把 `m_Running` 设为 `false`，主循环会在当前帧结束后退出。
+
+```cpp
+void Application::OnEvent(Event& event)
+{
+    EventDispatcher dispatcher(event);
+    dispatcher.Dispatch<WindowCloseEvent>(
+        [this](WindowCloseEvent& closeEvent)
+        {
+            return OnWindowClose(closeEvent);
+        });
+
+    // 随后按逆序交给 LayerStack，Handled 后停止传播
 }
 
-void Application::OnEvent(Event& e) {
-    // 1. 打印所有事件（调试用）
-    GL_CORE_TRACE("{0}", e.ToString());
-
-    // 2. 使用分发器处理特定事件
-    EventDispatcher dispatcher(e);
-    // 如果是关闭窗口事件，就执行 OnWindowClose 函数
-    dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent& event) {
-        return this->OnWindowClose(event);
-    });
-}
-
-bool Application::OnWindowClose(WindowCloseEvent& e) {
-    m_Running = false; // 停止 while 循环，优雅退出
+bool Application::OnWindowClose(WindowCloseEvent& event)
+{
+    m_Running = false;
     return true;
 }
 ```
 
-```
-m_Window->SetEventCallback([this](Event& e) {
-    this->OnEvent(e);
-});
-```
+![Application 收到 GLFW 转换后的窗口事件](README.assets/image-20260326183438714.png)
 
-- **原理**：编译器会为你自动生成一个匿名的“闭包”类。[this] 表示通过值捕获当前对象的指针，使得 Lambda 内部可以访问成员函数。
+这条链路跑通后，窗口、平台实现和应用循环之间的关系才算清楚：GLFW 负责报告系统动作，`WindowsWindow` 把动作翻译成引擎事件，`Application` 决定传播顺序。后面加入 Layer 时，只需要接在 `Application::OnEvent()` 的下游，不用重新碰 GLFW 回调。
 
-  **性能更好**：编译器更容易对 Lambda 进行内联（Inline）优化。它不涉及复杂的包装转换，几乎没有额外开销。
+## 图层 (Layer)
 
-  **更直观**：代码一眼就能看出逻辑——“当事件 e 发生时，执行 this->OnEvent(e)”。
+窗口和事件接进来以后，`Application` 很快塞满了测试逻辑。每加一个功能都去改主循环，短期省事，过几天就很难分清哪些代码属于引擎，哪些只是某个示例。Layer 是当时用来拆开这些逻辑的最小单位。
 
-  **调试友好**：在断点调试时，堆栈信息比 std::bind 简单得多。
+`Layer` 提供挂载、卸载、逐帧更新、事件处理和 ImGui 绘制入口。现在的更新函数接收 `Timestep`，各层可以用同一份帧间隔推进动画或场景逻辑。
 
-![image-20260326183438714](README.assets/image-20260326183438714.png)
-
-## 图层(Layer)
-
-在游戏引擎开发中，**图层（Layer）** 是组织游戏逻辑的核心架构。
-
-想象一下：你的游戏有背景地图、玩家角色、敌人、以及顶层的 UI 菜单和调试信息。如果不分层，所有的代码都会堆在 Application::Run 的死循环里，变得无法维护。
-
-**图层系统的目的：** 把引擎的一帧拆解成多个有序的步骤，并让事件（如鼠标点击）能从上往下传递（UI 层先接住，如果 UI 没拦截，再传给游戏层）。
-
-定义图层基类 (Layer.h)
-
-在 Glimmer/src/Glimmer 下创建 Layer.h。
-
-**Layer.h**:
-
-```
-#pragma once
-
-#include "Glimmer/Core.h"
-#include "Glimmer/Events/Event.h"
-
-namespace gl {
-
-    class Layer {
-    public:
-        Layer(const std::string& name = "Layer");
-        virtual ~Layer();
-
-        virtual void OnAttach() {}    // 当图层被推入引擎时调用（类似 Start）
-        virtual void OnDetach() {}    // 当图层被移除时调用
-        virtual void OnUpdate() {}    // 每帧调用（类似 Update）
-        virtual void OnEvent(Event& event) {} // 当事件发生时调用
-
-        inline const std::string& GetName() const { return m_DebugName; }
-    protected:
-        std::string m_DebugName; // 用于调试的名字
-    };
-
-}
-```
-
-**Layer.cpp**:
-
-```
-#include "glpch.h"
-#include "Layer.h"
-
-namespace gl {
-    Layer::Layer(const std::string& name) : m_DebugName(name) {}
-    Layer::~Layer() {}
-}
-```
-
-实现图层栈 (LayerStack.h/cpp)
-
-图层栈负责管理图层的顺序。在 Glimmer 中，我们把图层分为两类：
-
-1. **普通图层 (Layers)**：放在栈的前半部分（如关卡、背景）。
-2. **覆盖层 (Overlays)**：永远放在栈的最后面（如 UI、控制台），保证它们始终在最上层。
-
-**LayerStack.h**:
-
-```
-#pragma once
-
-#include "glpch.h"
-#include "Layer.h"
-
-namespace gl {
-
-    class LayerStack {
-    public:
-        LayerStack();
-        ~LayerStack();
-
-        void PushLayer(Layer* layer);
-        void PushOverlay(Layer* overlay);
-        void PopLayer(Layer* layer);
-        void PopOverlay(Layer* overlay);
-
-        // 为了方便循环遍历
-        std::vector<Layer*>::iterator begin() { return m_Layers.begin(); }
-        std::vector<Layer*>::iterator end() { return m_Layers.end(); }
-    private:
-        std::vector<Layer*> m_Layers;
-        unsigned int m_LayerInsertIndex = 0; // 用于追踪普通图层应该插在哪里
-    };
-
-}
-```
-
-**LayerStack.cpp**:
-
-```
-#include "glpch.h"
-#include "LayerStack.h"
-
-namespace gl {
-
-    LayerStack::LayerStack() {}
-
-    LayerStack::~LayerStack() {
-        for (Layer* layer : m_Layers)
-            delete layer;
-    }
-
-    void LayerStack::PushLayer(Layer* layer) {
-        // 普通图层插入到 Index 位置，Index 后移
-        m_Layers.emplace(m_Layers.begin() + m_LayerInsertIndex, layer);
-        m_LayerInsertIndex++;
-    }
-
-    void LayerStack::PushOverlay(Layer* overlay) {
-        // 覆盖层直接插在末尾
-        m_Layers.emplace_back(overlay);
-    }
-
-    void LayerStack::PopLayer(Layer* layer) {
-        auto it = std::find(m_Layers.begin(), m_Layers.end(), layer);
-        if (it != m_Layers.end()) {
-            m_Layers.erase(it);
-            m_LayerInsertIndex--;
-        }
-    }
-
-    void LayerStack::PopOverlay(Layer* overlay) {
-        auto it = std::find(m_Layers.begin(), m_Layers.end(), overlay);
-        if (it != m_Layers.end())
-            m_Layers.erase(it);
-    }
-}
-```
-
-在 Application 中集成
-
-现在我们要让 Application 拥有这个栈，并在每帧去更新它，在每个事件去分发它。
-
-**Application.h**:
-
-```
-// ... 增加引用 ...
-#include "Glimmer/LayerStack.h"
-
-    class Application {
-    public:
-        void PushLayer(Layer* layer);
-        void PushOverlay(Layer* overlay);
-        // ...
-    private:
-        LayerStack m_LayerStack;
-        // ...
-    };
-```
-
-随后在**Application.cpp**:实现函数
-
-注意顺序
-
-```
-// 核心逻辑：事件倒序分发
-// 为什么要倒序？因为最上层（UI）在 vector 的末尾，它们应该先处理事件
-for (auto it = m_LayerStack.end(); it != m_LayerStack.begin(); ) {
-    (*--it)->OnEvent(e);
-    if (e.Handled) // 如果事件被某一层拦截了，直接停止传递
-        break;
-}
-```
-
-```
-void Application::Run() {
-
-    while (m_Running) {
-        // 核心逻辑：正序更新
-        // 先渲染背景，再渲染玩家，最后渲染 UI
-        for (Layer* layer : m_LayerStack)
-            layer->OnUpdate();
-
-        m_Window->OnUpdate();
-    }
-}
-```
-
-在 Sandbox 中测试
-
-在 SandboxApp.cpp 里创建一个测试图层：
-
-```
-class ExampleLayer : public gl::Layer {
+```cpp
+class Layer
+{
 public:
-    ExampleLayer() : Layer("Example") {}
+    explicit Layer(const std::string& name = "Layer");
+    virtual ~Layer();
 
-    void OnUpdate() override {
-         GL_INFO("ExampleLayer::Update");
-    }
-
-    void OnEvent(gl::Event& event) override {
-        GL_TRACE("{0}", event.ToString());
-    }
-};
-
-class Sandbox : public gl::Application {
-public:
-    Sandbox() {
-        std::cout << "Glimmer Engine Initialized! Hello World!" << std::endl;
-        //在这里激活
-        PushLayer(new ExampleLayer());
-    }
-    ~Sandbox() {}
+    virtual void OnAttach() {}
+    virtual void OnDetach() {}
+    virtual void OnUpdate(Timestep ts) {}
+    virtual void OnEvent(Event& event) {}
+    virtual void OnImGuiRender() {}
 };
 ```
 
-运行可以看到，Example层一直在更新，但同时也会监听其他操作
+`LayerStack` 用 `m_LayerInsertIndex` 隔开普通 Layer 和 Overlay。普通 Layer 插在分界线之前，Overlay 追加到容器末尾。主循环按正序更新，事件则从末尾反向传递，因此后加入的 UI Overlay 可以先处理输入，并在设置 `Handled` 后结束传播。
 
-<img src="README.assets/image-20260326200942243.png" alt="image-20260326200942243" style="zoom:67%;" />
+```cpp
+void LayerStack::PushLayer(Layer* layer)
+{
+    m_Layers.emplace(m_Layers.begin() + m_LayerInsertIndex, layer);
+    ++m_LayerInsertIndex;
+}
+
+void LayerStack::PushOverlay(Layer* overlay)
+{
+    m_Layers.emplace_back(overlay);
+}
+```
+
+`Application::PushLayer()` 和 `PushOverlay()` 会先把对象放入栈，再调用 `OnAttach()`。`LayerStack` 销毁时负责释放仍在容器中的对象，这也是当前裸指针接口隐含的所有权约定。需要注意的是，`PopLayer()` 和 `PopOverlay()` 只负责移出容器，不会调用 `OnDetach()` 或删除对象；如果以后支持运行时卸载，调用方还要补齐这段生命周期。
+
+我最早用 `ExampleLayer` 验证更新和事件是否能到达同一个模块。控制台不停刷日志并不优雅，但这次测试确认了一件重要的事：主循环已经不需要知道示例层具体在做什么。
+
+![ExampleLayer 接收更新与事件](README.assets/image-20260326200942243.png)
 
 ## Glad
 
-**GLAD** 是 Glimmer 引擎与显卡驱动之间的“翻译官”。OpenGL 的函数实现是在显卡驱动里的，C++ 默认找不到它们。GLAD 的作用就是**加载所有 OpenGL 函数的指针**，让你能写出 glClear、glDrawArrays 这些指令。
+GLFW 把窗口建起来以后，OpenGL 函数还不能直接使用。这些函数由显卡驱动提供，需要先拿到当前平台上的函数地址。GLAD 在这里负责加载指针，后面的 `glClear`、`glDrawElements` 等调用才真正有落点。
 
-我们要遵循**高度解耦**的架构：创建一个 GraphicsContext（图形上下文）接口。这样以后如果你想把 OpenGL 换成 Vulkan，只需要换一个 Context 实现，而不必拆掉整个窗口系统。
+仓库把 GLAD 作为一个独立的 C 静态库编译。根 Premake 脚本负责引入子项目，Glimmer 再添加头文件目录并链接 `Glad`。这样生成的 `glad.c` 只编译一次，也没有混进引擎自己的 C++ 源文件。
 
-**获取 GLAD 源代码**
+最初我把 `glfwMakeContextCurrent()` 和 `gladLoadGLLoader()` 直接写进了 `WindowsWindow`。窗口确实能跑，但 GLFW 的窗口管理和 OpenGL 初始化被粘在了一起。后来增加 `GraphicsContext` 接口，把上下文初始化和交换缓冲区收进 `OpenGLContext`，`WindowsWindow` 只负责创建它并调用接口。
 
-1. 访问 [GLAD 在线生成器](https://glad.dav1d.de/)。
-2. **Language**: C/C++
-3. **API**: gl Version **4.6** (或者 4.5，确保选 **Core** 模式)。
-4. 点击 **Generate**，下载生成的 ZIP 包。
-5. **物理存放**：将 include/glad 和 include/KHR 文件夹放入 Glimmer/vendor/Glad/include。将 src/glad.c 放入 Glimmer/vendor/Glad/src。
+```cpp
+void OpenGLContext::Init()
+{
+    glfwMakeContextCurrent(m_WindowHandle);
 
-**为 Glad 编写 Premake 脚本**
+    int status = gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+    GL_CORE_ASSERT(status, "Failed to initialize Glad!");
 
-因为 Glad 包含一个 .c 文件，我们需要把它编译进引擎。
+    GL_CORE_INFO("OpenGL Info:");
+    GL_CORE_INFO("  Vendor: {0}", (const char*)glGetString(GL_VENDOR));
+    GL_CORE_INFO("  Renderer: {0}", (const char*)glGetString(GL_RENDERER));
+    GL_CORE_INFO("  Version: {0}", (const char*)glGetString(GL_VERSION));
+}
 
-在 **Glimmer/vendor/Glad/** 目录下新建 **premake5.lua**：
-
-```
-project "Glad"
-    kind "StaticLib"
-    language "C"
-    staticruntime "on"
-
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-
-    files {
-        "include/glad/glad.h",
-        "include/KHR/khrplatform.h",
-        "src/glad.c"
-    }
-
-    includedirs {
-        "include"
-    }
-
-    filter "system:windows"
-        systemversion "latest"
+void OpenGLContext::SwapBuffers()
+{
+    glfwSwapBuffers(m_WindowHandle);
+}
 ```
 
-修改根目录的 **premake5.lua**：
+这里有一个很容易踩到的包含顺序问题。GLFW 默认可能带入系统 OpenGL 头文件，而 GLAD 要自己提供这些声明；如果 `GLFW/glfw3.h` 先被包含，编译会报 `OpenGL header already included`。当前代码统一先包含 GLAD，再包含 GLFW：
 
-1. 在 include "Glimmer/vendor/GLFW" 下面增加 include "Glimmer/vendor/Glad"。
-2. 在 Glimmer 项目的 includedirs 中增加 "%{prj.name}/vendor/Glad/include"。
-3. 在 Glimmer 项目的 links 中增加 "Glad"。
-
-**运行 GenerateProject.bat。**
-
-修改WindowsWindow.cpp进行测试
-
-在WindowsWindow更新了
-
-```
-m_Window = glfwCreateWindow((int)props.Width, (int)props.Height, m_Data.Title.c_str(), nullptr, nullptr);
-glfwMakeContextCurrent(m_Window);
-int status = gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
-
-glfwSetWindowUserPointer(m_Window, &m_Data);
-SetVSync(true);
+```cpp
+#include <glad/glad.h>
+#include <GLFW/glfw3.h>
 ```
 
-报错1>E:\Zaproject\Engine\Glimmer\Glimmer\vendor\Glad\include\glad\glad.h(27,1): fatal  error C1189: #error:  OpenGL header already included, remove this include, glad already provides it
+加载成功后，我用启动日志中的 Vendor、Renderer 和 Version 做了第一次验证。比起只看窗口有没有出现，这三项输出更直接：Context 已经成为当前上下文，函数指针也确实可以调用。
 
-**报错原因**：
-GLAD 和 GLFW 都在争夺对 OpenGL 头文件的控制权。
-
-1. GLAD 必须在**最前面**被包含，因为它定义了所有的 OpenGL 函数。
-2. GLFW 默认也会自动包含一个标准的 GL.h。
-3. 如果你先包含了 GLFW/glfw3.h 再包含 glad/glad.h，或者在同一个文件里它们顺序反了，就会触发 GLAD 源码里的那个 #error 保护机制。
-
-可以
-
-```
-// WindowsWindow.h 或 WindowsWindow.cpp 的顶部
-#include <glad/glad.h>   // 1. GLAD 永远在第一位
-#define GLFW_INCLUDE_NONE // 2. 告诉 GLFW 别带上默认的 OpenGL 头文件
-#include <GLFW/glfw3.h>  // 3. 然后再包含 GLFW
-```
-
-不加宏定义也行，只是要保证顺序
-
-断点调试结果保证正常运行
-
-![image-20260327125047422](README.assets/image-20260327125047422.png)
+![GLAD 初始化后的 OpenGL 信息](README.assets/image-20260327125047422.png)
 
 ## ImGui
 
-集成 **Dear ImGui** 是 Glimmer 引擎开发中里程碑式的一步。它不仅能让你画出各种调试滑块、性能图表，更是未来**可视化编辑器**的基石。
+接入 Dear ImGui 的直接原因很简单：日志能告诉我程序发生了什么，却不适合反复调参数。渲染颜色、相机速度或者调试开关时，如果每次修改都要重新编译，开发节奏会被切得很碎。ImGui 提供的是一套即时 UI，正好适合这类只在工具侧存在的控件。
 
-按照 Glimmer 的架构，我们将 ImGui 作为一个特殊的 **Overlay（覆盖层）** 插入图层栈。这样它就能永远显示在游戏画面最顶端，并且优先拦截鼠标/键盘事件。
+仓库把 ImGui 核心源码、GLFW 后端和 OpenGL3 后端编译成独立静态库，再链接到 Glimmer。引擎侧的入口是 `ImGuiLayer`。它作为 Overlay 放在 `LayerStack` 末尾，因此既能最后绘制，也能在事件反向传播时最先收到输入。
 
-```
-git submodule add -b docking https://github.com/ocornut/imgui.git Glimmer/vendor/imgui
-```
+`OnAttach()` 创建 ImGui Context，开启键盘导航、Docking 和 Viewports，加载正文与图标字体，然后用原生 `GLFWwindow` 初始化两个后端。这个步骤需要 `Application::Get()` 和 `Window::GetNativeWindow()`，也是应用单例最早出现的实际用途之一。
 
-> *-b docking* *分支。这个分支支持“窗口停靠”和“多视图”功能，是做引擎编辑器的标准选择。*
+```cpp
+Application& app = Application::Get();
+GLFWwindow* window = static_cast<GLFWwindow*>(
+    app.GetWindow().GetNativeWindow());
 
-为 ImGui 编写 Premake 脚本
-
-ImGui 本身只是源码，我们需要告诉 Premake 如何编译它的核心代码以及对应的 **GLFW** 和 **OpenGL3** 后端。
-
-在 **Glimmer/vendor/imgui/** 目录下新建 **premake5.lua**：
-
-并**修改根目录的 premake5.lua：**
-
-1. 在 include "Glimmer/vendor/Glad" 下增加 include "Glimmer/vendor/imgui"。
-2. 在 Glimmer 项目的 includedirs 中增加 "%{prj.name}/vendor/imgui" 和 "%{prj.name}/vendor/imgui/backends"。
-3. 在 Glimmer 项目的 links 中增加 "ImGui"。
-
-**运行 GenerateProject.bat。**
-
-
-
-**在 Application 中渲染 ImGui**
-
-现代引擎通常不在 Layer::OnUpdate 里直接画 UI，而是在主循环里专门留出一个位置。
-
-**Application.cpp 改动**：
-
-
-
-为了让 ImGuiLayer 能顺利初始化，我们需要让它能访问到全局的 Application 实例，以及底层的 GLFWwindow 指针。
-
-1. 修改 Window.h (暴露原生窗口指针)
-
-   ```
-   // Glimmer/src/Glimmer/Window.h
-   namespace gl {
-       // ...
-       class Window {
-       public:
-           // ... 其他虚函数
-           virtual void* GetNativeWindow() const = 0; // 【新增】：返回底层窗口句柄
-       };
-   }
-   ```
-
-2. 修改 WindowsWindow.h (实现接口)
-
-   ```
-   // Glimmer/src/Platform/Windows/WindowsWindow.h
-   namespace gl {
-       class WindowsWindow : public Window {
-       public:
-           // ...
-           inline virtual void* GetNativeWindow() const override { return m_Window; } // 【新增】
-       };
-   }
-   ```
-
-3. 修改 Application.h (实现单例模式)
-
-4. 修改 Application.cpp (初始化单例)
-
-   ```
-   namespace gl {
-       Application* Application::s_Instance = nullptr; // 【新增】：定义静态变量
-   
-       Application::Application() {
-           GL_CORE_ASSERT(!s_Instance, "Application already exists!"); // 防止实例化多次
-           s_Instance = this; // 【新增】：把自己存入单例
-   ```
-
-**编写 ImGuiLayer (完整的 UI 渲染层)**
-
-在 Glimmer/src/Glimmer/ImGui 目录下创建这两个文件。
-
-1. ImGuiLayer.h，为了给cpp调用，需要重载Layer里的函数
-
-   ```
-   #pragma once
-   #include "Glimmer/Layer.h"
-   
-   namespace gl {
-       class ImGuiLayer : public Layer {
-       public:
-           ImGuiLayer();
-           ~ImGuiLayer();
-   
-           virtual void OnAttach() override;
-           virtual void OnDetach() override;
-           virtual void OnUpdate() override;
-           virtual void OnEvent(Event& event) override;
-   
-           virtual void OnImGuiRender() override;
-   
-           void Begin(); // 每帧开始前呼叫
-           void End();   // 每帧结束后呼叫
-       private:
-           float m_Time = 0.0f;
-       };
-   }
-   ```
-
-2. cpp代码过长，简要说明：代码实现了一个 ImGui 的引擎层封装（ImGuiLayer），把 Dear ImGui 完整接入到你的引擎生命周期中。核心逻辑是：在 `OnAttach` 中创建 ImGui 上下文并开启键盘控制、Docking 和多窗口 Viewport 等高级功能，同时通过 GLFW 获取原生窗口并初始化 ImGui 的 GLFW + OpenGL 后端；在每一帧通过 `Begin` 和 `End` 控制 ImGui 的更新与渲染流程，其中 `End` 负责将 UI 绘制数据提交给 OpenGL，并在开启多窗口时处理额外的平台窗口渲染和上下文切换；在 `OnDetach` 中则完整释放 ImGui 相关资源。整体上，这段代码把 UI 系统封装成引擎的一个独立 Layer，使 UI 渲染流程与游戏逻辑解耦，并为后续实现类似 Unity 的编辑器（可拖拽面板、多窗口界面）提供基础。
-
-最后打开 SandboxApp.cpp，在 ExampleLayer 中重写 OnImGuiRender：
-
-
-
-
-
-回头来看全过程：
-
-我们将 ImGui 的集成分为 **资源导入、项目构建、层级集成、渲染循环** 四个阶段：
-
-1. **资源获取（Submodule）**：
-   使用 Git 子模块拉取 ImGui 的 docking 分支。这个分支不仅支持窗口停靠，还支持 **Viewports**（允许 UI 拖出主窗口），是做现代引擎编辑器的必备选择。
-2. **项目构建（Premake）**：
-   由于 ImGui 是以源代码形式分发的，我们编写了一个专门的 premake5.lua。关键点在于包含 backends 文件夹下的 imgui_impl_glfw.cpp 和 imgui_impl_opengl3.cpp，并将它们编译成一个静态库（StaticLib），链接到我们的 Glimmer 引擎中。
-3. **图层抽象（ImGuiLayer）**：
-   我们创建了一个 ImGuiLayer 类，继承自引擎的 Layer 基类。**OnAttach**：执行 ImGui 的初始化（创建上下文、开启 Docking/Viewports 标志位、初始化 GLFW 和 OpenGL 后端）。**OnDetach**：执行清理工作。
-4. **渲染管线集成（The Loop）**：
-   在 Application::Run 的主循环中，我们将 UI 渲染独立出来。每帧执行：m_ImGuiLayer->Begin()：开启 ImGui 新帧，处理输入轮询。调用所有 Layer 的 OnImGuiRender()：让每个游戏模块能在此处编写自己的调试 UI。m_ImGuiLayer->End()：执行渲染并将数据交给 GPU，同时处理 **Multi-Viewport** 的上下文切换（Context Switching），保证弹出窗口的正确渲染。
-
-相关机制
-
-- **架构层面的解耦设计**
-  “在集成过程中，我采用了 **Backend-Agnostic（后端无关）** 的设计思路。ImGui 的核心代码与具体的图形 API 是分离的。虽然我目前使用的是 GLFW 和 OpenGL3 组合，但我将其封装在 ImGuiLayer 中，并通过 Application::Get().GetWindow().GetNativeWindow() 获取原生句柄。这种设计保证了如果未来将 Glimmer 升级到 Vulkan 或 DX12，我只需要更换 ImGuiLayer 内部的实现细节，而不需要触动任何上层 UI 代码。”
-- **针对多视口（Viewports）的特殊处理**
-  “为了实现类似 Unity 那种可以将窗口拖出主程序的体验，我开启了 ImGuiConfigFlags_ViewportsEnable。这引入了一个难点：**OpenGL 上下文管理**。在 End() 函数中，ImGui 需要在多个 OS 窗口间切换渲染上下文。我实现的逻辑是：在处理完额外视口后，必须通过 glfwMakeContextCurrent 强制将 Context 还原回引擎主窗口，否则主循环后续的 SwapBuffers 会作用在错误窗口导致崩溃。这体现了对图形 API 状态机机制的理解。”
-- **事件系统与 UI 的冲突处理（劫持机制）**
-  “目前我正在完善 UI 对事件的**拦截机制**。即当鼠标悬浮在 ImGui 窗口上时，通过检查 io.WantCaptureMouse 标志位，由 ImGuiLayer 设置 Event.Handled = true。这样可以确保玩家在点击 UI 按钮时，不会误触发背后游戏世界的攻击动作。这证明了我对引擎内‘从顶层向底层分发事件’这一流向的准确控制。”
-
-## 接入ImGui事件
-
-接入 ImGui 事件是让引擎从“只能看”变成“能交互”的关键。
-
-目前，你的 WindowsWindow 捕获了系统事件并分发给了 Application。但 ImGui 作为一个独立的库，它也需要知道鼠标在哪、哪个键按下了。
-
-最重要的是，我们要实现 **“事件拦截（Event Blocking）”**：当点击 ImGui 的按钮时，鼠标点击事件应该在 UI 层就被消耗掉，不应该传给底层的游戏角色
-
-BIND_EVENT_FN
-
-这个宏的作用是简化 std::bind 的写法，让你在绑定事件函数时不需要每次都写那长长的一串。
-
-**请在 Glimmer/src/Glimmer/Core.h 中添加如下代码：**
-
-```
-#pragma once
-
-#include <memory>
-
-// ... 之前的 BIT(x) 和断言宏 ...
-
-// ✨ 添加这个宏定义
-#define BIND_EVENT_FN(x) std::bind(&x, this, std::placeholders::_1)
-
-// ...
+ImGui_ImplGlfw_InitForOpenGL(window, true);
+ImGui_ImplOpenGL3_Init("#version 410");
 ```
 
-我们需要利用 EventDispatcher 将 Glimmer 的事件转化为 ImGui 的输入状态。
+主循环把 UI 单独夹在 `Begin()` 和 `End()` 之间。每个 Layer 只实现自己的 `OnImGuiRender()`，不需要碰 ImGui 后端的帧管理。`End()` 提交主窗口的绘制数据；启用多视口后，它还会渲染额外的平台窗口，并在结束时恢复先前的 OpenGL Context。这个恢复动作不能省，否则下一次交换缓冲区可能落到错误的窗口上。
 
-修改 **Glimmer/src/Glimmer/ImGui/ImGuiLayer.cpp** 的 OnEvent 函数及其配套的处理函数：
-
+```cpp
+m_ImGuiLayer->Begin();
+for (Layer* layer : m_LayerStack)
+    layer->OnImGuiRender();
+m_ImGuiLayer->End();
 ```
+
+第一个滑块跑通后，UI 在引擎里的位置也定了下来。它是一个参与生命周期的 Overlay；上层模块负责描述面板，后端初始化和平台窗口处理留在 `ImGuiLayer` 内部。
+
+## 接入 ImGui 事件
+
+UI 能显示以后，紧接着遇到的是输入冲突。点击一个 ImGui 按钮时，同一次鼠标事件仍可能传到场景层；编辑器里的拖动、滚轮和快捷键都会因此误触发后面的游戏逻辑。
+
+我一开始尝试在 `ImGuiLayer::OnEvent()` 里手动维护 `io.KeysDown`、鼠标位置和按键映射。后来才发现这条路既重复又已经过时。`ImGui_ImplGlfw_InitForOpenGL(window, true)` 的第二个参数会让 GLFW 后端安装输入回调，并串联窗口上已有的回调。ImGui 自己接收鼠标、键盘和文本输入，Glimmer 不需要再把每一种 Event 转换一遍。
+
+当前 `OnEvent()` 只做拦截判断：
+
+```cpp
 void ImGuiLayer::OnEvent(Event& event)
 {
-    // 如果你希望 UI 拦截所有事件，可以在这里根据 ImGui 的状态设置 event.Handled
-    ImGuiIO& io = ImGui::GetIO();
-    
-    // 核心逻辑：如果 ImGui 想要捕获鼠标/键盘，就标记事件已处理
-    // 这样事件就不会传给下层的 GameLayer 了
-    event.Handled |= event.IsInCategory(EventCategoryMouse) & io.WantCaptureMouse;
-    event.Handled |= event.IsInCategory(EventCategoryKeyboard) & io.WantCaptureKeyboard;
+    if (!m_BlockEvents)
+        return;
 
-    // 以下是手动将 Glimmer 事件喂给 ImGui 的逻辑（如果你使用的是手动对接模式）
-    EventDispatcher dispatcher(event);
-    dispatcher.Dispatch<MouseButtonPressedEvent>(BIND_EVENT_FN(ImGuiLayer::OnMouseButtonPressedEvent));
-    dispatcher.Dispatch<MouseButtonReleasedEvent>(BIND_EVENT_FN(ImGuiLayer::OnMouseButtonReleasedEvent));
-    dispatcher.Dispatch<MouseMovedEvent>(BIND_EVENT_FN(ImGuiLayer::OnMouseMovedEvent));
-    dispatcher.Dispatch<MouseScrolledEvent>(BIND_EVENT_FN(ImGuiLayer::OnMouseScrolledEvent));
-    dispatcher.Dispatch<KeyPressedEvent>(BIND_EVENT_FN(ImGuiLayer::OnKeyPressedEvent));
-    dispatcher.Dispatch<KeyReleasedEvent>(BIND_EVENT_FN(ImGuiLayer::OnKeyReleasedEvent));
-    dispatcher.Dispatch<KeyTypedEvent>(BIND_EVENT_FN(ImGuiLayer::OnKeyTypedEvent));
-    dispatcher.Dispatch<WindowResizeEvent>(BIND_EVENT_FN(ImGuiLayer::OnWindowResizeEvent));
+    ImGuiIO& io = ImGui::GetIO();
+    event.Handled |= event.IsInCategory(EventCategoryMouse)
+        & io.WantCaptureMouse;
+    event.Handled |= event.IsInCategory(EventCategoryKeyboard)
+        & io.WantCaptureKeyboard;
 }
-
-// --- 以下是具体的转换函数示例 ---
-
-bool ImGuiLayer::OnMouseButtonPressedEvent(MouseButtonPressedEvent& e)
-{
-    ImGuiIO& io = ImGui::GetIO();
-    io.MouseDown[e.GetMouseButton()] = true;
-    return false; // 返回 false 表示不强制拦截，交给上面的 WantCapture 逻辑判断
-}
-
-bool ImGuiLayer::OnMouseMovedEvent(MouseMovedEvent& e)
-{
-    ImGuiIO& io = ImGui::GetIO();
-    io.MousePos = ImVec2(e.GetX(), e.GetY());
-    return false;
-}
-
-// ... 同理实现 KeyPressed (io.KeysDown[e.GetKeyCode()] = true) 
-// ... 和 MouseScrolled (io.MouseWheel += e.GetYOffset())
 ```
 
-**配置 KeyMap（在 OnAttach 中）**
+`ImGuiLayer` 位于栈顶，`Application` 又按反序把事件交给各层，所以它有机会先设置 `Handled`。如果 ImGui 正在使用鼠标或键盘，传播就停在这里；没有捕获时，事件继续交给编辑器相机或场景层。`BlockEvents(false)` 则允许调用方临时关闭这层保护。
 
-为了让 ImGui 认识你的按键编号（GLFW 的编号），需要在初始化时建立映射关系。
+文本输入仍值得单独说明。物理按键由 `glfwSetKeyCallback` 生成 `KeyPressedEvent` 和 `KeyReleasedEvent`，字符输入则由 `glfwSetCharCallback` 生成 `KeyTypedEvent`。后者已经经过系统的键盘布局和修饰键处理，输入框需要的是这条路径，而不是自行把键码猜成字符。
 
-**ImGuiLayer.cpp (OnAttach)**:
-
-```
-void ImGuiLayer::OnAttach() {
-    // ... 之前的初始化代码 ...
-    
-    ImGuiIO& io = ImGui::GetIO();
-    // 建立 KeyMap：把 ImGui 的索引映射到 GLFW 的键码
-    io.KeyMap[ImGuiKey_Tab] = GLFW_KEY_TAB;
-```
-
-过程中发现这段代码io.KeysDown不能用了，找了很久方法
-
-```
-	bool ImGuiLayer::OnKeyPressedEvent(KeyPressedEvent& e)
-	{
-		ImGuiIO& io = ImGui::GetIO();
-		io.KeysDown[e.GetKeyCode()] = true;
-
-		io.KeyCtrl = io.KeysDown[GLFW_KEY_LEFT_CONTROL] || io.KeysDown[GLFW_KEY_RIGHT_CONTROL];
-		io.KeyShift = io.KeysDown[GLFW_KEY_LEFT_SHIFT] || io.KeysDown[GLFW_KEY_RIGHT_SHIFT];
-		io.KeyAlt = io.KeysDown[GLFW_KEY_LEFT_ALT] || io.KeysDown[GLFW_KEY_RIGHT_ALT];
-		io.KeySuper = io.KeysDown[GLFW_KEY_LEFT_SUPER] || io.KeysDown[GLFW_KEY_RIGHT_SUPER];
-		return false;
-	}
-```
-
-但最后得知如果你在 OnAttach 里调用了 ImGui_ImplGlfw_InitForOpenGL(window, true)，**这里的 true 表示 ImGui 会自己去钩住 GLFW 的回调**。这样你根本不需要在 OnEvent 里手动写 OnKeyPressedEvent 这些函数。ImGui 自己会偷偷处理好一切。
-
-
-
-WindowsWindow.cpp加入
-
-- **KeyPressedEvent**：捕捉的是**物理按键**。比如你按下 Shift + A，它收到的是 Shift 键按下和 A 键按下。它不知道你想输入的是大写的 A。
-- **KeyTypedEvent**：捕捉的是**文本输入**。它由操作系统处理，直接告诉你用户输入了字符 A。它会自动处理输入法、大小写、特殊符号。
-
-如果你以后在引擎里想做一个**文本输入框**（比如给物体改名字、写控制台指令），没有 KeyTypedEvent 的话，你的退格键、大小写、甚至是中文输入都会出大问题。
-
-```
+```cpp
 glfwSetCharCallback(m_Window, [](GLFWwindow* window, unsigned int keycode)
 {
     WindowData& data = *(WindowData*)glfwGetWindowUserPointer(window);
-
     KeyTypedEvent event(keycode);
     data.EventCallback(event);
 });
 ```
 
+这次调整后，职责终于清楚了：GLFW 后端把输入送给 ImGui，Glimmer 的窗口回调生成自己的事件，`ImGuiLayer` 只决定这些事件是否还能继续向下传播。
+
 ## 输入轮询
 
-在 Glimmer 引擎中实现**输入轮询（Input Polling）**，标志着你终于可以像在 Unity 里写 Input.GetKey(KeyCode.W) 那样，随时随地获取按键状态了。
+事件适合描述一次变化，例如按键刚刚按下或鼠标滚轮滚了一格。角色移动和相机平移却需要在每一帧判断某个键是否仍然按住。为此我补了一套输入轮询接口，它和事件系统并行存在，各自解决不同的问题。
 
-目前你的事件系统是“被动”的（只有按键时才发通知），而输入轮询是“主动”的（随时询问状态）。这在处理角色移动等需要连续输入的场景中是必不可少的。
+上层通过 `Input` 的静态方法查询键盘、鼠标按钮和光标位置。真正的实现藏在 `s_Instance` 后面，当前实例是由 `Scope<Input>` 持有的 `WindowsInput`。这种写法让 Layer 不必保存输入对象，也不会直接依赖 GLFW。
 
-**创建输入抽象接口 (Input.h)**
+```cpp
+class Input
+{
+public:
+    static bool IsKeyPressed(int keycode);
+    static bool IsMouseButtonPressed(int button);
+    static std::pair<float, float> GetMousePosition();
+    static float GetMouseX();
+    static float GetMouseY();
 
-在 Glimmer/src/Glimmer 下创建 Input.h。我们使用**单例模式（Singleton）**，但通过静态方法暴露接口，保证调用最整洁。
-
-**Input.h**:
-
+private:
+    static Scope<Input> s_Instance;
+};
 ```
-#pragma once
 
-#include "Glimmer/Core.h"
+`WindowsInput` 每次查询都会从 `Application` 取得原生窗口，再调用 GLFW。键盘查询同时接受 `GLFW_PRESS` 和 `GLFW_REPEAT`，因此按住按键时每一帧都能得到 `true`。
 
-namespace gl {
-
-    class Input {
-    public:
-        // 静态接口：外部直接调用 Input::IsKeyPressed(key)
-        inline static bool IsKeyPressed(int keycode) { return s_Instance->IsKeyPressedImpl(keycode); }
-
-        inline static bool IsMouseButtonPressed(int button) { return s_Instance->IsMouseButtonPressedImpl(button); }
-        inline static std::pair<float, float> GetMousePosition() { return s_Instance->GetMousePositionImpl(); }
-        inline static float GetMouseX() { return s_Instance->GetMouseXImpl(); }
-        inline static float GetMouseY() { return s_Instance->GetMouseYImpl(); }
-
-    protected:
-        // 由不同平台实现的受保护虚函数 (Impl = Implementation)
-        virtual bool IsKeyPressedImpl(int keycode) = 0;
-        virtual bool IsMouseButtonPressedImpl(int button) = 0;
-        virtual std::pair<float, float> GetMousePositionImpl() = 0;
-        virtual float GetMouseXImpl() = 0;
-        virtual float GetMouseYImpl() = 0;
-
-    private:
-        // 静态单例指针
-        static Input* s_Instance;
-    };
+```cpp
+bool WindowsInput::IsKeyPressedImpl(int keycode)
+{
+    auto* window = static_cast<GLFWwindow*>(
+        Application::Get().GetWindow().GetNativeWindow());
+    auto state = glfwGetKey(window, keycode);
+    return state == GLFW_PRESS || state == GLFW_REPEAT;
 }
 ```
 
-**Windows 平台的具体实现 (WindowsInput.cpp)**
+最早的验证是在 Layer 更新时持续查询按键和鼠标，并把光标坐标写进日志。结果不复杂，但它把两种输入方式的边界测清楚了：Event 记录变化，Polling 读取当前状态。后面的相机控制也正是建立在这个区别上。
 
-在 Glimmer/src/Platform/Windows 目录下创建 WindowsInput.h/cpp。它将直接调用 **GLFW** 的 API 来查询状态。
-
-对外提供一个统一的 `Input` 静态接口（比如 `Input::IsKeyPressed`），但内部并不直接实现，而是通过一个静态单例指针 `s_Instance` 转发到具体平台（这里是 `WindowsInput`）去执行。也就是说，上层代码只依赖 `Input` 这个抽象接口，而真正调用的是底层用 GLFW 实现的 `WindowsInput`，例如在 `IsKeyPressedImpl` 里通过 `glfwGetKey` 轮询当前键盘状态。这样一来，你的引擎逻辑层完全不需要关心是 Windows、Mac 还是 Linux，只需要调用统一接口即可，实现了**平台解耦**。
-
-同时，这套设计本质上是一个“**静态接口 + 单例 + 虚函数分发**”的组合：
-
-- 静态函数保证调用方便（不用到处传对象）
-- 单例保证全局唯一输入系统
-- 虚函数保证不同平台可以替换实现
-
-最终效果就是：
-
-> 上层写 `Input::IsKeyPressed(W)`，底层自动走到 GLFW（Windows）实现，实现了干净的分层。
-
-**在 Application 中测试**
-
-现在，可以在任何 Layer 的 OnUpdate 中，极其方便地检测输入了。
-
-```
-    void Application::Run() {
-
-        while (m_Running) {
-            // 1. 游戏逻辑更新 (清除屏幕、移动角色等)
-            for (Layer* layer : m_LayerStack)
-                layer->OnUpdate();
-
-            // 2. UI 渲染 (极其重要：必须在 Begin 和 End 之间)
-            m_ImGuiLayer->Begin();
-            for (Layer* layer : m_LayerStack)
-                layer->OnImGuiRender(); // 调用每个图层的 UI 绘制函数
-            m_ImGuiLayer->End();
-
-            // 检测按键
-            if (gl::Input::IsKeyPressed(GLFW_KEY_TAB))
-                GL_TRACE("TAB 键正被按住！");
-
-            // 检测鼠标
-            if (gl::Input::IsMouseButtonPressed(0)) {
-                auto [x, y] = gl::Input::GetMousePosition();
-                GL_TRACE("鼠标左键点击坐标: {0}, {1}", x, y);
-            }
-
-            // 3. 交换缓冲区
-            m_Window->OnUpdate();
-        }
-    }
-```
-
-<img src="README.assets/image-20260329132404500.png" alt="image-20260329132404500" style="zoom:67%;" />
+![输入轮询测试](README.assets/image-20260329132404500.png)
 
 ## 按键与鼠标码解耦
 
-现在的 Sandbox 如果想判断按键，必须 #include <GLFW/glfw3.h> 并使用 GLFW_KEY_A。这违反了**依赖倒置原则**——上层游戏逻辑不应该依赖底层的实现库。
+输入轮询刚接通时，Sandbox 为了判断 W 键还得包含 `GLFW/glfw3.h`。这让平台库的名字直接跑进了客户端代码，之后替换窗口后端时，连游戏逻辑里的按键判断都要跟着改。
 
-在 Glimmer/src/Glimmer 下创建 KeyCodes.h 和 MouseCodes.h。
+我先增加了 `KeyCodes.h` 和 `MouseButtonCodes.h`，把常用键位统一成 `GL_KEY_*` 与 `GL_MOUSE_BUTTON_*`。`Input` 的调用方式没有变化，客户端只需要使用 Glimmer 自己的名字：
 
-**KeyCodes.h (部分示例)：**
+```cpp
+if (gl::Input::IsKeyPressed(GL_KEY_W))
+    GL_TRACE("向前移动");
 
-```
-#pragma once
-
-// 这里的数值完全参照 GLFW，但名字变成了我们引擎自己的前缀
-#define GL_KEY_SPACE           32
-#define GL_KEY_APOSTROPHE      39  /* ' */
-#define GL_KEY_A               65
-#define GL_KEY_W               87
-#define GL_KEY_S               83
-#define GL_KEY_D               68
-// ... (你可以从 GLFW 源码拷贝剩下的并替换前缀)
+if (gl::Input::IsMouseButtonPressed(GL_MOUSE_BUTTON_RIGHT))
+    GL_TRACE("旋转相机");
 ```
 
-**MouseButtonCodes**
+这些常量目前仍直接采用 GLFW 的数值，`WindowsInput` 也会把收到的整数原样交给 `glfwGetKey()` 和 `glfwGetMouseButton()`。所以这一步解决的是客户端头文件依赖，还算不上完整的输入后端映射。如果以后接入数值体系不同的平台，需要在平台实现里增加转换，而不能继续假设两边编码一致。
 
-```
-#pragma once
+`Glimmer.h` 随后成为客户端常用的聚合头，集中导出 Application、Layer、Input、键码以及渲染接口。程序入口仍由各可执行项目显式包含 `Glimmer/Core/EntryPoint.h`，没有塞进聚合头。这个分界可以避免普通业务文件因为包含 `Glimmer.h` 而意外定义 `main()`。
 
-// From glfw3.h
-#define GL_MOUSE_BUTTON_1         0
-#define GL_MOUSE_BUTTON_2         1
-#define GL_MOUSE_BUTTON_3         2
-#define GL_MOUSE_BUTTON_4         3
-#define GL_MOUSE_BUTTON_5         4
-#define GL_MOUSE_BUTTON_6         5
-#define GL_MOUSE_BUTTON_7         6
-#define GL_MOUSE_BUTTON_8         7
-#define GL_MOUSE_BUTTON_LAST      GL_MOUSE_BUTTON_8
-#define GL_MOUSE_BUTTON_LEFT      GL_MOUSE_BUTTON_1
-#define GL_MOUSE_BUTTON_RIGHT     GL_MOUSE_BUTTON_2
-#define GL_MOUSE_BUTTON_MIDDLE    GL_MOUSE_BUTTON_3
-```
+最初的测试只是把 `GLFW_KEY_W` 换成 `GL_KEY_W`，运行结果没有变化。看起来很小，但从这一步开始，Sandbox 和相机控制代码不再需要知道 GLFW 的键名。
 
-**更新引擎“全家桶”头文件 (Glimmer.h)**
-
-**作用：** 在 Unity 里，你只需要 using UnityEngine;。我们也要给 Glimmer 做一个“出口”，让用户只需要 #include <Glimmer.h> 就能用到引擎的所有核心功能。
-
-在 Glimmer/src 下创建 **Glimmer.h**：
-
-```
-#pragma once
-
-// 供客户端（Sandbox）使用的总头文件
-#include "Glimmer/Application.h"
-#include "Glimmer/Layer.h"
-#include "Glimmer/Log.h"
-
-#include "Glimmer/Input.h"
-#include "Glimmer/KeyCodes.h"
-#include "Glimmer/MouseButtonCodes.h"
-
-#include "imgui.h"
-
-// --- 入口点 (EntryPoint) ---
-#include "Glimmer/EntryPoint.h"
-// ----------------------------
-```
-
-SandBox
-
-```
-    void OnUpdate() override {
-        // 使用我们自己的键码判断移动
-        if (gl::Input::IsKeyPressed(GL_KEY_W))
-            GL_TRACE("向北前进!");
-
-    }
-```
-
-<img src="README.assets/image-20260329141655268.png" alt="image-20260329141655268" style="zoom:67%;" />
+![引擎键码输入测试](README.assets/image-20260329141655268.png)
 
 ## GLM
 
-在底层 C++ 开发中，这些数学类型都需要我们自己找库。**GLM** 是工业界的绝对标准，它的设计几乎完全模仿 **GLSL**（OpenGL 着色语言），让你在 C++ 里写数学逻辑和在 Shader 里写起来一模一样。
+开始写相机和物体变换后，向量与矩阵很快变成绕不开的基础设施。我没有自己实现一套数学库，而是把 GLM 作为头文件依赖放进 `vendor/glm`。它的类型和函数命名接近 GLSL，在 CPU 侧准备 Shader 数据时比较顺手。
 
-```
-git submodule add https://github.com/g-truc/glm.git Glimmer/vendor/glm
-```
+GLM 不需要单独编译。Premake 把它的路径加入 Glimmer、Sandbox 和编辑器项目的包含目录，引擎项目还把 GLM 的 `.hpp` 与 `.inl` 文件纳入工程列表。代码按需包含 `glm/glm.hpp`、矩阵变换或四元数扩展即可。
 
-**修改 Premake 配置**
+第一次验证用了一个很朴素的平移：把 `(1, 1, 1, 1)` 乘上 X 方向平移 2 个单位的矩阵，结果的 X 应该是 3。
 
-由于 GLM 只是头文件，我们不需要为它写 premake5.lua 脚本，只需要把它的路径加入到 **Engine** 和 **Sandbox** 的包含目录中。
+```cpp
+glm::vec4 point(1.0f, 1.0f, 1.0f, 1.0f);
+glm::mat4 translation = glm::translate(
+    glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
 
-修改根目录的 **premake5.lua**：includedirs 两个项目
-
-在Application中进行测试
-
-```
-#include <glm/vec3.hpp> // glm::vec3
-#include <glm/vec4.hpp> // glm::vec4
-#include <glm/mat4x4.hpp> // glm::mat4
-#include <glm/gtc/matrix_transform.hpp> // glm::translate, glm::rotate, glm::scale, glm::perspective
-namespace gl {
-    Application* Application::s_Instance = nullptr;
-
-    Application::Application() {
-        GL_CORE_ASSERT(!s_Instance, "Application already exists!"); // 防止实例化多次
-        s_Instance = this; // 【新增】：把自己存入单例
-        m_Window = std::unique_ptr<Window>(Window::Create());
-        // 使用 Lambda 表达式把事件传给 OnEvent
-        m_Window->SetEventCallback([this](Event& e) {
-            this->OnEvent(e);
-            });
-
-        m_ImGuiLayer = new ImGuiLayer();
-        PushOverlay(m_ImGuiLayer); // 【新增】：把 ImGuiLayer 作为覆盖层推入栈顶
-
-        // --- GLM 数学测试 ---
-        glm::vec4 vector(1.0f, 1.0f, 1.0f, 1.0f);
-
-        // 创建一个平移矩阵，让坐标向右移动 2 个单位
-        glm::mat4 trans = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f));
-
-        // 矩阵乘法
-        auto result = trans * vector;
-
-        GL_CORE_INFO("GLM Math Test: Result X = {0}", result.x); // 应该输出 3.0
-    }
+glm::vec4 result = translation * point;
+GL_CORE_INFO("GLM Math Test: Result X = {0}", result.x);
 ```
 
-![image-20260329145655166](README.assets/image-20260329145655166.png)
+这个测试之后，GLM 逐渐进入了真正的引擎数据结构。`TransformComponent` 用平移、旋转和缩放组合模型矩阵，`SceneCamera` 用 `glm::perspective` 或 `glm::ortho` 生成投影，Renderer 再把这些矩阵传给 Shader。早期的一行 `result.x == 3`，后来成了整条变换链的起点。
 
-##  渲染上下文
+![GLM 平移矩阵测试](README.assets/image-20260329145655166.png)
 
-WindowsWindow 承担了太多的责任：它既要负责打开窗口，又要负责初始化 OpenGL（调用 Glad）。
+## 渲染上下文
 
-按照工业级引擎的**“解耦”**原则，我们需要引入 **渲染上下文 (Rendering Context)** 抽象层。
+GLAD 第一次接入时，创建当前 Context、加载函数指针和交换缓冲区都写在 `WindowsWindow` 里。功能可以运行，但窗口类已经同时处理系统窗口、输入回调和 OpenGL 启动，继续往里加渲染细节只会让它更难维护。
 
-为什么需要这一步？
+`GraphicsContext` 是这次拆分留下的最小接口。它只约定初始化与交换缓冲区，不暴露 GLFW 或 OpenGL 类型：
 
-- **职责分离**：窗口只负责和操作系统（Windows/Linux）打交道；上下文只负责和图形显卡（OpenGL/Vulkan）打交道。
-- **跨平台/多 API 支持**：未来如果你想支持 DirectX 或 Vulkan，你只需要增加一个新的 Context 实现类，而不需要修改 WindowsWindow.cpp。
-
-**定义抽象基类 (GraphicsContext.h)**
-
-在 Glimmer/src/Glimmer/Renderer 下创建 GraphicsContext.h。
-
-**GraphicsContext.h**:
-
-```
-#pragma once
-
-namespace gl {
-
-    // 这是一个纯虚接口，定义了所有图形 API 上下文必须具备的功能
-    class GraphicsContext {
-    public:
-        virtual ~GraphicsContext() = default;
-
-        virtual void Init() = 0;        // 初始化（加载驱动函数指针）
-        virtual void SwapBuffers() = 0; // 交换缓冲区（将画面呈现到屏幕）
-    };
-
-}
-```
-
-**实现 OpenGL 具体上下文 (OpenGLContext.cpp)**
-
-在 Glimmer/src/Platform/OpenGL 下创建 OpenGLContext.h 和 OpenGLContext.cpp。
-
-**OpenGLContext.h**:
-
-```
-#pragma once
-#include "Glimmer/Renderer/GraphicsContext.h"
-
-struct GLFWwindow; // 前向声明，减少头文件包含
-
-namespace gl {
-
-    class OpenGLContext : public GraphicsContext {
-    public:
-        OpenGLContext(GLFWwindow* windowHandle);
-
-        virtual void Init() override;
-        virtual void SwapBuffers() override;
-    private:
-        GLFWwindow* m_WindowHandle;
-    };
-
-}
-```
-
-**OpenGLContext.cpp**:
-
-```
-#include "glpch.h"
-#include "OpenGLContext.h"
-
-#include <glad/glad.h>
-#include <GLFW/glfw3.h>
-
-namespace gl {
-
-    OpenGLContext::OpenGLContext(GLFWwindow* windowHandle)
-        : m_WindowHandle(windowHandle)
-    {
-        GL_CORE_ASSERT(windowHandle, "Window handle is null!")
-    }
-
-    void OpenGLContext::Init()
-    {
-        // 1. 将该窗口设为当前的 OpenGL 上下文
-        glfwMakeContextCurrent(m_WindowHandle);
-
-        // 2. 使用 Glad 加载 OpenGL 函数指针
-        int status = gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
-        GL_CORE_ASSERT(status, "Failed to initialize Glad!");
-
-        // 打印 GPU 信息（面试加分项）
-        GL_CORE_INFO("OpenGL Info:");
-        GL_CORE_INFO("  Vendor: {0}", (const char*)glGetString(GL_VENDOR));
-        GL_CORE_INFO("  Renderer: {0}", (const char*)glGetString(GL_RENDERER));
-        GL_CORE_INFO("  Version: {0}", (const char*)glGetString(GL_VERSION));
-    }
-
-    void OpenGLContext::SwapBuffers()
-    {
-        // 交换前后缓冲区
-        glfwSwapBuffers(m_WindowHandle);
-    }
-}
-```
-
-在 `Init()` 中先通过 `glfwMakeContextCurrent` 将当前窗口绑定为 OpenGL 的上下文，然后使用 Glad 加载所有 OpenGL 函数指针（因为 OpenGL 本身是动态函数，需要运行时获取），接着打印显卡厂商、渲染器和版本信息用于调试；而 `SwapBuffers()` 则负责在每一帧结束时调用 `glfwSwapBuffers` 进行前后缓冲区交换，把渲染结果真正显示到屏幕上。整体上，这个类把“平台窗口（GLFW）”和“图形 API（OpenGL）”连接起来，是渲染系统启动的第一步。
-
-**重构 WindowsWindow 接入上下文**
-
-现在我们要把 WindowsWindow 里的“脏活累活”交给 OpenGLContext。
-
-**WindowsWindow.h**:
-
-```
-#include "Glimmer/Renderer/GraphicsContext.h" // 包含接口
-
-// ...
-private:
-    GLFWwindow* m_Window;
-    GraphicsContext* m_Context; // ✨ 增加成员变量
-// ...
-```
-
-WindowsWindow.cpp
-
-```
-void WindowsWindow::Init(const WindowProps& props)
+```cpp
+class GraphicsContext
 {
-    // ... glfwCreateWindow 的代码 ...
+public:
+    virtual ~GraphicsContext() = default;
+    virtual void Init() = 0;
+    virtual void SwapBuffers() = 0;
+};
+```
 
-    // 核心重构：创建并初始化上下文
-    m_Context = new OpenGLContext(m_Window);
-    m_Context->Init(); 
+当前实现是 `OpenGLContext`。它保存窗口句柄，在 `Init()` 中把窗口设为当前 Context，调用 GLAD 加载函数指针，并输出 Vendor、Renderer 和 Version。每帧结束时，`SwapBuffers()` 再把 GLFW 的前后缓冲区交换封装起来。
 
-    // ... 设置回调的代码 ...
-}
+`WindowsWindow` 使用 `Scope<GraphicsContext>` 持有上下文。窗口创建成功后构造并初始化它，`OnUpdate()` 只负责轮询事件，再通过接口交换缓冲区：
+
+```cpp
+m_Context = CreateScope<OpenGLContext>(m_Window);
+m_Context->Init();
 
 void WindowsWindow::OnUpdate()
 {
     glfwPollEvents();
-    // 核心重构：不再调用 glfwSwapBuffers，而是调用上下文的交换
-    m_Context->SwapBuffers(); 
+    m_Context->SwapBuffers();
 }
 ```
 
-<img src="README.assets/image-20260329164819786.png" alt="image-20260329164819786" style="zoom:67%;" />
+`Scope` 补上了早期裸指针版本的所有权问题，窗口销毁时 Context 会随成员自动释放。这里的抽象仍有一段没走完：`WindowsWindow` 目前直接构造 `OpenGLContext`，还没有根据 Renderer API 选择实现的工厂。现阶段它隔离了职责，却没有让图形后端真正做到可切换。
+
+![OpenGLContext 初始化验证](README.assets/image-20260329164819786.png)
 
 ## 首个三角形
 
-要在屏幕上画出一个三角形，我们需要打通 **CPU（你的代码）** 与 **GPU（显卡）** 之间的通道。这涉及到三个核心概念：
+窗口、OpenGL Context 和 GLAD 都能正常启动后，我需要一个足够小的渲染目标来验证整条链路。三角形正合适：三个顶点、一组三角形索引，再配一对最简单的 Shader，任何一步出错都会直接表现为黑屏。
 
-1. **VBO (顶点缓冲区)**：在显存里开辟一块地，把三角形的坐标存进去。
-2. **VAO (顶点数组对象)**：告诉显卡怎么阅读这块地里的坐标（每隔几个字节是一个点）。
-3. **Shader (着色器)**：写两段运行在显卡上的小程序，一段算位置，一段算颜色。
+第一版代码直接写在 Application 附近，完全使用 OpenGL 原生接口。VBO 保存三个顶点的位置，EBO 保存 `{0, 1, 2}` 的绘制顺序，VAO 记录位置属性的解析方式。创建 EBO 时必须保持 VAO 处于绑定状态，否则索引缓冲不会成为这个 VAO 的状态。
 
-**在 Application.cpp 中编写三角形逻辑**
+```cpp
+float vertices[] = {
+    -0.5f, -0.5f, 0.0f,
+     0.5f, -0.5f, 0.0f,
+     0.0f,  0.5f, 0.0f
+};
+uint32_t indices[] = { 0, 1, 2 };
 
-我们将直接在 Application 类里加入这些 OpenGL 原生调用。别担心，之后我们会把它们封装成漂亮的类。
+glBindVertexArray(vertexArray);
+glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
+glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-修改 **Glimmer/src/Glimmer/Application.cpp**：
+glEnableVertexAttribArray(0);
+glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
 
-```
-    glGenVertexArrays(1, &m_VertexArray);
-    glBindVertexArray(m_VertexArray);
-
-    glGenBuffers(1, &m_VertexBuffer);
-    glBindBuffer(GL_ARRAY_BUFFER, m_VertexBuffer);
-
-    float vertices[3 * 3] = {
-        -0.5f, -0.5f, 0.0f,
-         0.5f, -0.5f, 0.0f,
-         0.0f,  0.5f, 0.0f
-    };
-
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
-
-    glGenBuffers(1, &m_IndexBuffer);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_IndexBuffer);
-
-    unsigned int indices[3] = { 0, 1, 2 };
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 ```
 
-**把一个三角形的顶点数据上传到 GPU，并配置好如何解析这些数据，从而让显卡能够正确绘制它**。流程是先创建并绑定一个 VAO（顶点数组对象）来记录所有顶点相关状态，然后创建 VBO（顶点缓冲）并把三角形的顶点坐标传到显存中；接着通过 `glVertexAttribPointer` 告诉 OpenGL：这些数据是按每 3 个 float 表示一个顶点位置（对应 shader 里的 layout location = 0）；最后创建 EBO（索引缓冲），用索引 `{0,1,2}` 指定绘制顺序。这样一套下来，GPU 就知道“从哪里读数据、怎么读、按什么顺序画”，后面只需要一次 DrawCall 就能把这个三角形画出来。
+绘制时绑定 Shader 与 VAO，再调用 `glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr)`。屏幕上出现三角形后，至少能确认 Context、函数加载、显存上传、顶点布局和 Draw Call 已经连通。那时的代码很粗糙，但故障范围足够小，适合做第一次排查。
 
-- **以前 (无索引)**：glDrawArrays(GL_TRIANGLES, 0, 3);
-- **现在 (有索引)**：使用 **glDrawElements**。
+这些原生调用后来分别进入 `VertexBuffer`、`IndexBuffer`、`VertexArray`、`Shader` 和 `RendererAPI`。当前正式路径通过 `RenderCommand::DrawIndexed()` 绘制，Application 已经不再保存三角形的 OpenGL ID。
 
-在 Application::Run 中修改：
-
-```
-// 绑定 VAO（它会自动关联之前绑定的 VBO 和 IBO）
-glBindVertexArray(m_VertexArray);
-
-// 参数：模式, 索引数量, 索引类型, 偏移量
-glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
-```
-
-<img src="README.assets/image-20260329175722236.png" alt="image-20260329175722236" style="zoom:67%;" />
+![首个索引三角形](README.assets/image-20260329175722236.png)
 
 ## Shader
 
-Shader 是运行在显卡（GPU）上的小程序，通常使用 **GLSL** (OpenGL Shading Language) 编写
+首个三角形最开始使用内嵌 GLSL。顶点 Shader 负责写入 `gl_Position`，片元 Shader 输出颜色。把编译和链接代码继续留在 Application 里很快就会失控，尤其是语法错误只留下黑屏时，排查体验相当差。
 
-**创建 Shader 接口类 (Shader.h)**
+我先封装了 Shader Program 的创建、绑定和销毁，随后又把接口与 OpenGL 实现拆开。当前 `Shader` 是渲染层接口，`Shader::Create()` 返回 `Ref<Shader>`；OpenGL 后端由 `OpenGLShader` 负责。它可以从顶点、片元源码创建，也可以读取带 `#type vertex` 与 `#type fragment` 分段的 `.glsl` 文件。
 
-在 Glimmer/src/Glimmer/Renderer 目录下创建。
+```cpp
+class Shader
+{
+public:
+    virtual ~Shader() = default;
+    virtual void Bind() const = 0;
+    virtual void Unbind() const = 0;
 
-**Shader.h**:
-
+    static Ref<Shader> Create(const std::string& filepath);
+    static Ref<Shader> Create(
+        const std::string& name,
+        const std::string& vertexSrc,
+        const std::string& fragmentSrc);
+};
 ```
-#pragma once
-#include <string>
 
-namespace gl {
+`OpenGLShader` 会逐阶段编译源码，再链接成 Program。失败时会收集驱动返回的编译或链接日志，并清理已经创建的 Shader 对象。文件重载采用先构建新 Program、成功后再替换旧对象的顺序，所以一次编辑错误不会立刻销毁当前仍可用的 Shader。成功重载会增加版本号，并让依赖它的渲染缓存知道资源已经变化。
 
-    class Shader {
-    public:
-        Shader(const std::string& vertexSrc, const std::string& fragmentSrc);
-        ~Shader();
+最初我做了两种片元输出。固定 RGBA 用来确认基础路径；位置渐变则把顶点位置传给片元阶段，观察光栅化插值是否符合预期。
 
-        void Bind() const;   // 对应 glUseProgram(id)
-        void Unbind() const; // 对应 glUseProgram(0)
+```glsl
+#version 330 core
+layout(location = 0) out vec4 color;
+in vec3 v_Position;
 
-    private:
-        uint32_t m_RendererID; // 显卡返回的程序 ID
-    };
-
+void main()
+{
+    color = vec4(v_Position * 0.5 + 0.5, 1.0);
 }
 ```
 
-**实现 Shader 类逻辑 (Shader.cpp)**
+![根据顶点位置生成的渐变](README.assets/image-20260330104705597.png)
 
-这一步最核心的工作是**错误检查**。如果 Shader 写错了，我们必须让引擎在控制台报错，而不是默默黑屏。
+![固定颜色输出](README.assets/image-20260330104640582.png)
 
-**Shader.cpp**:源代码过长，具体逻辑如下：
-
-**把顶点着色器和片元着色器从源码编译、链接成一个 GPU 可执行的渲染程序（Shader Program），并提供绑定/解绑接口供渲染时使用**。流程上先分别创建**顶点**和**片元**着色器对象，将传入的 GLSL 源码提交给 OpenGL 编译，并在每一步严格**检查编译错误**；接着把两个着色器附加到同一个 Program 上进行**链接**，生成最终的 Shader Program（`m_RendererID`），链接完成后再将中间的 Shader 对象解绑（释放依赖）；最后**通过 `Bind/Unbind` 控制当前使用的 Shader**。整体上，这个类把原本繁琐的 OpenGL Shader 流程封装起来，让上层只需要关心“用哪个 Shader”，而不用关心底层细节。
-
-**在 Application 中使用封装后的类**
-
-重构你的 Application.cpp：在缓冲区下加入shader
-
-这段代码的核心是在**定义一套最基础的 Shader（顶点 + 片元），并创建对应的 GPU 渲染程序**。具体来说，`vertexSrc` 定义了顶点着色器：它接收每个顶点的位置 `a_Position`，一方面直接传给 `gl_Position` 用于最终的屏幕变换，另一方面通过 `v_Position` 传递给后续阶段；而 `fragmentSrc` 定义了片元着色器：它接收从顶点阶段插值过来的 `v_Position`，并通过简单的数学变换（`*0.5 + 0.5`）把原本范围在 [-1,1] 的坐标映射到 [0,1]，最终作为颜色输出。最后通过 `m_Shader.reset(new Shader(...))` 创建 Shader 对象并交给智能指针管理，实现自动生命周期控制。整体效果就是：**根据顶点位置生成一个渐变颜色的三角形**。
-
-```glsl
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_IndexBuffer);
-
-    unsigned int indices[3] = { 0, 1, 2 };
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-
-
-    std::string vertexSrc = R"(
-        #version 330 core
-
-        layout(location = 0) in vec3 a_Position;
-
-        out vec3 v_Position;
-
-        void main()
-        {
-            v_Position = a_Position;
-            gl_Position = vec4(a_Position, 1.0);	
-        }
-    )";
-
-    std::string fragmentSrc = R"(
-        #version 330 core
-
-        layout(location = 0) out vec4 color;
-
-        in vec3 v_Position;
-
-        void main()
-        {
-            color = vec4(v_Position * 0.5 + 0.5, 1.0);
-        }
-    )";
-
-    m_Shader.reset(new Shader(vertexSrc, fragmentSrc));
-```
-
-<img src="README.assets/image-20260330104705597.png" alt="image-20260330104705597" style="zoom:50%;" />
-
-与之相对，固定RGB写法
-
-这两段 Shader 的本质区别在于：**第一段是“基于顶点位置生成颜色的动态渐变”，第二段是“固定颜色输出”**。具体来说，第一段在顶点着色器中把顶点位置通过 `v_Position` 传递到片元着色器，并利用 GPU 的插值机制在三角形内部自动插值，最终在片元阶段根据位置计算颜色（`v_Position * 0.5 + 0.5`），所以整个三角形会呈现渐变效果；而第二段完全没有数据传递，片元着色器直接输出一个固定的 RGBA 值，因此整个三角形是纯色的，没有任何变化。
-
-```
-// 顶点着色器：负责把 3D 坐标转换到屏幕上
-std::string vertexSrc = R"(
-    #version 330 core
-    
-    layout(location = 0) in vec3 a_Position; // 对应刚才指定的 AttribPointer 0
-
-    void main()
-    {
-        gl_Position = vec4(a_Position, 1.0);
-    }
-)";
-
-// 片元着色器：负责给像素上色
-std::string fragmentSrc = R"(
-    #version 330 core
-    
-    layout(location = 0) out vec4 color;
-
-    void main()
-    {
-        color = vec4(0.8, 0.2, 0.3, 1.0); // 橘红色 (RGBA)
-    }
-)";
-```
-
-<img src="README.assets/image-20260330104640582.png" alt="image-20260330104640582" style="zoom: 50%;" />
+现在 Shader 还由 `ShaderLibrary` 按名称管理，并支持文件监视与批量重载。图形 Shader 的当前工厂仍创建 OpenGL 实现，Vulkan 后端只是接口预留，不能当作已经可用。
 
 ## Uniform 上传
 
-实现 **Uniform 上传** 是让 Shader 从“静态图片”变成“动态特效”的关键，也是 CPU 指挥 GPU 的核心手段。
+Shader 能编译以后，下一步是让 CPU 在运行时传入数据。Uniform 最早只用来上传 `u_Time`，后来扩展到相机矩阵、材质参数、纹理槽和环境模拟数据，已经成了渲染路径里最常用的接口之一。
 
-为了让 Glimmer 引擎能够方便地传递时间、颜色、甚至是变换矩阵，我们需要在 Shader 类中封装一系列 UploadUniform 函数。
+当前 `Shader` 提供整数、整数数组、标量、`vec2` 到 `vec4`、`mat4` 以及纹理绑定接口。OpenGL 实现先按名称取得 Uniform Location，再调用对应的 `glUniform*`。矩阵通过 `glm::value_ptr()` 取得连续数据，并按不转置的方式上传。
 
-**扩展 Shader.h 接口**
-
-我们需要支持多种数据类型。虽然你现在只需要 float 传时间，但以后一定会用到 vec3 传颜色和 mat4 传位置。
-
-**Glimmer/src/Glimmer/Renderer/Shader.h**:
-
-```
-#include <glm/glm.hpp> // 确保包含了 GLM 数学库
-
-namespace gl {
-    class Shader {
-    public:
-        // ... 原有构造、析构、Bind ...
-
-        // ✨ 新增一系列上传 Uniform 的接口
-        void UploadUniformInt(const std::string& name, int value);
-
-        void UploadUniformFloat(const std::string& name, float value);
-        void UploadUniformFloat2(const std::string& name, const glm::vec2& value);
-        void UploadUniformFloat3(const std::string& name, const glm::vec3& value);
-        void UploadUniformFloat4(const std::string& name, const glm::vec4& value);
-
-        void UploadUniformMat4(const std::string& name, const glm::mat4& matrix);
-
-    private:
-        uint32_t m_RendererID;
-    };
-}
-```
-
-**实现 Shader.cpp 中的上传逻辑**
-
-在 OpenGL 中，上传数据的标准流程是：**获取位置 (Location) -> 调用对应的 glUniform 函数**。
-
-**Glimmer/src/Glimmer/Renderer/Shader.cpp**:
-
-```
-    void Shader::UploadUniformInt(const std::string& name, int value) {
-        GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-        glUniform1i(location, value);
-    }
-
-    void Shader::UploadUniformFloat(const std::string& name, float value) {
-        GLint location = glGetUniformLocation(m_RendererID, name.c_str());
-        glUniform1f(location, value);
-    }
-    //其余同理
-```
-
- **在渲染循环中注入时间**
-
-修改 Application::Run：
-
-```
-void Application::Run() {
-    while (m_Running) {
-        glClearColor(0.1f, 0.1f, 0.1f, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        m_Shader->Bind();
-        
-        // 每帧获取当前时间并上传给显卡
-        float time = (float)glfwGetTime(); 
-        m_Shader->UploadUniformFloat("u_Time", time);
-
-        glBindVertexArray(m_VertexArray);
-        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
-
-        m_Window->OnUpdate();
-    }
-}
-```
-
-动态shader
-
-```
-std::string fragmentSrc = R"(
-    #version 330 core
-    layout(location = 0) out vec4 color;
-    in vec3 v_Position;
-    
-    uniform float u_Time; // 接收外部注入的时间
-
-    void main() {
-        // 让颜色随时间和位置发生偏移
-        vec3 col = 0.5 + 0.5 * cos(u_Time + v_Position.xyx + vec3(3,1,4));
-        color = vec4(col, 1.0);
-    }
-)";
-```
-
-<img src="README.assets/image-20260330120556157.png" alt="image-20260330120556157" style="zoom:50%;" />
-
-**顶点动画**
-
-使得三角形有旋转的动感
-
-```
-std::string vertexSrc = R"(
-#version 330 core
-
-layout(location = 0) in vec3 a_Position;
-out vec3 v_Position;
-uniform float u_Time;
-
-void main()
+```cpp
+void OpenGLShader::UploadUniformFloat(
+    const std::string& name, float value)
 {
-    vec3 pos = a_Position;
-    pos.y += sin(pos.x * 5.0 + u_Time) * 0.1; // 新增
-    v_Position = pos;
-    gl_Position = vec4(pos, 1.0);
+    glUniform1f(GetUniformLocation(name), value);
 }
-)";
-```
 
-<img src="README.assets/image-20260330120936484.png" alt="image-20260330120936484" style="zoom:50%;" />
-
-extra：
-
-**迷幻彩虹 (Psychedelic Flow)**
-
-颜色不再是静态的，而是像液体一样在三角形表面流动。
-
-**特色**：在颜色空间中引入正弦波震荡。
-
-```
-// Fragment Shader
-#version 330 core
-
-layout(location = 0) out vec4 color;
-in vec3 v_Position;
-uniform float u_Time;
-
-void main()
+void OpenGLShader::UploadUniformMat4(
+    const std::string& name, const glm::mat4& matrix)
 {
-    vec3 col;
-    // 使用三角函数让 R, G, B 三个通道随位置和时间发生不同的相位偏移
-    col.r = sin(v_Position.x * 3.0 + u_Time) * 0.5 + 0.5;
-    col.g = sin(v_Position.y * 3.0 + u_Time + 2.0) * 0.5 + 0.5;
-    col.b = sin((v_Position.x + v_Position.y) * 3.0 + u_Time + 4.0) * 0.5 + 0.5;
-    
-    color = vec4(col, 1.0);
+    glUniformMatrix4fv(
+        GetUniformLocation(name), 1, GL_FALSE, glm::value_ptr(matrix));
 }
 ```
 
-<img src="README.assets/image-20260330120529730.png" alt="image-20260330120529730" style="zoom:50%;" />
+Location 查询结果保存在 `m_UniformCache`，同一个名字不会每帧重复调用 `glGetUniformLocation()`。Shader 成功重载后 Program ID 会变化，旧 Location 随即失效，因此重载路径会清空缓存。调用上传函数前仍要先绑定目标 Shader，这是 OpenGL 状态机留下的使用约定。
 
-同时应用顶点变换和颜色变换小bug：没有更新顶点的out v_Position赋值，导致颜色变换的计算是基于原坐标而不是变换坐标
+第一个动态实验把 `glfwGetTime()` 上传给 `u_Time`，片元 Shader 用正弦函数改变颜色。随后我又在顶点阶段修改 Y 坐标，做了一个轻微摆动的三角形。
 
-<img src="README.assets/image-20260330140556451.png" alt="image-20260330140556451" style="zoom:50%;" />
+![时间驱动的颜色变化](README.assets/image-20260330120556157.png)
 
-测试shader留档
+![时间驱动的顶点摆动](README.assets/image-20260330120936484.png)
 
+继续试验时，我让三个颜色通道使用不同相位，得到了一版流动的彩色效果。这段 Shader 没有进入正式渲染管线，但它很适合确认 `u_Time` 和插值数据都在逐帧更新。
+
+![基于位置和时间的颜色实验](README.assets/image-20260330120529730.png)
+
+这里还踩过一个很具体的坑：顶点 Shader 修改了局部变量 `pos`，却仍把原始 `a_Position` 写入 `v_Position`。几何已经发生摆动，片元颜色仍按旧坐标计算，两种效果看起来像错开了一层。把输出改为 `v_Position = pos` 后，颜色才会跟随变形后的顶点数据。
+
+```glsl
+vec3 pos = a_Position;
+pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
+v_Position = pos;
+gl_Position = u_ViewProjection * vec4(pos, 1.0);
 ```
-        // Shader 代码
-        std::string vertexSrc = R"(
-		#version 330 core
-		layout(location = 0) in vec3 a_Position;
-        uniform mat4 u_ViewProjection;
-		out vec3 v_Position;
-        uniform float u_Time;
-		void main()
-		{
-            vec3 pos = a_Position;
-            pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
-            v_Position = pos;
-            gl_Position = u_ViewProjection * vec4(pos, 1.0); 
-		}
-	)";
-        std::string fragmentSrc = R"(
-		#version 330 core
-		layout(location = 0) out vec4 color;
-		in vec3 v_Position;
-        uniform float u_Time;
-		void main()
-		{
-            vec3 col;
-            // 使用三角函数让 R, G, B 三个通道随位置和时间发生不同的相位偏移
-            col.r = sin(v_Position.x * 3.0 + u_Time) * 0.5 + 0.5;
-            col.g = sin(v_Position.y * 3.0 + u_Time + 2.0) * 0.5 + 0.5;
-            col.b = sin((v_Position.x + v_Position.y) * 3.0 + u_Time + 4.0) * 0.5 + 0.5;
-            color = vec4(col, 1.0);
-		}
-	)";
-```
+
+![插值位置未同步时的错误效果](README.assets/image-20260330140556451.png)
+
+今天的 Uniform 已经不只服务这些小实验。Renderer 会上传 ViewProjection 和 Transform，材质系统会提交 PBR 参数，Compute Shader 也使用同样的思路传递模拟步长与环境数据。早期的 `u_Time` 测试留下了一个实用习惯：先用能直接看见的变化验证数据通路，再把接口接进更复杂的渲染逻辑。
 
 
 
 ## Buffer 抽象
 
-接入 **Buffer（缓冲区）抽象** 是 Glimmer 引擎迈向**多图形 API 支持**（如未来支持 DX12/Vulkan）最关键的一步。
+首个三角形跑通后，Application 里还散落着 `glGenBuffers`、`glBufferData` 和资源销毁代码。继续照这个方式增加网格，很快就会出现重复的创建流程，也很难看出谁负责释放显存。我先把顶点缓冲和索引缓冲从这些调用里拆了出来。
 
-目前我们在 Application.cpp 里直接调用 glGenBuffers 和 glBindBuffer，这让代码充满了“OpenGL 味儿”。我们要把它封装成通用的 C++ 接口。
+`VertexBuffer` 负责顶点数据，可以用现有数据创建静态缓冲，也可以只分配容量，之后通过 `SetData()` 更新。`IndexBuffer` 保存索引并记录数量，绘制时不必在外部重复维护 count。两者都提供绑定接口和静态工厂，当前返回 `Ref`，GPU 对象会随最后一个引用释放。
 
-我们将实现三个核心类：
+```cpp
+auto vertexBuffer = VertexBuffer::Create(vertices, sizeof(vertices));
+auto dynamicBuffer = VertexBuffer::Create(maxVertexBytes);
+dynamicBuffer->SetData(batchVertices, usedVertexBytes);
 
-1. **VertexBuffer** (顶点缓冲区)：存坐标、颜色。
-2. **IndexBuffer** (索引缓冲区)：存画图顺序。
-3. **BufferLayout** (布局)：**这是重中之重！** 它将彻底消灭难看的 glVertexAttribPointer。
-
-**定义抽象接口 (Buffer.h)**
-
-在 Glimmer/src/Glimmer/Renderer 下创建。
-
-**Buffer.h**:
-
-```
-#pragma once
-
-namespace gl {
-
-    class VertexBuffer {
-    public:
-        virtual ~VertexBuffer() {}
-
-        virtual void Bind() const = 0;
-        virtual void Unbind() const = 0;
-
-        static VertexBuffer* Create(float* vertices, uint32_t size);
-    };
-
-    class IndexBuffer {
-    public:
-        virtual ~IndexBuffer() {}
-
-        virtual void Bind() const = 0;
-        virtual void Unbind() const = 0;
-
-        virtual uint32_t GetCount() const = 0; // 拿到有多少个索引点
-
-        static IndexBuffer* Create(uint32_t* indices, uint32_t count);
-    };
-
-}
+auto indexBuffer = IndexBuffer::Create(indices, indexCount);
 ```
 
-**实现 OpenGL 版本的 Buffer (OpenGLBuffer.cpp)**
+OpenGL 后端在构造函数中创建 Buffer，析构时调用 `glDeleteBuffers()`。带初始数据的 VertexBuffer 使用 `GL_STATIC_DRAW`；只分配容量的版本使用 `GL_DYNAMIC_DRAW`，更新时调用 `glBufferSubData()`。这个差别后来直接支撑了 Renderer2D 的批量顶点上传和 Renderer3D 的实例数据更新。
 
-在 Glimmer/src/Platform/OpenGL 下创建。
+工厂目前仍直接创建 `OpenGLVertexBuffer` 与 `OpenGLIndexBuffer`。接口已经挡住上层的 OpenGL 类型，后端选择却还没有进入工厂逻辑。Vulkan 要真正接入时，这里仍需要按 Renderer API 分派。
 
-**OpenGLBuffer.h**:
-
-定义了 OpenGL 渲染后端的两个核心缓冲区类：`OpenGLVertexBuffer` 和 `OpenGLIndexBuffer`，它们分别实现了引擎抽象的顶点缓冲和索引缓冲接口。`OpenGLVertexBuffer` 接收顶点数据，在构造时生成 GPU 上的 VBO 并通过 `m_RendererID` 管理，`Bind` 和 `Unbind` 用于在渲染时切换当前缓冲区，而析构函数负责释放 GPU 内存。`OpenGLIndexBuffer` 同样管理索引数据，保存索引数量 `m_Count`，通过绑定和解绑操作配合 `glDrawElements` 使用，实现顶点复用以减少渲染开销。这种设计的核心价值在于接口与实现分离，上层渲染逻辑无需关心 OpenGL 细节，只通过统一接口操作缓冲区，从而保证了渲染器后端的可替换性。
-
-```
-#pragma once
-#include "Glimmer/Renderer/Buffer.h"
-
-namespace gl {
-
-    class OpenGLVertexBuffer : public VertexBuffer {
-    public:
-        OpenGLVertexBuffer(float* vertices, uint32_t size);
-        virtual ~OpenGLVertexBuffer();
-
-        virtual void Bind() const override;
-        virtual void Unbind() const override;
-    private:
-        uint32_t m_RendererID;
-    };
-
-    class OpenGLIndexBuffer : public IndexBuffer {
-    public:
-        OpenGLIndexBuffer(uint32_t* indices, uint32_t count);
-        virtual ~OpenGLIndexBuffer();
-
-        virtual void Bind() const override;
-        virtual void Unbind() const override;
-
-        virtual uint32_t GetCount() const override { return m_Count; }
-    private:
-        uint32_t m_RendererID;
-        uint32_t m_Count;
-    };
-}
-```
-
-**OpenGLBuffer.cpp**: (核心逻辑，把 gl 函数包起来)
-
-`OpenGLBuffer.cpp` 代码实现了前面头文件中声明的 `OpenGLVertexBuffer` 和 `OpenGLIndexBuffer`，核心作用是把顶点和索引数据上传到 GPU 并管理它们的生命周期，从而支持高效渲染。具体来说，`OpenGLVertexBuffer` 构造时通过 `glGenBuffers` 创建一个 VBO，并用 `glBufferData` 将顶点数组传入 GPU 内存，绑定和解绑方法用于在渲染时切换当前缓冲区，析构函数负责释放 GPU 资源，保证内存安全；`OpenGLIndexBuffer` 类似地创建 EBO 管理索引数据，`m_Count` 记录索引数量方便后续渲染调用 `glDrawElements`，绑定解绑控制当前索引缓冲对象。整体逻辑体现了 **RAII 风格的资源管理**、**接口抽象与实现分离**，上层渲染系统只需通过统一接口操作缓冲区而无需关心 OpenGL 的底层细节，实现了渲染器后端解耦。
-
-**实现工厂方法 (Buffer.cpp)**
-
-这一步是为了让 Application 只需要调用 Create 就能自动根据平台返回正确的 Buffer。
-
-**Glimmer/src/Glimmer/Renderer/Buffer.cpp**:
-
-```
-#include "glpch.h"
-#include "Buffer.h"
-#include "Platform/OpenGL/OpenGLBuffer.h"
-
-namespace gl {
-
-    VertexBuffer* VertexBuffer::Create(float* vertices, uint32_t size) {
-        // 未来可以在这里写 switch(Renderer::GetAPI()) 来切换平台
-        return new OpenGLVertexBuffer(vertices, size);
-    }
-
-    IndexBuffer* IndexBuffer::Create(uint32_t* indices, uint32_t count) {
-        return new OpenGLIndexBuffer(indices, count);
-    }
-
-}
-```
-
-**在 Application 中使用封装后的 Buffer**
-
-重构你的 Application.cpp。你会发现原生 gl 调用正在消失：
+我当时最在意的是把资源生命周期收回来。原生 ID 一旦散在 Application 和 Layer 里，很容易漏删；改成 `Ref<Buffer>` 后，创建位置和实际共享关系更容易追踪。
 
 ## 缓冲区布局与顶点数组封装
 
-**实现 BufferLayout (缓冲区布局)**
+Buffer 只能保存字节，GPU 还需要知道每段数据的含义。最早的 `glVertexAttribPointer()` 把分量数、步长和偏移全写成数字，顶点结构一改，这些数字就可能悄悄错位。`BufferLayout` 就是为了解决这类同步问题。
 
-我们要让引擎自动计算“步长（Stride）”和“偏移量（Offset）”。
+`BufferElement` 记录属性名称、`ShaderDataType`、大小、偏移、归一化标记和输入频率。`BufferLayout` 按声明顺序累加大小，算出每个元素的 Offset 与整条顶点的 Stride：
 
-定义数据类型与布局类
-
-在 Buffer.h 中添加以下代码（放在命名空间内）：
-
-**Glimmer/src/Glimmer/Renderer/Buffer.h** (新增部分):
-
-代码过长：首先定义了 `ShaderDataType` 枚举，表示顶点属性可能的数据类型（浮点、整型、矩阵、布尔），并通过 `ShaderDataTypeSize` 函数计算每种类型在内存中的字节大小，这对于后续缓冲区偏移计算非常关键。
-
-`BufferElement` 结构体描述单个顶点属性，包括名称、类型、大小、偏移量以及是否归一化，同时提供 `GetComponentCount` 方法返回该属性的分量数量（例如 `Float3` 是 3 个分量），便于在 OpenGL 中调用 `glVertexAttribPointer` 时指定每个顶点属性的维度。
-
-`BufferLayout` 类则管理一组 `BufferElement`，在构造时接受初始化列表并调用 `CalculateOffsetsAndStride` 计算每个属性在顶点结构体中的 **内存偏移** 和 **顶点总字节数（Stride）**，保证 GPU 能按正确顺序读取数据。通过提供 `begin()` 和 `end()`，支持范围循环遍历每个属性，方便绑定到渲染管线。
-
-同时，给 VertexBuffer 类增加设置布局的虚接口：
-
-```
-class VertexBuffer {
-public:
-    // ... 原有函数 ...
-    virtual void SetLayout(const BufferLayout& layout) = 0;
-    virtual const BufferLayout& GetLayout() const = 0;
-};
-```
-
-**更新 OpenGLBuffer.h/cpp**
-
-你需要实现刚才在接口里增加的 GetLayout 和 SetLayout。
-
-```
-		virtual const BufferLayout& GetLayout() const override { return m_Layout; }
-		virtual void SetLayout(const BufferLayout& layout) override { m_Layout = layout; }
-	private:
-		uint32_t m_RendererID;
-		BufferLayout m_Layout;
-```
-
-**实现 VertexArray (顶点数组对象)**
-
-定义抽象接口 (VertexArray.h)
-
-```
-#pragma once
-#include "Glimmer/Renderer/Buffer.h"
-#include <memory>
-
-namespace gl {
-    class VertexArray {
-    public:
-        virtual ~VertexArray() {}
-        virtual void Bind() const = 0;
-        virtual void Unbind() const = 0;
-
-        virtual void AddVertexBuffer(const std::shared_ptr<VertexBuffer>& vertexBuffer) = 0;
-        virtual void SetIndexBuffer(const std::shared_ptr<IndexBuffer>& indexBuffer) = 0;
-
-        virtual const std::vector<std::shared_ptr<VertexBuffer>>& GetVertexBuffers() const = 0;
-        virtual const std::shared_ptr<IndexBuffer>& GetIndexBuffer() const = 0;
-
-        static VertexArray* Create();
-    };
-}
-```
-
-**实现 OpenGL 版本的 VertexArray**
-
-这里是最精彩的：它会自动读取 VertexBuffer 里的 Layout，并自动调用 glVertexAttribPointer。
-
-**文件路径：Glimmer/src/Platform/OpenGL/OpenGLVertexArray.h**
-
-```
-#pragma once
-#include "Glimmer/Renderer/VertexArray.h"
-
-namespace gl {
-
-	class OpenGLVertexArray : public VertexArray
-	{
-	public:
-		OpenGLVertexArray();
-		virtual ~OpenGLVertexArray();
-
-		virtual void Bind() const override;
-		virtual void Unbind() const override;
-
-		virtual void AddVertexBuffer(const std::shared_ptr<VertexBuffer>& vertexBuffer) override;
-		virtual void SetIndexBuffer(const std::shared_ptr<IndexBuffer>& indexBuffer) override;
-
-		virtual const std::vector<std::shared_ptr<VertexBuffer>>& GetVertexBuffers() const override { return m_VertexBuffers; }
-		virtual const std::shared_ptr<IndexBuffer>& GetIndexBuffer() const override { return m_IndexBuffer; }
-	private:
-		uint32_t m_RendererID;
-		std::vector<std::shared_ptr<VertexBuffer>> m_VertexBuffers;
-		std::shared_ptr<IndexBuffer> m_IndexBuffer;
-	};
-
-}
-```
-
-文件路径：**Glimmer/src/Platform/OpenGL/OpenGLVertexArray.cpp**
-
-它的核心作用是：**把“顶点数据 + 顶点布局描述”绑定在一起，让 GPU 知道如何解析一段连续内存中的顶点结构**，从而完成真正的渲染输入配置。
-
-从整体流程来看，这个类在构造时通过 `glGenVertexArrays` 创建一个 VAO，在 `Bind/Unbind` 中切换当前 VAO；真正的关键逻辑在 `AddVertexBuffer`：它先检查传入的 `VertexBuffer` 是否有布局（这是非常重要的安全校验），然后绑定 VAO 和 VBO，接着遍历 `BufferLayout` 中的每个 `BufferElement`，调用 `glEnableVertexAttribArray` 和 `glVertexAttribPointer`，把“顶点数据如何解释”（比如位置是3个float、颜色是4个float）逐个告诉 GPU，其中 `ShaderDataTypeToOpenGLBaseType` 负责把引擎抽象的数据类型映射为 OpenGL 类型（如 GL_FLOAT）。同时通过 `stride` 和 `offset` 指定每个属性在内存中的步长和偏移，这一步本质上就是在描述“一个顶点在内存中的结构”。最后把这个 VBO 存入列表，保证生命周期和后续使用。
-
-`SetIndexBuffer` 则负责绑定索引缓冲（EBO），并保存引用，这样 VAO 就同时记录了“顶点数据 + 索引数据”的完整状态，之后渲染时只需要 Bind VAO，就能恢复全部输入配置。
-
-**VertexArray 的工厂方法**
-
-**文件路径：Glimmer/src/Glimmer/Renderer/VertexArray.cpp**
-
-```
-#include "glpch.h"
-#include "VertexArray.h"
-#include "Platform/OpenGL/OpenGLVertexArray.h"
-
-namespace gl {
-
-	VertexArray* VertexArray.Create()
-	{
-		// 暂时直接返回 OpenGL 版本
-		return new OpenGLVertexArray();
-	}
-
-}
-```
-
-## Render类
-
-接入 **Renderer（渲染器）** 类是 Glimmer 引擎从“OpenGL 包装盒”进化为“真正的渲染引擎”的决定性一步。
-
-目前的 Application.cpp 依然在亲手处理 glClear 和 glDrawElements。**Renderer 类存在的意义，就是彻底剥离这些底层细节。**
-
-我们将建立一个三层架构：
-
-1. **RendererAPI**：抽象基类，定义“画画”和“清屏”的动作。
-2. **RenderCommand**：静态中转站，负责呼叫当前的 API。
-3. **Renderer**：最高级层，负责场景管理（比如：开始场景、提交模型、结束场景）。
-
-**API 抽象层 (RendererAPI & RenderCommand)**
-
-定义 API 接口 (RendererAPI.h)，这是所有图形 API（OpenGL, Vulkan, DX12）必须实现的“动作清单”。
-
-在 Glimmer/src/Glimmer/Renderer 下创建。
-
-**Glimmer/src/Glimmer/Renderer/RendererAPI.h**
-
-```
-#pragma once
-#include <glm/glm.hpp>
-#include "VertexArray.h"
-
-namespace gl {
-    class RendererAPI {
-    public:
-        enum class API { None = 0, OpenGL = 1 };
-    public:
-        virtual void SetClearColor(const glm::vec4& color) = 0;
-        virtual void Clear() = 0;
-        virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) = 0;
-
-        inline static API GetAPI() { return s_API; }
-    private:
-        static API s_API;
-    };
-}
-```
-
-**Glimmer/src/Glimmer/Renderer/RendererAPI.cpp**
-
-```
-#include "glpch.h"
-#include "RendererAPI.h"
-
-namespace gl {
-
-	RendererAPI::API RendererAPI::s_API = RendererAPI::API::OpenGL;
-
-}
-```
-
-**实现 OpenGL 的具体指令 (OpenGLRendererAPI.h/cpp)**
-
-在这里，我们将抽象接口翻译成真实的 OpenGL 代码。
-
-```
-#pragma once
-#include "Glimmer/Renderer/RendererAPI.h"
-
-namespace gl {
-
-	class OpenGLRendererAPI : public RendererAPI
-	{
-	public:
-		virtual void SetClearColor(const glm::vec4& color) override;
-		virtual void Clear() override;
-
-		virtual void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray) override;
-	};
-
-}
-```
-
-```
-#include "glpch.h"
-#include "OpenGLRendererAPI.h"
-#include <glad/glad.h>
-
-namespace gl {
-
-	void OpenGLRendererAPI::SetClearColor(const glm::vec4& color)
-	{
-		glClearColor(color.r, color.g, color.b, color.a);
-	}
-
-	void OpenGLRendererAPI::Clear()
-	{
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	}
-
-	void OpenGLRendererAPI::DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray)
-	{
-		glDrawElements(GL_TRIANGLES, vertexArray->GetIndexBuffer()->GetCount(), GL_UNSIGNED_INT, nullptr);
-	}
-
-}
-```
-
-**建立命令中转站 (RenderCommand.h/cpp)**
-
-它的作用是提供一组全局静态方法，方便我们随时随地“发号施令”。
-
-**文件路径：Glimmer/src/Glimmer/Renderer/RenderCommand.h**
-
-```
-#pragma once
-#include "RendererAPI.h"
-
-namespace gl {
-
-	class RenderCommand
-	{
-	public:
-		inline static void SetClearColor(const glm::vec4& color)
-		{
-			s_RendererAPI->SetClearColor(color);
-		}
-
-		inline static void Clear()
-		{
-			s_RendererAPI->Clear();
-		}
-
-		inline static void DrawIndexed(const std::shared_ptr<VertexArray>& vertexArray)
-		{
-			s_RendererAPI->DrawIndexed(vertexArray);
-		}
-	private:
-		static RendererAPI* s_RendererAPI;
-	};
-
-}
-```
-
-文件路径：**Glimmer/src/Glimmer/Renderer/RenderCommand.cpp**
-
-```
-#include "glpch.h"
-#include "RenderCommand.h"
-#include "Platform/OpenGL/OpenGLRendererAPI.h"
-
-namespace gl {
-
-	// 核心：在这里决定到底用哪个 API 实例
-	RendererAPI* RenderCommand::s_RendererAPI = new OpenGLRendererAPI();
-
-}
-```
-
-**实现高层渲染器 (Renderer.h/cpp)**
-
-这是开发者最终打交道的类。它负责“提交（Submit）”各种模型和 Shader。
-
-**文件路径：Glimmer/src/Glimmer/Renderer/Renderer.h**
-
-```
-#pragma once
-#include "RenderCommand.h"
-#include "Shader.h"
-
-namespace gl {
-
-	class Renderer
-	{
-	public:
-		static void BeginScene();
-		static void EndScene();
-
-		static void Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray);
-
-		inline static RendererAPI::API GetAPI() { return RendererAPI::GetAPI(); }
-	};
-
-}
-```
-
-```
-#include "glpch.h"
-#include "Renderer.h"
-
-namespace gl {
-
-	void Renderer::BeginScene()
-	{
-		// 以后这里会接收摄像机，并计算 View-Projection 矩阵
-	}
-
-	void Renderer::EndScene()
-	{
-	}
-
-	void Renderer::Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray)
-	{
-		shader->Bind();
-		vertexArray->Bind();
-		RenderCommand::DrawIndexed(vertexArray);
-	}
-
-}
-```
-
-## 正交摄像机
-
-现在所有的渲染底层组件（Buffer, VertexArray, Renderer API）都已经封装完毕。目前的三角形是**死死固定在屏幕中心**的（处于 -1 到 1 的标准化设备坐标系中）。
-
-下一步我们要引入 **正交摄像机 (Orthographic Camera)**。
-
-**这一步的作用：**
-
-1. **建立世界坐标系**：你可以定义一个 16:9 的世界，而不是死板的 -1 到 1。
-2. **场景漫游**：通过移动摄像机，实现 2D 游戏的画面滚动（比如主角走，镜头跟）。
-3. **数学联动**：这是你第一次真正大规模使用 GLM 矩阵运算（View-Projection 矩阵）。
-
-**创建摄像机类 (OrthographicCamera.h/cpp)**
-
-**文件路径：Glimmer/src/Glimmer/Renderer/OrthographicCamera.h**
-
-```
-#pragma once
-#include <glm/glm.hpp>
-
-namespace gl {
-
-	class OrthographicCamera
-	{
-	public:
-		OrthographicCamera(float left, float right, float bottom, float top);
-
-		const glm::vec3& GetPosition() const { return m_Position; }
-		void SetPosition(const glm::vec3& position) { m_Position = position; RecalculateViewMatrix(); }
-
-		float GetRotation() const { return m_Rotation; }
-		void SetRotation(float rotation) { m_Rotation = rotation; RecalculateViewMatrix(); }
-
-		const glm::mat4& GetProjectionMatrix() const { return m_ProjectionMatrix; }
-		const glm::mat4& GetViewMatrix() const { return m_ViewMatrix; }
-		const glm::mat4& GetViewProjectionMatrix() const { return m_ViewProjectionMatrix; }
-	private:
-		void RecalculateViewMatrix();
-	private:
-		glm::mat4 m_ProjectionMatrix;
-		glm::mat4 m_ViewMatrix;
-		glm::mat4 m_ViewProjectionMatrix;
-
-		glm::vec3 m_Position = { 0.0f, 0.0f, 0.0f };
-		float m_Rotation = 0.0f;
-	};
-
-}
-```
-
-**Glimmer/src/Glimmer/Renderer/OrthographicCamera.cpp**
-
-```
-#include "glpch.h"
-#include "OrthographicCamera.h"
-#include <glm/gtc/matrix_transform.hpp>
-
-namespace gl {
-
-	OrthographicCamera::OrthographicCamera(float left, float right, float bottom, float top)
-		: m_ProjectionMatrix(glm::ortho(left, right, bottom, top, -1.0f, 1.0f)), m_ViewMatrix(1.0f)
-	{
-		m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
-	}
-
-	void OrthographicCamera::RecalculateViewMatrix()
-	{
-		// 计算 View 矩阵：先平移再旋转，最后取逆
-		// 在 2D 中，摄像机往左移，物体看起来就往右移
-		glm::mat4 transform = glm::translate(glm::mat4(1.0f), m_Position) *
-			glm::rotate(glm::mat4(1.0f), glm::radians(m_Rotation), glm::vec3(0, 0, 1));
-
-		m_ViewMatrix = glm::inverse(transform);
-		m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
-	}
-
-}
-```
-
-**更新渲染器以支持摄像机 (Renderer.h/cpp)**
-
-渲染器现在需要接收摄像机的矩阵，并把它传给每一帧绘制的 Shader。
-
-**文件路径：Glimmer/src/Glimmer/Renderer/Renderer.h**
-
-```
-#pragma once
-#include "RenderCommand.h"
-#include "OrthographicCamera.h"
-#include "Shader.h"
-
-namespace gl {
-
-	class Renderer
-	{
-	public:
-		// 修改：BeginScene 现在需要传入摄像机
-		static void BeginScene(OrthographicCamera& camera);
-		static void EndScene();
-
-		static void Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray);
-
-		inline static RendererAPI::API GetAPI() { return RendererAPI::GetAPI(); }
-
-	private:
-		struct SceneData
-		{
-			glm::mat4 ViewProjectionMatrix;
-		};
-
-		static SceneData* s_SceneData;
-	};
-
-}
-```
-
-**Glimmer/src/Glimmer/Renderer/Renderer.cpp**
-
-```
-#include "glpch.h"
-#include "Renderer.h"
-
-namespace gl {
-
-	Renderer::SceneData* Renderer::s_SceneData = new Renderer::SceneData;
-
-	void Renderer::BeginScene(OrthographicCamera& camera)
-	{
-		// 记录摄像机的 View-Projection 矩阵
-		s_SceneData->ViewProjectionMatrix = camera.GetViewProjectionMatrix();
-	}
-
-	void Renderer::EndScene()
-	{
-	}
-
-	void Renderer::Submit(const std::shared_ptr<Shader>& shader, const std::shared_ptr<VertexArray>& vertexArray)
-	{
-		shader->Bind();
-		// 自动向 Shader 上传矩阵变量，名字定为 "u_ViewProjection"
-		shader->UploadUniformMat4("u_ViewProjection", s_SceneData->ViewProjectionMatrix);
-
-		vertexArray->Bind();
-		RenderCommand::DrawIndexed(vertexArray);
-	}
-
-}
-```
-
-**重构 Application.cpp**
-
-现在我们要修改 Shader 源码，并让摄像机动起来。
-
-**修改 Application.cpp 中的部分逻辑：**
-
-```
-		// ---------------------------------------------------------
-		// 1. 摄像机初始化 (16:9 比例)
-		// ---------------------------------------------------------
-		m_Camera.reset(new OrthographicCamera(-1.6f, 1.6f, -0.9f, 0.9f));
-
-		// ---------------------------------------------------------
-		// 2. 顶点数据与 VertexArray 封装
-		// ---------------------------------------------------------
-		m_VertexArray.reset(VertexArray::Create());
-
-		float vertices[3 * 3] = {
-			-0.5f, -0.5f, 0.0f, // 左下
-			 0.5f, -0.5f, 0.0f, // 右下
-			 0.0f,  0.5f, 0.0f  // 顶
-		};
-
-		std::shared_ptr<VertexBuffer> vertexBuffer;
-		vertexBuffer.reset(VertexBuffer::Create(vertices, sizeof(vertices)));
-
-		// 使用声明式布局 (BufferLayout)
-		vertexBuffer->SetLayout({
-			{ ShaderDataType::Float3, "a_Position" }
-		});
-		m_VertexArray->AddVertexBuffer(vertexBuffer);
-
-		uint32_t indices[3] = { 0, 1, 2 };
-		std::shared_ptr<IndexBuffer> indexBuffer;
-		indexBuffer.reset(IndexBuffer::Create(indices, 3));
-		m_VertexArray->SetIndexBuffer(indexBuffer);
-
-		// ---------------------------------------------------------
-		// 3. Shader 源码 (必须乘以 u_ViewProjection 矩阵)
-		// ---------------------------------------------------------
-		std::string vertexSrc = R"(
-			#version 330 core
-			
-			layout(location = 0) in vec3 a_Position;
-
-			uniform mat4 u_ViewProjection; // 接收摄像机矩阵
-
-			out vec3 v_Position;
-
-			void main()
-			{
-				v_Position = a_Position;
-				gl_Position = u_ViewProjection * vec4(a_Position, 1.0);	
-			}
-		)";
-```
-
-```
-void Application::Run()
-{
-    while (m_Running)
-    {
-        // ---------------------------------------------------------
-        // A. 摄像机控制逻辑 (Input Polling)
-        // ---------------------------------------------------------
-        float moveSpeed = 0.01f;
-        if (Input::IsKeyPressed(GL_KEY_A))
-            m_Camera->SetPosition({ m_Camera->GetPosition().x - moveSpeed, m_Camera->GetPosition().y, 0.0f });
-        else if (Input::IsKeyPressed(GL_KEY_D))
-            m_Camera->SetPosition({ m_Camera->GetPosition().x + moveSpeed, m_Camera->GetPosition().y, 0.0f });
-
-        if (Input::IsKeyPressed(GL_KEY_W))
-            m_Camera->SetPosition({ m_Camera->GetPosition().x, m_Camera->GetPosition().y + moveSpeed, 0.0f });
-        else if (Input::IsKeyPressed(GL_KEY_S))
-            m_Camera->SetPosition({ m_Camera->GetPosition().x, m_Camera->GetPosition().y - moveSpeed, 0.0f });
-
-        // ---------------------------------------------------------
-        // B. 渲染执行
-        // ---------------------------------------------------------
-        RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
-        RenderCommand::Clear();
-
-        // 1. 开启场景渲染 (传入当前摄像机)
-        Renderer::BeginScene(*m_Camera);
-
-        // 2. 更新 Shader 中的时间 Uniform
-        m_Shader->Bind();
-        m_Shader->UploadUniformFloat("u_Time", (float)glfwGetTime());
-
-        // 3. 提交物体进行渲染
-        Renderer::Submit(m_Shader, m_VertexArray);
-
-        // 4. 结束渲染
-        Renderer::EndScene();
-
-        // ---------------------------------------------------------
-        // C. 层级更新与 UI 渲染
-        // ---------------------------------------------------------
-        for (Layer* layer : m_LayerStack)
-            layer->OnUpdate();
-
-        m_ImGuiLayer->Begin();
-        for (Layer* layer : m_LayerStack)
-            layer->OnImGuiRender();
-        m_ImGuiLayer->End();
-
-        m_Window->OnUpdate();
-    }
-}
-```
-
-这部分要改的东西很多，之后还需要再次回顾加深理解
-
-现在的三角形可以WASD控制移动
-
-<img src="README.assets/image-20260330194300345.png" alt="image-20260330194300345" style="zoom:50%;" />
-
-感觉比例好像变了？这是因为正交摄像机，**在没有加入摄像机之前，你的三角形是被拉伸的；加入摄像机后，它的比例才是正确的。**
-
-重新修改顶点，以至于匹配正交摄像机后的画面
-
-<img src="README.assets/image-20260330194657176.png" alt="image-20260330194657176" style="zoom:50%;" /> 
-
-## Timestep
-
-引入时间步这一机制，首先要明白，什么是时间步？
-
-我们之前也写过关于shader的时间u_Time
-
-**运行总时间 (u_Time) 的职责**
-
-你现在在 Shader 里写：sin(u_Time + v_Position.x)。
-
-- **它的强项**：处理**周期性、持续性**的视觉效果。波浪起伏（水面、草地摆动）。颜色循环（彩虹特效）。纹理滚动（流光效果）。
-- **为什么用它？** 因为显卡非常擅长计算数学函数。通过给它一个单增的时间值，它可以瞬间算出这一帧每一个像素应该在什么相位。
-
-**时间步 (Timestep / DeltaTime) 的职责**
-
-你在 Application::Run 算出的 timestep = time - lastFrameTime。
-
-- **它的强项**：处理**位移、速度和变化率**。摄像机移动：pos += velocity * timestep。角色跳跃、物理模拟。
-- **为什么用它？（帧率无关性）**如果你不用 timestep，直接 pos += 0.01f。在 60 帧的电脑上，每秒移动 0.6 单位。在 144 帧的电竞屏上，每秒移动 1.44 单位。**用了 timestep，无论电脑多快，大家每秒移动的距离都完全一样。**
-
-**为什么不建议在 Shader 里用 Timestep 来累加时间？**
-
-有些新手会想：我能不能每帧传一个 u_DeltaTime 给 Shader，让 Shader 内部自己加出一个总时间？
-**答案：绝对不要这样做。**
-
-- **精度灾难（Floating Point Drift）**：
-  Shader 内部使用的是 float（单精度浮点数）。如果你每帧加一个很小的数（比如 0.016s），运行几十分钟后，浮点数的舍入误差会越来越大，导致你的彩虹特效开始闪烁、跳变甚至停滞。
-- **CPU 的优势**：
-  CPU 可以使用 double（双精度）甚至高精度的计时器来追踪总时间，然后在传给 Uniform 时转成 float。这样每一帧 Shader 拿到的都是一个经过校准的、绝对准确的时间点。
-
-**创建 Timestep 包装类**
-
-在 Glimmer/src/Glimmer/Core 下创建 Timestep.h。我们不直接用 float，而是封装一个类，这样可以方便地在秒和毫秒之间切换。
-
-**文件路径：Glimmer/src/Glimmer/Core/Timestep.h**
-
-```
-#pragma once
-
-namespace gl {
-
-	class Timestep
-	{
-	public:
-		Timestep(float time = 0.0f)
-			: m_Time(time)
-		{
-		}
-
-		// 允许像 float 一样直接使用： float s = ts;
-		operator float() const { return m_Time; }
-
-		float GetSeconds() const { return m_Time; }
-		float GetMilliseconds() const { return m_Time * 1000.0f; }
-	private:
-		float m_Time;
-	};
-
-}
-```
-
-**修改 Layer.h 接口**
-
-所有的图层更新都必须感知到时间的流逝。
-
-**文件路径：Glimmer/src/Glimmer/Layer.h**
-
-```
-#include "Glimmer/Core/Timestep.h" // ✨ 包含头文件
-
-namespace gl {
-	class Layer {
-	public:
-		// ... 
-		virtual void OnUpdate(Timestep ts) {} // ✨ 修改：增加参数
-		// ...
-	};
-}
-```
-
-**在 Application 中计算 Delta Time**
-
-我们需要在主循环中对比“这一帧的时间”和“上一帧的时间”。
-
-**文件路径：Glimmer/src/Glimmer/Application.h**
-
-```
-private:
-    // ... 其他成员 ...
-    float m_LastFrameTime = 0.0f; // ✨ 记录上一帧的时间点
-```
-
-文件路径：**Glimmer/src/Glimmer/Application.cpp**
-
-```
-void Application::Run()
-{
-    while (m_Running)
-    {
-        // 1. ✨ 计算增量时间 (Delta Time)
-        // glfwGetTime 返回的是从启动到现在的总秒数
-        float time = (float)glfwGetTime(); 
-        Timestep timestep = time - m_LastFrameTime;
-        m_LastFrameTime = time;
-
-        // 2. 渲染清屏
-        RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
-        RenderCommand::Clear();
-
-        // 3. 更新图层逻辑 (传入 timestep)
-        for (Layer* layer : m_LayerStack)
-            layer->OnUpdate(timestep);
-
-        // 4. ImGui 渲染 (UI 通常不需要按 timestep 移动)
-        m_ImGuiLayer->Begin();
-        for (Layer* layer : m_LayerStack)
-            layer->OnImGuiRender();
-        m_ImGuiLayer->End();
-
-        m_Window->OnUpdate();
-    }
-}
-```
-
-**在 Sandbox 中应用（真正解决移动问题）**
-
-现在我们可以把摄像机的移动速度定义为 **“每秒移动多少单位”**，而不是“每帧移动多少”。
-
-**修改 SandboxApp.cpp 里的 OnUpdate：**
-
-```
-void OnUpdate(gl::Timestep ts) override 
-{
-    // 定义移动速度：每秒 2.0 个世界单位
-    float moveSpeed = 2.0f; 
-
-    // ✨ 核心公式：位移 = 速度 * 时间
-    // 无论帧率高低，相乘后的结果都能保证每一秒钟移动的距离是恒定的
-    if (gl::Input::IsKeyPressed(GL_KEY_A))
-        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(-moveSpeed * ts, 0, 0));
-    else if (gl::Input::IsKeyPressed(GL_KEY_D))
-        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(moveSpeed * ts, 0, 0));
-
-    if (gl::Input::IsKeyPressed(GL_KEY_W))
-        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(0, moveSpeed * ts, 0));
-    else if (gl::Input::IsKeyPressed(GL_KEY_S))
-        m_Camera->SetPosition(m_Camera->GetPosition() + glm::vec3(0, -moveSpeed * ts, 0));
-}
-```
-
-同时，将Application中的渲染逻辑全部迁移
-
-```
-class ExampleLayer : public gl::Layer {
-public:
-    ExampleLayer() :Layer("Example"), m_Camera(-1.6f, 1.6f, -0.9f, 0.9f)
-    {
-        // 1. 创建顶点数组
-        m_VertexArray.reset(gl::VertexArray::Create());
-
-        // 2. 准备数据
-        float vertices[3 * 3] = {
-            -1.0f, -0.5f, 0.0f,
-             1.0f, -0.5f, 0.0f,
-             0.0f,  0.5f, 0.0f
-        };
-
-        std::shared_ptr<gl::VertexBuffer> vertexBuffer;
-        vertexBuffer.reset(gl::VertexBuffer::Create(vertices, sizeof(vertices)));
-// ... 同之前Application ...
-```
-
-并且修改u_Time
-
-我们要在 Application 里提供一个统一的时间入口，让 Sandbox 能拿到时间，但不需要知道 GLFW 的存在。
-
-**第一步：在 Application 中暴露时间接口**
-
-修改 **Glimmer/src/Glimmer/Application.h** 和 **Application.cpp**：
-
-```
-// Application.h
-public:
-    // 供外部获取从引擎启动至今的总时间（秒）
-    inline float GetTime() { return (float)glfwGetTime(); }
-
-// ... 保持单例模式 ...
-```
-
-**第二步：在 Sandbox 中优雅地使用**
-
-现在，**SandboxApp.cpp** 不再需要 #include <GLFW/glfw3.h>，也不需要改 Premake，直接找引擎要时间：
-
-```
-void ExampleLayer::OnUpdate(gl::Timestep ts) override {
-    // ... 摄像机控制逻辑 ...
-
-    // --- 渲染部分 ---
-    gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
-    gl::RenderCommand::Clear();
-
-    gl::Renderer::BeginScene(m_Camera);
-
-    m_Shader->Bind();
-    
-    // ✨ 重点：通过 Application 单例获取时间，彻底告别 GLFW
-    float time = gl::Application::Get().GetTime();
-    m_Shader->UploadUniformFloat("u_Time", time); 
-
-    gl::Renderer::Submit(m_Shader, m_VertexArray);
-
-    gl::Renderer::EndScene();
-}
-```
-
-最终修复大大小小的简单报错，可以WASD移动，变色，动态顶点且在SandBox实现的三角形，诞生
-
-<img src="README.assets/image-20260330223810703.png" alt="image-20260330223810703" style="zoom: 50%;" />
-
-## 变换矩阵
-
-这一步的作用是实现 **“物体级变换”**：让你可以通过代码让三角形（或正方形）在世界空间里**移动、旋转、缩放**，而不需要去动那块冰冷的顶点缓冲区
-
-**修改 Shader 支持变换矩阵**
-
-我们需要在顶点着色器中增加一个 u_Transform 变量。
-
-**修改 SandboxApp.cpp 里的 vertexSrc：**
-
-```
-std::string vertexSrc = R"(
-    #version 330 core
-    
-    layout(location = 0) in vec3 a_Position;
-
-    uniform mat4 u_ViewProjection;
-    uniform mat4 u_Transform; // ✨ 新增：模型变换矩阵
-
-    out vec3 v_Position;
-    uniform float u_Time;
-
-    void main()
-    {
-        vec3 pos = a_Position;
-        pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
-        v_Position = pos;
-        // ✨ 计算顺序：投影 * 视图 * 模型 * 原始坐标
-        gl_Position = u_ViewProjection * u_Transform * vec4(pos, 1.0);
-    }
-)";
-```
-
-**升级渲染器接口 (Renderer.h/cpp)**
-
-渲染器现在不仅要管摄像机，还要管每个物体的“位姿”。
-
-**文件路径：Glimmer/src/Glimmer/Renderer/Renderer.h**
-
-```
-// 修改 Submit 函数签名，增加 transform 参数
-static void Submit(const std::shared_ptr<Shader>& shader, 
-                  const std::shared_ptr<VertexArray>& vertexArray, 
-                  const glm::mat4& transform = glm::mat4(1.0f)); // ✨ 默认是单位矩阵
-```
-
-**Glimmer/src/Glimmer/Renderer/Renderer.cpp**
-
-```
-void Renderer::Submit(const std::shared_ptr<Shader>& shader, 
-                     const std::shared_ptr<VertexArray>& vertexArray, 
-                     const glm::mat4& transform)
-{
-    shader->Bind();
-    // 1. 上传场景矩阵 (PV)
-    shader->UploadUniformMat4("u_ViewProjection", s_SceneData->ViewProjectionMatrix);
-    // 2. 上传物体变换矩阵 (M)
-    shader->UploadUniformMat4("u_Transform", transform);
-
-    vertexArray->Bind();
-    RenderCommand::DrawIndexed(vertexArray);
-}
-```
-
-**在 Sandbox 中画一个“正方形网格”**
-
-现在我们要展示变换矩阵的威力。我们不再画三角形，而是画一个**正方形**，并且利用循环画出一堆小方块。
-
-**修改 SandboxApp.cpp 构造函数（定义正方形）：**
-
-```
-// 1. 定义 4 个顶点
-float vertices[4 * 3] = {
-    -0.5f, -0.5f, 0.0f,
-     0.5f, -0.5f, 0.0f,
-     0.5f,  0.5f, 0.0f,
-    -0.5f,  0.5f, 0.0f
-};
-// 2. 定义索引 (两个三角形拼成正方形)
-uint32_t indices[6] = { 0, 1, 2, 2, 3, 0 };
-
-// ... 初始化 vertexBuffer (Layout依然是 Float3) ...
-// ... 初始化 m_VertexArray ...
-```
-
-**修改** **SandboxApp.cpp** **的** **OnUpdate**（动画逻辑）：
-
-```
-void OnUpdate(gl::Timestep ts) override {
-    // ... 摄像机控制代码 ...
-
-    gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
-    gl::RenderCommand::Clear();
-
-    gl::Renderer::BeginScene(m_Camera);
-
-    // ✨ 准备一个基础的比例矩阵（让方块变小一点）
-    glm::mat4 scale = glm::scale(glm::mat4(1.0f), glm::vec3(0.1f));
-
-    m_Shader->Bind();
-    m_Shader->UploadUniformFloat("u_Time", gl::Application::Get().GetTime());
-
-    // ✨ 渲染一个 20x20 的方块阵列
-    for (int y = 0; y < 20; y++) {
-        for (int x = 0; x < 20; x++) {
-            // 计算每个方块的位置
-            glm::vec3 pos(x * 0.11f, y * 0.11f, 0.0f);
-            glm::mat4 transform = glm::translate(glm::mat4(1.0f), pos) * scale;
-            
-            // 提交给渲染器，每个方块用不同的 transform
-            gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
-        }
-    }
-
-    gl::Renderer::EndScene();
-}
-```
-
-<img src="README.assets/image-20260331104756545.png" alt="image-20260331104756545" style="zoom:50%;" />
-
-给每个方块加一点旋转:
-
-```
-float time = gl::Application::Get().GetTime();
-
-for (int y = 0; y < 20; y++) {
-    for (int x = 0; x < 20; x++) {
-        glm::vec3 pos(x * 0.11f, y * 0.11f, 0.0f);
-        
-        // ✨ 让每个方块根据位置和时间，产生不同的旋转角度
-        float rotation = time * 20.0f + (x + y) * 10.0f;
-        
-        glm::mat4 transform = glm::translate(glm::mat4(1.0f), pos) * 
-                             glm::rotate(glm::mat4(1.0f), glm::radians(rotation), {0, 0, 1}) * 
-                             scale;
-        
-        gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
-    }
-}
-```
-
-<img src="README.assets/image-20260331110107923.png" alt="image-20260331110107923" style="zoom:50%;" />
-
-## 纹理
-
-加入纹理（Texture）是引擎开发从“简笔画”向“真实画面”跨越的关键一步。
-
-为了实现纹理，我们需要：
-
-1. **图像加载库**：引入 stb_image（工业标准）。
-2. **纹理抽象层**：定义 Texture 和 Texture2D 接口。
-3. **OpenGL 实现**：编写 OpenGLTexture2D 类。
-4. **管线升级**：让顶点数据支持 **UV 坐标**，并在 Shader 里使用采样器。
-
-**集成图像加载库 stb_image**
-
-stb_image 是一个极其轻量级的纯头文件 C 库。
-
-1. **下载**：前往 [stb_image.h](https://github.com/nothings/stb/blob/master/stb_image.h) 下载该文件。
-
-2. **物理存放**：放入 Glimmer/vendor/stb_image 目录下。
-
-3. **实现文件**：在同目录下创建一个 stb_image.cpp（这是 C 库的要求）：
-
-   ```
-   #include "glpch.h"
-   
-   #define STB_IMAGE_IMPLEMENTATION
-   #include "stb_image.h"
-   ```
-
-4. **修改 Premake**：将 vendor/stb_image 加入包含路径，并把这个 .cpp 编译进项目。
-
-**定义纹理接口 (Texture.h)**
-
-**文件路径：Glimmer/src/Glimmer/Renderer/Texture.h**
-
-```
-#pragma once
-#include <string>
-#include "Glimmer/Core.h"
-
-namespace gl {
-
-	class Texture
-	{
-	public:
-		virtual ~Texture() = default;
-
-		virtual uint32_t GetWidth() const = 0;
-		virtual uint32_t GetHeight() const = 0;
-
-		// slot 代表纹理单元（0-31），显卡可以同时绑定多个纹理
-		virtual void Bind(uint32_t slot = 0) const = 0;
-	};
-
-	class Texture2D : public Texture
-	{
-	public:
-		// 静态工厂方法，传入图片路径创建纹理
-		static std::shared_ptr<Texture2D> Create(const std::string& path);
-	};
-
-}
-```
-
-**实现工厂方法 (Texture.cpp)**
-
-**文件作用**：根据当前选用的图形 API（目前只有 OpenGL），返回具体的对象实例。
-**Glimmer/src/Glimmer/Renderer/Texture.cpp**：
-
-```
-#include "glpch.h"
-#include "Texture.h"
-
-#include "Platform/OpenGL/OpenGLTexture2D.h"
-#include "Glimmer/Renderer/Renderer.h"
-
-namespace gl {
-
-	std::shared_ptr<Texture2D> Texture2D::Create(const std::string& path)
-	{
-		// 以后这里可以根据 Renderer::GetAPI() 进行分支切换
-		return std::make_shared<OpenGLTexture2D>(path);
-	}
-
-}
-```
-
-**实现 OpenGL 版本的纹理类**
-
-这里是真正与显卡和驱动打交道的地方。
-
-**文件路径说明**：
-
-- .h 负责定义 OpenGL 专属的私有变量（如 m_RendererID）。
-- .cpp 负责加载图片、配置显卡过滤参数、上传像素数据。
-
-**Glimmer/src/Platform/OpenGL/OpenGLTexture2D.h**：
-
-```
-#pragma once
-#include "Glimmer/Renderer/Texture.h"
-
-namespace gl {
-
-	class OpenGLTexture2D : public Texture2D
-	{
-	public:
-		OpenGLTexture2D(const std::string& path);
-		virtual ~OpenGLTexture2D();
-
-		virtual uint32_t GetWidth() const override { return m_Width; }
-		virtual uint32_t GetHeight() const override { return m_Height; }
-
-		virtual void Bind(uint32_t slot = 0) const override;
-	private:
-		std::string m_Path;
-		uint32_t m_Width, m_Height;
-		uint32_t m_RendererID; // GPU 端的资源 ID
-	};
-
-}
-```
-
-**Glimmer/src/Platform/OpenGL/OpenGLTexture2D.cpp**：
-
-这个类在构造时先通过 `stb_image` 从硬盘读取图片数据，然后根据图片通道数选择合适的 OpenGL 格式（RGB/RGBA），接着在 GPU 中创建纹理对象并分配显存，通过 `glTexImage2D` 把像素数据上传到显卡，最后设置采样方式（过滤），这样这张图片就变成了可以在 Shader 中使用的纹理；`Bind` 函数则负责把这个纹理绑定到指定的纹理槽位，供渲染时采样使用。
-
-**升级 Sandbox 渲染管线 (支持 UV)**
-
-要显示贴图，你的顶点必须知道图片上的哪个点对应模型上的哪个点（UV 坐标）。
-
-**修改 Sandbox 顶点数据**：
-
-```
-float vertices[4 * 5] = {
-    // X, Y, Z          // U, V (0-1范围)
-    -0.5f, -0.5f, 0.0f,  0.0f, 0.0f, // 左下
-     0.5f, -0.5f, 0.0f,  1.0f, 0.0f, // 右下
-     0.5f,  0.5f, 0.0f,  1.0f, 1.0f, // 右上
-    -0.5f,  0.5f, 0.0f,  0.0f, 1.0f  // 左上
-};
-```
-
-**更新布局 (Layout)**：
-
-```
+```cpp
 vertexBuffer->SetLayout({
-    { gl::ShaderDataType::Float3, "a_Position" },
-    { gl::ShaderDataType::Float2, "a_TexCoord" } // 👈 新增 UV 属性
+    { ShaderDataType::Float3, "a_Position" },
+    { ShaderDataType::Float3, "a_Normal" },
+    { ShaderDataType::Float2, "a_TexCoord" }
 });
 ```
 
-**更新 Shader 代码**：
+这套计算按字段紧密排列，不会替 C++ 结构体补齐额外对齐。传入的真实顶点内存必须和 Layout 保持一致；如果以后给顶点结构增加显式对齐，布局计算也要一起调整。
 
+`VertexArray` 把一个或多个 VertexBuffer、它们的 Layout 以及 IndexBuffer 组合成可绘制状态。`OpenGLVertexArray::AddVertexBuffer()` 会拒绝空 Layout，然后依次配置属性位置。浮点属性走 `glVertexAttribPointer()`，整数属性走 `glVertexAttribIPointer()`；矩阵拆成多列，占用连续的 attribute location。
+
+当前 Layout 还支持 `PerVertex` 和 `PerInstance` 两种输入频率。实例属性会调用 `glVertexAttribDivisor(location, 1)`，这正是 Renderer3D 批量提交 Transform 与 Entity 数据时使用的路径。
+
+```cpp
+instanceBuffer->SetLayout({
+    { ShaderDataType::Mat4, "a_InstanceTransform", false,
+      BufferInputRate::PerInstance },
+    { ShaderDataType::Int4, "a_InstanceEntityData", false,
+      BufferInputRate::PerInstance }
+});
 ```
-// 顶点着色器
-layout(location = 1) in vec2 a_TexCoord; 
-out vec2 v_TexCoord;
-void main() {
-    v_TexCoord = a_TexCoord;
-    gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 1.0);
+
+VAO 内部保留这些 Buffer 的 `Ref`，避免顶点状态仍在使用时底层对象已经销毁。设置 IndexBuffer 时会先绑定 VAO，再绑定 EBO，让索引缓冲成为对应 VAO 的状态。到这里，上层组装网格时已经不需要直接计算 attribute offset，也不再碰 OpenGL ID。
+
+## Renderer 分层
+
+Buffer 和 VertexArray 封装完成后，清屏、深度状态和 Draw Call 仍然由业务代码直接调用。为这些操作再加一层包装很有必要，但我不想把所有事情塞进一个巨大的 Renderer，于是先分成 `RendererAPI`、`RenderCommand` 和 `Renderer` 三层。
+
+`RendererAPI` 描述后端动作。当前接口覆盖初始化、颜色与深度清理、混合和深度状态，以及普通或实例化索引绘制。`OpenGLRendererAPI` 把这些操作翻译成 `glClear`、`glDepthMask`、`glDrawElements` 和 `glDrawElementsInstanced`。绘制函数可以接收显式 index count；传入 0 时使用 VertexArray 中 IndexBuffer 的完整数量。
+
+`RenderCommand` 是一组薄的静态转发函数。Renderer2D、Renderer3D、ShadowRenderer 和 RenderPass 都通过它修改状态或提交 Draw Call，调用方不会直接包含 OpenGLRendererAPI。
+
+```cpp
+RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1.0f });
+RenderCommand::Clear();
+RenderCommand::SetBlendEnabled(true);
+RenderCommand::DrawIndexed(vertexArray);
+```
+
+高层 `Renderer` 保存当前场景的 ViewProjection，`Submit()` 负责绑定 Shader、上传 `u_ViewProjection` 与 `u_Transform`，再把 VertexArray 交给 RenderCommand。初始化入口现在还会启动 Renderer2D、Renderer3D、TerrainRenderer、环境光照和 SkyboxRenderer，并创建共享的灯光 UniformBuffer。
+
+```cpp
+Renderer::BeginScene(camera);
+Renderer::Submit(shader, vertexArray, transform);
+Renderer::EndScene();
+```
+
+这套分层后来容纳了批处理、实例化、阴影和地形，但底层选择仍是固定的。`RendererAPI` 虽然声明了 OpenGL 与 Vulkan 枚举，`RenderCommand` 当前持有的对象依旧直接由 `new OpenGLRendererAPI()` 创建，Buffer、VertexArray 和 Shader 工厂也采用同样方式。调用 `SetAPI()` 只会改变枚举值，不会自动替换后端对象。文档里的 Vulkan 因此只是接口预留。
+
+这一轮重构最实际的变化，是 Application 和 Layer 开始使用 `清屏`、`提交网格` 这样的渲染语义。OpenGL 调用集中到了 Platform 后端，后面调整深度、混合或实例绘制时，不必再沿着所有业务层逐个修改。
+
+## 正交摄像机
+
+最初的三角形直接写在标准化设备坐标里，顶点一旦确定，画面就只能跟着窗口比例变化。我想让渲染使用世界坐标，也希望镜头可以移动，于是先实现了一台二维正交摄像机。
+
+`OrthographicCamera` 保存 Projection、View 和两者的乘积。Projection 由 `glm::ortho()` 生成，当前深度范围是 `-100` 到 `100`。摄像机的位置或旋转变化后，会先组合自身 Transform，再取逆得到 View Matrix：
+
+```cpp
+glm::mat4 transform =
+    glm::translate(glm::mat4(1.0f), m_Position)
+    * glm::rotate(glm::mat4(1.0f), glm::radians(m_Rotation),
+        glm::vec3(0.0f, 0.0f, 1.0f));
+
+m_ViewMatrix = glm::inverse(transform);
+m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
+```
+
+Renderer 在 `BeginScene()` 中保存 ViewProjection，提交物体时再上传给 Shader。这样摄像机向右移动，场景会在屏幕上向左移动；Shader 只消费最终矩阵，不需要知道镜头的位置和旋转是怎样计算的。
+
+第一版控制逻辑直接在 Layer 里轮询 WASD。画面可以移动后，我才注意到宽高比也在影响结果。投影范围如果没有按窗口比例设置，同一个三角形会被横向或纵向拉伸。把横向范围设为 `aspectRatio * zoom` 后，物体比例才稳定下来。
+
+![正交摄像机移动测试](README.assets/image-20260330194300345.png)
+
+![修正宽高比后的画面](README.assets/image-20260330194657176.png)
+
+这部分后来收进 `OrthographicCameraController`。Controller 负责 WASD 平移、可选的 Q/E 旋转，并响应滚轮和窗口缩放事件。滚轮改变 Zoom Level，窗口变化则重新计算 Aspect Ratio，最后都通过 `SetProjection()` 更新投影。Camera 本身只保存数学状态，输入策略留在 Controller 中。
+
+## Timestep
+
+摄像机刚能移动时，速度写成了每帧增加 `0.01f`。这在我的机器上看起来正常，换到不同帧率后移动距离立刻变了。问题出在单位：代码表达的是每帧位移，真正想要的是每秒速度。
+
+Application 现在每轮读取 `glfwGetTime()`，用当前时间减去上一帧时间得到 Timestep，再把它传给所有 Layer：
+
+```cpp
+float time = static_cast<float>(glfwGetTime());
+Timestep timestep = time - m_LastFrameTime;
+m_LastFrameTime = time;
+
+for (Layer* layer : m_LayerStack)
+    layer->OnUpdate(timestep);
+```
+
+`Timestep` 只是一个很薄的秒数包装，支持隐式转成 `float`，也可以显式读取秒或毫秒。移动代码因此可以直接写成速度乘时间：
+
+```cpp
+if (Input::IsKeyPressed(GL_KEY_A))
+    position.x -= translationSpeed * ts;
+if (Input::IsKeyPressed(GL_KEY_D))
+    position.x += translationSpeed * ts;
+```
+
+总运行时间和帧间隔解决的是两类问题。`Application::GetTime()` 适合给 `u_Time` 提供连续相位，动画可以按绝对时间计算。Timestep 适合积分速度、旋转速度或模拟变化率。Shader 通常没有跨帧累加状态，因此只传 Delta Time 也无法凭空得到稳定的总时间。
+
+当前主循环使用可变 Timestep，没有钳制最大 Delta。窗口被拖住或调试器暂停后，下一帧可能收到很大的值。普通相机移动会直接反映这次停顿，需要确定性或稳定性的模拟则应使用自己的固定步长调度，而不是原样消费 Application Delta。
+
+这次改动还把早期渲染测试从 Application 移进了 ExampleLayer。Application 只负责计算时间并更新 Layer，Sandbox 自己持有 Camera、Shader 和网格。最终的三角形可以按秒速移动，同时继续使用 `u_Time` 驱动颜色与顶点变化。
+
+![使用 Timestep 后的 Sandbox 三角形](README.assets/image-20260330223810703.png)
+
+## 变换矩阵
+
+摄像机解决了观察位置，物体本身仍然共享同一组原始顶点。为了让同一个网格出现在不同位置，我给 `Renderer::Submit()` 增加了 Model Transform，并约定顶点 Shader 使用 `ViewProjection * Transform * Position`。
+
+```glsl
+uniform mat4 u_ViewProjection;
+uniform mat4 u_Transform;
+
+void main()
+{
+    gl_Position = u_ViewProjection
+        * u_Transform
+        * vec4(a_Position, 1.0);
 }
+```
 
-// 片元着色器
-uniform sampler2D u_Texture; // 👈 采样器
-void main() {
-    color = texture(u_Texture, v_TexCoord);
+CPU 侧最早用 GLM 手动组合矩阵。按当前列向量约定，`translate * rotate * scale` 作用到顶点时会先缩放，再旋转，最后平移。顺序写反通常不会报错，只会得到一个很难解释的运动轨迹。
+
+```cpp
+glm::mat4 transform =
+    glm::translate(glm::mat4(1.0f), position)
+    * glm::rotate(glm::mat4(1.0f), glm::radians(rotation),
+        glm::vec3(0.0f, 0.0f, 1.0f))
+    * glm::scale(glm::mat4(1.0f), scale);
+
+Renderer::Submit(shader, vertexArray, transform);
+```
+
+第一次验证复用了同一个四边形 VAO，在双层循环中生成不同的平移和缩放矩阵。随后加上按时间和网格位置变化的旋转角度，确认每次 Submit 都能把自己的 `u_Transform` 送到 Shader。
+
+![使用 Transform 绘制方块阵列](README.assets/image-20260331104756545.png)
+
+![加入旋转后的方块阵列](README.assets/image-20260331110107923.png)
+
+现在场景实体通过 `TransformComponent` 保存 Translation、欧拉角 Rotation 和 Scale。`GetTransform()` 用 Z、Y、X 顺序组合四元数，再返回 `T * R * S`。Renderer2D 会在 DrawQuad 系列接口中构造相同含义的矩阵，Renderer3D 则把它放进渲染项或实例数据。早期一格一格提交方块的实验没有性能优势，但它确认了网格数据和物体位姿可以独立复用。
+
+## 纹理
+
+方块有了 Transform 以后，纯色很快就不够用了。接入纹理要解决两件事：从磁盘得到可靠的像素数据，以及把采样规则和 GPU 资源生命周期收进渲染接口。第一版使用 stb_image 读取 PNG、JPG，再由 `Texture2D` 工厂创建 OpenGL 对象。
+
+当前 `Texture2D` 已经支持从文件、尺寸或完整 `TextureSpecification` 创建。Specification 记录格式、过滤方式、Wrap、Usage 和颜色空间。文件纹理默认使用 sRGB，适合 Base Color 这类颜色数据；法线、AO、高度等数值纹理应传入 Linear，避免采样时发生错误的伽马转换。
+
+```cpp
+auto colorTexture = Texture2D::Create(
+    "assets/textures/Henry.jpg",
+    TextureColorSpace::SRGB);
+
+auto dataTexture = Texture2D::Create(
+    "assets/textures/heightmap.png",
+    TextureColorSpace::Linear);
+```
+
+`OpenGLTexture2D` 会让 stb_image 纵向翻转文件，按 1、3 或 4 通道选择 R8、RGB8 或 RGBA8，再创建不可变存储并上传像素。`SetData()` 会检查上传大小，接口还提供 Clear、Readback、Bind 和 Renderer ID 查询。析构函数负责删除 OpenGL Texture。
+
+顶点侧增加 UV 后，Shader 用 `sampler2D` 采样，再与 Tint Color 相乘。Renderer2D 现在用一张 1x1 白纹理统一纯色与贴图路径，一个 Batch 最多维护 32 个纹理槽；相同纹理会复用已有 slot，槽位用完时才 Flush。
+
+```glsl
+vec4 texColor = v_Color;
+switch (int(v_TexIndex))
+{
+case 0:
+    texColor *= texture(u_Textures[0], v_TexCoord * v_TilingFactor);
+    break;
+case 1:
+    texColor *= texture(u_Textures[1], v_TexCoord * v_TilingFactor);
+    break;
+// 其余纹理槽使用相同方式展开
 }
+color = texColor;
 ```
 
-之后更换相关变量，并加入
+这里还有两处当前限制。文件路径工厂仍直接创建 `OpenGLTexture2D`，只有 Specification 工厂按 Renderer API 分支；另外 2D Texture 目前只分配一个 Mip Level，`LinearMipmapLinear` 枚举尚未对应完整的 Mip Chain。接口已经预留，实际行为仍以这两条为准。
 
-```
-    m_TextureShader.reset(gl::Shader::Create(vertexSrc, fragmentSrc));
-    m_Texture = gl::Texture2D::Create("assets/textures/Henry.jpg");
-
-    std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->Bind();
-    std::dynamic_pointer_cast<gl::OpenGLShader>(m_TextureShader)->UploadUniformInt("u_Texture", 0);
-```
-
-若要混合颜色和纹理，将两者相乘
-
-<img src="README.assets/image-20260331154634223.png" alt="image-20260331154634223" style="zoom:50%;" />
+![纹理与颜色相乘后的测试画面](README.assets/image-20260331154634223.png)
 
 ## Alpha 混合
 
-现在加载的纹理，如果是透明的 .png 图片（比如一个带圆角的按钮或一个角色小人），你会发现透明的地方变成了**纯黑色**。
-这是因为 OpenGL 默认是直接“覆盖”像素的。你需要告诉显卡：请根据图片的 Alpha 通道进行混合。
+第一次换成带透明通道的 PNG 时，透明区域显示成了黑色。像素里有 Alpha 只代表数据存在，光栅化阶段还要决定它怎样和 Framebuffer 里的颜色合成。早期修复是在 OpenGL 初始化时启用 Blend，并使用常见的 Source Alpha 公式。
 
-<img src="README.assets/image-20260331162819221.png" alt="image-20260331162819221" style="zoom:50%;" />
+![尚未启用混合时的透明纹理](README.assets/image-20260331162819221.png)
 
-在 OpenGLRendererAPI.cpp 的 Init 函数中加入：
-
-```
+```cpp
 glEnable(GL_BLEND);
 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 ```
 
-并在下列文件声明Init()函数
+这个公式相当于 `source * alpha + destination * (1 - alpha)`。它解决了黑底问题，却也暴露了全局状态的麻烦：如果 Blend 一直开着，Opaque、阴影和需要深度写入的 Pass 都会受到影响。
 
-<img src="README.assets/image-20260331162947946.png" alt="image-20260331162947946" style="zoom:50%;" />
+![最初接入 Blend 状态](README.assets/image-20260331162947946.png)
 
-最后在Application启用
+当前 `OpenGLRendererAPI::Init()` 会设置混合函数，但默认关闭 Blend。Renderer2D 在 `StartBatch()` 时开启 Source Alpha 混合，`EndScene()` 后关闭。Renderer3D 把 `MaterialAlphaMode::Blend` 项目放进透明队列，按相机距离从远到近排序，绘制时关闭深度写入；队列结束后会恢复 Blend、Depth Write 和 Depth Function。
 
-```
-Renderer::Init();
-```
+`Mask` 使用的是另一条路径。它保留深度写入，通过 Alpha Cutoff 丢弃片元，不需要颜色混合。Opaque、Mask 和 Blend 因此有各自的状态约定，不能只凭纹理文件是否带 Alpha 来决定。
 
-如今的png透明已经去除黑边
+![按 Alpha 正确合成后的 PNG](README.assets/image-20260331163140298.png)
 
-<img src="README.assets/image-20260331163140298.png" alt="image-20260331163140298" style="zoom:50%;" />
+这次问题给我留下的教训很直接：渲染状态要由当前 Pass 设置并负责恢复。依赖某次初始化留下的全局状态，短期能看到正确画面，后面加入更多 Pass 时很容易互相污染。
 
 ## 单文件多着色器模式
 
-将 Shader 从 C++ 字符串搬迁到外部文件（.glsl 或 .hlsl）是引擎开发的必经之路。这不仅能让代码更整洁，还能让你利用 VS Code 等工具的插件实现 **GLSL 语法高亮**。
+Shader 还写在 C++ 字符串里时，每改一行 GLSL 都要重新编译应用，错误位置也很难读。我把 Shader 搬到 `.glsl` 文件，并约定用 `#type` 把多个阶段放在同一个文件里。对常见的顶点与片元组合来说，一个资源文件比两条独立路径更容易管理。
 
-我们将实现一种**“单文件多着色器”**模式：即一个 .glsl 文件里同时包含顶点（Vertex）和片元（Fragment）代码，通过特殊的标签（如 #type vertex）来区分。
-
-**准备外部 Shader 文件**
-
-在你的项目目录下创建 assets/shaders/Texture.glsl 文件，内容如下：
-
-**assets/shaders/Texture.glsl**:
-
-```
+```glsl
 #type vertex
 #version 330 core
 
-layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec2 a_TexCoord;
-
-uniform mat4 u_ViewProjection;
-uniform mat4 u_Transform;
-uniform float u_Time;
-
-out vec3 v_Position;
-out vec2 v_TexCoord;
-
 void main()
 {
-    v_TexCoord = a_TexCoord;
-    vec3 pos = a_Position;
-    pos.y += sin(pos.x * 5.0 + u_Time) * 0.1;
-    v_Position = pos;
-    gl_Position = u_ViewProjection * u_Transform * vec4(pos, 1.0);
+    gl_Position = vec4(a_Position, 1.0);
 }
 
 #type fragment
 #version 330 core
 
-layout(location = 0) out vec4 color;
-
-in vec3 v_Position;
-in vec2 v_TexCoord;
-
-uniform sampler2D u_Texture;
-uniform float u_Time;
-
 void main()
 {
-    vec3 col;
-    // 使用三角函数让 R, G, B 三个通道随位置和时间发生不同的相位偏移
-    col.r = sin(v_Position.x * 3.0 + u_Time) * 0.5 + 0.5;
-    col.g = sin(v_Position.y * 3.0 + u_Time + 2.0) * 0.5 + 0.5;
-    col.b = sin((v_Position.x + v_Position.y) * 3.0 + u_Time + 4.0) * 0.5 + 0.5;
-    color = vec4(col, 1.0);
-    color *= texture(u_Texture, v_TexCoord);
+    color = vec4(1.0);
 }
 ```
 
-**扩展 Shader.h 接口**
+`OpenGLShader::ReadFile()` 以二进制方式读取内容，并移除可能存在的 UTF-8 BOM。`PreProcess()` 查找每个 `#type` 行，把后续源码切分到对应阶段。缺少标签、未知类型或空阶段都会返回明确错误。当前图形 Shader 只接受 `vertex`、`fragment` 和 `pixel` 别名；Compute Shader 使用独立的 `ComputeShader` 接口。
 
-我们需要增加一个接收“文件路径”的工厂方法。
+文件模式后来接上了 FileWatcher。检测到修改后，Shader 会先编译一个新 Program，成功才替换旧 Program，并清空 Uniform Location 缓存、增加 Version。编译失败时旧对象继续工作，编辑器可以显示错误而不必把当前画面一起弄丢。
 
-**Glimmer/src/Glimmer/Renderer/Shader.h**:
+我用这套文件格式做的第一个复杂实验是一张程序化漩涡背景。最早版本用极坐标和 FBM 扰动 UV，能动，但离参考效果很远。
 
-```
-static Shader* Create(const std::string& filepath);
-```
+![第一版程序化漩涡](README.assets/image-20260331193141079.png)
 
-```
-	Shader* Shader::Create(const std::string& filepath)
-	{
-		return new OpenGLShader(filepath);
-	}
-```
+第二次增加了 `u_VortexAmt`，让扭曲强度随时间变化。轮廓接近了一些，颜色和纹理组织仍显得生硬。
 
-**在 OpenGLShader 中实现文件读取与解析**
+![加入 Vortex 强度后的版本](README.assets/image-20260331195911871.png)
 
-我们需要增加两个核心私有方法：ReadFile（读文件）和 PreProcess（解析标签）。
+最后一版改用屏幕空间 `gl_FragCoord` 与 `u_Resolution`，再叠加像素化、角度扭曲和多轮正弦扰动。当前 Sandbox 的 `BalatroVortex.glsl` 保留的是这条实现，`Renderer2D::DrawFullscreenQuad()` 会上传时间、分辨率并绘制全屏四边形。
 
-**Glimmer/src/Platform/OpenGL/OpenGLShader.h**:
+![适配屏幕空间后的漩涡效果](README.assets/image-20260331200053084.png)
 
-```
-class OpenGLShader : public Shader {
-public:
-    OpenGLShader(const std::string& filepath); // ✨ 新构造函数
-    // ...
-private:
-    std::string ReadFile(const std::string& filepath);
-    std::unordered_map<GLenum, std::string> PreProcess(const std::string& source);
-    void Compile(const std::unordered_map<GLenum, std::string>& shaderSources);
-private:
-    uint32_t m_RendererID;
-    std::string m_Name; // 用于 Shader 库标识
-};
-```
-
-核心分割算法：**把一个“合并写在一起的 shader 文件”，按 `#type` 标签拆分成多个独立的着色器源码（vertex / fragment）**，并用 `unordered_map` 存起来，方便后续编译。
-
-函数一开始创建了一个 `unordered_map<GLenum, std::string>`，用于存储“着色器类型 → 对应源码”的映射关系，比如：
-
-```
-GL_VERTEX_SHADER   -> 顶点着色器源码
-GL_FRAGMENT_SHADER -> 片元着色器源码
-```
-
-接着它在整段字符串 `source` 里查找 `#type` 这个标记（比如 `#type vertex`），一旦找到，就说明接下来是一段新的 shader。它先找到这一行的结尾（`\n`），然后从 `#type` 后面截取出类型字符串（例如 `"vertex"` 或 `"fragment"`），再通过 `ShaderTypeFromString` 转换成 OpenGL 能识别的枚举（如 `GL_VERTEX_SHADER`）。
-
-然后关键来了：它会找到**下一行真正 shader 代码开始的位置**，并继续往后找下一个 `#type`，这样就可以确定“当前 shader 代码的范围”，最后用 `substr` 把这一段源码切出来，存进 map 里。
-
-这个过程会循环执行，直到把整个文件里的所有 shader 都拆完。
-
-```
-	std::unordered_map<GLenum, std::string> OpenGLShader::PreProcess(const std::string& source)
-	{
-		std::unordered_map<GLenum, std::string> shaderSources;
-
-		const char* typeToken = "#type";
-		size_t typeTokenLength = strlen(typeToken);
-		size_t pos = source.find(typeToken, 0);
-		while (pos != std::string::npos)
-		{
-			size_t eol = source.find_first_of("\r\n", pos);
-			GL_CORE_ASSERT(eol != std::string::npos, "Syntax error");
-			size_t begin = pos + typeTokenLength + 1;
-			std::string type = source.substr(begin, eol - begin);
-			GL_CORE_ASSERT(ShaderTypeFromString(type), "Invalid shader type specified");
-
-			size_t nextLinePos = source.find_first_not_of("\r\n", eol);
-			pos = source.find(typeToken, nextLinePos);
-			shaderSources[ShaderTypeFromString(type)] = source.substr(nextLinePos, pos - (nextLinePos == std::string::npos ? source.size() - 1 : nextLinePos));
-		}
-
-		return shaderSources;
-	}
-```
-
-```
-	static GLenum ShaderTypeFromString(const std::string& type)
-	{
-		if (type == "vertex") return GL_VERTEX_SHADER;
-		if (type == "fragment" || type == "pixel") return GL_FRAGMENT_SHADER;
-
-		GL_CORE_ASSERT(false, "Unknown shader type!");
-		return 0;
-	}
-```
-
-**制作新shader：小丑牌背景**
-
-要实现那种“红蓝颜料交替的黏稠漩涡感”，我们需要在 Fragment Shader 中完成以下逻辑：
-
-1. **坐标归一化**：将 UV 映射到中心点。
-2. **极坐标转换**：将直角坐标转为角度和半径，实现基础旋转。
-3. **多层噪声 (FBM)**：制造不规则的颜料团块感。
-4. **领域扭曲**：用噪声去偏移噪声的坐标，产生“液体搅拌”的效果。
-
-```
-#type vertex
-#version 330 core
-
-layout(location = 0) in vec3 a_Position;
-uniform mat4 u_ViewProjection;
-uniform mat4 u_Transform;
-
-out vec2 v_Position;
-
-void main()
-{
-	v_Position = a_Position.xy;
-	gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 1.0);
-}
-
-#type fragment
-#version 330 core
-
-layout(location = 0) out vec4 color;
-in vec2 v_Position;
-
-uniform float u_Time;
-
-// 基础噪声函数：制造随机感
-float hash(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
-}
-
-// 简单的平滑噪声
-float noise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	float a = hash(i);
-	float b = hash(i + vec2(1.0, 0.0));
-	float c = hash(i + vec2(0.0, 1.0));
-	float d = hash(i + vec2(1.0, 1.0));
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-}
-
-// 分形布朗运动 (FBM)：叠加强度不同的噪声，产生细节
-float fbm(vec2 p) {
-	float v = 0.0;
-	float a = 0.5;
-	mat2 rot = mat2(1.6, 1.2, -1.2, 1.6); // 每一层旋转一下，打乱方向
-	for (int i = 0; i < 5; i++) {
-		v += a * noise(p);
-		p = rot * p * 2.0;
-		a *= 0.5;
-	}
-	return v;
-}
-
-void main()
-{
-	vec2 uv = v_Position; // 假设传入的是 -0.5 到 0.5 的坐标
-
-	// 1. 基础极坐标变换 (产生漩涡核心)
-	float r = length(uv);
-	float angle = atan(uv.y, uv.x);
-
-	// 2. 漩涡扭曲：距离中心越近，旋转越快
-	// u_Time 控制总速度，1.0/r 产生漩涡拉扯
-	float strength = 1.5;
-	float swirl = angle + (strength / (r + 0.15)) * (u_Time * 0.5);
-
-	// 3. 领域扭曲 (Domain Warping)：让颜料看起来“不规则”的关键
-	// 我们用 FBM 产生的数值去偏移坐标
-	vec2 warpUV = vec2(cos(swirl) * r, sin(swirl) * r);
-	float n = fbm(warpUV * 3.0 + u_Time * 0.2);
-
-	float m = fbm(warpUV * 2.0 + n + u_Time * 0.1);
-
-	// 4. 颜色调色板 (经典的红蓝交替)
-	vec3 colorRed = vec3(0.8, 0.1, 0.2);   // 深红
-	vec3 colorBlue = vec3(0.1, 0.2, 0.7);  // 深蓝
-	vec3 colorHighlight = vec3(0.9, 0.8, 1.0); // 亮色边缘
-
-	// 用最终的噪声值 m 来在红蓝之间混合
-	vec3 finalCol = mix(colorRed, colorBlue, m);
-
-	// 叠加一些高光效果，增加颜料的质感
-	finalCol += smoothstep(0.7, 1.0, m) * 0.3;
-
-	// 边缘暗角处理
-	finalCol *= smoothstep(1.5, 0.3, r);
-
-	color = vec4(finalCol, 1.0);
-}
-```
-
-<img src="README.assets/image-20260331193141079.png" alt="image-20260331193141079" style="zoom:50%;" />
-
-通过解包小丑牌的源代码发现，原效果用到了`uniform float u_VortexAmt; // 对应 vortex_amt 强度`这种的思路，所以需要通过时间来获取强度变化
-
-```
-    // ✨ 重点：让扭曲强度随时间正弦波动 (从 -2 到 2 循环拧)
-    float vortexStrength = sin(time) * 2.0f; 
-    m_VortexShader->UploadUniformFloat("u_VortexAmt", vortexStrength);
-```
-
-```
-void main()
-{
-	// 1. 获取基础坐标 (假设 v_Position 是相对于中心的)
-	vec2 uv = v_Position;
-	float r = length(uv);
-	float angle = atan(uv.y, uv.x);
-
-	// 2. 融合：第二段代码的 Smoothstep 扭曲逻辑
-	// 控制旋转半径和角度
-	float effectRadius = 2.0;
-	float twist = u_VortexAmt * smoothstep(effectRadius, 0.0, r);
-
-	// 3. 加入“不规则正弦”效果 (波浪抖动)
-	// 利用 sin 让漩涡边缘产生不规则的起伏
-	float wobble = sin(r * 10.0 - u_Time * 2.0) * 0.05;
-
-	// 最终角度 = 原始角度 + 强度扭曲 + 动态旋转 + 波浪抖动
-	float finalAngle = angle + twist + (u_Time * 0.2) + wobble;
-
-	// 4. 将扭曲后的极坐标转回平面坐标，作为颜料噪声的输入
-	vec2 twistedUV = vec2(cos(finalAngle), sin(finalAngle)) * r;
-
-	// 5. 领域扭曲 (Balatro 核心颜料算法)
-	float n = fbm(twistedUV * 3.0 + u_Time * 0.1);
-	float m = fbm(twistedUV * 2.0 + n + u_Time * 0.05);
-
-	// 6. 颜色混合 (红蓝艺术配色)
-	vec3 colorRed = vec3(0.85, 0.15, 0.2);   // 鲜亮红
-	vec3 colorBlue = vec3(0.1, 0.25, 0.75);  // 宝石蓝
-	vec3 darkColor = vec3(0.1, 0.05, 0.15);
-	vec3 darkRed = vec3(0.2, 0.0, 0.0);   // 偏黑红
-	vec3 darkBlue = vec3(0.0, 0.0, 0.2);  // 偏黑蓝
-	vec3 darkGreen = vec3(0.0, 0.2, 0.0); // 偏黑绿
-	vec3 deepBlue = vec3(0.05, 0.05, 0.3); // 深蓝，略带一点暗
-
-	// 用最终噪声值 m 混合，并加入高光亮边
-	vec3 finalCol = mix(colorRed, colorBlue, m);
-	finalCol += smoothstep(0.75, 1.0, m) * 0.25; // 增加白色颜料反光
-
-	// 7. 边缘压暗 (Vignette)
-	finalCol *= smoothstep(1.8, 0.5, r);
-
-	color = vec4(finalCol, 1.0);
-}
-```
-
-<img src="README.assets/image-20260331195911871.png" alt="image-20260331195911871" style="zoom:50%;" />
-
-<img src="README.assets/image-20260331200053084.png" alt="image-20260331200053084" style="zoom:50%;" />
-
-对比了下游戏效果感觉差远了，特意从shadertoy上扒了大手子复刻的源码进行Glimmer的适配，并学习实现步骤
-
-```
-#type vertex
-#version 330 core
-
-layout(location = 0) in vec3 a_Position;
-uniform mat4 u_ViewProjection;
-uniform mat4 u_Transform;
-
-void main()
-{
-    gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 1.0);
-}
-
-#type fragment
-#version 330 core
-
-layout(location = 0) out vec4 color;
-
-uniform float u_Time;
-uniform vec2 u_Resolution;
-
-// --- 原版配置参数 ---
-#define SPIN_ROTATION -2.0
-#define SPIN_SPEED 7.0
-#define OFFSET vec2(0.0)
-#define COLOUR_1 vec4(0.871, 0.267, 0.231, 1.0)
-#define COLOUR_2 vec4(0.0, 0.42, 0.706, 1.0)
-#define COLOUR_3 vec4(0.086, 0.137, 0.145, 1.0)
-#define CONTRAST 3.5
-#define LIGTHING 0.4
-#define SPIN_AMOUNT 0.25
-#define PIXEL_FILTER 745.0
-#define SPIN_EASE 1.0
-#define IS_ROTATE false
-#define PI 3.14159265359
-
-vec4 effect(vec2 screenSize, vec2 screen_coords) {
-    // 1. 像素化逻辑：产生小丑牌特有的复古感
-    float pixel_size = length(screenSize.xy) / PIXEL_FILTER;
-    vec2 uv = (floor(screen_coords.xy * (1./pixel_size)) * pixel_size - 0.5 * screenSize.xy) / length(screenSize.xy) - OFFSET;
-    float uv_len = length(uv);
-    
-    // 2. 旋转逻辑
-    float speed = (SPIN_ROTATION * SPIN_EASE * 0.2);
-    if(IS_ROTATE){
-       speed = u_Time * speed;
-    }
-    speed += 302.2;
-    float new_pixel_angle = atan(uv.y, uv.x) + speed - SPIN_EASE * 20. * (1. * SPIN_AMOUNT * uv_len + (1. - 1. * SPIN_AMOUNT));
-    vec2 mid = (screenSize.xy / length(screenSize.xy)) / 2.;
-    uv = (vec2((uv_len * cos(new_pixel_angle) + mid.x), (uv_len * sin(new_pixel_angle) + mid.y)) - mid);
-    
-    // 3. 核心扰动循环：产生黏稠的液体感
-    uv *= 30.;
-    float time_speed = u_Time * (SPIN_SPEED);
-    vec2 uv2 = vec2(uv.x + uv.y);
-    
-    for(int i=0; i < 5; i++) {
-        uv2 += sin(max(uv.x, uv.y)) + uv;
-        uv  += 0.5 * vec2(cos(5.1123314 + 0.353 * uv2.y + time_speed * 0.131121), sin(uv2.x - 0.113 * time_speed));
-        uv  -= 1.0 * cos(uv.x + uv.y) - 1.0 * sin(uv.x * 0.711 - uv.y);
-    }
-    
-    // 4. 颜色与光照计算
-    float contrast_mod = (0.25 * CONTRAST + 0.5 * SPIN_AMOUNT + 1.2);
-    float paint_res = min(2., max(0., length(uv) * (0.035) * contrast_mod));
-    float c1p = max(0., 1. - contrast_mod * abs(1. - paint_res));
-    float c2p = max(0., 1. - contrast_mod * abs(paint_res));
-    float c3p = 1. - min(1., c1p + c2p);
-    float light = (LIGTHING - 0.2) * max(c1p * 5. - 4., 0.) + LIGTHING * max(c2p * 5. - 4., 0.);
-    
-    return (0.3 / CONTRAST) * COLOUR_1 + (1. - 0.3 / CONTRAST) * (COLOUR_1 * c1p + COLOUR_2 * c2p + vec4(c3p * COLOUR_3.rgb, c3p * COLOUR_1.a)) + light;
-}
-
-void main() {
-    // 使用内置 gl_FragCoord 配合 u_Resolution 还原 Shadertoy 的渲染环境
-    color = effect(u_Resolution, gl_FragCoord.xy);
-}
-```
-
-这段 shader 的整体思路可以概括为：**把屏幕空间的像素坐标（gl_FragCoord）转成一个“可操作的 UV 空间”，然后通过“像素化 → 极坐标旋转 → 多次扰动 → 颜色混合”这一连串变换，生成一种动态的流体/漩涡视觉效果**。具体来说，先利用 `u_Resolution` 把屏幕坐标归一化并做一次 `floor` 量化，制造出复古的“像素块”质感；接着把 UV 转成极坐标（用 `atan` 和长度），在角度上叠加一个与半径相关的旋转偏移，从而形成整体的旋转/扭曲结构；然后进入核心的 for 循环，通过多次 sin/cos 非线性扰动不断“搅动”坐标，让原本规则的空间变得像流体一样粘稠、混乱，这一步是视觉复杂度的来源；最后根据扰动后的坐标长度计算权重（c1p、c2p、c3p），在三种预设颜色之间做混合，并叠加一点类似高光的亮度计算，从而得到具有层次感的红蓝主色调效果，最终输出到屏幕上。
+这个实验没有发展成通用材质系统，但它验证了外部 Shader、文件重载和全屏 Pass 可以一起工作。调试循环也变成了保存文件、查看结果、继续修改，不再需要重编整个客户端。
 
 ## 着色器库
 
-加入 **ShaderLibrary（着色器库）** 是引擎资源管理系统的开端。
+着色器数量变多以后，继续在每个 Layer 里保存一组 `Ref<Shader>` 很快就会变得难以维护。加载路径、对象名称和实际用途混在一起，调用方还得自己判断某个着色器是否已经创建。于是这一阶段加入了 `ShaderLibrary`，把常用着色器集中登记，再通过名称取用。
 
-目前，在 ExampleLayer 的构造函数里手动 reset 每一个 Shader，这会导致：
+它内部是一张 `std::unordered_map<std::string, Ref<Shader>>`。使用文件路径加载时，库会采用着色器自身的名称，也就是文件名去掉扩展名后的部分；需要更清楚的业务名称时，也可以在加载时指定别名。
 
-1. **代码臃肿**：加载 10 个 Shader 就要写 10 行几乎重复的代码。
-2. **内存浪费**：如果两个图层都用到同一个 Shader，你会重复加载并编译两次。
-3. **管理困难**：你必须时刻持有 Shader 的指针才能使用它。
+```cpp
+m_ShaderLibrary.Load("assets/shaders/BalatroVortex.glsl");
+m_ShaderLibrary.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
 
-**ShaderLibrary 的目标**：让你通过 m_ShaderLib.Get("Balatro") 这种字符串方式，随时随地在任何地方调用已加载的资源。
-
-**修改 Shader.h 接口**
-
-为了让库能识别 Shader，我们需要给 Shader 增加一个“名字”属性。
-
-**Glimmer/src/Glimmer/Renderer/Shader.h**:
-
-```
-namespace gl {
-    class Shader {
-    public:
-        virtual ~Shader() = default;
-        // ... 原有虚函数 ...
-
-        // ✨ 新增：获取 Shader 名字
-        virtual const std::string& GetName() const = 0;
-
-        static Ref<Shader> Create(const std::string& filepath);
-        static Ref<Shader> Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc);
-    };
-
-    // ✨ 新增：ShaderLibrary 类
-    class ShaderLibrary {
-    public:
-        // 手动添加已创建的 Shader 对象
-        void Add(const std::string& name, const Ref<Shader>& shader);
-        void Add(const Ref<Shader>& shader);
-
-        // 直接从文件加载并存入库
-        Ref<Shader> Load(const std::string& filepath);
-        Ref<Shader> Load(const std::string& name, const std::string& filepath);
-
-        // 获取资源
-        Ref<Shader> Get(const std::string& name);
-
-        bool Exists(const std::string& name) const;
-    private:
-        std::unordered_map<std::string, Ref<Shader>> m_Shaders;
-    };
-}
+Ref<Shader> shader = m_ShaderLibrary.Get("Blinn-Phong");
 ```
 
-**修改 OpenGLShader 记录名字**
+`Add`、`Get` 和 `Remove` 都会检查名称是否合法。重复登记或读取不存在的条目会触发断言，这比让空引用一路传到渲染阶段更容易定位问题。库中保存的是 `Ref<Shader>`，调用方拿到对象后可以直接共享，不需要额外处理生命周期。
 
-确保 m_Name 在构造时被正确赋值（我们在之前的“文件读取”步骤中已经预留了此逻辑）。
+前一章实现的安全重载也接到了这里。编辑器中的 Shader 面板持有一个库实例，可以调用 `ReloadChanged()` 只处理发生变化的文件，也可以用 `ReloadAll()` 主动重载全部条目。重载是否成功仍由每个 `Shader` 自己负责，库只做查找和批量调度。
 
-**Glimmer/src/Platform/OpenGL/OpenGLShader.h**:
-
-```
-class OpenGLShader : public Shader {
-public:
-    // ...
-    virtual const std::string& GetName() const override { return m_Name; }
-private:
-    std::string m_Name;
-    uint32_t m_RendererID;
-};
-```
-
-cpp构造函数
-
-```
-	OpenGLShader::OpenGLShader(const std::string& filepath)
-	{
-		std::string source = ReadFile(filepath);
-		auto shaderSources = PreProcess(source);
-		Compile(shaderSources);
-
-		// Extract name from filepath
-		auto lastSlash = filepath.find_last_of("/\\");
-		lastSlash = lastSlash == std::string::npos ? 0 : lastSlash + 1;
-		auto lastDot = filepath.rfind('.');
-		auto count = lastDot == std::string::npos ? filepath.size() - lastSlash : lastDot - lastSlash;
-		m_Name = filepath.substr(lastSlash, count);
-	}
-```
-
-**实现 ShaderLibrary 逻辑**
-
-**Glimmer/src/Glimmer/Renderer/Shader.cpp** (在文件末尾添加)：函数实现
-
-修改Create
-
-```
-	Ref<Shader> Shader::Create(const std::string& filepath)
-	{
-		return std::make_shared<OpenGLShader>(filepath);
-	}
-
-	Ref<Shader> Shader::Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc)
-	{
-		return std::make_shared<OpenGLShader>(name, vertexSrc, fragmentSrc);
-    }
-```
-
-以及其余函数逻辑
-
-```
-	// --- ShaderLibrary 实现 ---
-
-	void ShaderLibrary::Add(const std::string& name, const Ref<Shader>& shader)
-	{
-		GL_CORE_ASSERT(!Exists(name), "Shader already exists!");
-		m_Shaders[name] = shader;
-	}
-
-	void ShaderLibrary::Add(const Ref<Shader>& shader)
-	{
-		auto& name = shader->GetName();
-		Add(name, shader);
-	}
-	// 。。。
-```
-
-**在 Sandbox 中优雅地重构**
-
-现在，你的 ExampleLayer 构造函数和渲染逻辑会变得极其干净。
-
-**SandboxApp.cpp**:
-
-```
-class ExampleLayer : public gl::Layer {
-public:
-    ExampleLayer() : Layer("Example")
-    {
-        // ✨ 批量加载，不需要自己管理指针了
-        m_ShaderLib.Load("assets/shaders/Texture.glsl");
-        m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
-        m_ShaderLib.Load("assets/shaders/Octgrams.glsl");
-        
-        m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
-    }
-
-    void OnUpdate(gl::Timestep ts) override {
-        // ... 
-        
-        // ✨ 使用时直接通过名字取
-        auto textureShader = m_ShaderLib.Get("Texture");
-        textureShader->Bind();
-        m_Texture->Bind();
-        gl::Renderer::Submit(textureShader, m_VertexArray);
-        
-        // 如果想换背景，一句话切换
-        auto bgShader = m_ShaderLib.Get("BalatroVortex");
-        gl::Renderer::Submit(bgShader, m_bg_vortexVertexArray);
-    }
-
-private:
-    gl::ShaderLibrary m_ShaderLib; // ✨ 库对象
-    gl::Ref<gl::VertexArray> m_VertexArray;
-    gl::Ref<gl::Texture2D> m_Texture;
-    // ... 不再需要定义一堆 m_Shader1, m_Shader2 ...
-};
-```
-
-清理Sandbox多余注释
+这里有一个容易误判的边界：`ShaderLibrary` 目前是实例内的注册表，并不是全局资源缓存。Sandbox、示例 Layer 和编辑器各自创建库时，同一路径仍可能被重复加载和编译。现阶段这种设计足够直接，也避免了全局状态；如果以后需要统一资产管理，路径规范化和跨库去重应该放到更上层解决。
 
 ## 正交摄像机控制器
 
-加入 **OrthographicCameraController（正交摄像机控制器）** 是为了将“摄像机硬件”与“用户交互”彻底解耦。
+早期示例把按键判断、滚轮缩放和窗口尺寸变化直接写在 Layer 中。代码量不算大，但每增加一个二维场景都要复制一遍，而且 Layer 开始同时承担输入规则和渲染逻辑。为此项目增加了 `OrthographicCameraController`，把这一组常用行为收进一个可复用对象。
 
-**现状**：你之前的 WASD 逻辑写在 ExampleLayer 里。如果以后有多个关卡或编辑器模式，你需要重复写这些逻辑，且窗口拉伸时画面会变形。
-**目标**：封装一个控制器，让它自动处理 **移动、旋转、缩放（滚轮）** 以及 **分辨率自适应**。
+控制器持有正交摄像机、宽高比、缩放级别和移动状态。每帧更新时，它轮询 W、A、S、D，并用 `Timestep` 修正位移，因此移动速度不会跟着帧率变化。构造时可以开启旋转，开启后 Q、E 会更新摄像机角度。移动速度会随当前缩放级别调整，画面拉近时每秒跨过的世界坐标也会减少，操作起来更细一些。
 
-**第一步：创建控制器类 (OrthographicCameraController.h/cpp)**
+Layer 只需要转发更新和事件：
 
-这个类将包裹 OrthographicCamera，并负责监听事件。
-
-**文件路径：Glimmer/src/Glimmer/Renderer/OrthographicCameraController.h**
-
-```
-#pragma once
-
-#include "Glimmer/Renderer/OrthographicCamera.h"
-#include "Glimmer/Core/Timestep.h"
-
-#include "Glimmer/Events/ApplicationEvent.h"
-#include "Glimmer/Events/MouseEvent.h"
-
-namespace gl {
-
-	class OrthographicCameraController
-	{
-	public:
-		OrthographicCameraController(float aspectRatio, bool rotation = false);
-
-		void OnUpdate(Timestep ts);
-		void OnEvent(Event& e);
-
-		OrthographicCamera& GetCamera() { return m_Camera; }
-		const OrthographicCamera& GetCamera() const { return m_Camera; }
-
-		float GetZoomLevel() const { return m_ZoomLevel; }
-		void SetZoomLevel(float level) { m_ZoomLevel = level; CalculateView(); }
-	private:
-		bool OnMouseScrolled(MouseScrolledEvent& e);
-		bool OnWindowResized(WindowResizeEvent& e);
-		void CalculateView();
-	private:
-		float m_AspectRatio;
-		float m_ZoomLevel = 1.0f;
-		OrthographicCamera m_Camera;
-
-		bool m_Rotation;
-		glm::vec3 m_CameraPosition = { 0.0f, 0.0f, 0.0f };
-		float m_CameraRotation = 0.0f; // 角度单位
-		float m_CameraTranslationSpeed = 5.0f, m_CameraRotationSpeed = 180.0f;
-	};
-
-}
-```
-
-cpp负责“根据输入实时更新相机的 Position / Rotation / Projection”，从而控制你看到的画面（移动、旋转、缩放、窗口自适应）
-
-整个类本质是一个“相机驱动器”：在 `OnUpdate` 里读取键盘输入（WASD 控平移，QE 控旋转），不断修改 `m_CameraPosition` 和 `m_CameraRotation`，再同步到 `m_Camera`；同时用 `m_ZoomLevel` 控制缩放，并把它反过来影响移动速度（缩得越近移动越慢，手感更自然）。在 `OnEvent` 里则监听事件系统：鼠标滚轮改变 `ZoomLevel` 实现缩放，窗口大小变化时更新 `AspectRatio`，然后统一通过 `CalculateView()` 重新计算正交投影矩阵，保证画面不会被拉伸。最终结果就是——无论是输入还是窗口变化，都会实时影响“你看到的世界范围”。
-
-**修改 OrthographicCamera.h 增加 SetProjection**
-
-你需要让摄像机能够中途修改它的投影范围。
-
-```
-// OrthographicCamera.h 中增加
-void SetProjection(float left, float right, float bottom, float top);
-
-// OrthographicCamera.cpp 实现
-void OrthographicCamera::SetProjection(float left, float right, float bottom, float top)
+```cpp
+void Sandbox2D::OnUpdate(Timestep ts)
 {
-    m_ProjectionMatrix = glm::ortho(left, right, bottom, top, -1.0f, 1.0f);
-    m_ViewProjectionMatrix = m_ProjectionMatrix * m_ViewMatrix;
+    m_CameraController.OnUpdate(ts);
+
+    Renderer2D::BeginScene(m_CameraController.GetCamera());
+    // 提交场景内容
+    Renderer2D::EndScene();
+}
+
+void Sandbox2D::OnEvent(Event& event)
+{
+    m_CameraController.OnEvent(event);
 }
 ```
 
-**在 Sandbox 中重构**
+滚轮事件会修改缩放级别，并把最小值限制为 `0.25f`，避免投影范围缩到零或翻转。窗口尺寸改变时，控制器重新计算宽高比和投影矩阵。这两个事件处理函数都会返回 `false`，所以控制器读取事件后不会阻止它继续向后传播。
 
-现在的 Sandbox 代码将变得极其整洁，所有的 WASD 逻辑全部消失！
-
-**SandboxApp.cpp**:
-
-```
-class ExampleLayer : public gl::Layer {
-public:
-    ExampleLayer() 
-        : Layer("Example"), 
-          m_CameraController(1280.0f / 720.0f, true) // ✨ 初始化控制器
-    {
-        // ... 加载数据逻辑不变 ...
-    }
-
-    void OnUpdate(gl::Timestep ts) override {
-        // 1. ✨ 只要这一行，移动、缩放、旋转全搞定！
-        m_CameraController.OnUpdate(ts);
-
-        // 2. 渲染指令
-        gl::RenderCommand::SetClearColor({ 0.1f, 0.1f, 0.1f, 1 });
-        gl::RenderCommand::Clear();
-
-        // 3. ✨ 从控制器拿摄像机
-        gl::Renderer::BeginScene(m_CameraController.GetCamera());
-        
-        // ... 执行 Submit ...
-        
-        gl::Renderer::EndScene();
-    }
-
-    void OnEvent(gl::Event& e) override {
-        // ✨ 将事件转发给控制器
-        m_CameraController.OnEvent(e);
-    }
-
-private:
-    gl::OrthographicCameraController m_CameraController; // ✨ 控制器成员
-    // ... 其他变量 ...
-};
-```
+当前接口还有一个值得记住的小边界：滚轮路径会执行最小值限制，`SetZoomLevel()` 则直接相信调用方。编辑器或脚本如果主动设置缩放值，需要自己保证它大于零。这个约束暂时没有藏进控制器内部，后续统一摄像机参数接口时可以再收紧。
 
 ## Renderer2D
 
-目前的渲染方式是：
-gl::Renderer::Submit(m_Shader, m_VertexArray, transform);
-这要求开发者在 Sandbox 里自己管理 VAO、VBO 和 Shader。
+完成缓冲区、顶点数组、纹理和着色器封装后，Layer 里仍然留着不少固定流程：创建四边形网格、准备白色纹理、绑定 Shader，再按顺序提交绘制。它们都属于二维渲染的内部细节，于是这一阶段把这些工作集中到 `Renderer2D`，让场景代码只描述要画什么。
 
-**Renderer2D 的目标是：** 建立一套极其简化的 **2D 绘图指令集**。你只需要告诉引擎：*“在 (1,1) 位置画一个红色的方块”* 或者 *“在 (0,0) 位置画一个带贴图的方块”*。
+最初拆分 Sandbox 示例时还遇到过一次入口冲突。`EntryPoint.h` 会生成 `main()`，如果它随着 Layer 实现被多个编译单元包含，链接阶段就会出现重复定义。现在入口只保留在 `SandboxApp.cpp`，`Sandbox2D.cpp` 负责具体场景，两部分的职责也因此清楚了许多。
 
-并且考虑是否将SandboxApp分离出 Sandbox.h/cpp
+现在的 `Renderer2D` 已经采用批处理。初始化阶段会一次性准备可容纳 20,000 个四边形的动态顶点缓冲区，并生成对应的索引缓冲区。每次调用 `DrawQuad()` 时，顶点先写入 CPU 端缓存；到 `EndScene()`，或批次容量达到上限时，再把有效数据上传并提交一次绘制。统计信息中的 `DrawCalls` 记录实际批次数，`QuadCount` 则记录本帧写入的四边形数量。
 
-**即使现在已经进行了shader库的编写，并可以从硬盘读glsl，但是sandboxapp仍有VAO、VBO的绑定等冗余代码，故抽离出Sandbox2D，以后想做一个主菜单层、一个游戏关卡层、一个结算层。每个层都应该是独立的 .h/cpp 文件。**
+```cpp
+Renderer2D::ResetStats();
+Renderer2D::BeginScene(m_CameraController.GetCamera());
 
-1. 新建 Sandbox2D.h 和 Sandbox2D.cpp。
-2. 将 ExampleLayer 的逻辑全部搬进去，改名叫 Sandbox2D。
-3. 在 SandboxApp.cpp 里的 Sandbox 构造函数中：PushLayer(new Sandbox2D());。
+Renderer2D::DrawQuad({ 0.0f, 0.0f }, { 1.0f, 1.0f }, { 0.2f, 0.7f, 0.9f, 1.0f });
+Renderer2D::DrawRotatedQuad(
+    { 1.5f, 0.0f }, { 1.0f, 1.0f },
+    glm::radians(30.0f), m_CheckerboardTexture, 4.0f
+);
 
-在 Glimmer 引擎的架构中，EntryPoint.h 包含了真正的 int main() 函数。
-
-- **真相是：** 在 SandboxApp.cpp 里包含了 #include <Glimmer.h>（或者直接包含了 EntryPoint.h），同时在 Sandbox2D.cpp 里也包含了它。
-- **结果：** 编译器在编译这两个文件时，分别都在里面发现了一个 main 函数。当链接器（Linker）最后要把这两个文件拼成一个 .exe 时，它发现有两个入口，于是就崩溃了。
-
-**这样** **SandboxApp.cpp** **以后就只剩下几行代码，专门负责“创建游戏应用”，而真正的游戏内容全部都在** **Sandbox2D.cpp** **里了。**
-
-这套代码实现了 **2D 渲染器的第一阶段：封装 API 调用**。它引入了“白贴图”技术，让你可以用同一个接口画**纯色方块和带贴图的方块**。
-
-Glimmer/src/Glimmer/Renderer/Renderer2D.h
-
-```
-#pragma once
-
-#include "Glimmer/Renderer/OrthographicCamera.h"
-#include "Glimmer/Renderer/Texture.h"
-
-namespace gl {
-
-	class Renderer2D
-	{
-	public:
-		static void Init();
-		static void Shutdown();
-
-		static void BeginScene(const OrthographicCamera& camera);
-		static void EndScene();
-
-		// --- 基础绘图接口 (Quads) ---
-
-		// 纯色方块 (Vector2 & Vector3 坐标支持)
-		static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const glm::vec4& color);
-		static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const glm::vec4& color);
-
-		// 贴图方块
-		static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const Ref<Texture2D>& texture);
-		static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture);
-
-	};
-}
+Renderer2D::EndScene();
 ```
 
-**Glimmer/src/Glimmer/Renderer/Renderer2D.cpp**
+纯色和纹理四边形共用同一套顶点格式。槽位 0 固定放置一张 1×1 白色纹理，纯色绘制也走纹理采样，再乘上传入颜色；这样批次不必因为材质类型不同而拆开。一个批次最多使用 32 个纹理槽，相同纹理会复用已有槽位。顶点中还保留了 `EntityID`，编辑器的鼠标拾取可以沿用同一条绘制路径。
 
-在初始化阶段创建并保存一个通用的四边形（Quad）顶点数据（包含位置和纹理坐标）、对应的顶点数组对象（VAO）和索引缓冲，同时加载两种 Shader（纯色和纹理）；在 `BeginScene` 时将相机的视图投影矩阵和当前时间统一传入 Shader 作为全局状态；随后通过多个 `DrawQuad` 重载函数，根据传入的位置、大小以及颜色或纹理，动态构建模型变换矩阵（平移 + 缩放），绑定对应 Shader 和资源（颜色或纹理），最终复用同一个 Quad 网格调用底层 `RenderCommand::DrawIndexed` 完成绘制；整体设计上通过一个全局静态结构集中管理渲染资源，实现了“一个四边形 + 不同参数 = 渲染任意 2D 图元”的高效复用机制。
+`BeginScene()` 会更新绑定点 0 上的摄像机 UBO，其中包含 ViewProjection 矩阵和当前时间，然后重置批次状态。绘制期间顶点变换在 CPU 端完成；`EndScene()` 上传数据、绑定本批次用到的纹理并调用 `DrawIndexed`。混合状态也在批次开始和结束时成对处理，带透明通道的精灵可以直接参与绘制。
 
-现在可以在Sandbox2D里这样绘制
+![Renderer2D 示例](README.assets/image-20260413104502041.png)
 
-```
-	gl::Renderer2D::DrawQuad({ -1.0f, 0.0f }, { 0.8f, 0.8f }, { 0.8f, 0.2f, 0.3f, 1.0f });
-	gl::Renderer2D::DrawQuad({ 0.5f, -0.5f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
-	gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, -0.1f }, { 1.0f, 1.0f }, m_Texture); // 背景图
-```
-
-需要让 Application 在启动时初始化这个 Renderer2D。Renderer.cpp更新Init函数
-
-```
-	void Renderer::Init()
-	{
-		RenderCommand::Init();
-		Renderer2D::Init();
-	}
-```
-
-**Renderer2D的具体作用，所有shader都要用Renderer2D处理吗，有没有必须在Sandbox2D处理的？**
-
-- **渲染器 (Renderer2D)** 负责**机制 (Mechanisms)**：它负责顶点数据的布局、批处理算法的实现、以及图形 API 的底层封装。它是一个‘无状态’或‘全局状态’的处理器。
-- **游戏逻辑层 (Sandbox)** 负责**策略 (Policies)**：它决定渲染什么内容、使用哪个 Shader、以及如何配置特定的 Uniform 材质参数。
-
-> 一、 Renderer2D 的具体作用是什么？
->
-> 你可以把 Renderer2D 想象成一个**“专业的物流中心”**。它的核心作用有三点：
->
-> 1. **极简化接口 (Simplicity)**：
->    它把复杂的 OpenGL 流程（生成 VBO、绑定 VAO、设置 Layout、激活 Shader）封装成一句话：DrawQuad。
-> 2. **批处理优化 (Batching) —— 它的终极价值**：
->    这是你下一步要做的。当你调用 1000 次 DrawQuad 时，Renderer2D 不会立刻画，而是把 1000 个方块的顶点攒在一起，最后只用**一个 Draw Call** 发给显卡。这是 Sandbox 无法高效完成的任务。
-> 3. **状态管理 (State Management)**：
->    它记录了当前的摄像机、当前的时间，并确保每次绘图时这些全局信息能准确“注入”到显卡。
->
-> 二、 所有 Shader 都要用 Renderer2D 处理吗？
->
-> **答案是：不。**
->
-> 在引擎架构中，Shader 分为两类，处理方式完全不同：
->
-> 1. 通用 Shader (Standard Shaders) —— **Renderer2D 管**
->
-> - **例子**：FlatColor (纯色)、Texture (普通贴图)、Sprite (带动画的图集)。
-> - **特点**：它们使用的顶点数据结构完全一样（都是 4 个点的正方形）。
-> - **做法**：这些 Shader 应该内置在 Renderer2D 内部。Sandbox 只需要传个颜色或图片指针进来，剩下的细节（Bind, Upload）都由引擎底层自动化。
->
-> 2. 特效/特定逻辑 Shader (Custom/Post-Process Shaders) —— **Renderer2D 配合管**
->
-> - **例子**：你的 BalatroVortex (漩涡)、GaussianBlur (模糊)、ShieldEffect (护盾特效)。
-> - **特点**：它们需要一些奇奇怪怪的参数（如 u_VortexAmt），Renderer2D 根本不知道这些参数的存在。
-> - **做法**：你需要给 Renderer2D 一个重载函数，允许 Sandbox 把“自定义 Shader”传进去。Renderer2D 只负责提供“肉体”（VAO 和变换矩阵），Sandbox 负责提供“灵魂参数”。
->
-> 三、 有没有必须在 Sandbox2D 处理的部分？
->
-> **有的。** 即使引擎再强大，以下三件事也必须留在 Sandbox2D（逻辑层）：
->
-> 1. **特殊 Uniform 的赋值**：
->    比如你之前的 u_VortexAmt。引擎底层不应该知道什么叫“漩涡强度”。codeC++`// 必须在 Sandbox2D 做： auto shader = m_ShaderLib.Get("Vortex"); shader->UploadUniformFloat("u_VortexAmt", value); // 引擎管不了这个`
-> 2. **资源的生命周期决定权**：
->    Sandbox 决定什么时候加载“草地贴图”，什么时候卸载“雪地贴图”。引擎只提供加载工具（Texture::Create）。
-> 3. **渲染顺序（层级逻辑）**：
->    Sandbox 决定谁先画、谁后画（决定 Z-Index）。codeC++`// Sandbox 决定了背景在第一行，玩家在最后一行 Renderer2D::DrawQuad(bg_pos, ...);  Renderer2D::DrawQuad(player_pos, ...);`
-
-现在在Renderer2D初步测试，如果引入Time接口会怎么样，用Appilication单例，需要调用对应头
-
-```
-// tmp 用于单例上传时间
-#include "Glimmer/Core/Application.h"
-
-	void Renderer2D::BeginScene(const OrthographicCamera& camera)
-	{
-		s_Data->SceneTime = gl::Application::Get().GetTime();
-
-		s_Data->FlatColorShader->Bind();
-		s_Data->FlatColorShader->UploadUniformMat4("u_ViewProjection", camera.GetViewProjectionMatrix());
-
-		s_Data->TextureShader->Bind();
-		s_Data->TextureShader->UploadUniformFloat("u_Time", s_Data->SceneTime);
-		s_Data->TextureShader->UploadUniformMat4("u_ViewProjection", camera.GetViewProjectionMatrix());
-	}
-```
-
-```
-// Sandbox2D::OnAttach
-m_Texture = gl::Texture2D::Create("assets/textures/Balatro.png");
-
-// Sandbox2D::OnUpdate
-gl::Renderer2D::DrawQuad({ -1.0f, 0.0f }, { 0.8f, 0.8f }, { 0.8f, 0.2f, 0.3f, 1.0f });
-gl::Renderer2D::DrawQuad({ 0.5f, -0.5f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
-gl::Renderer2D::DrawQuad({ 0.0f, 0.0f, -0.1f }, { 1.0f, 1.0f }, m_Texture); // 背景图
-```
-
-成功引入了时间变量，有了shader里的动态效果
-
-<img src="README.assets/image-20260413104502041.png" alt="image-20260413104502041" style="zoom:50%;" />
+这一版已经把常用二维绘制从 Layer 中拿走，但它仍是静态的全局渲染器，并且在 `BeginScene()` 中直接读取 `Application` 的时间。对于当前编辑器和 Sandbox 来说，这种接线方式简单有效；以后如果要支持多渲染上下文或离线渲染，这两处依赖会是需要继续拆分的地方。自定义全屏 Shader 的接口留到下一章再展开。
 
 ## Uniform解耦/全屏shader接口
 
-> 下面一段话是废话，理论设想，最终还是集成到了Renderer2D保持Sandbox2D的极简调用
+普通精灵可以共享 Renderer2D 的 Texture Shader，但程序化背景和后处理 Shader 往往还需要时间、分辨率或输入纹理。最初我尝试给 `DrawQuad()` 增加自定义 Shader 重载，结果很快碰到坐标系问题：场景四边形经过摄像机矩阵，全屏效果需要的却是稳定的屏幕坐标。继续往普通 Quad 接口里塞参数，只会让两种用途越缠越紧。
 
-由上一部分可知，Renderer2D实际上的作用只是封装一些简单图形API的调用和部分Uniform上传，但部分shader需要另外上传时间、强度等自定义Uniform变量，因此对于这些shader我们需要在Sandbox2D调用DrawQuad()时单独声明。
+后来单独增加了全屏绘制路径。`Renderer2D::Init()` 会创建一套覆盖 NDC 的四边形 VAO，顶点只包含位置和纹理坐标。`DrawFullscreenQuad()` 绑定调用方提供的 Shader，并按固定名称上传引擎能够提供的数据：
 
-目前的 Renderer2D 只能画“颜色”和“贴图”。我们需要增加一个重载函数，允许它使用**自定义 Shader** 来画方块。此外，我们需要在底层自动上传 u_Resolution，因为大部分背景特效都需要这个。
-
-Renderer2D.h 增加函数声明：
-
-```
-// 在 Renderer2D 类中增加
-#include "Glimmer/Renderer/Shader.h"
-static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const Ref<Shader>& shader);
-static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Shader>& shader);
-```
-
-```
-// 在 Glimmer/src/Glimmer/Renderer/Renderer2D.cpp 中添加：
-
-// 1. vec2 重载版本（调用 vec3 版本）
-void Renderer2D::DrawQuad(const glm::vec2& position, const glm::vec2& size, const Ref<Shader>& shader)
-{
-    DrawQuad({ position.x, position.y, 0.0f }, size, shader);
-}
-
-// 2. vec3 核心实现版本
-void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Shader>& shader)
-{
-    // 这里的逻辑是：给自定义 Shader 提供引擎管辖的基础数据
-    shader->Bind();
-    
-    // A. 自动上传当前的 View-Projection 矩阵
-    // 注意：s_Data 里的 ViewProjectionMatrix 必须在 BeginScene 里存好了
-    shader->UploadUniformMat4("u_ViewProjection", s_Data->ViewProjectionMatrix);
-
-    // B. 计算并上传物体的 Transform 矩阵
-    glm::mat4 transform = glm::translate(glm::mat4(1.0f), position)
-        * glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
-    shader->UploadUniformMat4("u_Transform", transform);
-
-    // C. 绘制
-    s_Data->QuadVertexArray->Bind();
-    RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
-}
+```cpp
+shader->UploadUniformMat4("u_ViewProjection", glm::mat4(1.0f));
+shader->UploadUniformMat4("u_Transform", fullscreenTransform);
+shader->UploadUniformFloat("u_Time", s_Data.CameraBuffer.Time);
+shader->UploadUniformFloat2("u_Resolution", {
+    static_cast<float>(window.GetWidth()),
+    static_cast<float>(window.GetHeight())
+});
 ```
 
-初步发现分辨率对不上，且改参数无作用
+调用端因此可以保持很短：
 
-<img src="README.assets/image-20260413122635512.png" alt="image-20260413122635512" style="zoom:50%;" />
-
-这就遇到了一个问题，因为原本这个全屏背景shader我就没有传变换矩阵，所以原始Draw传入size对其是没有作用的。并且考虑到有挺多这种全屏shader的应用场景的，比如滤镜啥的，于是新定义接口
-
-```
-// 增加一个全屏绘制函数，不需要位置和尺寸，只需要 Shader
-static void DrawFullscreenQuad(const Ref<Shader>& shader);
+```cpp
+auto shader = m_ShaderLibrary.Get("BalatroVortex");
+Renderer2D::DrawFullscreenQuad(shader, 0.9f);
 ```
 
-简单实现后，发现即使先写背景shader，依然覆盖了所有对象，才想起来开启了深度测试，物体层级是由z值决定的，因此改动接口
+这里的 `depth` 已经处于 NDC 语义下，和经过摄像机投影的世界坐标 Z 值不能直接比较。全屏背景、场景内容和后处理最好按独立 Pass 排列，由调用方明确设置渲染目标、清理规则和深度写入状态。把全屏绘制插进尚未提交的 2D 批次中，也容易留下 Shader 状态冲突。
 
-```
-static void DrawFullscreenQuad(const Ref<Shader>& shader, float depth = 0.0f);
-```
+`DrawPostProcess()` 在这条路径上多做了一步：把输入颜色附件绑定到 0 号槽，并约定采样器名称为 `u_SceneTexture`，随后复用全屏四边形。现在的 Bloom、雾和 Tone Mapping 已经由 `PostProcessRenderer` 组织 Pass，底层仍调用这个接口。
 
-在计算 u_Transform 矩阵时，我们将 depth 应用到位移向量的 Z 分量上。
+![全屏 Shader 运行效果](README.assets/image-20260413142738033.png)
 
-```
-// Glimmer/src/Glimmer/Renderer/Renderer2D.cpp
-void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
-{
-    shader->Bind();
-    
-    glm::mat4 identity = glm::mat4(1.0f);
-    shader->UploadUniformMat4("u_ViewProjection", identity);
-    
-    // 核心修改：将深度值应用到 translate 中
-    // 注意：顺序必须是 先平移(translate) 后缩放(scale)
-    glm::mat4 transform = glm::translate(identity, { 0.0f, 0.0f, depth }) 
-                        * glm::scale(identity, glm::vec3(2.0f));
-    
-    shader->UploadUniformMat4("u_Transform", transform);
-
-    // 自动上传时间、分辨率等基础参数 (保持不变)
-    shader->UploadUniformFloat("u_Time", s_Data->SceneTime);
-    auto& window = gl::Application::Get().GetWindow();
-    shader->UploadUniformFloat2("u_Resolution", { (float)window.GetWidth(), (float)window.GetHeight() });
-
-    s_Data->QuadVertexArray->Bind();
-    RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
-}
-```
-
-更改Sandbax2D
-
-```
-    auto bgShader = m_ShaderLib.Get("BalatroVortex");
-    gl::Renderer2D::DrawFullscreenQuad(bgShader, 0.9f); 
-```
-
-<img src="README.assets/image-20260413142738033.png" alt="image-20260413142738033" style="zoom:50%;" />
-
-```
-	gl::Renderer2D::DrawQuad({ 0.5f, -0.5f, -0.1f }, { 0.5f, 0.75f }, { 0.2f, 0.3f, 0.8f, 1.0f });
-	gl::Renderer2D::DrawQuad({ -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_Texture);
-	gl::Renderer2D::DrawQuad({ 1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f }, m_STSTexture);
-```
-
-添加image像呼吸一样简单了
-
-<img src="README.assets/image-20260413163937602.png" alt="image-20260413163937602" style="zoom:50%;" />
-
-为什么DrawQuad的深度和DrawFullscreenQuad好像基准不一样？
-
-> 是由于 **世界空间（World Space）** 与 **NDC 空间（归一化设备坐标）** 之间的转换逻辑导致的。
->
-> **1. 深度基准的本质区别**
->
-> - **DrawFullscreenQuad (基准：NDC 空间)**
->   由于你传的是**单位矩阵 (Identity Matrix)**，它的 Z 轴直接就是 OpenGL 的标准数值。范围：**-1.0 (最近/最前) 到 1.0 (最远/最后)**。这是一个绝对值。不管你相机在哪，depth = 0.9 永远代表“贴在屏幕背景墙上”。
-> - **DrawQuad (基准：世界空间 + 相机转换)**
->   它经过了 u_ViewProjection 的洗礼。**相机位移的影响**：如果你的相机位置是 (0, 0, 5)，那么在世界坐标里 Z=0 的物体，相对于相机来说深度就是 5。**投影矩阵的映射**：你在创建 OrthographicCamera 时设置过 Near 和 Far（比如 -1.0 到 1.0）。这个矩阵会把这个世界范围内的 Z 轴强行“挤”进 NDC 的 -1 到 1 之间。**计算结果**：如果你的相机在移动，或者 Near/Far 设置不是 -1 到 1，那么 DrawQuad 传进去的 Z 值经过计算后，在显卡看来可能已经变成了 0.2 或 0.8。
->
-> **2. 为什么它们会“打架”？**
->
-> 想象你在拍戏：
->
-> - DrawFullscreenQuad 是在**镜头玻璃**上贴了一层保鲜膜（不管摄像机怎么动，保鲜膜就在那）。
-> - DrawQuad 是在**舞台**上放了一个道具。
->
-> 当你问“谁在前面”时，GPU 会看最终算出来的 gl_Position.z。
-> 如果相机往后退了（Z 增加了），舞台上的道具在 GPU 眼里就会变远（Z 变大）。但镜头玻璃上的保鲜膜 Z 值是写死的，于是原本在道具后面的背景，可能由于道具往后退，突然就跑到了道具前面。
->
-> **3. 如何统一标准？（架构建议）**
->
-> 要解决这个问题，让背景永远在最底层，建议采用以下 **方案 A**。
->
-> 方案 A：关闭深度写入（最推荐的做法）
->
-> 既然背景是“全屏特效”，它就不应该参与物体的深度竞争。我们让它在渲染时**不写深度缓冲区**，只管涂颜色。这样，无论后面的方块 Z 是多少，背景都会被视为“最远”。
->
-> **修改 Sandbox2D.cpp 渲染顺序：**
->
-> ```
-> void Sandbox2D::OnUpdate(gl::Timestep ts) {
->     gl::RenderCommand::Clear();
-> 
->     // 1. 渲染背景前，暂时禁用深度测试（或仅禁用深度写入）
->     glDisable(GL_DEPTH_TEST); 
->     
->     auto bgShader = m_ShaderLib.Get("BalatroVortex");
->     gl::Renderer2D::DrawFullscreenQuad(bgShader, 0.0f); // 深度填多少都无所谓了
-> 
->     // 2. 重新开启深度测试，给游戏世界用
->     glEnable(GL_DEPTH_TEST); 
-> 
->     gl::Renderer::BeginScene(m_CameraController.GetCamera());
->     // 这里的物体会根据彼此的 Z 轴正常排序
->     gl::Renderer2D::DrawQuad({0, 0, 0.0f}, {1, 1}, m_Texture); 
->     gl::Renderer::EndScene();
-> }
-> ```
+这套接口解决了当时的接线问题，不过它还算不上完整的 Uniform 系统。`u_Time`、`u_Resolution` 和 `u_SceneTexture` 都依赖名称约定，额外参数仍由调用方上传；分辨率取自应用窗口，并不一定等于当前 Framebuffer 尺寸。时间则来自最近一次 `BeginScene()` 写入的摄像机缓冲。以后如果继续整理全屏 Pass，这两项应改成显式输入，减少对 Application 和调用顺序的依赖。
 
 ## 白贴图模式
 
-引入**白贴图（White Texture）模式**是 2D 渲染器的一次重要进化。它的核心逻辑是：**将“纯色”和“贴图”渲染逻辑统一到一个 Shader 中**。
+开始做 Renderer2D 时，纯色方块和纹理方块各走一套 Shader。表面上很好理解，实际批处理时却很麻烦：颜色块会迫使渲染器切换 Shader，也无法和相邻精灵留在同一个批次。白贴图就是为了解掉这个分支。
 
-当你画纯色方块时，引擎会自动绑定一张 $1 \times 1$ 的纯白色贴图。因为任何颜色乘以白色（1.0, 1.0, 1.0, 1.0）都等于它本身，所以我们可以只用一套代码管所有 2D 绘图。
-
----
-
-文件 1：`Glimmer/src/Glimmer/Renderer/Texture.h`
-
-我们需要增加手动设置像素数据的能力，以便创建 1x1 的白色纹理。
+初始化时，Renderer2D 创建一张 1×1 的 RGBA8 纹理，把唯一像素写成 `0xffffffff`，并固定放在纹理槽 0：
 
 ```cpp
-namespace gl {
-    class Texture2D : public Texture {
-    public:
-        // ✨ 新增：支持指定宽高的工厂方法
-        static Ref<Texture2D> Create(uint32_t width, uint32_t height);
-        static Ref<Texture2D> Create(const std::string& path);
+s_Data.WhiteTexture = Texture2D::Create(1, 1);
 
-        // ✨ 新增：手动上传像素数据的方法
-        virtual void SetData(void* data, uint32_t size) = 0;
-    };
-}
+uint32_t whitePixel = 0xffffffff;
+s_Data.WhiteTexture->SetData(&whitePixel, sizeof(whitePixel));
+s_Data.TextureSlots[0] = s_Data.WhiteTexture;
 ```
 
----
+纯色 Quad 的顶点使用槽 0，颜色字段保存调用方传入的颜色。片元阶段仍执行纹理采样和颜色相乘，因为白色采样值是 1，结果正好保留顶点颜色。真实纹理走相同公式，只是 `TexIndex` 指向其所在槽位，`tintColor` 负责染色。
 
-文件 2：`Glimmer/src/Platform/OpenGL/OpenGLTexture2D.h/cpp`
+这一步真正有价值的地方，是让纯色、贴图、平铺和 Tint 共用同一种顶点格式与 Texture Shader。后来的 32 纹理槽批处理正是沿着这个约定建立的，白贴图一直占用 0 号槽，其余纹理从 1 开始登记。
 
-实现上面新增的接口。
+`Texture2D` 如今也不再只有早期的宽高构造函数。它支持 `TextureSpecification`，可以指定格式、过滤、寻址、用途和颜色空间；`SetData()` 会按规格校验完整上传大小。白贴图仍使用最简单的 `Create(1, 1)`，因为这里确实不需要额外配置。
 
-**OpenGLTexture2D.h**
-```cpp
-class OpenGLTexture2D : public Texture2D {
-public:
-    OpenGLTexture2D(uint32_t width, uint32_t height); // ✨ 新构造函数
-    // ...
-    virtual void SetData(void* data, uint32_t size) override;
-private:
-    uint32_t m_Width, m_Height;
-    uint32_t m_RendererID;
-    GLenum m_InternalFormat, m_DataFormat; // 记录格式信息
-};
-```
+![白贴图统一后的绘制结果](README.assets/image-20260415211525172.png)
 
-**OpenGLTexture2D.cpp**
-```cpp
-OpenGLTexture2D::OpenGLTexture2D(uint32_t width, uint32_t height)
-    : m_Width(width), m_Height(height)
-    {
-        m_InternalFormat = GL_RGBA8;
-        m_DataFormat = GL_RGBA;
-
-        glCreateTextures(GL_TEXTURE_2D, 1, &m_RendererID);
-        glTextureStorage2D(m_RendererID, 1, m_InternalFormat, m_Width, m_Height);
-
-        glTextureParameteri(m_RendererID, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-        glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    }
-
-void OpenGLTexture2D::SetData(void* data, uint32_t size)
-{
-    uint32_t bpp = m_DataFormat == GL_RGBA ? 4 : 3;
-    GL_CORE_ASSERT(size == m_Width * m_Height * bpp, "Data must be entire texture!");
-    glTexImage2D(GL_TEXTURE_2D, 0, m_InternalFormat, m_Width, m_Height, 0, m_DataFormat, GL_UNSIGNED_BYTE, data);
-}
-```
-*(注意：别忘了在 `Texture.cpp` 里实现 `Texture2D::Create(width, height)` 指向这个类)*。
-
----
-
-文件 3：`Glimmer/src/Glimmer/Renderer/Renderer2D.cpp`
-
-这是重头戏。我们**删除 `FlatColorShader`**，引入 `WhiteTexture`。
-
-```cpp
-namespace gl {
-
-    struct Renderer2DStorage {
-        Ref<VertexArray> QuadVertexArray;
-        Ref<Shader> TextureShader; // ✨ 只需要这一个 Shader
-        Ref<Texture2D> WhiteTexture; // ✨ 引入白贴图
-
-        glm::mat4 ViewProjectionMatrix;
-        float SceneTime = 0.0f;
-    };
-
-    static Renderer2DStorage* s_Data;
-
-    void Renderer2D::Init() {
-        s_Data = new Renderer2DStorage();
-        // ... (VAO/VBO/IBO 设置保持不变) ...
-
-        // ✨ 核心逻辑 1：创建 1x1 纯白贴图
-        s_Data->WhiteTexture = Texture2D::Create(1, 1);
-        uint32_t whiteTextureData = 0xffffffff; // 纯白色
-        s_Data->WhiteTexture->SetData(&whiteTextureData, sizeof(uint32_t));
-
-        // ✨ 核心逻辑 2：只加载 TextureShader
-        s_Data->TextureShader = Shader::Create("assets/shaders/Texture.glsl");
-        s_Data->TextureShader->Bind();
-        s_Data->TextureShader->UploadUniformInt("u_Texture", 0);
-    }
-
-    void Renderer2D::BeginScene(const OrthographicCamera& camera) {
-        s_Data->SceneTime = Application::Get().GetTime();
-        s_Data->ViewProjectionMatrix = camera.GetViewProjectionMatrix();
-
-        s_Data->TextureShader->Bind();
-        s_Data->TextureShader->UploadUniformMat4("u_ViewProjection", s_Data->ViewProjectionMatrix);
-        s_Data->TextureShader->UploadUniformFloat("u_Time", s_Data->SceneTime);
-    }
-
-    // --- 修改纯色 DrawQuad ---
-    void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const glm::vec4& color) {
-        s_Data->TextureShader->Bind();
-        s_Data->TextureShader->UploadUniformFloat4("u_Color", color); // 设置目标颜色
-        s_Data->WhiteTexture->Bind(); // ✨ 绑定白色贴图，让 Shader 采样出 1.0
-
-        glm::mat4 transform = glm::translate(glm::mat4(1.0f), position) 
-                            * glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
-        s_Data->TextureShader->UploadUniformMat4("u_Transform", transform);
-
-        s_Data->QuadVertexArray->Bind();
-        RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
-    }
-
-    // --- 修改贴图 DrawQuad ---
-    void Renderer2D::DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture) {
-        s_Data->TextureShader->Bind();
-        s_Data->TextureShader->UploadUniformFloat4("u_Color", glm::vec4(1.0f)); // ✨ 设为白色，不改变贴图原色
-        texture->Bind(); // 绑定真实贴图
-
-        glm::mat4 transform = glm::translate(glm::mat4(1.0f), position) 
-                            * glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
-        s_Data->TextureShader->UploadUniformMat4("u_Transform", transform);
-
-        s_Data->QuadVertexArray->Bind();
-        RenderCommand::DrawIndexed(s_Data->QuadVertexArray);
-    }
-}
-```
-
----
-
-文件 4：`assets/shaders/Texture.glsl`
-
-由于现在所有的方块（纯色或贴图）都用这一个 Shader，必须确保它的计算公式包含 `u_Color`。
-
-```glsl
-#type fragment
-#version 330 core
-
-layout(location = 0) out vec4 color;
-
-in vec2 v_TexCoord;
-uniform sampler2D u_Texture;
-uniform vec4 u_Color; // 接收 C++ 传来的颜色
-
-void main() {
-    // ✨ 核心公式：采样出的贴图颜色 * 外部颜色
-    // 对于纯色块：采样出 (1,1,1,1) * u_Color = u_Color
-    // 对于贴图：采样出 ImageColor * (1,1,1,1) = ImageColor (如果外部传白)
-    color = texture(u_Texture, v_TexCoord) * u_Color;
-}
-```
-
----
-
-为什么要这么做？
-
-1.  **性能优化**：通过统一 Shader，我们减少了 GPU 的 **状态切换（State Change）**。在 OpenGL 中，切换 Shader 程序是非常昂贵的。
-2.  **灵活性**：现在的贴图方块也支持变色了！你可以给 `m_Texture` 版的 `DrawQuad` 传一个红色，原本的图片就会被染上一层红色的阴影（Tinting），这在实现“受击变红”等特效时极其方便。
-3.  **批处理（Batching）的前奏**：这是最重要的原因。批处理要求一组物体共用同一个 Shader 和贴图。有了白贴图，纯色方块现在在显卡眼里也是“带贴图的方块”了，未来它们可以完美地合并成一个 Draw Call 发送出去。
-
-<img src="README.assets/image-20260415211525172.png" alt="image-20260415211525172" style="zoom: 50%;" />
+白贴图当前是 Renderer2D 私有资源，没有公共获取接口，也不是全引擎共享的默认纹理。Renderer3D 会为自己的材质回退单独创建白贴图。两边采用相同思路，但生命周期和槽位规则各自管理，调用方不该假设它们指向同一个 GPU 对象。
 
 ## 仪器测量
 
-为了让你的 **Glimmer Engine** 从“能跑”进化到“高性能工业级”水平，我们必须建立一套科学的性能观测体系。
+渲染结果正常以后，我开始需要回答更具体的问题：一帧时间花在哪里，偶发卡顿落在哪个函数，调整批处理后 CPU 提交有没有真的减少。单看 FPS 很难追到调用链，所以项目加入了一套轻量的 CPU Instrumentation。
 
-我将这个过程分为两个大的阶段：
-1.  **仪器测量（Instrumentation）**：在 CPU 层面追踪每个函数的耗时，并生成可视化报告。
-2.  **渲染器统计与批处理（Renderer2D Evolution）**：实时监测 Draw Call 次数，并进化到批处理模式。
+核心实现位于 `Glimmer/Debug/Instrumentor.h`。`InstrumentationTimer` 在构造时记录起点，离开作用域时自动停止，再把名称、微秒时间戳和线程 ID 写入单例 `Instrumentor`。输出格式兼容 Chrome Trace Event，可以在时间轴查看函数的开始位置和持续时间。
 
-本篇对话我们先攻克 **“第一阶段：全引擎性能剖析器（Profiler）”**。
-
----
-
-**第一阶段：全引擎仪器测量 (Instrumentation)**
-
-我们要实现一套类似 Chrome 的性能追踪工具。它能生成一个 `.json` 文件，你只需在 Chrome 浏览器打开 `chrome://tracing` 就能看到类似电影剪辑软件那样的全引擎时间轴。
-
-创建性能监测核心类 (`Instrumentor.h`)
-
-在 `Glimmer/src/Glimmer/Debug` 目录下创建。这个类负责将每个函数的开始和结束时间记录到文件中。
-
-**文件：`Glimmer/src/Glimmer/Debug/Instrumentor.h`**
+日常埋点通过宏完成：
 
 ```cpp
-#pragma once
-#include <string>
-#include <chrono>
-#include <algorithm>
-#include <fstream>
-#include <thread>
-
-namespace gl {
-
-	struct ProfileResult {
-		std::string Name;
-		long long Start, End;
-		uint32_t ThreadID;
-	};
-
-	struct InstrumentationSession {
-		std::string Name;
-	};
-
-	class Instrumentor
-	{
-	private:
-		InstrumentationSession* m_CurrentSession;
-		std::ofstream m_OutputStream;
-		int m_ProfileCount;
-	public:
-		Instrumentor() : m_CurrentSession(nullptr), m_ProfileCount(0) {}
-
-		void BeginSession(const std::string& name, const std::string& filepath = "results.json")
-		{
-			m_OutputStream.open(filepath);
-			WriteHeader();
-			m_CurrentSession = new InstrumentationSession{ name };
-		}
-
-		void EndSession()
-		{
-			WriteFooter();
-			m_OutputStream.close();
-			delete m_CurrentSession;
-			m_CurrentSession = nullptr;
-			m_ProfileCount = 0;
-		}
-
-		void WriteProfile(const ProfileResult& result)
-		{
-			if (m_ProfileCount++ > 0) m_OutputStream << ",";
-
-			std::string name = result.Name;
-			std::replace(name.begin(), name.end(), '"', '\'');
-
-			m_OutputStream << "{";
-			m_OutputStream << "\"cat\":\"function\",";
-			m_OutputStream << "\"dur\":" << (result.End - result.Start) << ',';
-			m_OutputStream << "\"name\":\"" << name << "\",";
-			m_OutputStream << "\"ph\":\"X\",";
-			m_OutputStream << "\"pid\":1,";
-			m_OutputStream << "\"tid\":" << result.ThreadID << ",";
-			m_OutputStream << "\"ts\":" << result.Start;
-			m_OutputStream << "}";
-
-			m_OutputStream.flush();
-		}
-
-		static Instrumentor& Get() {
-			static Instrumentor instance;
-			return instance;
-		}
-
-	private:
-		void WriteHeader() { m_OutputStream << "{\"otherData\": {},\"traceEvents\":["; m_OutputStream.flush(); }
-		void WriteFooter() { m_OutputStream << "]}"; m_OutputStream.flush(); }
-	};
-
-	// 专门负责自动结束计时的计时器
-	class InstrumentationTimer
-	{
-	public:
-		InstrumentationTimer(const char* name)
-			: m_Name(name), m_Stopped(false)
-		{
-			m_StartTimepoint = std::chrono::high_resolution_clock::now();
-		}
-
-		~InstrumentationTimer() { if (!m_Stopped) Stop(); }
-
-		void Stop()
-		{
-			auto endTimepoint = std::chrono::high_resolution_clock::now();
-
-			long long start = std::chrono::time_point_cast<std::chrono::microseconds>(m_StartTimepoint).time_since_epoch().count();
-			long long end = std::chrono::time_point_cast<std::chrono::microseconds>(endTimepoint).time_since_epoch().count();
-
-			uint32_t threadID = std::hash<std::thread::id>{}(std::this_thread::get_id());
-			Instrumentor::Get().WriteProfile({ m_Name, start, end, threadID });
-
-			m_Stopped = true;
-		}
-	private:
-		const char* m_Name;
-		std::chrono::time_point<std::chrono::high_resolution_clock> m_StartTimepoint;
-		bool m_Stopped;
-	};
-}
-```
-
----
-
-在 `Core.h` 中添加便捷宏
-
-为了不破坏代码美感，我们用宏来封装调用。
-
-**文件：`Glimmer/src/Glimmer/Core.h`**
-```cpp
-// ... 之前的宏 ...
-
-#define GL_PROFILE 1
-#if GL_PROFILE
-	#define GL_PROFILE_BEGIN_SESSION(name, filepath) ::gl::Instrumentor::Get().BeginSession(name, filepath)
-	#define GL_PROFILE_END_SESSION() ::gl::Instrumentor::Get().EndSession()
-    // ✨ 核心宏：放在函数第一行即可追踪整个函数
-	#define GL_PROFILE_FUNCTION() GL_PROFILE_SCOPE(__FUNCSIG__)
-	#define GL_PROFILE_SCOPE(name) ::gl::InstrumentationTimer timer##__LINE__(name)
-#else
-	#define GL_PROFILE_BEGIN_SESSION(name, filepath)
-	#define GL_PROFILE_END_SESSION()
-	#define GL_PROFILE_FUNCTION()
-	#define GL_PROFILE_SCOPE(name)
-#endif
-```
-
----
-
-如何使用？(以 Sandbox2D 为例)
-
-你只需要在想要观察的函数第一行加上 `GL_PROFILE_FUNCTION();`。
-
-**文件：`Sandbox2D.cpp`**
-```cpp
-void Sandbox2D::OnUpdate(gl::Timestep ts)
+void Sandbox2D::OnUpdate(Timestep ts)
 {
-    GL_PROFILE_FUNCTION(); // ✨ 自动计时
+    GL_PROFILE_FUNCTION();
 
     {
-        GL_PROFILE_SCOPE("CameraController::OnUpdate"); // ✨ 追踪特定代码块
+        GL_PROFILE_SCOPE("CameraController::OnUpdate");
         m_CameraController.OnUpdate(ts);
     }
 
-    // ... 渲染代码 ...
+    // 本帧其他工作
 }
 ```
 
-同时，在 `Application.cpp` 的生命周期中开启会话：
+`GL_PROFILE_FUNCTION()` 使用 MSVC 的 `__FUNCSIG__` 记录完整函数签名，`GL_PROFILE_SCOPE()` 适合包住一段更有意义的工作。Application、窗口、OpenGL 后端、摄像机和 Renderer2D 等位置已经保留了这些埋点。关闭性能测量时，宏会展开为空，不需要逐处删除。
+
+入口把一次运行拆成 Startup、Runtime 和 Shutdown 三个 Session，分别生成 JSON 文件。这样初始化资源、主循环和释放阶段不会挤在同一条时间轴上：
+
 ```cpp
-void Application::Run() {
-    GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Runtime.json");
-    
-    while (m_Running) { ... }
-    
-    GL_PROFILE_END_SESSION();
-}
+GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Startup.json");
+auto app = gl::CreateApplication();
+GL_PROFILE_END_SESSION();
+
+GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Runtime.json");
+app->Run();
+GL_PROFILE_END_SESSION();
+
+GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Shutdown.json");
+delete app;
+GL_PROFILE_END_SESSION();
 ```
 
-在EntryPoint继承
+![CPU Trace 时间轴](README.assets/image-20260416124421235.png)
 
-```
-int main(int argc, char** argv)
-{
-    gl::Log::Init();
+当前 `Core.h` 中的 `GL_PROFILE` 是 `0`，因此默认构建不会生成这些文件。需要抓取时把开关设为 `1`，运行一段可复现操作并正常关闭程序，三个 Session 才能写完合法的 JSON 尾部。
 
-    GL_INFO("Ready to build something epic?");
-
-	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Startup.json");
-    auto app = gl::CreateApplication();
-	GL_PROFILE_END_SESSION();
-
-	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Runtime.json");
-    app->Run();
-	GL_PROFILE_END_SESSION();
-
-	GL_PROFILE_BEGIN_SESSION("Runtime", "GlimmerProfile-Shutdown.json");
-    delete app;
-	GL_PROFILE_END_SESSION();
-}
-```
-
----
-
-为什么用 Chrome Tracing？
-
-**为什么不直接在 ImGui 里画个简单的毫秒数，非要搞这个 JSON 导出报告？**
-“ImGui 的实时数值只能看到**‘现状’**，而不能分析**‘因果’**。
-通过 `Instrumentor` 生成的 Chrome Tracing 报告，我可以清晰地看到：
-
-1. **函数调用链**：哪个底层 gl 函数被哪个高级渲染指令调用。
-2. **多线程瓶颈**：如果未来引入渲染线程，我可以直观地看到 CPU 逻辑线程是在等待 GPU 提交，还是在等待 IO 读取。
-3. **微小的抖动（Jitter）**：有些 Bug 是偶发的（比如每 100 帧卡一下），实时数值很难捕捉。通过时间轴回放，我可以精准定位到那一帧里到底是哪个函数突然耗时暴增。
-这套体系让性能优化从‘拍脑袋猜’变成了‘数据驱动决策’，是专业引擎开发的基石。”
-
----
-
-🚀 接下来的操作流程：
-
-1.  **配置 `Instrumentor.h`**。
-2.  **修改 `Application.cpp`**：在 `Run` 的开头加 `BEGIN_SESSION`，结尾加 `END_SESSION`。
-3.  **大面积撒网**：在你的 `Renderer2D::DrawQuad`、`OpenGLShader::Bind`、`WindowsWindow::OnUpdate` 等函数里全部加上 `GL_PROFILE_FUNCTION()`。
-4.  **运行并查看**：运行几秒后关闭。在你的项目根目录找到 `GlimmerProfile-Runtime.json`，打开 Chrome 浏览器，输入 `chrome://tracing`，把文件拖进去。
-
-![image-20260416124445368](README.assets/image-20260416124445368.png)
-
-![image-20260416124421235](README.assets/image-20260416124421235.png)
-
-在函数入口加入`GL_PROFILE_FUNCTION()`
-
-![image-20260416160508341](README.assets/image-20260416160508341.png)
+这套工具适合本地找 CPU 热点，边界也很清楚。每条记录都会立即刷新文件，采样密度过高时会反过来干扰结果；`Instrumentor` 没有互斥保护，也没有处理会话重入和输出文件打开失败。它记录的是 CPU 作用域，不能替代 `GPUTimer` 对 Shadow、Terrain 等 GPU Pass 的非阻塞查询。我的使用习惯是先用它定位可疑阶段，再用渲染统计或 GPU Timer 验证具体瓶颈，避免只凭一张时间轴下结论。
 
 ## Renderer2D升级
 
-为 Renderer2D 增加旋转支持、颜色染色（Tinting）以及纹理平铺（Tiling）
+有了基础 Quad 绘制后，需求很快多了起来：纹理平铺、Sprite 染色、旋转和编辑器拾取都要接进同一条路径。继续为每种组合复制绘制代码撑不了多久，所以 Renderer2D 开始围绕 transform 和统一顶点格式整理接口。
 
-需要在 Shader 中增加 u_TilingFactor（平铺系数）的计算。
+普通方块可以传位置与尺寸，也可以直接传完整 `transform`。旋转接口在 CPU 端构造 `Translate * Rotate * Scale`，再把单位 Quad 的四个顶点转换到世界空间。`rotation` 使用角度，内部调用 `glm::radians()`；纹理版本另带 `tilingFactor` 和 `tintColor`。
 
-新增接口
+`DrawSprite()` 是场景侧入口。它读取 `SpriteRendererComponent`、实体 ID，以及可选的 Material 和 Overrides。材质存在时，BaseColor、BaseColorTexture 和 TilingFactor 会覆盖组件值，最终仍写入同一种 `QuadVertex`。EntityID 随顶点进入整数附件，编辑器拾取不用额外绘制。
 
-```
-// Glimmer/src/Glimmer/Renderer/Renderer2D.h
-namespace gl {
-    class Renderer2D {
-    public:
-        // ... Init, BeginScene, EndScene ...
-
-        // 1. 基础 DrawQuad (带平铺和染色)
-        static void DrawQuad(const glm::vec2& position, const glm::vec2& size, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
-        static void DrawQuad(const glm::vec3& position, const glm::vec2& size, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
-
-        // 2. 旋转 DrawQuad (纯色)
-        static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const glm::vec4& color);
-        static void DrawRotatedQuad(const glm::vec3& position, const glm::vec2& size, float rotation, const glm::vec4& color);
-
-        // 3. 旋转 DrawQuad (贴图 + 平铺 + 染色)
-        static void DrawRotatedQuad(const glm::vec2& position, const glm::vec2& size, float rotation, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
-        static void DrawRotatedQuad(const glm::vec3& position, const glm::vec2& size, float rotation, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
-    };
-}
+```cpp
+Renderer2D::DrawRotatedQuad(
+    { 0.0f, 0.0f, 0.0f }, { 1.5f, 1.0f }, 30.0f,
+    texture, 2.0f, { 0.8f, 0.4f, 0.4f, 1.0f }
+);
 ```
 
-实现 Renderer2D.cpp 逻辑
+这次升级里最难查的故障和旋转计算无关。全屏 Shader 改变了当前 VAO，批次 Flush 如果沿用 OpenGL 全局状态，就会拿错顶点布局，屏幕上出现与调用顺序有关的彩色方块。现在 `OpenGLRendererAPI::DrawIndexed()` 会先绑定参数中的 VertexArray，Renderer2D 不再依赖前一次绘制留下的 VAO；旧版绘制后主动解绑纹理的操作也已经移除。
 
-这里最核心的变化是变换矩阵的计算顺序：**平移 -> 旋转 -> 缩放**。
+透明像素没有被固化成 Renderer2D 的统一策略。批次会启用 SourceAlpha 混合，但保持现有深度写入状态。Sandbox 的旧 Texture Shader 仍在 Alpha 小于 `0.1` 时执行 `discard`，当前完整编辑器的 Shader 没有固定裁剪。透明 Sprite 的结果仍取决于提交顺序和深度状态。
 
-2D/3D 渲染中关于 **“深度缓冲区（Depth Buffer）”与“透明度（Alpha）”** 的核心矛盾。
+![Renderer2D 接口升级后的示例](README.assets/image-20260421113429547.png)
 
-看到的“透明背景挡住下面物体”，在图形学中被称为 **“深度遮挡（Depth Occlusion）”**。
+`ResetStats()` 和 `GetStats()` 用于查看批次 Draw Call 与 Quad 数量。当前统计主要覆盖 Sprite Batch：全屏接口会增加 QuadCount，却没有增加 DrawCalls，因此不能把它当作完整帧的 GPU 提交总数。
 
-> 在 OpenGL 中，当你开启了 GL_DEPTH_TEST（深度测试）后，显卡的工作逻辑是这样的：
->
-> 1. **计算位置**：显卡画出一个方块（Quad），确定它在屏幕上的位置和深度（Z=0.0）。
-> 2. **深度测试**：显卡检查这个位置的“深度记录”。如果现在的 Z 值小于或等于记录值，就允许画。
-> 3. **写入深度**：**重点来了！** 只要方块在这个像素点上有任何输出（即使是 100% 透明的像素），它都会把自己的 Z 值（0.0）写进深度缓冲区。
-> 4. **后续判定**：当你画第二个方块（RotatedQuad）时，它也在 Z=0.0。由于深度缓冲区里已经有一个 0.0 的记录了，显卡会认为：“这里已经有东西占位了，而且离我一样近（或更近）”，于是**直接丢弃**了后面那个方块的像素。
->
-> **结果**：第一个方块的“透明边框”虽然看不见颜色，但它在深度图里占了坑，导致后面重叠的物体被“空气”挡住了。
-
-在 Shader 中开启 discard
-
-这是解决 2D 透明物体遮挡问题的标准做法。我们告诉显卡：如果这个像素的透明度很低，就**彻底丢弃它，不要写深度缓存**。
-
-**修改 assets/shaders/Texture.glsl：**
-
-```
-void main() {
-    vec4 texColor = texture(u_Texture, v_TexCoord * u_TilingFactor) * u_Color;
-    
-    // ✨ 核心修复：如果透明度低于一个很小的阈值，直接扔掉这个像素
-    // 这样它就不会去更新深度缓冲区了
-    if (texColor.a < 0.1)
-        discard;
-
-    color = texColor;
-}
-```
-
-效果如图
-
-<img src="README.assets/image-20260416175835039.png" alt="image-20260416175835039" style="zoom:50%;" />
+源码里还有两处未收口。带位置和尺寸的纹理 `DrawQuad()` 转发时漏掉了 `tintColor`，需要 Tint 时应暂用 transform 重载；带纹理的 `DrawRotatedQuad()` 也缺少 32 槽容量检查。这些边界在继续扩展 2D API 前需要修正。
 
 ## 2D 批处理渲染
 
-在 Glimmer 引擎的批渲染（Batch Rendering）第一阶段重构中，我们完成了从**“即时模式（一物一画）”**到**“缓冲模式（攒够再画）”**的底层逻辑转型。以下是这一阶段的核心工作梳理与架构思考：
+Renderer2D 最初每画一个方块就上传 Uniform 并提交 Draw Call。数量一多，CPU 时间便耗在重复绑定和驱动调用上。批处理的做法很直接：先把兼容 Quad 写进连续内存，最后一起交给 GPU。
 
-### 纯色方块
+当前单个批次最多容纳 20,000 个 Quad，也就是 80,000 个顶点和 120,000 个索引。索引拓扑在初始化时一次生成；CPU 端分配同样容量的 `QuadVertex` 数组，动态 VBO 只上传本批次实际使用的部分。
 
-**第一步：定义顶点数据契约 (The Data Contract)**
-
-在批处理中，CPU 与 GPU 的沟通不再通过离散的 glUniform，而是通过一块连续的内存。我们定义了 **QuadVertex** 结构体，它将每个顶点的“坐标、颜色、纹理坐标”打包在一起。
-
-```
-	struct QuadVertex
-	{
-		glm::vec3 Position;
-		glm::vec4 Color;
-		glm::vec2 TexCoord;
-	};
-```
-
-**第二步：显存空间的预留与索引复用 (Resource Pre-allocation)**
-
-在 Init 函数中，我们不再根据单个物体的顶点来创建缓冲区，而是直接预申请了足以容纳 **10,000 个方块** 的显存额度。同时，由于所有 2D 方块的拓扑结构（即由两个三角形拼成，索引顺序为 0,1,2, 2,3,0）是恒定不变的，我们预先计算并填充了整个 **IndexBuffer**。
-
-```
-void Renderer2D::Init()
+```cpp
+struct QuadVertex
 {
-	GL_PROFILE_FUNCTION();
-
-	s_Data.QuadVertexArray = VertexArray::Create();
-
-	s_Data.QuadVertexBuffer = VertexBuffer::Create(s_Data.MaxVertices * sizeof(QuadVertex));
-	s_Data.QuadVertexBuffer->SetLayout({
-		{ ShaderDataType::Float3, "a_Position" },
-		{ ShaderDataType::Float4, "a_Color" },
-		{ ShaderDataType::Float2, "a_TexCoord" }
-		});
-	s_Data.QuadVertexArray->AddVertexBuffer(s_Data.QuadVertexBuffer);
-
-	s_Data.QuadVertexBufferBase = new QuadVertex[s_Data.MaxVertices];
-
-	// 预计算所有索引
-	uint32_t* quadIndices = new uint32_t[s_Data.MaxIndices];
-	uint32_t offset = 0;
-	for (uint32_t i = 0; i < s_Data.MaxIndices; i += 6) {
-		quadIndices[i + 0] = offset + 0;
-		quadIndices[i + 1] = offset + 1;
-		quadIndices[i + 2] = offset + 2;
-		quadIndices[i + 3] = offset + 2;
-		quadIndices[i + 4] = offset + 3;
-		quadIndices[i + 5] = offset + 0;
-		offset += 4;
-	}
-
-	Ref<IndexBuffer> quadIB = IndexBuffer::Create(quadIndices, s_Data.MaxIndices);
-	s_Data.QuadVertexArray->SetIndexBuffer(quadIB);
-	delete[] quadIndices;
-
-	s_Data.WhiteTexture = Texture2D::Create(1, 1);
-	uint32_t whiteTextureData = 0xffffffff;
-	s_Data.WhiteTexture->SetData(&whiteTextureData, sizeof(uint32_t));
-
-	s_Data.TextureShader = Shader::Create("assets/shaders/Texture.glsl");
-	s_Data.TextureShader->Bind();
-	s_Data.TextureShader->UploadUniformInt("u_Texture", 0);
-
-}
-```
-
-索引缓冲区的复用是性能优化的关键。无论我们画多少个方块，索引的逻辑排列是重复的，这种“一次计算，终身使用”的方法极大地节省了运行时的 CPU 开销。
-
-**第三步：建立 CPU 端的“内存草稿本” (Memory Scratchpad)**
-
-我们在 Renderer2DData 中分配了一块和显存等大的 CPU 内存（QuadVertexBase）。
-
-```
-	struct Renderer2DData
-	{
-		const uint32_t MaxQuads = 10000;
-		const uint32_t MaxVertices = MaxQuads * 4;
-		const uint32_t MaxIndices = MaxQuads * 6;
-
-		Ref<VertexArray> QuadVertexArray;
-		Ref<VertexBuffer> QuadVertexBuffer;
-		Ref<Shader> TextureShader;
-		Ref<Texture2D> WhiteTexture;
-
-		uint32_t QuadIndexCount = 0;
-		QuadVertex* QuadVertexBufferBase = nullptr;
-		QuadVertex* QuadVertexBufferPtr = nullptr;
-		float SceneTime = 0.0f;
-	};
-```
-
-之所以不直接往 GPU 写数据，是因为 CPU 内存的随机读写速度远快于跨总线操作 GPU 显存。我们引入了 QuadVertexBufferPtr 指针，它像一个画笔的笔尖，随着 DrawQuad 的调用在草稿本上不断向后移动，记录数据。
-
-**第四步：重构渲染生命周期 (The Lifecycle Transformation)**
-
-我们重写了 BeginScene 和 EndScene。
-
-1. **BeginScene**：将指针重置到草稿本的起始位置，宣告新一轮“数据采集”开始。
-2. **EndScene**：计算这一帧指针移动的总距离，通过 SetData（底层为 glBufferSubData）将整个草稿本一次性“拍”给 GPU。
-3. **Flush**：执行最终的 DrawCall。
-
-- 这种模式将原本分散在 10,000 次绘图中的 CPU-GPU 通讯压力，压缩到了 EndScene 中的那一次提交。这便是批处理性能飞跃的根本原因。
-
-**第五步：将几何变换从 GPU 回收至 CPU (Coordinate Transformation)**
-
-这是最显着的改变。在旧代码中，我们把 Model Matrix 传给 Shader 算位置。而在第一阶段批处理中，我们在 DrawQuad 里手动计算了四个顶点的世界坐标（例如 position.x + size.x）。
-
-由于 GPU 在一个 Draw Call 中只能接收一组 Uniform 矩阵，我们无法为 10,000 个物体传 10,000 个矩阵。因此，我们将“矩阵乘法”的工作收回到 CPU 完成。虽然这增加了 CPU 的浮点运算量，但相比于频繁切换渲染状态带来的指令开销，这是极度划算的交换。
-
-**第六步：Shader 的解耦与简化 (Shader Simplification)**
-
-为了配合批处理，我们的 **Texture.glsl** 发生了质变。顶点着色器现在直接接收处理好的 a_Position（世界坐标）和 a_Color，而不再依赖 u_Transform。
-
-Shader 变得更加“通用化”。它不再关心物体是怎么移动的，它只负责把传进来的颜色和坐标正确地投射到屏幕上。
-
-**阶段总结**：
-第一阶段完成后，你的引擎已经实现了**“纯色方块”的批处理**。目前即使在屏幕上画 10,000 个变色方块，也只会产生 **1 个 Draw Call**。这是你的 Glimmer 引擎从“业余框架”迈向“专业渲染器”的里程碑。
-
-**下一步挑战**：目前的批处理还不能处理不同的纹理（一旦切换纹理，批处理就会中断）。我们需要在下一阶段引入 **纹理插槽（Texture Slots）** 数组，让显卡能在一通指令里识别出不同的图片。
-
-### 纹理绑定
-
-**第一步：扩展顶点数据结构以承载纹理元数据**
-
-为了让 GPU 知道每个方块该贴哪张图，我们必须在顶点结构 QuadVertex 中新增两个属性。
-
-- **TexIndex (纹理索引)**：这是一个浮点数，代表该顶点指向纹理数组中的哪一个位置。
-- **TilingFactor (平铺系数)**：控制纹理的重复频率。
-- 在 BufferLayout 中，这两个属性被定义为 Float。虽然索引本质上是整数，但在顶点属性传输中统一使用浮点数能简化数据对齐，并允许 Shader 在插值后通过 int() 强制转换回索引，这是批处理的通用做法。
-
-**第二步：构建纹理插槽状态池**
-
-由于显卡单次绘制支持的纹理绑定数量有限（通常为 32 个），我们在 Renderer2DData 中建立了一个**纹理插槽数组** TextureSlots。
-
-- **白贴图占位**：在 Init 中将 TextureSlots[0] 固定为 WhiteTexture。
-- **动态计数器**：引入 TextureSlotIndex。在每一帧 BeginScene 时，除了重置顶点指针，还需要将该索引重置为 1。
-- **思考**：这相当于在 CPU 端维护了一个“显存插槽预览图”。我们不再即时绑定纹理，而是记录下“谁将要在哪个位置被绑定”。
-
-**第三步：建立 GPU 采样器阵列映射**
-
-在 Init 函数中，我们不再是简单的 UploadUniformInt("u_Texture", 0)，而是创建了一个包含 0 到 31 的整数数组。
-
-- **一次性注入**：通过 UploadUniformIntArray("u_Textures", samplers, 32)，一次性告知 Shader：数组中的 0 号元素对应 0 号槽位，1 号对应 1 号，依此类推。
-- **思考**：这一步打通了 Shader 内部 uniform sampler2D u_Textures[32] 的寻址链路。自此，Shader 具备了在一次绘制中“挑选”图片的能力。
-
-**第四步：实现纹理重用与动态分配算法**
-
-这是 DrawQuad 实现中最核心的逻辑改进。当 Sandbox 传入一张贴图时，引擎不再盲目绑定，而是执行以下操作：
-
-1. **线性搜索**：遍历当前已登记的 TextureSlots，检查这张贴图是否已经“排队”了。
-2. **命中重用**：如果找到了，直接复用其索引（textureIndex）。
-3. **新增分配**：如果没有找到，则将其放入下一个可用的插槽，并递增 TextureSlotIndex。
-4. **思考**：这套逻辑极大地优化了渲染开销。如果你的场景里有 1000 个方块共用 1 张背景图，引擎只会占用 1 个插槽，并且在数据填充阶段赋予它们完全相同的 textureIndex，完美符合批处理的特征。
-
-**第五步：实现延迟绑定与最终 Flush**
-
-这是纹理出现在屏幕上的最后一公里。在旧的渲染模式下，Bind() 是在 DrawQuad 里立即发生的；而在批处理模式下，绑定动作被推迟到了 Flush。
-
-- **集中绑定**：在 Flush 内部，通过一个循环 TextureSlots[i]->Bind(i)，将这一批次积累的所有贴图依次插入显卡的物理插槽。
-- **思考**：这种“延迟绑定”策略确保了所有贴图在 GPU 执行 glDrawElements 的那一刻都在其位，解决了“一物一绑”带来的管线停顿问题。
-
-**第六步：Shader 端的采样逻辑适配**
-
-配合 C++ 端的改动，GLSL 里的 main 函数不再采样单一对象，而是根据 v_TexIndex 进行索引。
-
-- **动态索引采样**：texture(u_Textures[int(v_TexIndex)], v_TexCoord * v_TilingFactor)。
-- **思考**：通过将顶点属性传入的 float 转回 int 作为数组下标，我们实现了在 GPU 端的动态分发。至此，即使是不同图片的方块，也能在同一个批次内被正确涂色。
-
-<img src="README.assets/image-20260417190927104.png" alt="image-20260417190927104" style="zoom:50%;" />
-
-### 融入全屏shader
-
-现在的DrawFullScreenQuad接口是实现批处理渲染之前的版本，无法起效。这是因为原版绑定了 s_Data.QuadVertexArray。但是，这个 VAO 对应的是那个巨大的、空的动态缓冲区。现在没有向这个缓冲区里填入全屏的 4 个顶点，也没有调用 SetData 把数据发给显卡。且批处理通过 s_Data.QuadIndexCount 来记录画了多少个索引。但在 DrawFullscreenQuad 中，直接调用了底层的 DrawIndexed。如果此时还没画任何批处理方块，索引数可能是 0，显卡就什么都不画。
-
-在引擎开发中，全屏 Pass 通常不和普通的批处理混在一起。最好的做法是在 Init 时准备一个专门的、**静态的**单位矩形（Unit Quad），专门给全屏 Shader 使用。
-
-**修改 Renderer2DData 结构**
-
-增加一个专门存放全屏矩形（-1 到 1）的 VAO。
-
-```
-struct Renderer2DData {
-    // ... 原有成员 ...
-    Ref<VertexArray> FullscreenVertexArray; // ✨ 新增：专门给全屏/后处理用的静态VAO
+    glm::vec3 Position;
+    glm::vec4 Color;
+    glm::vec2 TexCoord;
+    float TexIndex;
+    float TilingFactor;
+    int EntityID;
 };
 ```
 
-**在 Init() 中初始化静态全屏矩形**
+一帧的基本流程是：
 
-这个矩形永远不变，所以我们不需要每帧更新它
+1. `BeginScene()` 更新摄像机 UBO，`StartBatch()` 重置索引数、写指针和纹理槽。
+2. `DrawQuad()` 在 CPU 缓冲区追加四个顶点，并把索引数增加 6。
+3. `EndScene()` 计算有效字节数，一次上传动态 VBO。
+4. `Flush()` 绑定本批次纹理，以当前索引数调用一次 `DrawIndexed()`。
 
-```
-void Renderer2D::Init() {
-    // ... 原有批处理初始化代码 ...
+顶点位置在写入时完成变换。GPU 只使用共享 ViewProjection，不必为每个 Quad 切换 `u_Transform`。这多做了少量 CPU 矩阵运算，却省下大量小型提交，更适合 Sprite 场景。
 
-    // ✨ 初始化全屏专用资源
-    s_Data.FullscreenVertexArray = VertexArray::Create();
+纹理槽让不同图片也能留在同一批次。槽 0 固定为白贴图，其余从 1 开始。加入纹理时先线性查找，命中就复用 `TexIndex`，未命中才占新槽。普通纹理 Quad 在 32 槽用满时会提交并重开批次，Shader 通过 `u_Textures[32]` 和顶点索引选择采样器。
 
-    // 定义覆盖全屏（NDC空间 -1 到 1）的顶点
-    float fullscreenVertices[5 * 4] = {
-        -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
-         1.0f, -1.0f, 0.0f, 1.0f, 0.0f,
-         1.0f,  1.0f, 0.0f, 1.0f, 1.0f,
-        -1.0f,  1.0f, 0.0f, 0.0f, 1.0f
-    };
+索引容量耗尽也会调用 `FlushAndReset()`。`Flush()` 在索引数为 0 时必须直接返回，因为底层 `DrawIndexed()` 把 0 解释成使用整个 IndexBuffer；缺少这个保护，空 Sprite 帧会重画动态 VBO 中上一帧的数据。
 
-    auto fVBO = VertexBuffer::Create(fullscreenVertices, sizeof(fullscreenVertices));
-    fVBO->SetLayout({
-        { ShaderDataType::Float3, "a_Position" },
-        { ShaderDataType::Float2, "a_TexCoord" }
-    });
-    s_Data.FullscreenVertexArray->AddVertexBuffer(fVBO);
+![多纹理 Quad 合并到同一批次](README.assets/image-20260417190927104.png)
 
-    uint32_t fIndices[6] = { 0, 1, 2, 2, 3, 0 };
-    auto fIBO = IndexBuffer::Create(fIndices, 6);
-    s_Data.FullscreenVertexArray->SetIndexBuffer(fIBO);
-}
-```
+完整编辑器会延迟 Sprite Pass。Scene 先记录待绘制状态，EditorLayer 完成 Opaque、Terrain 和 Skybox 后调用 `Scene::FlushSpritePass()`，这时才执行 Renderer2D 的 Begin、Submit 和 End。Alpha Sprite 因此会与已经存在的 Skybox 颜色混合，自动拆批也不会跑到 Skybox 前面。Sandbox 没有这层编排，仍自行控制 Renderer2D 生命周期。
 
-**修改 DrawFullscreenQuad 函数**
-
-逻辑调整：**在画全屏之前，先清空当前的批处理队列（Flush），然后切换到静态 VAO 进行绘制。**
-
-<img src="README.assets/image-20260417194046593.png" alt="image-20260417194046593" style="zoom:50%;" />
-
-### 更新旋转绘图接口
-
-将旧版本的DrawRotateQuad()绘图接口更新至批处理渲染版本
-
-**第一步：建立局部空间“顶点模板” (The Vertex Template)**
-
-在 `Renderer2DData` 结构体中，新增了 `glm::vec4 QuadVertexPositions[4]`。
-*   **做法**：在 `Init()` 函数里，预先定义了一个中心在原点、边长为 1.0 的标准正方形四个角的坐标。
-*   **思考**：这是实现旋转的基石。在之前的非批处理版本中，这些坐标是写死在 VBO 里的。现在我们将它们存为 CPU 内存中的常量，作为所有方块的“原始形状”。使用 `vec4` 而不是 `vec3` 是为了方便后续直接与 4x4 变换矩阵进行数学运算。
-
-**第二步：计算完整的变换矩阵 (Matrix Composition)**
-
-在 `DrawRotatedQuad` 内部，不再依赖 Shader 里的 `u_Transform`。
-*   **做法**：利用 GLM 构造一个复合矩阵：`Translate * Rotate * Scale`。
-*   **思考**：注意矩阵乘法的顺序。在 GLM 中，变换是从右向左应用的。这个顺序（平移 * 旋转 * 缩放）确保了物体首先在局部空间缩放，然后在原点自转，最后被平移到世界空间的指定位置。如果顺序反了，方块会绕着世界中心旋转。
-
-**第三步：坐标空间的物理迁移 (CPU-Side Transformation)**
-
-这是批渲染中最核心的代码改动。
-*   **做法**：在填充缓冲区前，执行 `transform * s_Data.QuadVertexPositions[i]`。
-*   **思考**：我们将原本属于显卡的“几何变换”工作收回到了 CPU 端的 `DrawRotatedQuad` 函数中。
-    *   **原因**：批处理的一个 Draw Call 只能对应一个 Uniform。如果有 100 个方块旋转角度各不相同，我们无法传 100 个不同的 `u_Transform` 给 Shader。
-    *   **结果**：通过 CPU 预计算，我们直接把计算好的、处于**世界空间**的最终坐标存入 `QuadVertex` 结构体。对于 GPU 来说，它只需要机械地画出你给它的坐标，而不需要关心这些点是否经过了旋转。
-
-**第四步：顶点属性的线性填充 (Sequential Buffer Filling)**
-
-改动了数据存入方式，不再调用任何 OpenGL 绑定指令。
-*   **做法**：通过 `s_Data.QuadVertexBufferPtr` 指针，将计算好的 `Position`、`Color`、`TexCoord` 以及新增的 `TexIndex` 等连贯地写入内存。
-*   **思考**：每调用一次 `DrawRotatedQuad`，指针就向后移动 4 个 `QuadVertex` 的跨度。这种内存操作极快，远胜于频繁的 `glUniform` 调用。
-
-**第五步：纹理插槽的动态匹配 (Texture Slot Mapping)**
-
-为了让旋转的带贴图方块也能批处理，代码引入了纹理搜索逻辑。
-*   **做法**：遍历 `TextureSlots` 数组，查找当前传入的纹理是否已在槽位中。若不在，则占用一个新的槽位。
-*   **思考**：这一步保证了即使旋转方块和普通方块交替绘制，只要它们共用贴图，就能保持在同一个批次内，不会触发 `Flush`。
-
-**第六步：Shader 的极简适配 (Shader Stripping)**
-
-由于位置已经在 CPU 算好了，`Texture.glsl` 发生了对应的“瘦身”。
-*   **做法**：顶点着色器（Vertex Shader）中删除了 `u_Transform` 矩阵，直接使用 `u_ViewProjection * vec4(a_Position, 1.0)`。
-*   **思考**：Shader 变得极其纯粹，它只负责摄像机视角的转换。这让渲染管线变得异常稳健。
-
-**总结与思考**
-
-实现 `DrawRotatedQuad` 的过程，本质上是**将 GPU 的计算压力部分转移给 CPU，以换取 CPU 与 GPU 通讯频率的大幅降低**。
-
-阴间bug：实现具体DrawRotatedQuad时，屏幕会出现一个彩色正方形，且即便不调用 DrawRotatedQuad，屏幕上也会出现一个正方形，这说明**批处理缓冲区（Buffer）里有脏数据**。
-
-这样，我新建一个ExampleLayer，逐行测试我的接口问题
-
-测试结果：
-
-只启用DrawFullscreenQuad，结果正常；
-
-只启用DrawRotatedQuad纯色，出现彩色正方形(bug)；
-
-只启用DrawQuad纯色，出现彩色正方形(bug)；
-
-其余接口全部bug，但修改DrawRotatedQuad前正常，推测1.BeginScene问题；2.DrawRotatedQuad问题
-
-尝试回调DrawRotatedQuad纯色
-
-回调为原版之后，全部正常加载，无彩色正方形
-
-```
-		s_Data.TextureShader->Bind();
-		s_Data.TextureShader->UploadUniformFloat4("u_Color", color);
-		s_Data.TextureShader->UploadUniformFloat("u_TilingFactor", 1.0f);
-		s_Data.WhiteTexture->Bind();
-
-		glm::mat4 transform = glm::translate(glm::mat4(1.0f), position)
-			* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0.0f, 0.0f, 1.0f })
-			* glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
-
-		s_Data.TextureShader->UploadUniformMat4("u_Transform", transform);
-
-		s_Data.QuadVertexArray->Bind();
-		RenderCommand::DrawIndexed(s_Data.QuadVertexArray);
-```
-
-为何新版会导致接口全部bug？
-
-```
-		//const float textureIndex = 0.0f; // White Texture
-		//const float tilingFactor = 1.0f;
-
-		//glm::mat4 transform = glm::translate(glm::mat4(1.0f), position)
-		//	* glm::rotate(glm::mat4(1.0f), glm::radians(rotation), { 0.0f, 0.0f, 1.0f })
-		//	* glm::scale(glm::mat4(1.0f), { size.x, size.y, 1.0f });
-
-		//for (int i = 0; i < 4; i++)
-		//{
-		//	// 关键点：矩阵 * 局部坐标 = 旋转后的世界坐标
-		//	s_Data.QuadVertexBufferPtr->Position = transform * s_Data.QuadVertexPositions[i];
-		//	s_Data.QuadVertexBufferPtr->Color = color;
-		//	s_Data.QuadVertexBufferPtr->TexCoord = { (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
-		//	s_Data.QuadVertexBufferPtr->TexIndex = textureIndex;
-		//	s_Data.QuadVertexBufferPtr->TilingFactor = tilingFactor;
-		//	s_Data.QuadVertexBufferPtr++;
-		//}
-
-		//s_Data.QuadIndexCount += 6;
-```
-
-依旧未解决，择日再战
-
-终于发现了，原因在于Flush中为了防止其他 Shader 的干扰，一定要重新 Bind 自己的 VAO
-
-```
-	void Renderer2D::Flush()
-	{
-		// Bind textures
-		for (uint32_t i = 0; i < s_Data.TextureSlotIndex; i++)
-			s_Data.TextureSlots[i]->Bind(i);
-
-		s_Data.QuadVertexArray->Bind();
-		RenderCommand::DrawIndexed(s_Data.QuadVertexArray, s_Data.QuadIndexCount);
-	}
-```
-
-```
-s_Data.QuadVertexArray->Bind();
-```
-
-DrawIndexed接口内
-
-```
-	void OpenGLRendererAPI::DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount)
-	{
-		uint32_t count = indexCount ? vertexArray->GetIndexBuffer()->GetCount() : indexCount;
-		glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
-		glBindTexture(GL_TEXTURE_2D, 0);
-	}
-```
-
-glBindTexture(GL_TEXTURE_2D, 0);解绑当前绑定到 `GL_TEXTURE_2D` 目标的纹理
-
-`glBindTexture(GL_TEXTURE_2D, 0)` 的作用是：**解绑当前 2D 纹理，防止后续操作误作用到之前的纹理对象。**
-
-有一个原因说法：我的全屏shader：s_Data.FullscreenVertexArray->Bind(); // 这里把状态改了！！同时又因为我的旋转接口是最后一个修改批处理的对象，所以导致整个流程只有全屏shader进行过bind
-
-所以也可以在Draw里进行bind，经检验效果一样
-
-```
-	void OpenGLRendererAPI::DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount)
-	{
-		vertexArray->Bind();
-		uint32_t count = indexCount ? vertexArray->GetIndexBuffer()->GetCount() : indexCount;
-		glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
-		glBindTexture(GL_TEXTURE_2D, 0);
-	}
-```
-
-<img src="README.assets/image-20260421113429547.png" alt="image-20260421113429547" style="zoom:50%;" />
+批处理减少了提交次数，不保证整帧永远只有一个 Draw Call。顶点容量和纹理槽都可能拆批；以后加入多种 2D Shader 或混合状态时，还要定义新的兼容条件。分析统计时应同时看 DrawCalls 和 QuadCount。
 
 ## 加载obj文件
 
-> 历史记录说明：本节保留了早期尝试把 Assimp 全部源码直接塞进 Premake、手写 `config.h` 的失败过程，仅用于解释当时为什么退回 tinyobjloader，不能作为当前构建方式。2026-08-14 起，项目使用文末“模型导入边界与 Assimp 子模块准备”和“静态 FBX 与 Cerberus PBR 材质加载”所述的官方 CMake 独立静态库方案；当前生效的模型源格式为 OBJ 与静态 FBX。
+最早的 OBJ 加载器是课程作业式的手写解析，能读规整的三角模型，却很难应付四边形、负索引、Shape、MTL 和缺失属性。我也试过把 Assimp 源码直接塞进 Premake，甚至准备手写 `config.h`。报错越来越多后才确认，绕过第三方库自己的 CMake 配置并不省事。
 
-在我的CG课程中呢，已经学习了如何使用OpenGL渲染obj文件，当时是采用手写解析函数进行加载的，但实际引擎其实需要满足更多要求，比如：如果用这个函数去加载从 Blender、Maya 或网上下载的专业模型，会有大概率报错或显示乱码。原因如下：
+OBJ 最终交给 tinyobjloader。Assimp 后来重新接入，只负责静态 FBX，并通过官方 CMake 独立生成静态库。当前 `ModelImporter` 根据小写扩展名分发 `.obj` 和 `.fbx`；glTF、GLB 与动画模型尚未开放。
 
-- **多边形限制**：很多 .obj 文件包含**四边形面（Quads）**。你的代码遇到四边形会直接报错退出（redundency.length() >= 5 那段逻辑）。
-- **缺失材质支持**：.obj 文件通常配有一个 .mtl 文件来描述颜色、反光等。你的代码完全忽略了材质系统。
-- **格式容错率低**：如果文件里有注释（#）、空格不规范、或者使用了组（g）、平滑组（s）等高级指令，你的 file >> lineHeader 逻辑就会错位。
-- **只有 OBJ**：现实中的模型更多是 .fbx（带骨骼动画）、.gltf（现代网页标准）、.stl（工业模具）。手写这些二进制格式的解析器需要消耗数月时间。
+真正影响后续架构的是 CPU 中间层。两个 Importer 都只输出 `MeshSource`：
 
-因此，我决定集成第三方库 **Assimp (Open Asset Import Library)**。它可以处理 .obj, .fbx, .gltf 等几十种格式，并将其统一转换为引擎易于读取的数据结构。
-
-```
-git submodule add https://github.com/assimp/assimp.git Glimmer/vendor/assimp
-```
-
-**修改 Premake 配置**
-
-Assimp 源代码非常多，为了缩短编译时间，我们通常只开启必要的格式（如 OBJ, FBX, GLTF）。
-
-在 Glimmer/vendor/assimp/ 下创建 **premake5.lua**：
-*(这是一个精简版配置，只保留常用功能，避免编译几千个文件)*
-
-```
-project "Assimp"
-    kind "StaticLib"
-    language "C++"
-    cppdialect "C++17"
-    staticruntime "on"
-
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
-
-    files {
-        "include/**.h",
-        "include/**.hpp",
-        "code/**.cpp",
-        "code/**.h",
-        -- 包含内置依赖 zlib
-        "contrib/zlib/**.c",
-        "contrib/zlib/**.h"
-    }
-
-    includedirs {
-        "include",
-        "code",
-        "contrib/zlib"
-    }
-
-    defines {
-        "ASSIMP_BUILD_NO_OWN_ZLIB",
-        "ASSIMP_BUILD_NO_EXPORT",
-        -- 禁用不需要的格式以提速 (可选)
-        "ASSIMP_BUILD_NO_X_IMPORTER",
-        "ASSIMP_BUILD_NO_3DS_IMPORTER",
-        "ASSIMP_BUILD_NO_MD3_IMPORTER",
-        "ASSIMP_BUILD_NO_PLY_IMPORTER"
-    }
-
-    filter "system:windows"
-        systemversion "latest"
-        defines { "WIN32_LEAN_AND_MEAN" }
+```text
+MeshSource
+├── SourcePath
+├── Submeshes[]
+│   ├── Vertices: Position / Normal / Tangent / TexCoord
+│   ├── Indices
+│   └── MaterialIndex
+└── Materials[]
+    ├── PBR 因子
+    └── BaseColor / Normal / Metallic / Roughness / AO / Emissive 路径
 ```
 
-修改根目录的 premake5.lua
+`ObjModelImporter` 把 MTL 搜索目录设为 OBJ 所在文件夹，并要求 tinyobjloader 三角化。结果按材质拆成 Submesh，Position、Normal 和 TexCoord 的完整组合用于顶点去重。切线由三角形 UV 梯度计算；UV 退化时会从法线构造稳定正交方向，避免法线贴图路径出现 NaN。
 
-```
-include "Glimmer/vendor/assimp" -- 1. 包含项目
+OBJ 材质读取目前比较保守，只保存 MTL 名称和 Diffuse Texture 路径，其余 PBR 通道使用 `MeshMaterialSource` 默认值。FBX 路径会填写更多字段，但两种格式最终共享同一数据结构，Renderer 和 Scene 看不到 tinyobjloader 或 Assimp 类型。
 
-project "Glimmer"
-    -- ...
-    includedirs {
-        -- ...
-        "%{prj.name}/vendor/assimp/include" -- 2. 包含头文件
-    }
-    links { "Assimp" } -- 3. 链接静态库
-```
+`Model` 接收导入结果后，按材质索引复用纹理，再为有效 Submesh 创建 GPU `Mesh`。Mesh 持有 VAO、VBO、IBO、材质纹理和局部 AABB。Model 已经没有旧稿中的 `Draw()`；Scene 通过 ModelRendererComponent 的 AssetHandle 调用 `Renderer3D::SubmitModel()`，AssetManager 按 Handle 延迟创建并缓存 Model。
 
-运行 GenerateProject.bat
+![OBJ 模型加载结果](README.assets/image-20260428155345962.png)
 
-**建立 3D 渲染数据结构**
+无窗口回归会生成一个三角形 OBJ，检查导入器只公开 OBJ/FBX、输出三顶点 Submesh，并验证切线有限且归一化。它覆盖 CPU 导入契约，不创建 OpenGL Context；纹理上传和 Renderer3D 绘制仍需图形环境验证。
 
-3D 模型由多个 **Mesh（网格）** 组成，每个 Mesh 拥有自己的材质和顶点数据。
-
-**定义顶点结构 (Mesh.h)**
-
-在 Glimmer/src/Glimmer/Renderer/Mesh.h 中：
-
-```
-#pragma once
-#include <glm/glm.hpp>
-#include "Glimmer/Renderer/VertexArray.h"
-#include "Glimmer/Renderer/Shader.h"
-
-namespace gl {
-    struct Vertex {
-        glm::vec3 Position;
-        glm::vec3 Normal;   // 法线
-        glm::vec2 TexCoord; // UV
-    };
-
-    class Mesh {
-    public:
-        Mesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices)
-        {
-            m_VAO.reset(VertexArray::Create());
-            auto vbo = VertexBuffer::Create((float*)vertices.data(), vertices.size() * sizeof(Vertex));
-            vbo->SetLayout({
-                { ShaderDataType::Float3, "a_Position" },
-                { ShaderDataType::Float3, "a_Normal" },
-                { ShaderDataType::Float2, "a_TexCoord" }
-            });
-            m_VAO->AddVertexBuffer(vbo);
-            m_VAO->SetIndexBuffer(IndexBuffer::Create(indices.data(), indices.size()));
-            m_IndexCount = indices.size();
-        }
-
-        void Draw() { m_VAO->Bind(); /* 调用底层 DrawCall */ }
-    private:
-        Ref<VertexArray> m_VAO;
-        uint32_t m_IndexCount;
-    };
-}
-```
-
-**实现模型加载类 (Model.h/cpp)**
-
-这是 Assimp 发挥作用的地方。
-
-**Glimmer/src/Glimmer/Renderer/Model.h**:
-
-```
-#pragma once
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
-#include "Mesh.h"
-
-namespace gl {
-    class Model {
-    public:
-        Model(const std::string& path);
-        void Draw(const Ref<Shader>& shader, const glm::mat4& transform);
-    private:
-        void LoadModel(const std::string& path);
-        void ProcessNode(aiNode* node, const aiScene* scene);
-        Mesh ProcessMesh(aiMesh* mesh, const aiScene* scene);
-    private:
-        std::vector<Mesh> m_Meshes;
-        std::string m_Directory;
-    };
-}
-```
-
-**Glimmer/src/Glimmer/Renderer/Model.cpp**: (核心逻辑)
-
-```
-#include "glpch.h"
-#include "Model.h"
-#include "Renderer.h"
-
-namespace gl {
-    Model::Model(const std::string& path) { LoadModel(path); }
-
-    void Model::LoadModel(const std::string& path) {
-        Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_GenNormals);
-
-        if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-            GL_CORE_ERROR("Assimp Error: {0}", importer.GetErrorString());
-            return;
-        }
-        ProcessNode(scene->mRootNode, scene);
-    }
-
-    void Model::ProcessNode(aiNode* node, const aiScene* scene) {
-        for(unsigned int i = 0; i < node->mNumMeshes; i++) {
-            aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-            m_Meshes.push_back(ProcessMesh(mesh, scene));
-        }
-        for(unsigned int i = 0; i < node->mNumChildren; i++) {
-            ProcessNode(node->mChildren[i], scene);
-        }
-    }
-
-    Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene) {
-        std::vector<Vertex> vertices;
-        std::vector<uint32_t> indices;
-
-        for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
-            Vertex vertex;
-            vertex.Position = { mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z };
-            vertex.Normal = { mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z };
-            if(mesh->mTextureCoords[0])
-                vertex.TexCoord = { mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y };
-            else
-                vertex.TexCoord = { 0.0f, 0.0f };
-            vertices.push_back(vertex);
-        }
-
-        for(unsigned int i = 0; i < mesh->mNumFaces; i++) {
-            aiFace face = mesh->mFaces[i];
-            for(unsigned int j = 0; j < face.mNumIndices; j++)
-                indices.push_back(face.mIndices[j]);
-        }
-        return Mesh(vertices, indices);
-    }
-}
-```
-
-此时编译验证发现
-
-```
-E:\Zaproject\Engine\Glimmer\Glimmer\vendor\assimp\include\assimp\defs.h(55,10): fatal  error C1083: 无法打开包括文件: “assimp/config.h”: No such file or directory
-```
-
-这是因为在 Assimp 的源码中，config.h 是一个**动态生成文件**。当你使用 CMake 配置项目时，它会根据你的系统环境自动生成这个文件。因为你现在使用的是 **Premake** 跳过了 CMake 的配置步骤，所以你的硬盘里根本不存在这个 config.h。
-
-所以现在需要**手动提供一个静态的 config.h**。
-
-Glimmer/vendor/assimp/include/assimp/ 下，手动新建一个文本文件，命名为 **config.h**。
-
-```
-#ifndef ASSIMP_CONFIG_H_INC
-#define ASSIMP_CONFIG_H_INC
-
-#define ASSIMP_DOUBLE_PRECISION 0
-/* #undef ASSIMP_OPT_BUILD_PACKED */
-
-#define ASSIMP_BUILD_NO_OWN_ZLIB 1
-
-/* #undef ASSIMP_BUILD_X_IMPORTER */
-/* #undef ASSIMP_BUILD_OBJ_IMPORTER */
-// ... 这里可以根据需要开启或关闭特定的 Importer
-
-#endif // !! ASSIMP_CONFIG_H_INC
-```
-
-ok啊又是一堆报错，打算先不管了，用tinyobjloader
-
-去git库下载头文件，存放在Glimmer/vendor/tinyobjloader/tiny_obj_loader.h
-
-由于它是一个 Header-only 库，需要在该目录下建一个 .cpp 文件来生成实现。
-
-**文件：Glimmer/vendor/tinyobjloader/tiny_obj_loader.cpp**
-
-```
-#include "glpch.h"
-#define TINYOBJLOADER_IMPLEMENTATION // 必须定义这个宏
-#include "tiny_obj_loader.h"
-```
-
-**修改 Premake**：
-在 project "Glimmer" 的 includedirs 中加入：
-"%{prj.name}/vendor/tinyobjloader"。
-
-**重写加载逻辑**
-
-**Mesh.h —— 网格数据容器**
-
-**作用**：存储单个几何体的 GPU 资源（VAO/VBO/IBO）。
-
-```
-#pragma once
-#include <glm/glm.hpp>
-#include "Glimmer/Renderer/VertexArray.h"
-#include "Glimmer/Renderer/Buffer.h"
-
-namespace gl {
-
-	struct Vertex {
-		glm::vec3 Position;
-		glm::vec3 Normal;
-		glm::vec2 TexCoord;
-	};
-
-	class Mesh {
-	public:
-		Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
-		
-		void Bind() const;
-		uint32_t GetIndexCount() const { return m_IndexCount; }
-
-	private:
-		Ref<VertexArray> m_VertexArray;
-		uint32_t m_IndexCount;
-	};
-
-}
-```
-
-**Mesh.cpp —— 实现缓冲区绑定**
-
-**作用**：将内存中的顶点向量上传至显存。
-
-```
-#include "glpch.h"
-#include "Mesh.h"
-#include "Glimmer/Renderer/RenderCommand.h"
-
-namespace gl {
-
-	Mesh::Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
-		: m_IndexCount((uint32_t)indices.size())
-	{
-		m_VertexArray = VertexArray::Create();
-
-		// 创建顶点缓冲区 (VBO)
-		auto vbo = VertexBuffer::Create((float*)vertices.data(), (uint32_t)(vertices.size() * sizeof(Vertex)));
-		
-		// 定义符合 Vertex 结构体的布局
-		vbo->SetLayout({
-			{ ShaderDataType::Float3, "a_Position" },
-			{ ShaderDataType::Float3, "a_Normal" },
-			{ ShaderDataType::Float2, "a_TexCoord" }
-		});
-		m_VertexArray->AddVertexBuffer(vbo);
-
-		// 创建索引缓冲区 (IBO)
-		auto ibo = IndexBuffer::Create((uint32_t*)indices.data(), (uint32_t)indices.size());
-		m_VertexArray->SetIndexBuffer(ibo);
-	}
-
-	void Mesh::Bind() const
-	{
-		m_VertexArray->Bind();
-	}
-
-}
-```
-
-**Model.h —— 模型加载器**
-
-**作用**：管理一个 .obj 文件中包含的所有网格。
-
-```
-#pragma once
-#include "Mesh.h"
-#include "Glimmer/Renderer/Shader.h"
-#include <vector>
-#include <string>
-
-namespace gl {
-
-	class Model {
-	public:
-		Model(const std::string& path);
-		
-		// 渲染模型的所有子网格
-		void Draw(const Ref<Shader>& shader, const glm::mat4& transform);
-
-	private:
-		std::vector<Ref<Mesh>> m_Meshes;
-	};
-
-}
-```
-
-**Model.cpp —— TinyObjLoader 核心解析逻辑**
-
-**作用**：读取 OBJ 文件，处理顶点去重，并生成 Mesh 对象。
-
-```
-#include "glpch.h"
-#include "Model.h"
-#include "Glimmer/Renderer/Renderer.h"
-#include "tiny_obj_loader.h"
-#include <unordered_map>
-
-namespace gl {
-
-	Model::Model(const std::string& path)
-	{
-		tinyobj::ObjReaderConfig reader_config;
-		reader_config.mtl_search_path = "./assets/models"; // 材质搜索路径
-
-		tinyobj::ObjReader reader;
-		if (!reader.ParseFromFile(path, reader_config)) {
-			if (!reader.Error().empty()) {
-				GL_CORE_ERROR("TinyObjLoader Error: {0}", reader.Error());
-			}
-			return;
-		}
-
-		auto& attrib = reader.GetAttrib();
-		auto& shapes = reader.GetShapes();
-
-		// 遍历模型中的每个物体（Shape）
-		for (size_t s = 0; s < shapes.size(); s++) {
-			std::vector<Vertex> vertices;
-			std::vector<uint32_t> indices;
-			// 用于顶点去重，提升性能
-			std::unordered_map<size_t, uint32_t> uniqueVertices{};
-
-			for (const auto& index : shapes[s].mesh.indices) {
-				Vertex vertex{};
-
-				// 提取位置
-				vertex.Position = {
-					attrib.vertices[3 * index.vertex_index + 0],
-					attrib.vertices[3 * index.vertex_index + 1],
-					attrib.vertices[3 * index.vertex_index + 2]
-				};
-
-				// 提取法线
-				if (index.normal_index >= 0) {
-					vertex.Normal = {
-						attrib.normals[3 * index.normal_index + 0],
-						attrib.normals[3 * index.normal_index + 1],
-						attrib.normals[3 * index.normal_index + 2]
-					};
-				}
-
-				// 提取UV
-				if (index.texcoord_index >= 0) {
-					vertex.TexCoord = {
-						attrib.texcoords[2 * index.texcoord_index + 0],
-						attrib.texcoords[2 * index.texcoord_index + 1]
-					};
-				}
-
-				// 简单的去重逻辑：如果这个顶点组合没出现过，就加入 vertices
-				// 这里为了演示清晰使用线性填充，实际可用 Hash 优化
-				indices.push_back((uint32_t)vertices.size());
-				vertices.push_back(vertex);
-			}
-
-			m_Meshes.push_back(CreateRef<Mesh>(vertices, indices));
-		}
-		GL_CORE_INFO("Successfully loaded model: {0}", path);
-	}
-
-	void Model::Draw(const Ref<Shader>& shader, const glm::mat4& transform)
-	{
-		for (auto& mesh : m_Meshes)
-		{
-			// 利用你现有的 Renderer 系统提交绘制
-			// 注意：这里暂时使用基础的 Submit，不走 2D 批处理
-			shader->Bind();
-			shader->UploadUniformMat4("u_Transform", transform);
-			mesh->GetVertexArray()->Bind();
-			RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
-		}
-	}
-
-}
-```
-
-**3D渲染**
-
-由于之前一直专注于 **Renderer2D**，引擎目前就像是一个“平面的纸片世界”。要看到 3D 物体，需要打破 2D 的限制
-
-**第一步：准备一个 3D 着色器 (assets/shaders/Model3D.glsl)**
-
-之前的 Texture.glsl 是为 2D 批处理优化的，没有处理 3D 变换。我们需要一个标准的 3D Shader，它重新引入了 u_Transform（模型矩阵）。
-
-**第二步：记得开启深度测试 (Depth Test)**
-
-**第三步：使用透视摄像机 (Perspective Camera)**
-
-现在的 OrthographicCamera 是“平行投影”，没有近大远小的感觉。看到 3D 模型最好的方式是换成**透视投影**。
-
-你可以临时在 Sandbox2D 里修改摄像机的初始化逻辑：
-
-**第四步：在 Sandbox2D 中加载并绘制**
-
-这是最后一步，将模型放进场景。
-
-```
-// 1. 定义成员变量
-gl::Ref<gl::Model> m_MeshModel;
-gl::Ref<gl::Shader> m_3DShader;
-
-// 2. OnAttach 中加载
-void Sandbox2D::OnAttach() {
-    m_MeshModel = gl::CreateRef<gl::Model>("assets/models/cube.obj");
-    m_3DShader = gl::Shader::Create("assets/shaders/Model3D.glsl");
-}
-
-// 3. OnUpdate 中渲染
-void Sandbox2D::OnUpdate(gl::Timestep ts) {
-    // ... 清屏 ...
-    
-    // 我们手动控制 3D 物体旋转
-    static float rotation = 0.0f;
-    rotation += ts * 50.0f;
-
-    glm::mat4 transform = glm::translate(glm::mat4(1.0f), { 0.0f, 0.0f, 0.0f })
-                        * glm::rotate(glm::mat4(1.0f), glm::radians(rotation), {0, 1, 0})
-                        * glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
-
-    // ✨ 渲染 3D 模型
-    gl::Renderer::BeginScene(m_CameraController.GetCamera()); // 依然使用你的相机
-    m_MeshModel->Draw(m_3DShader, transform);
-    gl::Renderer::EndScene();
-    
-    // 渲染你原本的 2D 东西
-    gl::Renderer2D::BeginScene(m_CameraController.GetCamera());
-    // gl::Renderer2D::DrawQuad(...);
-    gl::Renderer2D::EndScene();
-}
-```
-
-但渲染出来发现没有效果，经排查，原因是之前抽象2D渲染层是统一上传了摄像机矩阵而本测试用到的是其它接口
-
-为了让 Model 类能拿到当前的摄像机矩阵，我们需要在 Renderer.h 增加一个静态 Getter。
-
-```
-// 增加这个静态函数
-static inline glm::mat4 GetViewProjection() { return s_SceneData->ViewProjectionMatrix; }
-```
-
-**修改 Model.cpp 补全上传逻辑**
-
-**Glimmer/src/Glimmer/Renderer/Model.cpp**:
-
-```
-void Model::Draw(const Ref<Shader>& shader, const glm::mat4& transform)
-{
-    for (auto& mesh : m_Meshes)
-    {
-        shader->Bind();
-        // ✨ 核心修复：手动从 Renderer 拿摄像机矩阵并上传
-        shader->UploadUniformMat4("u_ViewProjection", Renderer::GetViewProjection());
-        shader->UploadUniformMat4("u_Transform", transform);
-        
-        mesh->Bind();
-        RenderCommand::DrawIndexed(mesh->GetVertexArray(), mesh->GetIndexCount());
-    }
-}
-```
-
-旋转的神秘企鹅🐧
-
-<img src="README.assets/image-20260428153708790.png" alt="image-20260428153708790" style="zoom:50%;" />
-
-<img src="README.assets/image-20260428155345962.png" alt="image-20260428155345962" style="zoom:50%;" />
+Model 首次缓存未命中时仍会解析源文件并创建 GPU 资源，项目还没有版本化的内部 Mesh 烘焙格式。大型模型导入、源文件变化检测和发布打包仍需继续完善。现在至少已经分开格式解析、CPU 中间数据与渲染资源，增加下一种静态格式时不必改写 Model 和 Mesh。
 
 ## 3D全局光照
 
