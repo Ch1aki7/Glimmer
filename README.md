@@ -1524,4086 +1524,1194 @@ Model 首次缓存未命中时仍会解析源文件并创建 GPU 资源，项目
 
 ## 3D全局光照
 
-目前 3D 模型虽然能显示，但由于没有光影，它看起来像是一个“扁平的色块”。我们要引入工业界最经典的 **冯氏光照模型 (Phong Lighting Model)**。
+模型第一次能画出来时，颜色基本等于贴图本身，看不出体积。我先后试过 Phong、Toon 和 Blinn-Phong，用 Sandbox 手动上传灯光位置、颜色与相机位置。这些试验帮我把法线矩阵、漫反射和高光接通了，但每个 Layer 都维护一套 Uniform 很快就乱了。
 
-这一步的实现分为三个部分：**Shader 逻辑升级**、**C++ 数据上传**、以及**架构优化**。
+现在灯光由 Scene 统一收集。每帧会取第一个启用的 DirectionalLight、最多 16 个 PointLight，以及第一个拥有有效 Cubemap 的 SkyLight。方向光的方向来自实体 Transform 的局部 `-Z`，点光位置直接使用 Transform Translation。
 
-**第一步：编写 3D 光照着色器 (assets/shaders/Model3D.glsl)**
-
-光照计算主要发生在 **Fragment Shader** 中。我们需要利用顶点传来的 **法线 (Normal)** 来计算光线照射的角度。
-
-```
-#type vertex
-#version 330 core
-
-layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec3 a_Normal; // 之前在 Mesh 里存好的法线
-layout(location = 2) in vec2 a_TexCoord;
-
-uniform mat4 u_ViewProjection;
-uniform mat4 u_Transform;
-
-out vec2 v_TexCoord;
-out vec3 v_Normal;
-out vec3 v_WorldPos; // 传出世界坐标，用于计算光线方向
-
-void main()
-{
-	v_TexCoord = a_TexCoord;
-
-	// 核心：法线也需要旋转。使用“法线矩阵”防止非等比缩放导致法线畸变
-	v_Normal = mat3(transpose(inverse(u_Transform))) * a_Normal;
-
-	v_WorldPos = vec3(u_Transform * vec4(a_Position, 1.0));
-	gl_Position = u_ViewProjection * vec4(v_WorldPos, 1.0);
-}
-
-#type fragment
-#version 330 core
-
-layout(location = 0) out vec4 color;
-
-in vec2 v_TexCoord;
-in vec3 v_Normal;
-in vec3 v_WorldPos;
-
-uniform sampler2D u_Texture;
-uniform vec3 u_LightPos;    // 光源位置
-uniform vec3 u_LightColor;  // 灯光颜色
-uniform vec3 u_ViewPos;     // 摄像机位置（用于高光）
-
-void main()
-{
-	// 1. 环境光 (Ambient) - 保证没光的地方不是全黑
-	float ambientStrength = 0.2;
-	vec3 ambient = ambientStrength * u_LightColor;
-
-	// 2. 漫反射 (Diffuse) - 根据物体朝向光的角度决定亮度
-	vec3 norm = normalize(v_Normal);
-	vec3 lightDir = normalize(u_LightPos - v_WorldPos);
-	float diff = max(dot(norm, lightDir), 0.0);
-	vec3 diffuse = diff * u_LightColor;
-
-	// 3. 高光 (Specular) - 金属或光滑表面的反光
-	float specularStrength = 0.5;
-	vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
-	vec3 reflectDir = reflect(-lightDir, norm);
-	float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32); // 32 是发光反光度
-	vec3 specular = specularStrength * spec * u_LightColor;
-
-	// 结合贴图颜色
-	vec4 texColor = texture(u_Texture, v_TexCoord);
-	vec3 result = (ambient + diffuse + specular) * texColor.rgb;
-
-	color = vec4(result, texColor.a);
-}
-
+```text
+Scene Components
+    -> LightEnvironment
+    -> Renderer::UploadLightEnvironment()
+    -> binding 1 Light UBO
+    -> PBRModel / Terrain Shader
 ```
 
-**第二步：在 Sandbox2D 中配置光源**
+Light UBO 使用 `std140`，大小固定为 576 字节。方向、颜色、环境强度和点光数组一次上传，Renderer3D 不再逐模型重复设置这些值。SkyLight 的 Handle 与强度交给 `EnvironmentLighting`，由它绑定 Diffuse Irradiance、Specular Prefilter 和 BRDF LUT。
 
-你需要把灯的位置、颜色和相机位置传给 Shader。
+当前 PBRModel Shader 使用 Cook-Torrance BRDF。方向光和点光进入直接光照，SkyLight 提供环境漫反射与镜面反射；没有有效 IBL 时，环境项回退到方向光颜色和 AmbientIntensity。方向光还可以驱动 1 至 4 级 CSM，阴影采样与灯光 UBO 分开管理。
 
-**修改 Sandbox2D::OnUpdate：**
+![早期 3D 光照实验](README.assets/image-20260428163358738.png)
 
-```
-void Sandbox2D::OnUpdate(gl::Timestep ts)
-{
-    // ... 之前的清屏逻辑 ...
-
-    m_3DShader->Bind();
-
-    // 设置灯光参数
-    glm::vec3 lightPos(2.0f, 2.0f, 2.0f); // 灯在右上方
-    m_3DShader->UploadUniformFloat3("u_LightPos", lightPos);
-    m_3DShader->UploadUniformFloat3("u_LightColor", { 1.0f, 1.0f, 1.0f }); // 白光
-    
-    // 传入摄像机位置（用于高光计算）
-    m_3DShader->UploadUniformFloat3("u_ViewPos", m_CameraController.GetCamera().GetPosition());
-
-    // 渲染模型
-    glm::mat4 transform = glm::translate(glm::mat4(1.0f), {0, 0, 0})
-                        * glm::rotate(glm::mat4(1.0f), (float)gl::Application::Get().GetTime(), {0, 1, 0});
-                        
-    m_MeshModel->Draw(m_3DShader, transform);
-}
-```
-
-<img src="README.assets/image-20260428163358738.png" alt="image-20260428163358738" style="zoom:50%;" />
-
-ImGui集成了一个简单光源位置改变
-
-<img src="README.assets/image-20260428164532729.png" alt="image-20260428164532729" style="zoom:50%;" />
-
-卡通风格shader
-
-```
-void main()
-{
-    vec3 norm = normalize(v_Normal);
-    vec3 lightDir = normalize(u_LightPos - v_WorldPos);
-    vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
-
-    // 1. 核心：将漫反射强度“阶梯化”
-    float diff = dot(norm, lightDir);
-    float intensity = smoothstep(0.0, 0.05, diff) * 0.5 + 
-                     smoothstep(0.4, 0.45, diff) * 0.5; // 只有两层亮度
-    
-    vec3 diffuse = intensity * u_LightColor;
-
-    // 2. 边缘光 (Rim Light)：在物体轮廓处产生发光感
-    float rim = 1.0 - max(dot(viewDir, norm), 0.0);
-    rim = pow(rim, 4.0); // 调整边缘光的细度
-    vec3 rimColor = u_LightColor * rim * 0.5;
-
-    vec4 texColor = texture(u_Texture, v_TexCoord);
-    // 卡通色块 + 基础环境光 + 边缘光
-    vec3 result = (vec3(0.3) + diffuse + rimColor) * texColor.rgb;
-    
-    color = vec4(result, texColor.a);
-}
-```
-
-<img src="README.assets/image-20260428164842698.png" alt="image-20260428164842698" style="zoom:50%;" />
-
-Blinn-Phong
-
-```
-void main()
-{
-    vec3 norm = normalize(v_Normal);
-    vec3 lightDir = normalize(u_LightPos - v_WorldPos);
-    vec3 viewDir = normalize(u_ViewPos - v_WorldPos);
-
-    // 1. 漫反射
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * u_LightColor;
-
-    // 2. ✨ Blinn-Phong 核心：计算半角向量
-    vec3 halfwayDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(norm, halfwayDir), 0.0), 64.0); // 64 是反光锐度
-    vec3 specular = 0.5 * spec * u_LightColor;
-
-    vec4 texColor = texture(u_Texture, v_TexCoord);
-    color = vec4((vec3(0.1) + diffuse + specular) * texColor.rgb, texColor.a);
-}
-```
-
-<img src="README.assets/image-20260428164932054.png" alt="image-20260428164932054" style="zoom:50%;" />
+这里仍有明确上限。公共光照只采用第一个启用的方向光，点光最多 16 个且没有阴影，Spot Light 和 Area Light 也尚未实现。阴影系统会寻找第一个启用且允许 CastShadows 的方向光，所以场景放置多个方向光时，应避免让照明来源和投影来源分离。早期 Toon 与 Blinn-Phong Shader 仍可作为效果试验，但它们不代表当前完整编辑器的默认材质路径。
 
 ## 为3D对象绑定贴图
 
-核心是**让** **Mesh** **类持有纹理引用，并在** **Model** **绘制时进行绑定。**
+最初的实现让每个 Mesh 只保存一张漫反射贴图。OBJ 的 MTL 能显示了，但这种结构很快碰到天花板：法线、AO 和自发光没有位置，实体也无法用共享材质覆盖导入结果。后来纹理职责被拆成导入材质和 `.glmat` 两层。
 
-```
-// ✨ 构造函数增加纹理参数
-Mesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, Ref<Texture2D> texture);
-// ✨ 获取纹理的接口
-const Ref<Texture2D>& GetTexture() const { return m_Texture; }
-```
+Model 导入时会按 MaterialIndex 复用 `MeshMaterialTextures`。它可以保存 BaseColor、Normal、Metallic、Roughness、AO 和 Emissive 六个运行时 Texture2D 引用。BaseColor 与 Emissive 按 sRGB 读取，Normal、AO、Metallic 和 Roughness 保持 Linear，避免数据纹理被错误做 Gamma 转换。
 
-**修改 Model 的加载与绘制逻辑**
+渲染提交时，实体 MaterialInstance 的优先级更高。`.glmat` 目前可以显式指定 BaseColor、Normal、AO 和 Emissive Texture；缺少的通道回退到模型导入纹理。Metallic 与 Roughness 仍使用材质标量，并可乘上导入模型自带的独立纹理。全部纹理缺失时绑定白贴图，同时通过 `u_Has*Texture` 告诉 Shader 是否应该采样。
 
-这里有两种方式：
-
-1. **手动指定**：在 Sandbox 里加载模型后，手动塞给它一张图。
-2. **自动加载**：读取 .obj 时，自动去读它配套的 .mtl 文件里写的图片路径。
-
-**实现“自动加载”模式**
-
-**修改** **Glimmer/src/Glimmer/Renderer/Model.cpp**：
-
-在 `Model::Model` 里，首先根据模型路径提取出所在目录，并把它设置给 tinyobj，这样在解析 `.obj` 的同时就能正确找到 `.mtl` 和贴图文件；然后调用 tinyobj 读取模型数据，拿到顶点（attrib）、几何（shapes）和材质（materials）。接着遍历每个 shape，一边构建顶点/索引数据，一边根据该 shape 关联的材质 ID 查找对应的漫反射贴图（diffuse texture），如果存在就加载成 `Texture2D`，最后把“顶点数据 + 索引 + 贴图”封装成一个 Mesh 存进 `m_Meshes`。
-
-而在 `Model::Draw` 里，则是逐个 Mesh 渲染：先绑定 shader、上传矩阵（VP 和 transform），然后**在绘制前绑定这个 Mesh 自己的贴图**，最后绑定 VAO 并调用 `DrawIndexed` 送到 GPU。这样每个 Mesh 都能用自己的材质/贴图正确渲染出来。
-
-绑定纹理并测试
-
-```
-		m_TestTexture->Bind(0);
-		m_MeshModel->Draw(m_3DShader, transform);
+```text
+最终 BaseColor Texture = .glmat / Overrides -> 导入纹理 -> 白贴图占位
+最终 Normal、AO、Emissive = .glmat / Overrides -> 导入纹理 -> 白贴图占位
+最终 Metallic、Roughness = 材质标量 + 导入数据纹理
 ```
 
-<img src="README.assets/image-20260428171507539.png" alt="image-20260428171507539" style="zoom:50%;" />
+纹理单元已经固定分区：材质主通道占 0 至 3，CSM 使用 4 至 7，IBL 使用 8 至 10，导入 Metallic 与 Roughness 使用 11、12。这个约定看起来有些死板，但能避免不同 Shader 把同一个槽误当成另一种采样器。Renderer3D 还会缓存已绑定纹理，并把纹理 ID 纳入排序和 Instancing 兼容条件。
+
+![3D 模型贴图加载结果](README.assets/image-20260428171507539.png)
+
+导入纹理目前由 Model 直接持有，尚未注册为 AssetHandle，也不会自动生成 `.glmat`。这意味着它们能参与运行时渲染，却不能像正式纹理资产那样独立编辑、重载和序列化。等内部 Mesh 与材质烘焙落地时，这条边界还需要继续收拢。
 
 ## 帧缓冲 (Framebuffers)
 
-**为什么要这一步？**
+直接画到默认窗口后，我很快遇到两个实际问题：编辑器需要把场景嵌进 ImGui Viewport，后处理也需要先拿到完整场景颜色。Framebuffer 把场景输出变成可继续采样的离屏资源，渲染流程从这里开始有了 Pass 的概念。
 
-目前的游戏画面是直接绘制到显卡提供的“默认画布”上的，这会导致两个限制：
-
-- **无法做后期处理**：你没法给整个屏幕加模糊、调色或泛光（Bloom），因为画面一画完就显示了，你抓不住它。
-- **无法做“Unity 式”的编辑器**：在 Unity 里，你会发现游戏画面是在一个名为 **Viewport** 的窗口里的。要实现这个，我们需要把游戏渲染到一张**贴图**上，然后把这张图贴进 ImGui 的窗口里。
-
-**这一步的工作内容**
-
-我们要实现一套 Framebuffer 类，它允许我们：
-
-1. 创建一个离屏渲染目标（Off-screen Render Target）。
-2. 让渲染器（Renderer2D/3D）把东西画在这个目标上。
-3. 实时调整这个目标的大小（以适配窗口缩放）。
-
----
-
-**第一步：定义帧缓冲接口 (`Framebuffer.h`)**
-
-在 `Glimmer/src/Glimmer/Renderer` 下创建。
-
-**Glimmer/src/Glimmer/Renderer/Framebuffer.h**
-```cpp
-#pragma once
-#include <memory>
-
-namespace gl {
-
-	struct FramebufferSpecification
-	{
-		uint32_t Width, Height;
-		uint32_t Samples = 1; // 用于多重采样抗锯齿
-
-		bool SwapChainTarget = false; // 是否直接渲染到屏幕
-	};
-
-	class Framebuffer
-	{
-	public:
-		virtual ~Framebuffer() = default;
-
-		virtual void Bind() = 0;
-		virtual void Unbind() = 0;
-
-		virtual void Resize(uint32_t width, uint32_t height) = 0;
-
-		// 获取渲染出来的那个“图片”ID
-		virtual uint32_t GetColorAttachmentRendererID() const = 0;
-
-		virtual const FramebufferSpecification& GetSpecification() const = 0;
-
-		static Ref<Framebuffer> Create(const FramebufferSpecification& spec);
-	};
-
-}
-```
-
-Glimmer/src/Glimmer/Renderer/Framebuffer.cpp
-
-```
-#include "glpch.h"
-#include "Framebuffer.h"
-
-#include "Glimmer/Renderer/Renderer.h"
-#include "Platform/OpenGL/OpenGLFramebuffer.h"
-
-namespace gl {
-
-	Ref<Framebuffer> Framebuffer::Create(const FramebufferSpecification& spec)
-	{
-		switch (Renderer::GetAPI())
-		{
-			case RendererAPI::API::None:    GL_CORE_ASSERT(false, "RendererAPI::None is currently not supported!"); return nullptr;
-			case RendererAPI::API::OpenGL:  return CreateRef<OpenGLFramebuffer>(spec);
-		}
-
-		GL_CORE_ASSERT(false, "Unknown RendererAPI!");
-		return nullptr;
-	}
-
-}
-```
-
----
-
-**第二步：实现 OpenGL 帧缓冲 (`OpenGLFramebuffer.cpp`)**
-
-这一步最核心的工作是：**向显卡申请一块内存画布，并挂载一个“颜色附件”和“深度附件”。**
-
-**Glimmer/src/Platform/OpenGL/OpenGLFramebuffer.cpp (核心片段)**
-```cpp
-#include "glpch.h"
-#include "OpenGLFramebuffer.h"
-
-#include <glad/glad.h>
-
-namespace gl {
-
-	OpenGLFramebuffer::OpenGLFramebuffer(const FramebufferSpecification& spec)
-		: m_Specification(spec)
-	{
-		Invalidate();
-	}
-
-	OpenGLFramebuffer::~OpenGLFramebuffer()
-	{
-		glDeleteFramebuffers(1, &m_RendererID);
-		glDeleteTextures(1, &m_ColorAttachment);
-		glDeleteTextures(1, &m_DepthAttachment);
-	}
-
-	void OpenGLFramebuffer::Invalidate()
-	{
-		if (m_RendererID)
-		{
-			glDeleteFramebuffers(1, &m_RendererID);
-			glDeleteTextures(1, &m_ColorAttachment);
-			glDeleteTextures(1, &m_DepthAttachment);
-		}
-
-		// 使用 DSA (Direct State Access) 风格创建 Framebuffer
-		glCreateFramebuffers(1, &m_RendererID);
-		
-		// --- 颜色附件 (Color Attachment) ---
-		glCreateTextures(GL_TEXTURE_2D, 1, &m_ColorAttachment);
-		glBindTexture(GL_TEXTURE_2D, m_ColorAttachment);
-		
-		// 为颜色附件分配存储空间
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_Specification.Width, m_Specification.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-		
-		// 设置过滤参数，防止 ImGui 渲染时出现采样问题
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-		// 将纹理附加到帧缓冲
-		glNamedFramebufferTexture(m_RendererID, GL_COLOR_ATTACHMENT0, m_ColorAttachment, 0);
-
-		// --- 深度/模板附件 (Depth/Stencil Attachment) ---
-		glCreateTextures(GL_TEXTURE_2D, 1, &m_DepthAttachment);
-		glBindTexture(GL_TEXTURE_2D, m_DepthAttachment);
-		
-		// 使用 glTexStorage2D 分配不可变的深度存储
-		glTexStorage2D(GL_TEXTURE_2D, 1, GL_DEPTH24_STENCIL8, m_Specification.Width, m_Specification.Height);
-		
-		// 将深度纹理附加到帧缓冲
-		glNamedFramebufferTexture(m_RendererID, GL_DEPTH_STENCIL_ATTACHMENT, m_DepthAttachment, 0);
-
-		// 完整性检查
-		GL_CORE_ASSERT(glCheckNamedFramebufferStatus(m_RendererID, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "Framebuffer is incomplete!");
-	}
-
-	void OpenGLFramebuffer::Bind()
-	{
-		glBindFramebuffer(GL_FRAMEBUFFER, m_RendererID);
-		// 绑定后需要同步更新视口大小，确保渲染到正确的画布区域
-		glViewport(0, 0, m_Specification.Width, m_Specification.Height);
-	}
-
-	void OpenGLFramebuffer::Unbind()
-	{
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	}
-
-	void OpenGLFramebuffer::Resize(uint32_t width, uint32_t height)
-	{
-		// 简单的防零检查
-		if (width == 0 || height == 0)
-		{
-			GL_CORE_WARN("Attempted to resize framebuffer to {0}, {1}", width, height);
-			return;
-		}
-
-		m_Specification.Width = width;
-		m_Specification.Height = height;
-
-		Invalidate();
-	}
-
-}
-```
-
----
-
-**第三步：在 Sandbox2D 中实现“画中画”**
-
-当你有了 Framebuffer，你的渲染流程会发生翻天覆地的变化：
+当前接口由 `FramebufferSpecification` 描述尺寸、附件和采样数。可用格式包括 LDR `RGBA8`、HDR `RGBA16F`、用于拾取的 `RED_INTEGER`，以及 `Depth24Stencil8` 和阴影使用的 `Depth32F`。
 
 ```cpp
-void Sandbox2D::OnUpdate(gl::Timestep ts) {
-    // 1. ✨ 核心改变：绑定自己的画布，而不是屏幕
-    m_Framebuffer->Bind();
-
-    // 2. 执行你所有的 2D/3D 渲染指令
-    gl::RenderCommand::Clear();
-    gl::Renderer::BeginScene(...);
-    m_Model->Draw(...);
-    gl::Renderer::EndScene();
-
-    // 3. 解绑画布，回到默认屏幕
-    m_Framebuffer->Unbind();
-}
-
-void Sandbox2D::OnImGuiRender() {
-    // 4. ✨ 将画布上的图片画在 ImGui 窗口里！
-    ImGui::Begin("Viewport");
-    
-    uint32_t textureID = m_Framebuffer->GetColorAttachmentRendererID();
-    // 强制转换为 ImTextureID 并显示
-    ImGui::Image((void*)(uintptr_t)textureID, ImVec2{ 1280, 720 }, ImVec2{ 0, 1 }, ImVec2{ 1, 0 });
-    
-    ImGui::End();
-}
+FramebufferSpecification specification;
+specification.Width = viewportWidth;
+specification.Height = viewportHeight;
+specification.Attachments = {
+    { FramebufferTextureFormat::RGBA16F },
+    { FramebufferTextureFormat::RED_INTEGER },
+    { FramebufferTextureFormat::Depth24Stencil8 }
+};
+auto framebuffer = Framebuffer::Create(specification);
 ```
 
-<img src="README.assets/image-20260506180243041.png" alt="image-20260506180243041" style="zoom:50%;" />
+完整编辑器的 Scene FBO 使用上面这组三附件。每帧开始前，EntityID 附件清为 `-1`；模型、地形和 Sprite 写入自己的实体 ID，鼠标坐标转换到 Framebuffer 空间后再通过 `ReadPixel(1, x, y)` 完成拾取。HDR Color 与可采样 Depth 随后交给 PostProcessRenderer，经过 Bloom、雾和 Tone Mapping 后，Display FBO 的颜色纹理才显示到 Viewport。
+
+OpenGL 实现使用 DSA 创建附件。`Bind()` 同时切换 FBO 和 Viewport，`Resize()` 拒绝零尺寸及超过 8192 的尺寸，并在大小未变化时直接返回。普通颜色附件会原地重新分配，纹理 ID 保持稳定；深度附件会重新创建，因此缓存其 RendererID 的代码必须在 Resize 后重新获取。
+
+Depth32F 使用 ClampToBorder 和白色边界，专门供 ShadowRenderer 的深度图采样。只有深度附件的 FBO 会关闭颜色读写目标。`ClearAttachment()` 和 `ReadPixel()` 当前按整数附件实现，调用方应只把它们用于 `RED_INTEGER`。
+
+![Framebuffer 输出到编辑器 Viewport](README.assets/image-20260506180243041.png)
+
+Framebuffer 抽象目前只有 OpenGL 后端。`SwapChainTarget` 仍未实现；Samples 大于 1 的分支使用 Renderbuffer，也没有完整的多颜色附件和 Resolve 方案，不能当作已经可用的编辑器 MSAA。现阶段生产路径保持 Samples 为 1，抗锯齿需要在后续单独设计解析 Pass。
 
 ## 建立新项目
 
-打开根目录的 **premake5.lua**，参考 Sandbox 的配置，在文件末尾增加一个新项目块。
+Sandbox 能跑起来以后，我开始关心另一件事：引擎是否真的能被第二个程序使用。新建 Editor 项目的意义就在这里。它迫使 Application、入口点、Layer 和客户端资源从 Sandbox 的试验代码里分离出来，也暴露了不少依赖路径上的偷懒。
 
-```
-project "GlimmerEditor"
-    location "GlimmerEditor"
+现在每个客户端都维护自己的 `premake5.lua`，根工作区只负责统一配置并通过 `include` 把项目收进解决方案。以仓库中的 `GlimmerEditor-CyouBranch` 为例，客户端使用 C++17、静态运行库，链接 `Glimmer`，源码和 Windows 资源文件则由自己管理。
+
+```lua
+project "MyApp"
+    location "."
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++17"
     staticruntime "on"
 
-    targetdir ("bin/" .. outputdir .. "/%{prj.name}")
-    objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
+    targetdir ("../bin/" .. outputdir .. "/%{prj.name}")
+    objdir ("../bin-int/" .. outputdir .. "/%{prj.name}")
 
-    files {
-        "%{prj.name}/src/**.h",
-        "%{prj.name}/src/**.cpp",
-    }
-
+    files { "src/**.h", "src/**.cpp" }
     includedirs {
-        "Glimmer/src",
-        "Glimmer/vendor/spdlog/include",
-        "Glimmer/vendor/imgui",
-        "Glimmer/vendor/glm"
+        "../Glimmer/src",
+        "../" .. IncludeDir["spdlog"],
+        "../" .. IncludeDir["ImGui"],
+        "../" .. IncludeDir["glm"],
+        "../" .. IncludeDir["entt"]
     }
-
-    links {
-        "Glimmer"
-    }
-
-    filter "system:windows"
-    buildoptions { "/utf-8" }
-    systemversion "latest"
-    defines {
-        "GL_PLATFORM_WINDOWS"
-    }
+    links { "Glimmer" }
 ```
 
-创建EditorApp并设为启动项目，添加对应Layer和assets
+项目脚本完成后，还要在根 `premake5.lua` 中加入 `include "MyApp"`。根工作区当前的 `startproject` 仍是 Sandbox；如果希望生成解决方案后直接启动新程序，需要同步修改它，或者在 Visual Studio 中手动设置启动项目。
 
-```
+客户端入口很薄。它继承 `Application`，压入自己的 Layer，并实现引擎约定的 `CreateApplication()`。`EntryPoint.h` 会提供真正的 `main`，所以它只能出现在这个入口翻译单元中。
+
+```cpp
 #include <Glimmer.h>
 #include "Glimmer/Core/EntryPoint.h"
 #include "EditorLayer.h"
 
-class GlimmerEditor : public gl::Application {
+class MyApp final : public gl::Application
+{
 public:
-	GlimmerEditor() {
-		PushLayer(new EditorLayer());
-	}
+    MyApp() : Application("My App")
+    {
+        PushLayer(new EditorLayer());
+    }
 };
 
-gl::Application* gl::CreateApplication() {
-	return new GlimmerEditor();
+gl::Application* gl::CreateApplication()
+{
+    return new MyApp();
 }
-
 ```
 
-正常运行
+![独立 Editor 应用的早期窗口](README.assets/image-20260507090436321.png)
 
-<img src="README.assets/image-20260507090001321.png" alt="image-20260507090001321" style="zoom:50%;" />
-
-另外为了区分App，重写Application函数
-
-```
-Application::Application(const std::string& name)
-m_Window = Window::Create(WindowProps(name));
-```
-
-在App引用
-
-```
-#include <Glimmer.h>
-#include "Glimmer/Core/EntryPoint.h"
-#include "EditorLayer.h"
-
-class GlimmerEditor : public gl::Application {
-public:
-	GlimmerEditor():Application("Glimmer Editor") {
-		PushLayer(new EditorLayer());
-	}
-};
-
-gl::Application* gl::CreateApplication() {
-	return new GlimmerEditor();
-}
-
-```
-
-![image-20260507090436321](README.assets/image-20260507090436321.png)
+这一步最容易踩坑的是自行升级语言标准或随手改依赖版本。仓库目前固定 EnTT `v3.16.0`，根配置的包含目录是 `Glimmer/vendor/entt/src`，客户端继续使用 C++17。早期试过跟随 EnTT 开发分支并切到 C++20，结果撞上 MSVC concepts 和 tinyobjloader 内部 fast_float 的兼容问题，最后还是回到稳定标签与 C++17。新项目最好先复制现有客户端的配置，再删掉用不到的依赖。
 
 ## ECS
 
-在之前的开发中，你的企鹅、方块、椅子都是在 Sandbox2D 里手动创建的变量。如果游戏有 1000 个物体，你的代码会彻底失控。ECS 的出现就是为了解决**海量物体的管理、逻辑解耦以及 CPU 性能优化**。
+早期 Sandbox 把企鹅、方块和相机都保存成 Layer 成员。对象一多，更新、绘制和面板代码便开始互相缠绕。接入 EnTT 后，Scene 成了数据的所有者，渲染器只消费带有目标组件的实体。这个改动后来也给场景保存、Edit/Play 隔离和 Undo/Redo 留出了位置。
 
-我们将引入 C++ 业界最顶级的 ECS 库 —— **EnTT**。
+`Scene` 持有 `entt::registry`，`Entity` 只是 EnTT Handle 与所属 Scene 的轻量包装。创建实体时会自动添加 `IDComponent`、`TagComponent` 和 `TransformComponent`。其中 EnTT Handle 只适合当前 Registry 内的临时访问；UUID 才用于序列化、复制和跨重载查找，Scene 为此维护了一张 `UUID -> entt::entity` 索引。
 
-**EnTT** 是一个纯头文件（Header-only）的高性能库，集成非常简单。
+```cpp
+gl::Entity entity = scene->CreateEntity("Crate");
+entity.GetComponent<gl::TransformComponent>().Translation = { 0.0f, 1.0f, 0.0f };
+entity.AddComponent<gl::ModelRendererComponent>(modelHandle);
+entity.AddComponent<gl::MaterialComponent>(materialHandle);
 
-1. **添加子模块**：
-   在根目录运行：
-
-   ```
-   git submodule add https://github.com/skypjack/entt.git Glimmer/vendor/entt
-   ```
-
-2. **修改 Premake**：
-   在 project "Glimmer" 和 project "Sandbox"（以及 Editor）的 includedirs 中加入：
-   "%{prj.name}/vendor/entt/include"。
-
-我们需要建立三个核心类：Scene（场景）、Entity（实体）和 Components（组件）。
-
-**ECS 代码说明**：
-
-- **Components.h** —— 定义了所有组件结构体。`TagComponent`（实体名称标签）、`TransformComponent`（4×4 变换矩阵）、`SpriteRendererComponent`（纯色渲染，含四维颜色向量）。组件是纯数据，不含逻辑。
-- **Entity.h / Entity.cpp** —— 实体是对 `entt::entity` 的轻量包装。提供 `AddComponent<T>()`、`GetComponent<T>()`、`HasComponent<T>()`、`RemoveComponent<T>()` 四个模板方法，内部调用 `Scene::m_Registry` 完成组件增删查改。通过 `operator bool` 和 `operator entt::entity` 可隐式转换为底层 handle。
-- **Scene.h / Scene.cpp** —— 场景持有 `entt::registry`（ECS 世界的核心容器）。`CreateEntity()` 创建实体时自动挂载 `TransformComponent` 和 `TagComponent`；`OnUpdateRuntime()` 通过 `registry.group<TransformComponent>(entt::get<SpriteRendererComponent>)` 遍历所有含渲染组件的实体并提交绘制；`OnComponentAdded<T>()` 采用模板特化模式，为不同组件提供添加时的回调钩子。
-
-**1. 定义组件 (Components.h)**
-
-组件应该是纯粹的数据结构。
-
-**Glimmer/src/Glimmer/Scene/Components.h**:
-
-```
-#pragma once
-#include <glm/glm.hpp>
-#include <string>
-
-namespace gl {
-
-	struct TagComponent
-	{
-		std::string Tag;
-
-		TagComponent() = default;
-		TagComponent(const TagComponent&) = default;
-		TagComponent(const std::string& tag) : Tag(tag) {}
-	};
-
-	struct TransformComponent
-	{
-		glm::mat4 Transform{ 1.0f };
-
-		TransformComponent() = default;
-		TransformComponent(const TransformComponent&) = default;
-		TransformComponent(const glm::mat4& transform) : Transform(transform) {}
-
-		operator glm::mat4& () { return Transform; }
-		operator const glm::mat4& () const { return Transform; }
-	};
-
-	struct SpriteRendererComponent
-	{
-		glm::vec4 Color{ 1.0f, 1.0f, 1.0f, 1.0f };
-
-		SpriteRendererComponent() = default;
-		SpriteRendererComponent(const SpriteRendererComponent&) = default;
-		SpriteRendererComponent(const glm::vec4& color) : Color(color) {}
-	};
-
-}
+gl::UUID stableID = entity.GetUUID();
+gl::Entity sameEntity = scene->FindEntityByUUID(stableID);
 ```
 
-**2. 创建场景类 (Scene.h/cpp)**
+当前组件已经超过最初的 Tag、矩阵 Transform 和纯色 Sprite。Transform 分开保存 Translation、欧拉 Rotation 与 Scale；渲染侧有 Sprite、Model、Material 和 Terrain；环境侧有方向光、点光与 SkyLight；Camera 和 NativeScript 则负责运行期行为。大多数组件仍是可复制的数据结构，不过 Terrain 持有非持久化 Runtime，NativeScript 也含有运行时实例与工厂函数，复制时必须按各自规则处理。
 
-场景是 EnTT 注册表（Registry）的容器。
-
-**Glimmer/src/Glimmer/Scene/Scene.h**:
-
-```
-#pragma once
-
-#include "entt/entt.hpp"
-#include "Glimmer/Core/Timestep.h"
-
-namespace gl {
-
-	class Entity;
-
-	class Scene
-	{
-	public:
-		Scene();
-		~Scene();
-
-		Entity CreateEntity(const std::string& name = std::string());
-		void DestroyEntity(Entity entity);
-
-		void OnUpdateRuntime(Timestep ts);
-		void OnViewportResize(uint32_t width, uint32_t height);
-
-	private:
-		template<typename T>
-		void OnComponentAdded(Entity entity, T& component);
-
-	private:
-		entt::registry m_Registry;
-		uint32_t m_ViewportWidth = 0, m_ViewportHeight = 0;
-
-		friend class Entity;
-		friend class SceneHierarchyPanel; // 预留给未来的编辑器面板
-	};
-
-}
+```text
+Scene
+  -> EnTT Registry
+      -> ID + Tag + Transform
+      -> Renderer / Light / Camera / Script Components
+  -> UUID Index
+  -> Editor Update 或 Runtime Update
 ```
 
-cpp
+编辑模式调用 `OnUpdateEditor()`，相机由 EditorLayer 传入；运行模式调用 `OnUpdateRuntime()`，Scene 自己寻找 Primary Camera。两条路径都会上传灯光，并按组件 View 提交 Model、Terrain 和 Sprite。这样，面板只修改组件，Scene 决定本帧有哪些对象参与渲染，Renderer 不需要知道实体是从层级面板、脚本还是反序列化创建的。
 
-```
-#include "glpch.h"
-#include "Scene.h"
+`Scene::Copy()` 会保留 UUID，并复制当前支持的组件，用于进入 Play 时建立独立 Runtime Scene。复制 Terrain 时只保留 Specification，GPU Runtime 会重新生成；NativeScript 只复制构造与销毁函数，脚本实例不会跨 Scene 共用。`DuplicateEntity()` 则创建新 UUID，并复制可编辑组件。两者语义不同，后续实现复制命令时不能混用。
 
-#include "Components.h"
-#include "Glimmer/Renderer/Renderer2D.h"
-#include "Entity.h"
+![ECS 接入后的早期组件调试](README.assets/image-20260507160731040.png)
 
-#include <glm/glm.hpp>
-
-namespace gl {
-
-	Scene::Scene()
-	{
-	}
-
-	Scene::~Scene()
-	{
-	}
-
-	Entity Scene::CreateEntity(const std::string& name)
-	{
-		Entity entity = { m_Registry.create(), this };
-		entity.AddComponent<TransformComponent>();
-		auto& tag = entity.AddComponent<TagComponent>();
-		tag.Tag = name.empty() ? "Entity" : name;
-		return entity;
-	}
-
-	void Scene::DestroyEntity(Entity entity)
-	{
-		m_Registry.destroy(entity);
-	}
-
-	void Scene::OnUpdateRuntime(Timestep ts)
-	{
-		// 渲染 2D Sprites
-		// 这里通过 EnTT 的 group 功能，筛选出同时拥有 Transform 和 SpriteRenderer 的实体
-		auto group = m_Registry.group<TransformComponent>(entt::get<SpriteRendererComponent>);
-		for (auto entity : group)
-		{
-			auto [transform, sprite] = group.get<TransformComponent, SpriteRendererComponent>(entity);
-
-			// 调用此前封装好的 Renderer2D 进行批量渲染
-			// 注意：这里假设 transform 存储的是 glm::mat4。
-			// 如果 Renderer2D 接口需要 position/size，此处需从矩阵解算或修改接口
-			Renderer2D::DrawQuad(transform.Transform, sprite.Color);
-		}
-	}
-
-	void Scene::OnViewportResize(uint32_t width, uint32_t height)
-	{
-		m_ViewportWidth = width;
-		m_ViewportHeight = height;
-		// 可以在此处更新带有 CameraComponent 的实体的纵横比
-	}
-
-	// 各个组件添加时的回调模板特化
-	template<typename T>
-	void Scene::OnComponentAdded(Entity entity, T& component)
-	{
-	}
-
-	template<>
-	void Scene::OnComponentAdded<TransformComponent>(Entity entity, TransformComponent& component)
-	{
-	}
-
-	template<>
-	void Scene::OnComponentAdded<SpriteRendererComponent>(Entity entity, SpriteRendererComponent& component)
-	{
-	}
-
-	template<>
-	void Scene::OnComponentAdded<TagComponent>(Entity entity, TagComponent& component)
-	{
-	}
-
-}
-```
-
-**3. 创建实体包装类 (Entity.h/cpp)**
-
-在 EnTT 中，实体只是一个 uint32 的 ID。为了方便使用，我们把它包装成一个类，让你能写出 entity.AddComponent<T>() 这种顺手的代码。
-
-**Glimmer/src/Glimmer/Scene/Entity.h**:
-
-```
-#pragma once
-
-#include "Scene.h"
-#include "entt.hpp"
-
-namespace gl {
-
-	class Entity
-	{
-	public:
-		Entity() = default;
-		Entity(entt::entity handle, Scene* scene);
-		Entity(const Entity& other) = default;
-
-		template<typename T, typename... Args>
-		T& AddComponent(Args&&... args)
-		{
-			GL_CORE_ASSERT(!HasComponent<T>(), "Entity already has component!");
-			T& component = m_Scene->m_Registry.emplace<T>(m_EntityHandle, std::forward<Args>(args)...);
-			m_Scene->OnComponentAdded<T>(*this, component);
-			return component;
-		}
-
-		template<typename T>
-		T& GetComponent()
-		{
-			GL_CORE_ASSERT(HasComponent<T>(), "Entity does not have component!");
-			return m_Scene->m_Registry.get<T>(m_EntityHandle);
-		}
-
-		template<typename T>
-		bool HasComponent()
-		{
-			return m_Scene->m_Registry.all_of<T>(m_EntityHandle);
-		}
-
-		template<typename T>
-		void RemoveComponent()
-		{
-			GL_CORE_ASSERT(HasComponent<T>(), "Entity does not have component!");
-			m_Scene->m_Registry.remove<T>(m_EntityHandle);
-		}
-
-		operator bool() const { return m_EntityHandle != entt::null; }
-		operator entt::entity() const { return m_EntityHandle; }
-		operator uint32_t() const { return (uint32_t)m_EntityHandle; }
-
-		bool operator==(const Entity& other) const
-		{
-			return m_EntityHandle == other.m_EntityHandle && m_Scene == other.m_Scene;
-		}
-
-		bool operator!=(const Entity& other) const
-		{
-			return !(*this == other);
-		}
-
-	private:
-		entt::entity m_EntityHandle{ entt::null };
-		Scene* m_Scene = nullptr;
-	};
-
-}
-```
-
-cpp
-
-```
-#include "glpch.h"
-#include "Entity.h"
-
-namespace gl {
-
-	Entity::Entity(entt::entity handle, Scene* scene)
-		: m_EntityHandle(handle), m_Scene(scene)
-	{
-	}
-
-}
-```
-
-过程中出现了很多命名空间问题，例如：成功#include "entt.hpp"后一直显示entt::registry m_Registry;，entt::entity handle，entt命名空间没有xxx。 "%{prj.name}/vendor/entt/src/entt"
-
-![image-20260507143501483](README.assets/image-20260507143501483.png)
-
-  根因：EnTT v3.16+ 改用了 #include <concepts>、<compare> 和 requires requires { ... } 语法，这些全是 C++20 特性。C++17
-  模式下 MSVC 解析不到这些语法，entt 命名空间内的所有声明（registry、entity、view 等）会全部静默失败——#include
-  本身不报错（路径正确），但编译到 entt::registry m_Registry; 时发现命名空间里什么也没有。
-
-premake改动后正常
-
-<img src="README.assets/image-20260507144414741.png" alt="image-20260507144414741" style="zoom:50%;" />
-
-![image-20260507144126770](README.assets/image-20260507144126770.png)
-
-新增Renderer2D Draw接口
-
-```
-static void DrawQuad(const glm::mat4& transform, const glm::vec4& color);
-static void DrawQuad(const glm::mat4& transform, const Ref<Texture2D>& texture, float tilingFactor = 1.0f, const glm::vec4& tintColor = glm::vec4(1.0f));
-```
-
-现在的主要绘图在transform为参数的接口内，详见Renderer2D.cpp
-
-EditorLayer加入组件
-
-```
-	m_ActiveScene = gl::CreateRef<gl::Scene>();
-
-	auto square = m_ActiveScene->CreateEntity("Green Square");
-	square.AddComponent<gl::SpriteRendererComponent>(glm::vec4{ 0.0f, 1.0f, 0.0f, 1.0f });
-	//。。。
-		if (m_SquareEntity)
-	{
-		ImGui::Separator();
-		auto& tag = m_SquareEntity.GetComponent<gl::TagComponent>().Tag;
-		ImGui::Text("%s", tag.c_str());
-
-		auto& squareColor = m_SquareEntity.GetComponent<gl::SpriteRendererComponent>().Color;
-		ImGui::ColorEdit4("Square Color", glm::value_ptr(squareColor));
-		ImGui::Separator();
-	}
-```
-
-EnTT库依然出现很多隐式报错
-
-  根因：EnTT 子模块追踪的是 master 分支（v4.0.0-dev），meta 反射系统在 MSVC 上存在 concept 兼容性 bug，导致 meta_traits
-  的 operator&/operator| 无法解析。
-
-  已执行修复：将 Glimmer/vendor/entt 切到稳定标签 v3.16.0：
-  git checkout v3.16.0  (HEAD detached at b4e58bdd3)
-
-但这样一来又导致，C++20 后，tiny_obj_loader.h 内的 fast_float 库通过
-  __cpp_lib_constexpr_algorithms >= 201806L 检测到 C++20 constexpr 算法支持，把函数标记为 constexpr。但 MSVC 14.37 的
-  std::distance 并非 constexpr，导致 error C3615
-
-所以再次将premake改为C++17，重新构建后成功运行
-
-现在可在ImGui中实时操控场景面板
-
-<img src="README.assets/image-20260507160731040.png" alt="image-20260507160731040" style="zoom:50%;" />
+EnTT 目前固定在提交 `b4e58bdd3`，对应 `v3.16.0`。这不是随意留下的旧版本。开发分支曾要求 C++20，并在当时的 MSVC 环境里触发 meta/concepts 解析问题；改语言标准又会碰到 fast_float 的 constexpr 兼容错误。稳定标签配合 C++17 是当前已经验证过的组合，升级时需要把整个依赖链一起回归。
 
 ## 相机组件
 
-在 ECS 架构中，相机不应该只是一个全局变量，而应该是一个可以挂载到任何实体上的组件。
+相机进入 ECS 后，投影参数和空间位置终于分开了。`Camera` 基类只保存 Projection；`SceneCamera` 负责 Perspective 与 Orthographic 两套参数；实体上的 `TransformComponent` 提供世界变换。运行时取相机 Transform 的逆矩阵作为 View，再与 Projection 相乘。
 
-![image-20260507175205979](README.assets/image-20260507175205979.png)
-
-【文件】Glimmer/src/Glimmer/Renderer/Camera.h
-
-```
-#pragma once
-#include <glm/glm.hpp>
-
-namespace gl {
-
-	class Camera
-	{
-	public:
-		Camera() = default;
-		Camera(const glm::mat4& projection)
-			: m_Projection(projection) {}
-
-		virtual ~Camera() = default;
-
-		const glm::mat4& GetProjection() const { return m_Projection; }
-	protected:
-		glm::mat4 m_Projection = glm::mat4(1.0f);
-	};
-
-}
+```text
+CameraComponent.Camera.GetProjection()
+    x inverse(TransformComponent.GetTransform())
+    = ViewProjection
 ```
 
-【文件】Glimmer/src/Glimmer/Scene/SceneCamera.h
+`CameraComponent` 还保存 `Primary` 和 `FixedAspectRatio`。Scene 会采用第一个 Primary Camera，因此一个场景最好只保留一个主相机。视口尺寸变化时，`OnViewportResize()` 会更新所有未锁定宽高比的 SceneCamera；如果组件在 Viewport 已建立后才添加，`OnComponentAdded<CameraComponent>()` 会立即补一次尺寸同步。
 
-```
-#pragma once
-#include "Glimmer/Renderer/Camera.h"
-
-namespace gl {
-
-	class SceneCamera : public Camera
-	{
-	public:
-		enum class ProjectionType { Perspective = 0, Orthographic = 1 };
-	public:
-		SceneCamera();
-		virtual ~SceneCamera() = default;
-
-		void SetOrthographic(float size, float nearClip, float farClip);
-		void SetPerspective(float verticalFOV, float nearClip, float farClip);
-
-		void SetViewportSize(uint32_t width, uint32_t height);
-
-		float GetOrthographicSize() const { return m_OrthographicSize; }
-		void SetOrthographicSize(float size) { m_OrthographicSize = size; RecalculateProjection(); }
-
-		ProjectionType GetProjectionType() const { return m_ProjectionType; }
-		void SetProjectionType(ProjectionType type) { m_ProjectionType = type; RecalculateProjection(); }
-	private:
-		void RecalculateProjection();
-	private:
-		ProjectionType m_ProjectionType = ProjectionType::Orthographic;
-
-		float m_OrthographicSize = 10.0f;
-		float m_OrthographicNear = -1.0f, m_OrthographicFar = 1.0f;
-
-		float m_PerspectiveFOV = glm::radians(45.0f);
-		float m_PerspectiveNear = 0.01f, m_PerspectiveFar = 1000.0f;
-
-		float m_AspectRatio = 0.0f;
-	};
-
-}
+```cpp
+auto cameraEntity = scene->CreateEntity("Main Camera");
+auto& camera = cameraEntity.AddComponent<gl::CameraComponent>();
+camera.Primary = true;
+camera.FixedAspectRatio = false;
+camera.Camera.SetPerspective(glm::radians(45.0f), 0.01f, 1000.0f);
 ```
 
-【文件】Glimmer/src/Glimmer/Scene/SceneCamera.cpp
+SceneCamera 的 Setter 会立即重算投影矩阵。Perspective 保存垂直 FOV、Near 和 Far，Orthographic 保存 Size、Near 和 Far。这里的透视 FOV API 接收弧度；Inspector 展示角度时需要做一次转换，不能把界面上的 45 直接传进底层。
 
-```
-#include "glpch.h"
-#include "SceneCamera.h"
-#include <glm/gtc/matrix_transform.hpp>
+早期实现曾让 `OrthographicCameraController` 和 ECS Camera 各画一部分对象，共用同一个 Framebuffer。画面能出来，但一个 Viewport 同时存在两套观察坐标，调试起来相当别扭。
 
-namespace gl {
+![两套相机并存时的早期验证画面](README.assets/image-20260507193832578.png)
 
-	SceneCamera::SceneCamera()
-	{
-		RecalculateProjection();
-	}
-
-	void SceneCamera::SetOrthographic(float size, float nearClip, float farClip)
-	{
-		m_ProjectionType = ProjectionType::Orthographic;
-		m_OrthographicSize = size;
-		m_OrthographicNear = nearClip;
-		m_OrthographicFar = farClip;
-		RecalculateProjection();
-	}
-
-	void SceneCamera::SetPerspective(float verticalFOV, float nearClip, float farClip)
-	{
-		m_ProjectionType = ProjectionType::Perspective;
-		m_PerspectiveFOV = verticalFOV;
-		m_PerspectiveNear = nearClip;
-		m_PerspectiveFar = farClip;
-		RecalculateProjection();
-	}
-
-	void SceneCamera::SetViewportSize(uint32_t width, uint32_t height)
-	{
-		m_AspectRatio = (float)width / (float)height;
-		RecalculateProjection();
-	}
-
-	void SceneCamera::RecalculateProjection()
-	{
-		if (m_ProjectionType == ProjectionType::Perspective)
-		{
-			m_Projection = glm::perspective(m_PerspectiveFOV, m_AspectRatio, m_PerspectiveNear, m_PerspectiveFar);
-		}
-		else
-		{
-			float orthoLeft = -m_OrthographicSize * m_AspectRatio * 0.5f;
-			float orthoRight = m_OrthographicSize * m_AspectRatio * 0.5f;
-			float orthoBottom = -m_OrthographicSize * 0.5f;
-			float orthoTop = m_OrthographicSize * 0.5f;
-
-			m_Projection = glm::ortho(orthoLeft, orthoRight,
-				orthoBottom, orthoTop, m_OrthographicNear, m_OrthographicFar);
-		}
-	}
-
-}
-```
-
-修改Components.h，添加
-
-```
-	struct CameraComponent
-	{
-		gl::SceneCamera Camera;
-		bool Primary = true; // 是否为当前主相机
-		bool FixedAspectRatio = false; // 是否固定纵横比
-
-		CameraComponent() = default;
-		CameraComponent(const CameraComponent&) = default;
-	};
-```
-
-同时为Renderer2D::BeginScene添加重载
-
-```
-	void Renderer2D::BeginScene(const Camera& camera, const glm::mat4& transform)
-	{
-		GL_PROFILE_FUNCTION();
-
-		s_Data.SceneTime = gl::Application::Get().GetTime();
-		glm::mat4 viewProj = camera.GetProjection() * glm::inverse(transform);
-
-		s_Data.TextureShader->Bind();
-		s_Data.TextureShader->UploadUniformFloat("u_Time", s_Data.SceneTime);
-		s_Data.TextureShader->UploadUniformMat4("u_ViewProjection", viewProj);
-
-		s_Data.QuadIndexCount = 0;
-		s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
-
-		s_Data.TextureSlotIndex = 1;
-	}
-```
-
-实体加载具体流程：
-
-  m_ActiveScene ────────────► gl::Scene 实例（持有 entt::registry）
-    │
-    ├─ m_SquareEntity ──────► "Green Square" 实体
-    │     ├─ TransformComponent ──► Translation=(0,0,0), Scale=(1,1,1)
-    │     ├─ SpriteRendererComponent ──► Color=绿色 rgba(0,1,0,1)
-    │     └─ TagComponent ──► Tag="Green Square"
-    │
-    ├─ m_CameraEntity ──────► "Camera Entity" 实体
-    │     ├─ TransformComponent ──► 默认原点
-    │     ├─ CameraComponent ──► Primary=true, Camera=SceneCamera(ortho size=10)
-    │     └─ TagComponent
-    │
-    └─ m_SecondCamera ──────► "Clip-Space Entity" 实体
-          ├─ TransformComponent
-          └─ CameraComponent ──► Primary=false
-
-  关键点：绿色方块是 ECS 实体，存在 m_ActiveScene 的 entt::registry 里。它不是直接绘制的——必须通过
-  Scene::OnUpdateRuntime() 遍历 ECS 才能被提交到 GPU。
-
-![image-20260507192017901](README.assets/image-20260507192017901.png)
-
-为什么有两个绿色方块，一个由wasd控制，一个由ECS控制？
-
-![image-20260507192536791](README.assets/image-20260507192536791.png)
-
-  历史原因：m_CameraController 是早期硬编码渲染阶段的产物，直接驱动 3D 模型和调试贴图。后来引入 ECS 架构时，新增了
-  m_CameraEntity 作为场景相机，但没有替换掉旧的。
-
-  根本差异：
-  - 旧相机是 C++ 对象，直接被 BeginScene(OrthographicCamera&) 消费
-  - ECS 相机是 Entity + Component，被 Scene::OnUpdateRuntime 遍历取出投影矩阵和 view 矩阵后传给 BeginScene(mat4, mat4)
-
-### 相机组件架构总览
-
-**类层次**
-
-```
-Camera (抽象基类, Renderer/Camera.h)
-  └─ GetProjection() → 返回投影矩阵 (glm::mat4)
-       │
-       └─ SceneCamera (Scene/SceneCamera.h)
-            ├─ ProjectionType: Perspective / Orthographic
-            ├─ SetOrthographic(size, near, far)
-            ├─ SetPerspective(fov, near, far)
-            ├─ SetViewportSize(width, height) → 更新宽高比
-            └─ RecalculateProjection() → 重新计算 m_Projection
-```
-
-**ECS 组件挂载**
-
-```
-CameraComponent (Components.h)
-  ├─ SceneCamera Camera        ← 投影计算（正交/透视）
-  ├─ bool Primary              ← 是否为主相机（Scene 选第一个 Primary=true 的）
-  └─ bool FixedAspectRatio     ← 视口大小变化时是否保持固定纵横比
-```
-
-任何 Entity 挂上 `TransformComponent` + `CameraComponent` 即成为场景相机。
-
-**Renderer2D 桥接**
-
-`BeginScene(const Camera&, const glm::mat4& transform)` 重载是 ECS 相机与渲染器的唯一连接点：
-
-```
-viewProj = camera.GetProjection() * glm::inverse(transform)
-上传 u_ViewProjection uniform
-```
-
-参数语义：`camera` 提供投影，`transform` 是相机实体的世界矩阵，其逆矩阵即为 view 矩阵。
-
-**Scene::OnUpdateRuntime 渲染流程**
-
-```
-1. 遍历 Registry 中所有含 TransformComponent + CameraComponent 的实体
-2. 挑选第一个 Primary == true 的相机
-3. 取出 SceneCamera::GetProjection() + TransformComponent::GetTransform()
-4. 调用 Renderer2D::BeginScene(projection, inverse(cameraTransform))
-5. 遍历所有含 TransformComponent + SpriteRendererComponent 的实体
-6. 对每个 Sprite 调用 Renderer2D::DrawQuad(transform, color)
-7. 调用 Renderer2D::EndScene() → Flush() 提交 GPU 绘制
-```
-
-**Scene::OnViewportResize 响应**
-
-视口大小变化时，遍历所有 `CameraComponent`，对 `FixedAspectRatio == false` 的相机调用 `SetViewportSize(width, height)`，自动重算投影矩阵。
-
-**Scene::OnComponentAdded<CameraComponent> 初始化**
-
-新挂载的相机如果当前已记录视口尺寸，立刻同步一次 `SetViewportSize`，避免首帧投影矩阵宽高为零。
-
-**EditorLayer 中的双相机架构**
-
-| 相机 | 类型 | 控制方式 | 渲染目标 |
-|---|---|---|---|
-| `m_CameraController` | `OrthographicCameraController` | 键盘 WASD + 滚轮 | 3D 模型（企鹅/椅子/女孩）+ 编辑器调试贴图 |
-| `m_CameraEntity` (ECS) | `CameraComponent` | ImGui 面板 | 场景中所有 SpriteRendererComponent 实体 |
-
-两套相机各自独立工作，渲染到同一个 Framebuffer。WASD 相机通过 `Renderer::BeginScene` 和 `Renderer2D::BeginScene(OrthographicCamera&)` 驱动；ECS 相机通过 `Scene::OnUpdateRuntime` 内部调用 `BeginScene(Camera&, mat4)` 驱动。
-
-**ImGui 相机面板控件含义**
-
-| 控件 | 操作对象 | 直观效果 |
-|---|---|---|
-| `DragFloat3("Camera Transform")` | `m_CameraEntity.TransformComponent.Translation` | 拖拽 XYZ 改变相机世界位置，view 矩阵随之变化，视口中所有 ECS Sprite 反向移动 |
-| `Checkbox("Camera A")` | 切换 `m_CameraEntity` 与 `m_SecondCamera` 的 `Primary` | 切换主相机——当前仅影响绿色方块的视角来源 |
-| `DragFloat("Second Camera Ortho Size")` | `m_SecondCamera.CameraComponent.Camera` 的正交尺寸 | 数值越大视野越宽（等效缩小），仅在 SecondCamera 为 Primary 时有可见效果 |
-
-渲染层级总览（EditorLayer 每帧绘制顺序）
-
-```
-① Framebuffer Clear (深灰底色)
-② StarNest 全屏 Shader 背景
-③ 3D 模型层 ──────────── 相机 = m_CameraController (WASD)
-    企鹅 + 椅子 + 女孩
-④ ECS Sprite 层 ──────── 相机 = m_CameraEntity (ImGui)
-    绿色方块 (m_SquareEntity)
-    ← 此处由 m_ActiveScene->OnUpdateRuntime(ts) 驱动
-⑤ 编辑器 2D 调试层 ───── 相机 = m_CameraController (WASD)
-    Balatro / STS / Henry 贴图
-⑥ 后处理 (可选)
-```
-
-<img src="README.assets/image-20260507193832578.png" alt="image-20260507193832578" style="zoom: 50%;" />
+现在编辑器和游戏相机按模式分工。Edit 模式使用 `EditorCamera`，支持轨道观察、聚焦和视口输入；进入 Play 后先通过 `Scene::Copy()` 创建 Runtime Scene，再由其中的 Primary Camera 驱动阴影、3D 模型、Terrain 和 Sprite。CameraComponent 会随场景 YAML 保存，NativeScript 运行时实例则留在运行阶段。这条分界让编辑器观察位置不会误写进游戏相机，也让停止播放后能够干净地回到编辑场景。
 
 ## 原生脚本系统
 
-其核心原理是：定义一个 ScriptableEntity 基类，用户通过继承它来编写逻辑。引擎通过 NativeScriptComponent 组件持有脚本实例，并在场景更新时调用其生命周期函数。
+ECS 接通后，我需要一种最小成本的办法验证实体能否自己更新。原生脚本系统就是这层薄桥：脚本写成 C++ 类，通过 `NativeScriptComponent` 挂到实体上，Scene 在运行模式里负责创建、更新和销毁实例。它够用来测试生命周期和组件访问，但离可编辑、可热重载的正式脚本方案还有一段距离。
 
-**ScriptableEntity.h**（新增）  
-定义 C++ 原生脚本的抽象基类。将 OnCreate、OnUpdate、OnDestroy 设为 protected 虚函数供派生类重写；提供模板方法 GetComponent\<T\>() 便捷访问同实体上的其他组件。内部持有一个 Entity 引用并通过 friend Scene 允许场景在实例化时注入。
+`ScriptableEntity` 保存所属 Entity，并提供 `GetComponent<T>()`。派生类只需要覆盖 `OnCreate()`、`OnUpdate()` 或 `OnDestroy()`。脚本实例并不会在添加组件时立刻创建；第一次进入 `Scene::OnUpdateRuntime()` 时，Scene 才调用工厂函数，注入 Entity，执行一次 `OnCreate()`，随后每帧执行 `OnUpdate()`。
 
-**Components.h**（修改）  
-新增 NativeScriptComponent 组件，作为连接 ECS 与脚本逻辑的桥梁。采用函数指针工厂模式实现类型擦除：InstantiateScript 负责延迟构造脚本实例，DestroyScript 管理回收；Bind\<T\>() 模板方法通过无捕获 lambda 生成工厂函数指针，使用 static_cast 实现派生类到基类的安全转换。
+```cpp
+class CameraController final : public gl::ScriptableEntity
+{
+protected:
+    void OnUpdate(gl::Timestep ts) override
+    {
+        auto& transform = GetComponent<gl::TransformComponent>();
+        if (gl::Input::IsKeyPressed(GL_KEY_W))
+            transform.Translation.z -= 2.0f * static_cast<float>(ts);
+    }
+};
 
-**Scene.cpp**（修改）  
-在 OnUpdateRuntime 中集成脚本系统的完整生命周期。执行顺序为：先遍历所有 NativeScriptComponent——若脚本尚未实例化则通过工厂函数延迟创建、利用 Entity 构造回注实体引用、调用 OnCreate 初始化，随后每帧执行 OnUpdate；完成脚本更新后再执行主相机查找与精灵渲染管线。新增 OnComponentAdded\<NativeScriptComponent\> 显式特化。
+cameraEntity
+    .AddComponent<gl::NativeScriptComponent>()
+    .Bind<CameraController>();
+```
 
-**CameraController.h**（新增）  
-基于脚本系统实现的 WASD 键盘控制示例。继承 ScriptableEntity 后重写 OnUpdate，直接调用 gl::Input::IsKeyPressed 读取键盘状态并修改自身的 TransformComponent 位移量，验证了脚本层与输入子系统、ECS 组件的互操作能力。
+`Bind<T>()` 用两个无捕获 Lambda 填入构造与销毁函数指针，组件本身只保存基类指针，不需要知道具体脚本类型。退出 Play 时，`OnRuntimeStop()` 会依次调用 `OnDestroy()` 并释放实例；直接销毁实体也走同样的清理路径。`Scene::Copy()` 只复制这两个函数指针，不复制正在运行的脚本对象，因此 Runtime Scene 拥有自己的实例。
 
-**EditorLayer.cpp**（修改）  
-引入 CameraController 脚本头文件，在 OnAttach 中通过 m_CameraEntity.AddComponent\<gl::NativeScriptComponent\>().Bind\<CameraController\>() 将键盘控制脚本挂载到 ECS 主相机实体上，使视口内的绿色方块可随键盘 WASD 拖拽相机视图。
+![原生脚本控制相机的早期验证](README.assets/image-20260508173136130.png)
 
-**Glimmer.h**（修改）  
-ECS 部分新增 ScriptableEntity.h 包含，使下游客户端（Sandbox、EditorLayer）通过统一聚合头即可使用脚本基类。
+当前边界需要说清楚。NativeScriptComponent 不写入场景 YAML，因为函数指针无法跨进程持久化；完整编辑器也没有按类名选择和重新绑定脚本的资产系统。旧 `GlimmerEditor` 里保留了 CameraController 示例。当前完整编辑器保留 NativeScript 的 Scene 复制和销毁逻辑，但默认场景没有绑定具体脚本。脚本异常隔离、动态模块重载和反射都还没有实现。
 
-两个方块通过不同方式控制，中心对称移动
-
-<img src="README.assets/image-20260508173136130.png" alt="image-20260508173136130" style="zoom:50%;" />
+组件移除也有一个容易忽略的限制：运行中的脚本清理由 `OnRuntimeStop()` 和 `DestroyEntity()` 承担，通用 `RemoveComponent<NativeScriptComponent>()` 没有专门的销毁钩子。运行时不要直接移除一个已经实例化的脚本组件，否则 `OnDestroy()` 不会被调用，实例也无法正常回收。
 
 ## 代码审查+RenderDoc
 
-为便于后续调试，做出如下改动：
+第一次认真用 RenderDoc 抓帧，是为了追一个很荒唐的现象：代码里明明没有提交方块，画面上却留着一个巨大的白色 Quad。单看 CPU 调用很难解释，抓帧后却能直接看到一次包含 120000 个索引的 Draw。这个数字正好等于当时 Renderer2D 预生成的完整索引缓冲，问题一下缩小到空批次提交。
 
-<img src="README.assets/image-20260510194552904.png" alt="image-20260510194552904" style="zoom:50%;" />
+旧实现把 `indexCount = 0` 传给底层 `DrawIndexed()`，而这个接口把 0 解释为使用完整索引缓冲。上一帧 VBO 中残留的数据因此又被画了一遍。现在 `Renderer2D::Flush()` 会在索引数为零时直接返回，不绑定纹理，也不增加 DrawCall 统计。保留这段记录很有用，它提醒我：封装接口里的特殊值语义，迟早会在另一层变成真实 Bug。
 
+![RenderDoc 中定位到异常索引绘制](README.assets/image-20260510184039610.png)
 
+RenderDoc 没有嵌入 Glimmer，它仍是外部抓帧工具。分析完整编辑器时，应选择当前配置下的 `GlimmerEditor-CyouBranch.exe`，并把 Working Directory 设为 `D:\Glimmer\GlimmerEditor-CyouBranch`。编辑器以相对路径调用 `AssetManager::Initialize("assets")`，工作目录不对时，Shader 和资产会先于渲染问题报错。
 
-**RenderDoc**
+我现在通常按下面的顺序看一帧：
 
-RenderDoc 是调试 3D 渲染的利器——它能拦截所有 OpenGL 指令，让你逐帧、逐像素地拆解渲染过程。在 Glimmer Engine 里加载模型、调 Batch Renderer、排查 Shader 传参问题，基本上都靠它。
-
-**连接与捕获**
-
-打开 RenderDoc，在 Executable Path 填入 Sandbox.exe 的路径。Working Directory 必须设为包含 assets 的目录（一般是工程根目录），不然 Shader 加载会直接失败。点 Launch 运行游戏，到了想分析的那一帧按 F12（或 PrintScreen）捕获。双击捕获到的缩略图，RenderDoc 会还原那一帧的全部显卡状态。
-
-**四个核心面板**
-
-Event Browser 按顺序列出了这一帧里所有的 glClear、glDrawElements 调用。用它来验证 Batch Renderer 是否真的把几千个方块合并成了一个 DrawCall——如果这里 Draw 指令铺满屏幕，说明批处理在某个环节断开了。
-
-Pipeline State 显示当前 DrawCall 发生时显卡的全部配置。Input Assembler 里看 BufferLayout 是否正确、Offset 有没有错位。Rasterizer 里看 Cull Mode——模型转个身就消失，大概率是背面剔除的锅。Blend State 里确认 Alpha 混合是否开启。
-
-Mesh View 是排查"模型不显示"最常用的面板。VS Input 显示 CPU 传给显卡的原始顶点，如果这里是 0，说明 Model.cpp 读文件那一步就挂了。VS Output 显示经过 u_ViewProjection * u_Transform 变换后的坐标。Input 有数据但 Output 全变成 0 或无穷大——矩阵乘法算错了。Output 正常但预览窗没东西——物体在相机裁剪面外面。
-
-Texture Viewer 的 Inputs 标签可以看到当前 DrawCall 绑定的所有纹理。确认 0 号位是不是那张 1x1 白贴图，确认你的贴图是否真的传进了对应的采样器插槽。
-
-**排查"模型黑色或不显示"的思路**
-
-按渲染管线顺序倒着查。先看 Mesh View 的 VS Input，顶点数据是否正确解包上传——如果全是 0，回去查 tinyobjloader 的解析。再看 VS Output，坐标正常说明几何阶段没问题，顶点被拉伸到极远说明 u_ViewProjection 矩阵上传有问题。然后进 Pipeline State：确认 u_Texture 采样器指向了正确的纹理单元，确认 Depth Test 没有因为之前画 2D 背景时忘记清理缓存而导致 3D 模型被错误剔除。
-
-RenderDoc 不光是修 Bug 用的，验证优化假设也很好使。比如调 Batch Renderer 的时候，对比开启和关闭批处理前后的 Draw Call 数量和显存带宽占用，比对着代码瞎猜直观得多。
-
-![image-20260510184039610](README.assets/image-20260510184039610.png)
-
-![image-20260510184048818](README.assets/image-20260510184048818.png)
-
-发现了大正方形是120000，一眼我之前写的Renderer2D批处理
-
-```
-		static const uint32_t MaxQuads = 20000;
-		static const uint32_t MaxVertices = MaxQuads * 4;
-		static const uint32_t MaxIndices = MaxQuads * 6;
-		static const uint32_t MaxTextureSlots = 32;
+```text
+Event Browser
+  -> 找到目标 Pass 与 Draw Call
+Pipeline State
+  -> 核对 Program、VAO、Depth、Blend、Cull 与 Framebuffer
+Mesh Viewer
+  -> 对比 VS Input 和 VS Output
+Texture Viewer
+  -> 检查采样器槽位、纹理类型和实际内容
 ```
 
-于是检查Layer源代码发现：由于遮挡关系，部分注释掉了之前的一些资产绘制
+这个顺序后来又抓到过两类问题。一次是 Sprite 在 Skybox 前绘制，透明像素先与 Clear Color 混合；当前完整编辑器已经把 Sprite Pass 延后到 Skybox 之后。另一次是 Tone Mapping Program 的 `sampler2D` 与 `samplerCube` 默认落在同一槽位，严格驱动直接报 `GL_INVALID_OPERATION`；现在 PostProcessRenderer 每帧都会声明完整的 0 至 3 号采样器绑定。
 
-<img src="README.assets/image-20260510192003036.png" alt="image-20260510192003036" style="zoom:67%;" />
+![RenderDoc 中检查纹理与管线状态](README.assets/image-20260510184048818.png)
 
-但是一旦使用BeginScene，场景就会进行一次批量提交，结果导致了这次DC
+代码审查时还顺手补了 `ShaderLibrary::Remove()`。Library 内部保存的是 `Ref<Shader>`，`erase` 只释放 Library 自己持有的那份引用；如果 Renderer 或 Layer 仍持有同一个 Ref，Shader 对象和 OpenGL Program 会继续存在，直到最后一份引用销毁。当前 Library 还提供 `ReloadChanged()` 与 `ReloadAll()`，热重载成功后才替换旧 Program，编译失败会保留上一份可用对象。
 
-此时任意解除一个Draw的注释或完全注释该块，幽灵方块都会瞬间消失
-
-至此，双绿色方块之谜已告破
-
-**为着色器库添加卸载功能**
-
-```
-	void ShaderLibrary::Remove(const std::string& name)
-	{
-		GL_CORE_ASSERT(Exists(name), "Shader not found for removal!");
-		m_Shaders.erase(name);
-        // 从 Map 中移除这个 key。
-        // 这会使该 Shader 对象的引用计数（Ref Count）减 1。
-        // ✨ 这里的魔法在于：
-        // 如果没有任何 Layer 或物体还在持有这个 Shader 的 Ref 指针，
-        // C++ 会自动调用 Shader 的析构函数 (~OpenGLShader)，
-        // 进而触发 glDeleteProgram(m_RendererID)，
-        // 从而真正释放了 GPU 显存！
-	}
-}
-```
-
-**如果我 Unload 了某个 Shader，但某个图层还在使用它，会发生什么？程序会崩吗？**
-“这就是使用 **std::shared_ptr (Ref)** 的优势所在。
-
-1. **安全性**：调用 ShaderLibrary::Unload 只是切断了库对该资源的引用。如果某个 Layer 内部还存着这个 Shader 的 Ref，那么对象**不会被销毁**，程序依然能正常运行，不会崩溃。
-2. **延迟释放**：只有当最后一个持有该资源的人也释放了指针（比如图层被 Detach），资源才会真正从显存中抹除。这实现了一种**‘逻辑上的卸载，物理上的安全释放’**。
-   这种设计避免了传统引擎中因手动 delete 导致的‘悬空指针（Dangling Pointer）’和‘野指针访问’问题。”
-
-理解 erase 为什么减小引用计数，得先看清 shared_ptr（引擎里叫 Ref）的工作方式。
-
-**引用计数的增加**
-
-把一个 Shader 存入 unordered_map 时：
-
-```cpp
-Ref<Shader> myShader = Shader::Create(...);
-// 此时引用计数 = 1，由 myShader 持有
-
-m_Shaders["Texture"] = myShader;
-// 发生拷贝赋值，Map 内部也持有一份指向该 Shader 的 Ref
-// 引用计数变为 2
-```
-
-**引用计数的减少**
-
-执行 m_Shaders.erase("Texture") 时，unordered_map 做了两件事：从哈希表中移除键值对，然后销毁 Value 对象。Value 是 shared_ptr，销毁它时会调 shared_ptr 的析构函数——析构函数的工作就是去控制块里把引用计数减 1。
-
-**两种可能的后续**
-
-如果没有任何其他地方持有这个 Shader 的引用，erase 之后计数从 1 变 0，触发 Shader 对象的 delete，显存释放，资源彻底消失。
-
-如果 ExampleLayer 还在用这个 Shader（手里还攥着一份 Ref），erase 之后计数从 2 变 1。Map 里找不到了，但 Shader 对象还在内存里——直到 ExampleLayer 也销毁、计数变为 0，才真正释放。
-
-这正是用智能指针而不是原始指针的意义：库不知道外部是否还在使用这个资源，如果直接 delete 原始指针，外部拿着野指针下次渲染必崩。erase 只是库放弃了所有权，物理释放什么时候发生取决于所有持有者什么时候释放，逻辑删除和物理释放是分开的。这样做资产管理比手动管理稳得多，不用担心过河拆桥导致的崩溃。
+目前抓帧里看到的仍是原始 OpenGL 调用，Glimmer 没有接入 RenderDoc API，也没有为 Pass 添加 GPU Debug Group 或对象标签。复杂帧需要靠 Framebuffer、Shader 和调用顺序人工辨认；等 Pass 数继续增长，这会是值得补上的调试基础设施。
 
 ## 透视相机
 
+正交相机很适合早期 2D 测试，但模型开始有前后距离后，所有物体看起来都像贴在同一张纸上。透视投影加入以后，近处变大、远处缩小，3D 场景终于有了正常的空间感。需要同步管理的参数包括垂直 FOV、Aspect Ratio、Near 和 Far。只替换投影函数，深度精度和视口比例很快就会出问题。
+
+```cpp
+projection = glm::perspective(
+    glm::radians(verticalFOVDegrees),
+    viewportWidth / viewportHeight,
+    nearClip,
+    farClip);
+```
+
+当前有两类透视相机。`SceneCamera` 属于 CameraComponent，可在 Perspective 与 Orthographic 之间切换，并随场景保存；它的 `SetPerspective()` 接收弧度。`EditorCamera` 是编辑器自己的观察相机，构造参数中的 FOV 使用角度，内部计算投影时再调用 `glm::radians()`。两套 API 的单位不同，调用时混淆会得到一个几乎无法使用的视锥。
+
+EditorCamera 围绕 Focal Point 和 Distance 计算位置，再用 `glm::lookAt()` 生成 View。右键拖动旋转，右键配合 WASD/QE 移动，中键平移，滚轮改变观察距离；Pitch 被限制在 `-89` 到 `89` 度，Distance 限制在 `0.5` 到 `500`。只有 Viewport Hover 时 EditorLayer 才启用输入，避免操作面板时相机跟着跑。
+
+Near/Far 也会影响后续系统。Scene 把它们传给 CSM 计算级联范围，Depth 又参与世界位置重建与距离雾。Near 设得过小、Far 设得过大，会把有限的深度精度浪费在很长的区间里。当前仍使用普通深度投影，没有 Reverse-Z；编辑大型地形时应先按实际可见范围调整裁剪面，而不是一味增大 Far。
 
 ## 场景层级面板 (Scene Hierarchy Panel)
 
-### 设计目标
+场景里只有几个测试实体时，靠代码记住它们还勉强说得过去。模型、灯光和地形陆续加入后，我需要一个能直接看见 Scene 内容的入口。SceneHierarchyPanel 最初就是这样做出来的：遍历 Registry，把每个带 Tag 的实体画成一行，并把选中结果交给编辑器其它面板。
 
-在编辑器中实现一个低耦合的层级面板，能列出场景中所有实体、展示其组件类型、支持选中和删除操作。核心设计原则：**面板只依赖引擎公共接口，通过回调与编辑器通信，可独立实例化测试**。
+现在它的职责很窄。面板负责创建、枚举、选中、复制和删除实体；属性编辑已经交给 InspectorPanel。两者共享 `SelectionContext`，因此从 Hierarchy 选择实体会清掉资产选择，从 Content Browser 选择资产也会清掉实体选择。
 
-### 架构设计
-
-```
-SceneHierarchyPanel (独立类, SceneHierarchyPanel.h/.cpp)
-  │
-  │ 依赖: Scene, Entity (引擎公共接口)
-  │ 不依赖: EditorLayer, Application, 任何具体编辑器逻辑
-  │
-  ├─ SetContext(Ref<Scene>)     ← 绑定要展示的场景
-  ├─ OnImGuiRender()             ← 每帧在 ImGui 中绘制
-  ├─ GetSelectedEntity()         ← 获取当前选中的实体
-  │
-  └─ 回调 (std::function):
-      ├─ OnEntitySelected(Entity)  ← 选中变化时通知外部
-      └─ OnEntityDeleted(Entity)   ← 删除操作完成时通知外部
+```text
+Scene
+  -> SceneHierarchyPanel -> SelectEntity(Entity)
+                              |
+ContentBrowserPanel -> SelectAsset(AssetHandle)
+                              |
+                       SelectionContext
+                              |
+                       InspectorPanel
 ```
 
-与编辑器层的通信完全通过回调完成，不使用继承、不持有编辑器引用。这意味着你可以在任何地方（Sandbox、单元测试、独立窗口）实例化该面板，只需给它一个 Scene。
+列表项会在名称后附加组件缩写，例如 `[Cam]`、`[Model]`、`[Terrain]`、`[Sun]` 和 `[Scr]`。它们只是快速提示，不参与组件查询或渲染。当前列表仍通过 Scene 的 friend 权限直接遍历 `m_Registry`，所以早期文档所说的 "只依赖公共接口" 并不完全准确；如果以后要让其它工具复用实体枚举，Scene 还需要补一个正式的遍历接口。
 
-### 实现要点
-
-**实体列表遍历**
-
-利用 Scene 对 `SceneHierarchyPanel` 的 friend 声明，直接访问 `entt::registry` 遍历所有带 `TagComponent` 的实体：
-
-```cpp
-m_Context->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
-    Entity entity{ handle, m_Context.get() };
-    if (entity.HasComponent<TagComponent>()) {
-        DrawEntityNode(entity, idCounter);
-    }
-});
-```
-
-**组件徽章系统**
-
-每个实体节点后附加其拥有的组件缩写，一目了然：
-
-```
-Entity Node Label + [Cam] [Spr] [Scr]
-                     │     │     │
-                     │     │     └─ NativeScriptComponent
-                     │     └─ SpriteRendererComponent
-                     └─ CameraComponent
-```
-
-```cpp
-std::string badges;
-if (entity.HasComponent<CameraComponent>())          badges += " [Cam]";
-if (entity.HasComponent<SpriteRendererComponent>())  badges += " [Spr]";
-if (entity.HasComponent<NativeScriptComponent>())    badges += " [Scr]";
-```
-
-**ImGui 节点渲染**
-
-使用 `ImGui::TreeNodeEx` 配合 `ImGuiTreeNodeFlags_Leaf` 和 `SpanAvailWidth` 实现实体列表项。选中状态通过 `ImGuiTreeNodeFlags_Selected` 高亮，利用 `ImGui::IsItemClicked()` 检测左键点击：
-
-```cpp
-ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf
-    | ImGuiTreeNodeFlags_SpanAvailWidth
-    | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-
-if (m_SelectionContext == entity)
-    flags |= ImGuiTreeNodeFlags_Selected;
-
-ImGui::TreeNodeEx((void*)(uint64_t)(uint32_t)entity, flags, "%s", label.c_str());
-
-if (ImGui::IsItemClicked()) {
-    m_SelectionContext = entity;
-    if (OnEntitySelected) OnEntitySelected(entity);
-}
-```
-
-**右键删除 (带确认弹窗)**
-
-右键弹出上下文菜单 → 点击 Delete → 弹出 Modal 确认框 → 确认后删除实体：
-
-```cpp
-if (ImGui::BeginPopupContextItem()) {
-    if (ImGui::MenuItem("Delete")) {
-        m_RightClickedEntity = entity;
-        m_ShowDeletePopup = true;    // 下一帧弹出 Modal
-    }
-    ImGui::EndPopup();
-}
-```
-
-删除前通过 `OnEntityDeleted` 回调通知外部，如果被删除的实体恰好是当前选中项则清空选中状态，防止悬空引用。
-
-**与旧版 EnTT 的兼容**
-
-项目使用的 EnTT 版本较老，没有 `registry.alive()` 公开方法。原本计划在工具栏显示实体计数（如 `"(5 entities)"`），因 API 不存在而移除。这是引擎开发中常见的依赖版本适配问题——公共 API 在不同版本间可能完全不同。
-
-### 集成测试 (GlimmerEditor-CyouBranch)
-
-在 `EditorLayer::OnAttach` 中创建 5 个测试实体覆盖所有验证场景：
-
-| 实体 | 组件 | 验证目的 |
-|------|------|---------|
-| Main Camera | Tag + Transform + Camera | [Cam] 徽章 + Primary 相机 + Properties 面板 Camera 参数 |
-| Red Square | Tag + Transform + SpriteRenderer(红) | [Spr] 徽章 + 颜色属性编辑 |
-| Green Square | Tag + Transform + SpriteRenderer(绿) | ECS 场景渲染可见性 |
-| Blue Square | Tag + Transform + SpriteRenderer(蓝) | 多实体选择切换 |
-| Logic Controller | Tag + Transform (仅此两项) | 无特殊徽章，验证纯逻辑实体也能正确显示 |
-
-实例化并注册回调：
+右键菜单提供 Duplicate 和 Delete。删除会先弹确认框，操作完成后清理选中项。创建、复制和删除在 Edit 模式下都会记录到 `EditorCommandHistory`，`EntitySnapshot` 依靠 UUID 恢复实体及可复制组件。这样 Undo 删除时恢复的是原实体身份，而不是随手创建一个外观相同的新对象。
 
 ```cpp
 m_HierarchyPanel.SetContext(m_ActiveScene);
-m_HierarchyPanel.OnEntitySelected = [&](Entity e) {
-    GL_CORE_TRACE("Hierarchy selected: {0}", e.GetComponent<TagComponent>().Tag);
-};
-m_HierarchyPanel.OnEntityDeleted = [&](Entity e) {
-    GL_CORE_TRACE("Hierarchy deleted: {0}", e.GetComponent<TagComponent>().Tag);
-};
+m_HierarchyPanel.SetSelectionContext(&m_SelectionContext);
+m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
 ```
 
-`OnImGuiRender` 中只需一行调用即可渲染面板：
+进入 Play 后，Hierarchy 会切到 Runtime Scene，并通过同一 UUID 尽量保留当前选择；命令历史在运行模式中断开，修改只作用于副本。临时性能场景甚至会直接关闭实体枚举，避免几千个测试实体把面板和压力测试本身一起拖慢。
 
-```cpp
-m_HierarchyPanel.OnImGuiRender();
-```
+![早期场景实体列表](README.assets/Pasted%20image%2020260716151430.png)
 
-配合 Properties 面板，通过 `m_HierarchyPanel.GetSelectedEntity()` 获取选中实体，按需展示其 Tag/Transform/SpriteRenderer/Camera 组件属性。这样 Hierarchy 和 Properties 之间没有直接耦合——它们只通过 EditorLayer 持有的选中状态间接通信。
-
-![[README.assets/Pasted image 20260716151430.png]]
+名称里虽然有 Hierarchy，目前的数据仍是平面列表。Transform 没有 Parent/Children 关系，面板也没有折叠树、拖拽重设父级、多选和搜索。这个命名保留了编辑器的发展方向，却不应让人误以为场景图已经实现。
 
 ## ImGUI自定义风格
 
-```
+默认 ImGui 很适合调试，却和编辑器窗口放在一起时显得过于紧凑。早期我先从间距、圆角和字体入手，没有单独做主题系统。样式现在仍集中在 `ImGuiLayer::OnAttach()`，所有使用引擎 ImGuiLayer 的客户端都会继承同一套配置。
+
+初始化时启用键盘导航、Docking 和 Multi-Viewport。Multi-Viewport 开启后使用 Light 配色，整体尺寸放大 1.2 倍，窗口、Popup 和控件分别设置圆角与边框。EditorLayer 的全屏 DockSpace 和 Viewport 会局部覆盖 Padding、Rounding 等值，避免圆角与空白侵占实际渲染区域。
+
+```cpp
+ImGuiIO& io = ImGui::GetIO();
+io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+
+ImGui::StyleColorsLight();
 ImGuiStyle& style = ImGui::GetStyle();
-		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-			ImGui::StyleColorsLight();
-			style.ScaleAllSizes(1.2f);
-			style.WindowPadding = { 16.0f, 16.0f };
-			style.FramePadding = { 8.0f, 5.0f };
-
-			style.WindowTitleAlign = { 0.5f, 0.5f };
-
-			style.MouseCursorScale = 0.5f;
-
-			style.WindowRounding = 16.0f;
-			style.ChildRounding = 12.0f;
-			style.PopupRounding = 16.0f;
-			style.FrameRounding = 16.0f;
-			style.GrabRounding = 12.0f;
-
-			style.FrameBorderSize = 1;
-			style.PopupBorderSize = 1;
-		}
+style.ScaleAllSizes(1.2f);
+style.WindowRounding = 16.0f;
+style.FrameRounding = 16.0f;
 ```
 
-![[README.assets/Pasted image 20260717133307.png]]
+![浅色圆角风格的早期效果](README.assets/Pasted%20image%2020260717133307.png)
 
-添加字体
-```
-//io.Fonts->AddFontFromFileTTF("assets/fonts/Montenegrin_Gothic_One/MontenegrinGothicOne-Regular.ttf", 16.0f);
-		io.Fonts->AddFontFromFileTTF("assets/fonts/Josefin_Sans/static/JosefinSans-Regular.ttf", 16.0f);
-		//io.Fonts->AddFontFromFileTTF("assets/fonts/Caveat/static/Caveat-Regular.ttf", 20.0f);
-		//io.Fonts->AddFontFromFileTTF("assets/fonts/Open_Sans/static/OpenSans_SemiCondensed-LightItalic.ttf", 20.0f);
-```
+文字字体使用 `OpenSans_SemiCondensed-Italic.ttf` 的 20 像素字号，随后以 MergeMode 合并 Font Awesome 6 的 `0xf000` 至 `0xf2ff` 图标区间。字体和普通资产一样依赖工作目录下的 `assets/fonts`。如果启动目录错误，界面会先出现字体或资产问题，排查渲染前应先确认 Working Directory。
 
-![[README.assets/Pasted image 20260717141005.png]]
+![字体与面板间距调整后的界面](README.assets/Pasted%20image%2020260717141005.png)
 
-![[README.assets/Pasted image 20260717141100.png]]
+Multi-Viewport 渲染结束后，ImGui 会切换多个 GLFW Context。`ImGuiLayer::End()` 会保存当前 Context，执行 Platform Windows 更新和绘制，再恢复原 Context，避免下一帧 OpenGL 命令落到错误窗口。事件阻断则只看 ImGui 的 `WantCaptureMouse` 与 `WantCaptureKeyboard`，不重复向后端注入输入。
 
+这套样式目前是写死的：没有深浅主题切换，没有 DPI 感知缩放，也没有配置文件。`ScaleAllSizes(1.2f)` 只解决了当前开发设备上的密度问题。后续若认真处理多显示器 DPI，尺寸应从平台缩放计算，而不是继续叠加常量。
 
 ## 场景层级面板完善：内联组件检查器
 
-上一步实现了层级面板的实体列表、选中、删除功能，但组件属性编辑在另一个独立的 Properties 窗口中。参照 Hazel 上游设计，将 `DrawComponents` 方法整合进 `SceneHierarchyPanel`，使层级面板成为一个自包含的实体管理工具——选中实体后直接在面板底部展开组件检查器，无需跳转到其他窗口。
+第一版把组件属性直接画在 Hierarchy 列表下方。实现很快，实体一多却很难用：左边既要浏览场景，又要容纳 Terrain、Material 和 Camera 的长表单。后来我把这部分拆成独立的 InspectorPanel，Hierarchy 只保留实体列表，两者通过 SelectionContext 相连。
 
-### SceneCamera API 补全
-
-组件检查器需要运行时独立读写每个投影参数，但引擎 `SceneCamera` 的透视/正交近远面参数全为 `private` 且无公开访问器，只能通过 `SetOrthographic(size, near, far)` 一次性设置。为此在 `SceneCamera` 中新增 10 个 getter/setter：
+Inspector 会根据选择类型切换内容。Entity Selection 调用 `DrawComponents()`，Asset Selection 进入资产检查器；没有选择时只显示提示。这个统一入口解决了早期 Properties 面板与 Content Browser 各自维护选择状态的问题。
 
 ```cpp
-// 透视参数
-float GetPerspectiveVerticalFOV() const;
-void SetPerspectiveVerticalFOV(float fov);    // 弧度制，UI 层用 glm::degrees 转换
-float GetPerspectiveNearClip() const;
-void SetPerspectiveNearClip(float nearClip);
-float GetPerspectiveFarClip() const;
-void SetPerspectiveFarClip(float farClip);
-
-// 正交参数
-float GetOrthographicNearClip() const;
-void SetOrthographicNearClip(float nearClip);
-float GetOrthographicFarClip() const;
-void SetOrthographicFarClip(float farClip);
+if (selection.IsEntitySelected())
+    DrawComponents(selection.GetEntity());
+else if (selection.IsAssetSelected())
+    DrawAssetInspector(selection.GetAsset());
 ```
 
-每个 setter 调用后自动触发 `RecalculateProjection()`，确保投影矩阵立即生效。
+实体检查器目前覆盖 Transform、Terrain、三类灯光、Camera、Model Renderer、Sprite Renderer 和 Material。组件标题的右键菜单支持 Reset 与 Remove，底部的 Add Component 菜单只列出实体尚未拥有的类型。Transform 不允许移除；Tag 固定显示在顶部，也不走通用组件折叠框。
 
-### DrawComponents 实现
+Camera Inspector 是这次迭代最先打通的部分。为了让 UI 能独立修改投影参数，SceneCamera 补齐了 Perspective/Orthographic 的 FOV、Size 与 Near/Far Getter/Setter，每个 Setter 都立即重算 Projection。Inspector 中的 FOV 用角度显示，写回时转换为弧度，避免 UI 单位泄漏到 SceneCamera API。
 
-触发时机：`OnImGuiRender` 中，实体列表下方，检测到 `m_SelectionContext` 有效时调用 `DrawComponents(m_SelectionContext)`。
+![早期内联组件检查器](README.assets/Pasted%20image%2020260717153228.png)
 
-**Tag 组件**
+现在连续拖动不会为每一帧都创建一条命令。`EditorValueTransaction` 在控件激活时保存旧值，释放控件后把整段操作压成一次 Undo。Transform、Terrain、灯光、Camera 和 Material 已接入这条路径；组件添加、移除和重置也通过 CommandHistory 执行。Play 模式和临时调试场景会断开 CommandHistory，防止运行时修改污染编辑记录。
 
-```
-Tag: [Main Camera________]  ← ImGui::InputText，实时修改实体名称
-```
-
-**Transform 组件**
-
-```
-▼ Transform                       ← ImGui::TreeNodeEx，默认展开
-  Position  [ -0.00] [  1.00] [  0.00]   ← DragFloat3
-  Rotation  [  0.0 ] [  0.0 ] [  0.0 ]
-  Scale     [  1.00] [  1.00] [  1.00]   ← 限幅 0.01 ~ 10.0
-```
-
-适配本引擎的 `TransformComponent` 结构（`Translation / Rotation / Scale`），而非 tmp 参考代码中的 `Transform` 矩阵形式。
-
-**Camera 组件**
-
-```
-▼ Camera                          ← 默认展开
-  [✓] Primary
-  Projection: [Perspective ▼]     ← ImGui::BeginCombo 下拉切换
-
-  透视模式:
-    Vertical FOV: [45.0]°         ← DragFloat (1° ~ 179°)
-    Near:  [0.01]
-    Far:   [1000.0]
-
-  正交模式:
-    Size: [10.0]
-    Near: [-1.0]
-    Far:  [ 1.0]
-    [ ] Fixed Aspect Ratio
-```
-
-**SpriteRenderer 组件**
-
-```
-▼ Sprite Renderer                 ← 默认展开
-  Color: [■] [1.00, 0.20, 0.20, 1.00]  ← ImGui::ColorEdit4
-```
+边界还没有完全收口。Tag、SpriteRenderer 和 ModelRenderer 的部分字段仍直接改组件，尚未统一进入 Undo；TerrainMaterial 资产可以编辑、保存和重载，但资产字段也还没接入 CommandHistory。类职责虽然已经拆成 SceneHierarchyPanel 与 InspectorPanel，`DrawComponents()` 的大段实现目前仍放在 `SceneHierarchyPanel.cpp`。功能上没有冲突，源码位置却已经不符合类边界，后续应单独搬回 `InspectorPanel.cpp`。
 
 ## 修复：无贴图 3D 模型全黑 Bug
 
-### 问题现象
+这个问题最初很迷惑：只要把 2D 批处理注释掉，Bunny、Dragon 和 Suzanne 这类没有漫反射贴图的 OBJ 就会变黑。模型、法线和灯光都还在，唯一变化只是少画了一层 2D。RenderDoc 最后把原因指向了纹理状态，而不是光照公式。
 
-在 GlimmerEditor-CyouBranch 中，将 2D 批处理渲染注释掉后，OBJ 模型（bunny / dragon / suzanne 等无贴图模型）渲染结果变为全黑，而非预期的光照着色效果。
+当时的 `OpenGLRendererAPI::DrawIndexed()` 会在绘制后执行 `glBindTexture(GL_TEXTURE_2D, 0)`。这条命令只影响当前 Active Texture Slot。2D 批处理存在时，最后活跃的往往是其它槽位，slot 0 的白贴图碰巧没被解绑；移除 2D Draw 后，slot 0 成了最后活跃槽，无贴图模型下一帧采样到空纹理，颜色自然全部乘成零。
 
-### 根因定位
+最早的补丁是在 EditorLayer 里每帧重新绑定一张白贴图。画面恢复了，但 Renderer 的正确性依赖宿主按特定顺序补状态，这个修法留不住。当前实现把责任收回渲染器：低层 `DrawIndexed()` 不再擅自解绑纹理，Renderer3D 在初始化时创建自己的 `1x1 RGBA` 白贴图，并为每个缺失材质通道提供有效占位。
 
-`OpenGLRendererAPI::DrawIndexed` 每次绘制结束后调用 `glBindTexture(GL_TEXTURE_2D, 0)` 从当前活跃纹理单元解绑纹理。此调用不知道哪个 slot 是活跃的——它只解绑最后一条 `glActiveTexture` 指向的 slot。
+```text
+材质 Texture Handle
+  -> 模型导入纹理
+  -> Renderer3D 白贴图占位
 
-**2D 批处理启用时**：`Flush` 依次绑定白贴图 → slot 0、balatro.png → slot 1、STS.png → slot 2、henry.jpg → slot 3，最后活跃的是 slot 3。`DrawIndexed` 解绑 slot 3，**slot 0 的白贴图完好无损**。
-
-**2D 批处理注释后**：ECS 场景的 `EndScene → Flush` 仅绑定白贴图到 slot 0，`DrawIndexed` 随后将其解绑。下一帧 3D 模型采样 slot 0 时获取到空纹理，片段着色器中：
-
+u_Has*Texture
+  -> 0：Shader 使用材质常量或几何默认值
+  -> 1：Shader 才真正采样对应纹理
 ```
-vec4 texColor = texture(u_Texture, v_TexCoord);  // (0,0,0,0)
-vec3 result = (ambient + diffuse + specular) * texColor.rgb;  // = (0,0,0)
-```
 
-光照计算结果乘以 0，整个模型变黑。
+占位纹理和 `u_Has*Texture` 必须同时存在。白贴图保证所有采样器槽都有合法 Texture2D，存在标记则区分 "真实白色贴图" 和 "没有贴图"。BaseColor 缺失时 Shader 使用 `u_BaseColor`，Normal 回退几何法线，AO 回退 1，Emissive 纹理回退白色后仍受 EmissiveStrength 控制。Metallic 与 Roughness 也采用相同的存在标记。
 
-### 修复方案
-
-在 `EditorLayer::OnAttach` 中创建 1×1 白像素纹理 `m_WhiteTexture`，每次 3D 模型渲染前显式调用 `m_WhiteTexture->Bind(0)`，保障 slot 0 始终有有效的白色纹理，不再依赖 2D 批处理的副作用。
-
+现在无贴图模型可以正常渲染，但无材质模型仍是另一回事。`Renderer3D::SubmitModel()` 要求 Model 和 Material 都能从 AssetManager 解析；MaterialHandle 为 0 或失效时会增加 SkippedModels 并跳过提交。白贴图解决的是材质通道缺失，不能代替整个 Material 资产。
 
 ## 场景序列化 (Scene Serialization)
 
-### 设计目标
+编辑器能创建实体以后，下一个问题很直接：关掉程序，场景就全没了。我选择 YAML 是因为早期格式还在频繁变化，人能直接打开文件看出哪个组件或 Handle 写错，比一开始就做二进制资产省事得多。
 
-将编辑器中的场景（Entity + Component 集合）持久化为 YAML 文件，支持随时保存和恢复。选型优先人类可读性，便于调试和手动编辑。
+`SceneSerializer` 使用 yaml-cpp，把 Scene 写成 `.glimmer` 文件。yaml-cpp 作为独立静态库参与 Premake 构建，Windows 下引擎与依赖项目都定义 `YAML_CPP_STATIC_DEFINE`，避免头文件把符号声明成 DLL Import。
 
-### 依赖引入：yaml-cpp
-
-引擎的 vendor 目录现有库均为 header-only 或小体积静态库。yaml-cpp 需要编译为独立的静态库再链接入 Glimmer。
-
-**目录结构**
-
-```
-Glimmer/vendor/yaml-cpp/
-├── include/yaml-cpp/     ← 头文件
-├── src/                  ← 31 个 .cpp 源文件
-└── premake5.lua          ← 静态库编译配置
-```
-
-**premake5.lua 关键配置**
-
-```lua
-project "yaml-cpp"
-    kind "StaticLib"
-    language "C++"
-    cppdialect "C++17"
-
-    filter "system:windows"
-        defines { "YAML_CPP_STATIC_DEFINE" }  -- 强制静态链接模式
-```
-
-`YAML_CPP_STATIC_DEFINE` 必须同时在 yaml-cpp 自身和所有链接方（Glimmer）中定义，否则 Windows 下头文件会插入 `__declspec(dllimport)`，导致链接器寻找 DLL 符号而失败。这是最常见的集成坑——默认行为是导出 DLL 符号，但项目选择静态链接。
-
-**根 premake 集成**
-
-```lua
-IncludeDir["yaml-cpp"] = "Glimmer/vendor/yaml-cpp/include"
-group "Dependencies"
-    include "Glimmer/vendor/yaml-cpp"
-```
-
-```lua
--- Glimmer/premake5.lua
-includedirs { "vendor/yaml-cpp/include" }
-links { "yaml-cpp" }
-defines { "YAML_CPP_STATIC_DEFINE" }
-```
-
-### 序列化架构
-
-```
-SceneSerializer (Scene/SceneSerializer.h)
-    │
-    ├─ Serialize(path)    → 遍历 Registry → YAML::Emitter → 写入 .glimmer 文件
-    └─ Deserialize(path)  → YAML::LoadFile → 逐实体创建 → 重建 Registry
-```
-
-`SceneSerializer` 持有 `Ref<Scene>`，通过 `Scene` 的 `friend class SceneSerializer` 声明访问私有 `m_Registry`，直接遍历 entt 实体和组件。
-
-### 组件序列化策略
-
-每个组件类型一对静态函数，通过重载 + YAML key 匹配实现类型分发：
-
-```cpp
-// 序列化：YAML::Emitter 写入
-static void SerializeComponent(YAML::Emitter& out, const TagComponent& comp);
-static void SerializeComponent(YAML::Emitter& out, const CameraComponent& comp);
-// ...
-
-// 反序列化：YAML::Node 读取
-static void DeserializeComponent(const YAML::Node& node, TagComponent& comp);
-static void DeserializeComponent(const YAML::Node& node, CameraComponent& comp);
-// ...
-```
-
-新增组件类型只需加一对函数，无需修改 SceneSerializer 主流程。
-
-### 各组件序列化格式
-
-**TagComponent**
-
-```yaml
-TagComponent: "Main Camera"
-```
-
-纯字符串，直接 emit / as\<string\>。
-
-**TransformComponent**
-
-```yaml
-TransformComponent:
-  Translation: [0.0, 0.0, 0.0]
-  Rotation: [0.0, 0.0, 0.0]
-  Scale: [1.0, 1.0, 1.0]
-```
-
-glm::vec3 序列化为 YAML Flow Sequence `[x, y, z]`，通过辅助函数 `SerializeVec3` / `DeserializeVec3` 统一处理。
-
-**SpriteRendererComponent**
-
-```yaml
-SpriteRendererComponent:
-  Color: [1.0, 0.2, 0.2, 1.0]
-```
-
-glm::vec4 同理，`SerializeVec4` / `DeserializeVec4`。
-
-**CameraComponent**
-
-```yaml
-CameraComponent:
-  Primary: true
-  FixedAspectRatio: false
-  ProjectionType: 1           # 0=Perspective, 1=Orthographic
-  OrthoSize: 10.0
-  OrthoNear: -10.0
-  OrthoFar: 10.0
-  PerspFOV: 0.785398          # 弧度制
-  PerspNear: 0.01
-  PerspFar: 1000.0
-```
-
-所有投影参数独立存储，加载时通过 `SceneCamera` 的 getter/setter 逐个恢复。`ProjectionType` 用 int 值表示枚举。正交和透视的全部参数都写入文件，加载时根据 `ProjectionType` 分别恢复。
-
-**NativeScriptComponent**
-
-暂不序列化。脚本组件持有函数指针（`InstantiateScript` / `DestroyScript`），无法持久化为 YAML。这是 ECS 序列化的经典难点——C++ 原生脚本没有反射信息。未来方案：脚本工厂注册表将类型名映射到函数指针，YAML 只存类型名字符串。
-
-### Scene::Serialize 完整流程
-
-```cpp
-void SceneSerializer::Serialize(const std::string& filepath)
-{
-    YAML::Emitter out;
-    out << YAML::BeginMap;
-    out << YAML::Key << "Scene" << YAML::Value << "Untitled";
-    out << YAML::Key << "Version" << YAML::Value << 2;
-    out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
-
-    // 遍历 registry 中所有实体
-    m_Scene->m_Registry.view<entt::entity>().each([&](entt::entity handle) {
-        Entity entity{ handle, m_Scene.get() };
-        if (!entity.HasComponent<TagComponent>()) return;  // 跳过无效实体
-
-        out << YAML::BeginMap;
-        out << YAML::Key << "Entity" << YAML::Value
-            << static_cast<uint64_t>(entity.GetUUID());
-        out << YAML::Key << "Components" << YAML::Value << YAML::BeginMap;
-
-        // 逐组件分发序列化
-        if (entity.HasComponent<TagComponent>())
-            SerializeComponent(out, entity.GetComponent<TagComponent>());
-        if (entity.HasComponent<TransformComponent>())
-            SerializeComponent(out, entity.GetComponent<TransformComponent>());
-        if (entity.HasComponent<SpriteRendererComponent>())
-            SerializeComponent(out, entity.GetComponent<SpriteRendererComponent>());
-        if (entity.HasComponent<CameraComponent>())
-            SerializeComponent(out, entity.GetComponent<CameraComponent>());
-
-        out << YAML::EndMap;  // Components
-        out << YAML::EndMap;  // Entity
-    });
-
-    out << YAML::EndSeq;  // Entities
-    out << YAML::EndMap;  // Root
-
-    std::ofstream fout(filepath);
-    fout << out.c_str();
-}
-```
-
-遍历 → 检查 TagComponent（过滤无效实体）→ 逐组件调用对应的 `SerializeComponent` 重载 → 每个实体包裹在 `Entity + Components` 键下 → 写入文件。
-
-### Scene::Deserialize 反序列化
-
-```cpp
-bool SceneSerializer::Deserialize(const std::string& filepath)
-{
-    YAML::Node data = YAML::LoadFile(filepath);
-    uint32_t version = data["Version"] ? data["Version"].as<uint32_t>() : 1;
-
-    for (auto entityNode : data["Entities"])
-    {
-        auto& comps = entityNode["Components"];
-
-        // 1. 先读 TagComponent 获取实体名
-        std::string name = comps["TagComponent"].as<std::string>();
-        Entity entity;
-        if (version >= 2)
-            entity = m_Scene->CreateEntityWithUUID(
-                UUID(entityNode["Entity"].as<uint64_t>()), name);
-        else
-            entity = m_Scene->CreateEntity(name);
-
-        // 2. 恢复 Tag（覆盖 CreateEntity 的默认值）
-        DeserializeComponent(comps["TagComponent"], entity.GetComponent<TagComponent>());
-
-        // 3. 按需恢复其余组件
-        //    Transform 每个实体都有（CreateEntity 自动添加）
-        if (comps["TransformComponent"])
-            DeserializeComponent(comps["TransformComponent"], entity.GetComponent<TransformComponent>());
-
-        //    SpriteRenderer / Camera 按 key 存在与否决定是否添加
-        if (comps["SpriteRendererComponent"]) {
-            auto& sc = entity.AddComponent<SpriteRendererComponent>();
-            DeserializeComponent(comps["SpriteRendererComponent"], sc);
-        }
-        if (comps["CameraComponent"]) {
-            auto& cc = entity.AddComponent<CameraComponent>();
-            DeserializeComponent(comps["CameraComponent"], cc);
-        }
-    }
-    return true;
-}
-```
-
-注意：`CreateEntity` 已自动添加 `TransformComponent` 和 `TagComponent`，反序列化时是对已有组件赋值而非重新添加。`SpriteRenderer` 和 `Camera` 等可选组件通过 YAML key 存在性检测后 `AddComponent`。
-
-### 编辑器集成
-
-CyoutBranch 的 File 菜单中增加了 New / Save / Open 三项：
-
-```
-File → New  (Ctrl+N)  → 创建空白 Scene，刷新层级面板
-File → Save (Ctrl+S)  → SceneSerializer::Serialize("assets/scenes/demo.glimmer")
-File → Open (Ctrl+O)  → SceneSerializer::Deserialize("assets/scenes/demo.glimmer")
-                           加载成功后替换当前场景并刷新层级面板
-```
-
-当前使用固定路径 `assets/scenes/demo.glimmer` 作为测试入口，后续可接入 Windows 原生文件对话框（`GetOpenFileName` / `GetSaveFileName`）实现任意路径选择。
-
-### 完整的 .glimmer 文件示例
+当前场景格式版本是 6。根节点保存场景标识、版本和实体序列；每个实体写入稳定 UUID，再按实际拥有的组件输出字段。
 
 ```yaml
 Scene: Untitled
-Version: 2
+Version: 6
 Entities:
   - Entity: 13784169322866849271
     Components:
       TagComponent: Main Camera
       TransformComponent:
-        Translation: [0, 0, 0]
+        Translation: [0, 2, 5]
         Rotation: [0, 0, 0]
         Scale: [1, 1, 1]
       CameraComponent:
         Primary: true
-        FixedAspectRatio: false
-        ProjectionType: 1
-        OrthoSize: 10.0
-        OrthoNear: -10.0
-        OrthoFar: 10.0
-        PerspFOV: 0.785398
-        PerspNear: 0.01
-        PerspFar: 1000.0
-  - Entity: 8216397519218463350
-    Components:
-      TagComponent: Green Square
-      TransformComponent:
-        Translation: [0, 0, 0]
-        Rotation: [0, 0, 0]
-        Scale: [1, 1, 1]
-      SpriteRendererComponent:
-        Color: [0.2, 1.0, 0.2, 1.0]
+        ProjectionType: 0
 ```
 
-### 已知限制
+目前参与往返的组件包括 Tag、Transform、SpriteRenderer、ModelRenderer、Material、Terrain、DirectionalLight、PointLight、SkyLight 和 Camera。资源引用统一保存 AssetHandle，不保存文件绝对路径、运行时指针或 OpenGL ID。Material 会保存共享材质 Handle 和实体 Overrides；Camera 同时保存两种投影的参数，切换模式后原参数不会丢失。
 
-| 限制 | 说明 |
-|------|------|
-| NativeScript 不可序列化 | 函数指针无法持久化，需要脚本工厂注册表 |
-| 运行时 Handle 不保持 | `entt::entity` 仍可能变化；实体身份通过 UUID 稳定恢复 |
-| 固定文件路径 | 未接入原生文件对话框，Save/Open 均使用 `assets/scenes/demo.glimmer` |
-| 无多场景支持 | 当前仅处理单个 Scene，未来可扩展为 Project 文件（引用多个 Scene） |
+Terrain 只写 `TerrainSpecification`，包括生成参数、Authoring Erosion、Shader Handle、高度图和 TerrainMaterialHandle。Height、派生纹理、水文与气候状态都属于 Runtime，加载后按需重建。NativeScriptComponent 仍不序列化，因为组件里只有函数指针，没有可持久化的脚本类型名。
 
-可实现单场景的读取
-![[README.assets/Pasted image 20260717153228.png]]
+```text
+.glimmer
+  -> UUID + Components + AssetHandles
+  -> SceneSerializer::Deserialize()
+  -> CreateEntityWithUUID()
+  -> Runtime 资源按需重建
+```
 
+反序列化在新 Scene 中进行，成功后 EditorLayer 才替换当前编辑场景，解析失败不会先清空原场景。Version 1 文件没有稳定实体 ID，加载时会生成新 UUID；Version 2 及以后恢复文件中的 UUID。后续字段主要靠 "存在则读取、缺失则保留结构默认值" 兼容，当前还没有独立的逐版本迁移器。
+
+New、Save As 和 Open 同时出现在 File 菜单与 Ctrl+N/Ctrl+S/Ctrl+O 快捷键中。保存临时 Debug Scene 会被阻止；Play 期间保存的仍是 `m_EditorScene`，不会把 Runtime Scene 改动写回磁盘。打开成功后，Hierarchy、Inspector 和选择上下文都会切到新 Scene。
+
+无窗口回归会把场景写入临时目录，再检查固定 UUID、资产 Handle、Material Overrides 和 Terrain Specification 是否完整恢复，同时确认 Terrain Runtime 没有被持久化。这里还有两个明确缺口：`Serialize()` 返回 `void`，没有把文件打开或写入失败反馈给编辑器；保存也直接覆盖目标文件，尚未采用临时文件替换。场景根节点仍固定写 `Untitled`，编辑器也没有记录当前文件路径和 Dirty 状态，所以 Ctrl+S 实际上每次都是 Save As。
 
 ## 原生文件对话框 (Windows File Dialog)
 
-### 设计目标
-
-替换场景序列化中的硬编码文件路径，接入 Windows 原生文件对话框，支持用户通过 GUI 浏览和选择文件。
-
-### 架构分层
-
-```
-Glimmer/Utils/FileDialog.h                    ← 平台无关接口
-    │
-    └── Platform/Windows/WindowsFileDialog.cpp ← Windows 实现
-            │
-            ├── GetOpenFileNameA()   → 打开文件对话框
-            ├── GetSaveFileNameA()   → 保存文件对话框
-            └── glfwGetWin32Window() → GLFW 窗口 → HWND（模态化父窗口）
-```
-
-### 接口设计
+固定写 `assets/scenes/demo.glimmer` 只适合最早的往返测试。接入系统文件对话框以后，编辑器才真正能选择不同场景。公共接口放在 `Glimmer/Utils/FileDialog.h`，调用方只处理字符串路径；Windows 细节留在 `Platform/Windows/WindowsFileDialog.cpp`。
 
 ```cpp
-namespace gl::FileDialog {
+std::string path = gl::FileDialog::OpenFile(
+    "Glimmer Scene (*.glimmer)\0*.glimmer\0"
+    "All Files (*.*)\0*.*\0");
 
-    // 返回所选文件路径，取消时返回空字符串
-    // filter 格式: "描述1\0*.ext1\0描述2\0*.ext2\0"
-    std::string OpenFile(const char* filter);
-    std::string SaveFile(const char* filter);
-
+if (!path.empty())
+{
+    auto scene = gl::CreateRef<gl::Scene>();
+    if (gl::SceneSerializer(scene).Deserialize(path))
+        SetEditorScene(scene);
 }
 ```
 
-函数而非类——无状态、无生命周期管理，调用即用完。符合工具函数语义。
+实现使用 Win32 `OPENFILENAMEA`、`GetOpenFileNameA()` 和 `GetSaveFileNameA()`。GLFW 原生窗口通过 `glfwGetWin32Window()` 转成 HWND，作为对话框 Owner；这样系统窗口会正确模态化，不会躲到编辑器后面。`OFN_NOCHANGEDIR` 很重要，打开对话框后工作目录不会被系统悄悄改变，后续相对资产路径仍指向原来的 `assets`。
 
-### Windows 实现要点
+过滤器是双 Null 结尾的 Win32 字符串，Save 默认补 `.glimmer` 扩展名。用户取消时接口返回空字符串，编辑器直接结束本次操作。全局快捷键在 DockSpace 绘制前通过 `ImGui::IsKeyChordPressed()` 检查，不依赖 File 菜单当前是否获得焦点。
 
-**OPENFILENAME 结构**
+![Windows 原生场景文件对话框](README.assets/Pasted%20image%2020260717163457.png)
 
-```cpp
-OPENFILENAMEA ofn = {};
-ofn.lStructSize = sizeof(OPENFILENAMEA);
-ofn.hwndOwner   = hwnd;                     // 父窗口 HWND，模态化
-ofn.lpstrFilter = filter;                   // 双 null 终止的过滤器字符串
-ofn.lpstrFile   = filePath;                 // 结果缓冲区
-ofn.nMaxFile    = MAX_PATH;                 // 缓冲区大小
-ofn.lpstrDefExt = defaultExt;               // 默认扩展名
-ofn.Flags = OFN_PATHMUSTEXIST               // 路径必须存在
-          | OFN_HIDEREADONLY                 // 隐藏只读复选框
-          | OFN_NOCHANGEDIR;                 // 不改变当前工作目录
-```
-
-**模态化父窗口**
-
-对话框需要原生 HWND 作为父窗口以保持模态。Glimmer 使用 GLFW，需通过 `glfwGetWin32Window()` 转换：
-
-```cpp
-auto* native = static_cast<GLFWwindow*>(Application::Get().GetWindow().GetNativeWindow());
-HWND hwnd = glfwGetWin32Window(native);
-```
-
-`glfwGetWin32Window` 受 `GLFW_EXPOSE_NATIVE_WIN32` 条件编译保护，必须在 `#include <GLFW/glfw3native.h>` 之前定义。
-
-### 编辑器快捷键集成
-
-菜单快捷键在 DockSpace 架构下不可靠——焦点在子面板时菜单加速器可能不触发。改用 ImGui 全局快捷键：
-
-```cpp
-// OnImGuiRender 顶部，独立于任何窗口焦点
-if (ImGui::IsKeyChordPressed(ImGuiKey_S | ImGuiMod_Ctrl)) {
-    // Save...
-}
-if (ImGui::IsKeyChordPressed(ImGuiKey_O | ImGuiMod_Ctrl)) {
-    // Open...
-}
-```
-
-**焦点分流**：编辑文本（如 Tag InputText）时 `WantCaptureKeyboard` 阻止相机移动：
-
-```cpp
-void EditorLayer::OnEvent(Event& event) {
-    if (event.IsInCategory(EventCategoryKeyboard)) {
-        if (ImGui::GetIO().WantCaptureKeyboard) return;  // ImGui 占用键盘
-    }
-    if (event.IsInCategory(EventCategoryMouse)) {
-        if (!m_ViewportHovered) return;                   // 鼠标在 UI 面板上
-    }
-    m_CameraController.OnEvent(event);
-}
-```
-
-这样在层级面板编辑 Tag 名称时，Ctrl+S 触发保存而非相机移动。点击属性拖拽条时滚轮调整值而非缩放视口。
-
-### 调用示例
-
-```cpp
-// 保存
-std::string path = FileDialog::SaveFile(
-    "Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-if (!path.empty()) {
-    SceneSerializer serializer(m_ActiveScene);
-    serializer.Serialize(path);
-}
-
-// 打开
-std::string path = FileDialog::OpenFile(
-    "Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-if (!path.empty()) {
-    SceneSerializer serializer(newScene);
-    serializer.Deserialize(path);
-}
-```
-
-![[README.assets/Pasted image 20260717163457.png]]
-
+这层封装目前只有 Windows 实现，而且仍调用 ANSI 版本 API，结果缓冲区固定为 `MAX_PATH`。包含 Unicode 字符或超过传统路径长度的场景路径不可靠。Open 没有设置 `OFN_FILEMUSTEXIST`，Save 也没有设置 `OFN_OVERWRITEPROMPT`；取消和系统错误都会折叠成同一个空字符串。以后若要把它当成正式项目文件入口，应改用宽字符接口或现代 `IFileDialog`，同时返回可区分的错误状态。
 
 ## 视口 Gizmos (ImGuizmo 集成)
 
-### 设计目标
+层级面板能选中实体，Inspector 也能改 Transform，但只靠输入框调整位置和角度，搭场景时还是有些绕。于是这一阶段把 ImGuizmo 接进视口，让移动、旋转和缩放都能直接在画面里完成。
 
-在场景视口中实现变换手柄，选中实体后可直接拖拽平移、旋转、缩放。操作方式与 Unity 一致：快捷键切换模式，Ctrl 吸附，手柄跟随实体位置。
+### 接入位置
 
-### 依赖引入：ImGuizmo
-
-ImGuizmo 是 Dear ImGui 的即时模式 Gizmo 库，通过 `ImGuizmo::Manipulate()` 在视口内绘制变换手柄并处理鼠标交互。
-
-```
-Glimmer/vendor/ImGuizmo/        ← git submodule
-  ├── src/ImGuizmo.cpp/.h       ← 核心：Manipulate / DecomposeMatrixToComponents
-  ├── src/ImCurveEdit.cpp       ← 可选模块
-  └── premake5.lua
-```
-
-**premake 集成**
-
-```lua
--- 根 premake5.lua
-IncludeDir["ImGuizmo"] = "Glimmer/vendor/ImGuizmo/src"
-include "Glimmer/vendor/ImGuizmo"
-
--- Glimmer 链接
-includedirs { "vendor/ImGuizmo/src" }
-links { "ImGuizmo" }
-```
-
-### 帧初始化：BeginFrame
-
-ImGuizmo 必须在每帧 `ImGui::NewFrame()` 之后调用 `BeginFrame()` 初始化内部状态，否则手柄完全不渲染。这是排查"看不见 Gizmo"的第一个检查点。
+ImGuizmo 跟随 ImGui 的帧生命周期更新。`ImGuiLayer::Begin()` 在 `ImGui::NewFrame()` 之后调用 `ImGuizmo::BeginFrame()`，编辑器则在视口窗口内设置绘制区域：
 
 ```cpp
-// ImGuiLayer::Begin()
-ImGui::NewFrame();
-ImGuizmo::BeginFrame();     // ← 必须！重置内部矩阵状态
-ImGuizmo::Enable(true);     // 显式启用
+ImGuizmo::SetDrawlist();
+ImGuizmo::SetRect(
+    m_ViewportBounds[0].x,
+    m_ViewportBounds[0].y,
+    m_ViewportBounds[1].x - m_ViewportBounds[0].x,
+    m_ViewportBounds[1].y - m_ViewportBounds[0].y);
 ```
 
-### 渲染流程
+这里必须使用视口在屏幕中的真实边界。若直接把整个 ImGui 窗口交给 ImGuizmo，标题栏和面板边距会把手柄推离实体，鼠标命中也会跟着错位。
 
-Gizmo 绘制发生在 Viewport 窗口中，位于 `ImGui::Image()`（场景画面）之后，通过 `ImGui::GetWindowDrawList()` 在同一个 ImGui 窗口内叠加绘制：
+当前 Gizmo 只在 Edit 模式显示，并且要求已有选中实体和 `TransformComponent`。计算时使用 `EditorCamera` 的 View、Projection 矩阵，因此它始终对应编辑器里正在观察的画面，不依赖场景中的主相机。
 
-```
-Viewport 窗口
-  ├─ ImGui::Image(sceneTexture)     ← 底层：渲染的场景画面
-  └─ ImGuizmo::Manipulate(...)      ← 上层：变换手柄叠加
-```
-
-**完整调用链**
-
-```cpp
-// 1. 设置投影类型
-ImGuizmo::SetOrthographic(false);  // 透视投影
-
-// 2. 绑定当前窗口的 ImDrawList
-ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
-
-// 3. 定义 Gizmo 操作区域（视口矩形）
-ImGuizmo::SetRect(bounds.x, bounds.y, width, height);
-
-// 4. 调用 Manipulate 绘制手柄并处理交互
-ImGuizmo::Manipulate(view, proj, operation, mode, &matrix, delta, snap);
+```text
+EditorCamera View / Projection
+             +
+视口屏幕坐标 + 选中实体 Transform
+             |
+             v
+      ImGuizmo::Manipulate()
+             |
+             v
+   写回 Translation / Rotation / Scale
 ```
 
-### 相机矩阵选取
+### 操作方式
 
-场景中存在两套独立的相机：
+视口悬停时可以用数字键切换工具：
 
-| 相机 | 用途 | 控制 |
-|------|------|------|
-| `m_CameraController` (OrthographicCamera) | 编辑器自由视角（WASD） | 保留但当前未用于渲染 |
-| ECS "Main Camera" 实体 (SceneCamera) | 场景实体渲染 | 唯一渲染相机，Gizmo 使用它 |
+- `1`：移动
+- `2`：旋转
+- `3`：缩放
 
-Gizmo 必须使用 ECS 主相机的 view/projection 矩阵，因为它与实际渲染的实体处在同一坐标系：
+三种工具目前都工作在 `LOCAL` 空间。按住左侧 `Ctrl` 会启用吸附，移动和缩放的步长是 `0.5`，旋转步长是 `45°`。鼠标位于手柄上时，拾取逻辑会检查 `ImGuizmo::IsOver()`，避免拖动 Gizmo 的第一下又把下方实体重新选中。
 
-```cpp
-Entity camEntity = m_ActiveScene->GetPrimaryCameraEntity();
-auto& ct = camEntity.GetComponent<TransformComponent>();
-auto& cc = camEntity.GetComponent<CameraComponent>();
-glm::mat4 view = glm::inverse(ct.GetTransform());   // 实体变换矩阵求逆
-glm::mat4 proj = cc.Camera.GetProjection();          // 透视投影矩阵
-```
+![视口中的移动 Gizmo](README.assets/Pasted%20image%2020260720104837.png)
 
-### 操作模式与快捷键
+选中带有 `CameraComponent` 的实体时，视口还会绘制一组黄色视锥线。它先用该相机的 View-Projection 逆矩阵还原八个裁剪空间角点，再通过 `EditorCamera` 投影到当前视口。这样调整场景相机时，可以同时看到它实际覆盖的范围。
 
-| 按键 | 模式 | Gizmo 操作 |
-|------|------|-----------|
-| `1` | Translate | 平移手柄，拖拽箭头移动 |
-| `2` | Rotate | 旋转手柄，拖拽圆环旋转 |
-| `3` | Scale | 缩放手柄，拖拽方块缩放 |
+### Transform 写回与留下的问题
 
-**Ctrl 吸附**
+ImGuizmo 返回的是完整变换矩阵，编辑器通过 `DecomposeMatrixToComponents()` 拆出位移、欧拉角和缩放。位移、缩放直接覆盖原值；旋转目前写成 `旧值 += 新值 - 旧值`，结果与直接赋值相同。
 
-```cpp
-bool snap = Input::IsKeyPressed(GL_KEY_LEFT_CONTROL);
-float snapVal = (m_GizmoType == 1) ? 45.0f : 0.5f;  // 旋转45°，移动/缩放0.5
-float snapValues[3] = { snapVal, snapVal, snapVal };
-ImGuizmo::Manipulate(..., snap ? snapValues : nullptr);
-```
+Transform 在生成矩阵时会用四元数组合 X、Y、Z 旋转，这让矩阵构造顺序更清楚，但组件里保存的仍是欧拉角，Gizmo 分解也会回到欧拉角。因此跨越角度边界时仍可能出现数值跳变，不能把这段处理理解成已经消除了万向节锁。
 
-按住 Ctrl 拖拽时，平移和缩放以 0.5 单位步进，旋转以 45° 步进。
-
-### 矩阵分解与抖动修复
-
-这是整个集成中最关键的细节。ImGuizmo 的 `Manipulate()` 返回修改后的完整 4x4 矩阵，需要分解回 TransformComponent 的独立 T/R/S 值。
-
-**失败方案 1：GLM 实验性分解**
-
-```cpp
-glm::vec3 skew; glm::vec4 persp; glm::quat rot;
-glm::decompose(transform, scale, rot, translation, skew, persp);
-tc.Rotation = glm::degrees(glm::eulerAngles(rot));
-```
-
-问题：需要 `GLM_ENABLE_EXPERIMENTAL`，且四元数 → 欧拉角转换不稳定。
-
-**失败方案 2：自定义 Math::DecomposeTransform**
-
-使用 YXZ 顺序从矩阵提取欧拉角，但 `GetTransform()` 构建矩阵用的是 XYZ 顺序。构建和提取的欧拉顺序不一致，导致拖拽时旋转值发生不可预测的大跳。
-
-**最终方案：ImGuizmo 内置 + Delta 增量 + 四元数构阵**
-
-```cpp
-// Components.h — 四元数构阵（根源性修复）
-glm::mat4 GetTransform() const
-{
-    // 欧拉角 → 四元数 → 矩阵：避免万向节锁
-    glm::quat q = glm::angleAxis(glm::radians(Rotation.z), glm::vec3(0,0,1))
-                * glm::angleAxis(glm::radians(Rotation.y), glm::vec3(0,1,0))
-                * glm::angleAxis(glm::radians(Rotation.x), glm::vec3(1,0,0));
-    glm::mat4 rotation = glm::toMat4(q);
-
-    return glm::translate(glm::mat4(1.0f), Translation)
-         * rotation
-         * glm::scale(glm::mat4(1.0f), Scale);
-}
-```
-
-```cpp
-// EditorLayer.cpp — 单次分解 + 增量叠加
-ImGuizmo::Manipulate(...);
-
-if (ImGuizmo::IsUsing())
-{
-    float t[3], r[3], s[3];
-    ImGuizmo::DecomposeMatrixToComponents(value_ptr(transform), t, r, s);
-
-    tc.Translation = { t[0], t[1], t[2] };
-    tc.Rotation += glm::vec3(r[0], r[1], r[2]) - tc.Rotation;  // delta
-    tc.Scale = { s[0], s[1], s[2] };
-}
-```
-
-三要素配合：
-
-| 要素 | 作用 |
-|------|------|
-| 四元数构阵 | 欧拉角只存不用，矩阵本身不会退化或万向节锁 |
-| 同源分解 | `DecomposeMatrixToComponents` 始终唯一，不再混用不同算法 |
-| Delta 叠加 | `+= new - old` 语义上等价于绝对赋值，但形式明确表达"变化量" |
-
-### 常见问题排查
-
-| 现象 | 原因 | 检查点 |
-|------|------|--------|
-| Gizmo 完全不出现 | 未调用 `BeginFrame()` | `ImGuiLayer::Begin()` 中是否调用 |
-| 选中实体后无 Gizmo | 实体无 `TransformComponent` | 层级面板选择后日志确认 |
-| 拖拽时物体疯狂旋转 | 矩阵分解不一致 | `GetTransform()` 是否使用四元数 |
-| Gizmo 位置偏移 | 相机矩阵不匹配 | 是否使用 `GetPrimaryCameraEntity()` |
-| 透视下 Gizmo 消失 | 近平面裁剪 | 实体 Z 是否在 near/far 之间 |
-| 指针为 null 崩溃 | `DecomposeMatrixToComponents` 不接受空指针 | 所有三个参数必须提供有效数组 |
-
-最后通过Gizmos手搓正方体
-![[README.assets/Pasted image 20260720104837.png]]
-
+还有一处更实际的缺口：Inspector 的连续拖动已经接入 `CommandHistory`，Gizmo 拖拽目前仍然直接修改 Transform。也就是说，用手柄完成的变换还不能通过 `Ctrl+Z` 还原。后续应在 `ImGuizmo::IsUsing()` 的开始和结束阶段保存前后快照，把一次连续拖拽合并成一条命令。
 
 ## EditorCamera 编辑器自由相机
 
-### 设计动机
+把 Gizmo 放进视口后，很快就遇到另一个问题：如果编辑场景也依赖场景里的主相机，移动观察位置就会同时改动游戏镜头。编辑器需要一台只服务于创作过程的相机，`EditorCamera` 因此单独放在渲染模块中，不作为 ECS 组件保存。
 
-之前编辑器使用两套独立相机混合作业：
+### 相机状态怎么组织
 
-| 相机 | 角色 | 问题 |
-|------|------|------|
-| `m_CameraController` (OrthographicCamera) | WASD 平移、滚轮缩放 | 仅控制正交相机，不影响实际渲染 |
-| ECS "Main Camera" 实体 (SceneCamera) | 场景实体渲染、Gizmo 投影 | 静止不动，无法交互操作 |
-
-两套 camera 的 view/projection 不一致，导致 Gizmo 位置偏移。且 ECS 相机实体需手动创建/管理，与编辑器操作逻辑无关。
-
-### 设计目标
-
-将相机控制、渲染投影、Gizmo 投影统一为一个独立类，不依赖 ECS 实体系统，作为引擎核心基础组件放在 `Renderer` 目录下。
-
-### 球形坐标模型
-
-```
-相机位置 = 焦点 + 球面偏移
-
-       m_Position = m_FocalPoint
-                  + (orientation * (0,0,1)) * m_Distance
-
-       其中 orientation = rotateY(yaw) * rotateX(pitch)
-```
-
-```
-              m_Position (球面上)
-                 ╲
-                  ╲ m_Distance
-                   ╲
-                    ● m_FocalPoint (旋转中心)
-```
-
-三个自由度：
-- **m_Distance** — 相机到焦点的距离（滚轮 Dolly）
-- **m_Yaw** — 水平旋转角（右键左右拖拽）
-- **m_Pitch** — 垂直俯仰角（右键上下拖拽，限制 -89°~89° 防止翻转）
-
-### 核心接口
+`EditorCamera` 保存焦点 `FocalPoint`、观察距离 `Distance`、俯仰角 `Pitch` 和偏航角 `Yaw`。位置由这些状态推导，朝向通过四元数计算，最终用 `glm::lookAt()` 生成 View 矩阵。
 
 ```cpp
-class EditorCamera {
-public:
-    EditorCamera(float fov, float aspectRatio, float nearClip, float farClip);
-
-    void OnUpdate(Timestep ts);       // 每帧检查鼠标按键状态
-    void OnEvent(Event& e);           // 滚轮事件
-
-    const glm::mat4& GetViewMatrix() const;       // 给 Gizmo / 渲染
-    const glm::mat4& GetProjectionMatrix() const;
-
-    void SetViewportSize(float w, float h);       // 窗口 resize 时更新比例
-};
-```
-
-### 操作映射
-
-| 操作 | 方法 | 实现 |
-|------|------|------|
-| **右键拖拽** | Orbit 旋转 | `delta = (mouse - m_InitialRightMouse) * speed`，累加 yaw/pitch → `UpdateView()` |
-| **中键拖拽** | Pan 平移 | `delta = (mouse - m_InitialMiddleMouse) * speed * distance`，移动焦点 → `UpdateView()` |
-| **滚轮** | Dolly 缩放 | `m_Distance -= offset * distance * 0.1`，clamp(0.5, 500) → `UpdateView()` |
-
-每次操作后调用 `UpdateView()`：
-```cpp
-void EditorCamera::UpdateView()
+glm::vec3 EditorCamera::CalculatePosition() const
 {
-    m_Position = CalculatePosition();                    // 球坐标 → 世界位置
-    m_ViewMatrix = glm::lookAt(m_Position, m_FocalPoint, GetUpDirection());
+    return m_FocalPoint - GetForwardDirection() * m_Distance;
 }
 ```
 
-### 中键追踪踩踏修复
+这种组织方式很适合编辑器视角。旋转时镜头绕焦点运动，平移时移动焦点，滚轮则改变镜头与焦点之间的距离。默认投影参数为 `45°` 视野角、`0.1` 近裁剪面和 `1000.0` 远裁剪面；有效视口尺寸变化后会重新计算宽高比和投影矩阵。
 
-初版中右键和中键共用一个 `m_InitialMousePosition`。当右键未按下时，`else` 分支每帧重置该变量。中键按下后计算 delta 时，起点已被右键 `else` 覆盖为当前帧位置，delta 始终为零。
+### 当前操作
 
-修复：拆分为 `m_InitialRightMouse` 和 `m_InitialMiddleMouse`，各自独立追踪。这种两个操作共享同一状态变量导致的交互干扰是输入系统中常见的踩踏 Bug。
+视口悬停并处于 Edit 模式时，相机才接收输入：
 
-### 编辑器集成
+- 按住鼠标右键拖动：旋转视角，俯仰角限制在 `-89°` 到 `89°`
+- 按住鼠标右键并使用 `W/A/S/D/Q/E`：前后、左右、上下移动
+- 按住任一 `Shift`：移动速度提高到三倍
+- 按住鼠标中键拖动：沿相机的右方向和上方向平移焦点
+- 滚动滚轮：拉近或拉远，距离限制在 `0.5` 到 `500.0`
 
-```cpp
-// EditorLayer — 单一相机，统一驱动
+中键平移速度会随观察距离调整，远看大场景时不会挪得太慢，靠近物体后也不至于一步跨过去。右键旋转和中键平移分别记录上一帧鼠标位置，切换操作时不会共用一份残留增量。视口失去输入权时，这两组坐标会重置到当前鼠标位置，重新进入视口也就不会突然跳一下。
 
-// OnUpdate: 更新相机状态
-m_EditorCamera.OnUpdate(ts);
+![EditorCamera 自由观察场景](README.assets/Pasted%20image%2020260720114008.png)
 
-// 场景渲染：直接用 EditorCamera 的 VP
-glm::mat4 vp = m_EditorCamera.GetProjectionMatrix() * m_EditorCamera.GetViewMatrix();
-m_ActiveScene->OnUpdateEditor(ts, vp);  // 新增的重载，接受外部 VP
+### Edit 与 Play 使用不同相机
 
-// Gizmo：直接用 EditorCamera 的 view/projection
-const glm::mat4& view = m_EditorCamera.GetViewMatrix();
-const glm::mat4& proj = m_EditorCamera.GetProjectionMatrix();
-ImGuizmo::Manipulate(value_ptr(view), value_ptr(proj), ...);
+编辑器每帧先根据视口悬停状态决定是否启用输入，再更新 `EditorCamera`。渲染 Edit 场景时，View、Projection、相机位置和裁剪面都会传给 `Scene::OnUpdateEditor()`，天空盒和后处理也沿用同一组参数。
+
+进入 Play 模式后，渲染路径改用场景中的 Primary Camera。编辑器相机仍保留原来的观察状态，停止运行便能回到刚才的工作位置。这条分界避免了编辑视角对运行时镜头产生副作用。
+
+```text
+Edit  -> EditorCamera   -> Scene::OnUpdateEditor()
+Play  -> Primary Camera -> Scene::OnUpdateRuntime()
 ```
 
-ECS 相机实体不再需要——`Scene::OnUpdateEditor` 直接接收外部 VP 矩阵渲染所有 Sprite，绕过了场景内主相机搜索。
+### 快速聚焦选中实体
 
-### 文件位置
+视口悬停时按 `F` 可以聚焦当前选中的实体。编辑器会尽量计算实体的世界包围盒：模型使用变换后的网格 Bounds，地形根据网格分辨率和高度缩放估算范围，其余实体回退到 Transform 的缩放值。得到中心和半径后，相机把焦点移到中心，并把距离设为半径的 `2.5` 倍。
 
-```
-Glimmer/src/Glimmer/Renderer/
-  ├── Camera.h              ← 抽象基类
-  ├── OrthographicCamera.h  ← 正交相机
-  ├── EditorCamera.h/cpp    ← 编辑器自由相机（新增）
-  ├── Renderer.h
-  └── Renderer2D.h
-```
+这部分比写死一个观察距离实用得多。同一个快捷键既能查看小型网格，也能退到足够远的位置观察整块地形。调试面板也复用了 `SetView()` 和 `Focus()`，无需再维护一套临时相机逻辑。
 
-作为引擎核心组件与 `Camera`、`Renderer` 同级，任何应用（Sandbox、GlimmerEditor、CyoutBranch）都可以直接使用。
-
-![[README.assets/Pasted image 20260720114008.png]]
-
+当前相机状态只存在于编辑器运行期间，还没有保存到项目或场景；移动速度、FOV 和裁剪面也没有对应的编辑器设置项。若后面需要记住每个场景的工作视角，这些参数应进入编辑器配置，不能混进场景相机组件。
 
 ## Framebuffer 重构：多附件与优化
 
-### 重构前的问题
+最初的 Framebuffer 只负责把颜色画到一张纹理上，显示视口已经够用。等鼠标拾取、HDR 后处理和阴影陆续加入，一张颜色附件就装不下这些数据了。这次重构的重点，是让调用方用规格描述附件组合，再由 OpenGL 后端创建对应资源。
 
-| 问题 | 详情 |
-|------|------|
-| 单颜色附件 | 硬编码 1 个 `GL_RGBA8` 颜色附件，无法支持 MRT（多渲染目标） |
-| Resize 暴力重建 | `Resize()` = `glDeleteTextures` × 2 + `Invalidate()`，每次 resize 都销毁 GPU 资源再创建 |
-| MSAA 无效 | `Samples` 字段存在但 `Invalidate()` 中无任何多重采样逻辑 |
-| 纹理格式硬编码 | 颜色附件固定 `GL_RGBA8`，深度固定 `GL_DEPTH24_STENCIL8`，无法选择 HDR / 整数格式 |
-| 深度不可读 | 深度附件绑定后完全无法对外暴露，调试或后处理无法使用深度信息 |
-| 仅 OpenGL | `FramebufferSpecification` 中 `SwapChainTarget` 字段预留但未实现 |
+### 用规格描述渲染目标
 
-### 新接口设计
-
-**纹理格式枚举**
+当前编辑器的场景 Framebuffer 由三类附件组成：
 
 ```cpp
-enum class FramebufferTextureFormat {
-    None = 0,
-    RGBA8,              // 标准 8-bit 颜色
-    RED_INTEGER,        // 实体 ID 拾取（整数像素）
-    RGBA16F,            // HDR 半精度浮点
-    Depth24Stencil8,    // 深度/模板
-};
-```
-
-**附件规格**
-
-```cpp
-struct FramebufferAttachmentSpecification {
-    FramebufferTextureFormat Format = FramebufferTextureFormat::RGBA8;
+FramebufferSpecification sceneFramebufferSpec;
+sceneFramebufferSpec.Width = 1280;
+sceneFramebufferSpec.Height = 720;
+sceneFramebufferSpec.Attachments = {
+    { FramebufferTextureFormat::RGBA16F },
+    { FramebufferTextureFormat::RED_INTEGER },
+    { FramebufferTextureFormat::Depth24Stencil8 }
 };
 
-struct FramebufferSpecification {
-    uint32_t Width = 1280, Height = 720;
-    std::vector<FramebufferAttachmentSpecification> Attachments;  // 任意数量
-    uint32_t Samples = 1;         // MSAA 采样数（1=关闭）
-    bool SwapChainTarget = false;
-
-    FramebufferSpecification() = default;
-    FramebufferSpecification(uint32_t w, uint32_t h) : Width(w), Height(h) {}
-};
+m_Framebuffer = Framebuffer::Create(sceneFramebufferSpec);
 ```
 
-**Framebuffer 抽象接口**
+每个格式承担的工作很明确：
 
-```cpp
-class Framebuffer {
-public:
-    virtual void Bind() = 0;
-    virtual void Unbind() = 0;
-    virtual void Resize(uint32_t width, uint32_t height) = 0;
+- `RGBA8`：普通八位颜色，最终显示缓冲使用这一格式
+- `RGBA16F`：保留 HDR 颜色，场景和 Bloom 中间结果会用到
+- `RED_INTEGER`：保存实体 ID，供视口拾取读取
+- `Depth24Stencil8`：常规深度和模板附件
+- `Depth32F`：可采样的浮点深度纹理，阴影渲染使用这一格式
 
-    virtual uint32_t GetColorAttachmentRendererID(uint32_t index = 0) const = 0;
-    virtual uint32_t GetDepthAttachmentRendererID() const = 0;          // 新增
+若规格中没有任何附件，OpenGL 实现会补一张 `RGBA8` 颜色纹理；若没有显式深度格式，还会补一张 `Depth24Stencil8`。这两个默认值让简单离屏渲染仍可只填写尺寸，但复杂渲染目标最好把用途写完整，阅读调用点时会更直观。
 
-    virtual const FramebufferSpecification& GetSpecification() const = 0;
+### 多附件怎样参与一帧渲染
 
-    static Ref<Framebuffer> Create(const FramebufferSpecification& spec);
-};
+非多重采样路径会为每个颜色格式创建独立的二维纹理，再把实际存在的颜色槽提交给 `glNamedFramebufferDrawBuffers()`。纯深度 Framebuffer 没有颜色目标，Draw Buffer 和 Read Buffer 都设为 `GL_NONE`，阴影贴图便可以直接使用同一套抽象。
+
+编辑器里的主要数据流如下：
+
+```text
+Scene Framebuffer
+  attachment 0: RGBA16F      -> 后处理输入
+  attachment 1: RED_INTEGER  -> 鼠标拾取
+  depth: Depth24Stencil8     -> 深度测试 / 后处理深度
+
+PostProcessRenderer
+  HDR Color + Depth -> Bloom / Tone Mapping -> RGBA8 Display
+
+ShadowRenderer
+  Depth32F -> 阴影采样
 ```
 
-### 向后兼容
+每帧绘制场景前，实体 ID 附件会清成 `-1`。鼠标落在视口中时，编辑器从附件 1 读取一个整数，并据此恢复实体选择。这里的 `ReadPixel()` 和 `ClearAttachment()` 按整数附件实现，只适合 `RED_INTEGER`；把它们用于普通颜色附件会得到与接口表面含义不符的结果。
 
-旧代码无需任何改动，规约中未指定 `Attachments` 时自动补默认值：
+![Framebuffer 多附件阶段的编辑器视口](README.assets/Pasted%20image%2020260720133559.png)
 
-```cpp
-// 旧用法——完全兼容
-FramebufferSpecification fbSpec;
-fbSpec.Width  = 1280;
-fbSpec.Height = 720;
-auto fb = Framebuffer::Create(fbSpec);
-// 自动等价于: Attachments = { { RGBA8 } } + 默认 Depth24Stencil8
-```
+### Resize 为什么改成原地更新
 
-### Resize 优化
+视口尺寸会随着面板拖动频繁变化。旧做法每次都销毁整个 Framebuffer，ImGui 持有的颜色纹理 ID 也会更换，资源创建和界面绑定都比较躁动。
 
-之前 `Resize()` 先 `glDeleteTextures` 销毁旧纹理再 `Invalidate()` 重新创建。频繁拖拽视口边缘时，每帧都有 GPU 资源的分配/销毁开销。
+现在 `Resize()` 会先过滤零尺寸、超过 `8192 × 8192` 的尺寸以及与当前规格相同的尺寸。有效变化进入 `ResizeAttachments()`：非 MSAA 颜色纹理继续使用原来的 Renderer ID，只重新分配存储；深度纹理受固定存储接口限制，仍会删除后重建。调用方因此可以稳定持有颜色附件 ID，深度附件 ID 则不能假设永远不变。
 
-```cpp
-// 重构后：ResizeAttachments() 原地更新
-void OpenGLFramebuffer::ResizeAttachments()
-{
-    for (auto& att : m_ColorAttachments) {
-        glBindTexture(GL_TEXTURE_2D, att.RendererID);
-        glTexImage2D(GL_TEXTURE_2D, 0, InternalFormat, w, h, 0, ...);
-        // 纹理 ID 不变，ImGui::Image 引用不失效
-    }
-    // 深度附件：texStorage 不可原地更新，需重建（但仅此一个）
-}
-```
+`Bind()` 还会把 OpenGL Viewport 设置成 Framebuffer 的宽高。渲染代码只要在正确的目标上调用 Bind，就不必再单独同步一遍视口尺寸。
 
-颜色附件使用 `glTexImage2D` 原地重新分配存储（纹理 ID 不变），ImGui 引用的 `uintptr_t` 全程有效。仅深度附件因使用不可变存储 `glTexStorage2D` 仍需重建，但这是 GL 限制而非设计缺陷。
+### 目前的实现边界
 
-### 多附件支持
+这套抽象当前只有 OpenGL 后端，选择 Vulkan 会触发断言，`SwapChainTarget` 字段也还没有落地。MSAA 的规格字段和 Renderbuffer 创建代码虽然已经存在，但多颜色附件会复用同一个 `m_MSAAColorRBO`，附件 ID 也无法作为纹理采样，同时缺少 Resolve 到普通纹理的步骤。因此 `Samples > 1` 只能视作未完成的试验路径，编辑器正式渲染仍应保持 `Samples = 1`。
 
-**GL 层面的关键步骤**
-
-多附件 FBO 必须显式设置 `glDrawBuffers`，OpenGL 默认只向 `GL_COLOR_ATTACHMENT0` 写入片段：
-
-```cpp
-// Invalidate() 末尾
-std::vector<GLenum> drawBuffers;
-for (size_t i = 0; i < m_ColorAttachments.size(); i++)
-    if (!IsDepthFormat(m_ColorAttachments[i].Format))
-        drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + i);
-glNamedFramebufferDrawBuffers(m_RendererID, drawBuffers.size(), drawBuffers.data());
-```
-
-**使用示例**
-
-```cpp
-// 颜色 + 实体 ID 拾取
-FramebufferSpecification pickSpec(1280, 720);
-pickSpec.Attachments = {
-    { FramebufferTextureFormat::RGBA8 },
-    { FramebufferTextureFormat::RED_INTEGER }
-};
-auto pickFB = Framebuffer::Create(pickSpec);
-
-// Shader 端
-layout(location = 0) out vec4 color;      // → 附件 0
-layout(location = 1) out int  entityID;   // → 附件 1
-```
-
-**缺少 `glDrawBuffers` 的排查**
-
-这是实现多附件时最常见的踩坑点。如果 Fragment Shader 有 `layout(location = 1)` 输出但对应附件没有数据显示：
-1. 检查 FBO 是否有对应附件绑定
-2. 检查 `glDrawBuffers` 是否包含了 `GL_COLOR_ATTACHMENT1`
-3. 检查 FBO 完整性状态 `glCheckFramebufferStatus`
-
-### MSAA 支持
-
-当 `Samples > 1` 时，颜色附件使用 `glRenderbufferStorageMultisample` 创建多重采样渲染缓冲，解析到纹理需要在另一个 FBO 上 `glBlitFramebuffer`（当前框架已预留结构，后续可补解析逻辑）。
-
-### 纹理参数规范
-
-| 附件类型 | Min/Mag 过滤 | Wrap |
-|---------|-------------|------|
-| 颜色 (RGBA8, RGBA16F) | LINEAR | CLAMP_TO_EDGE |
-| 整数 (RED_INTEGER) | NEAREST | CLAMP_TO_EDGE |
-| 深度 (Depth24Stencil8) | NEAREST | CLAMP_TO_EDGE |
-
-### 文件结构
-
-```
-Glimmer/src/Glimmer/Renderer/
-  └── FrameBuffer.h          ← 抽象接口 + 规格定义
-      │
-      └── Platform/OpenGL/
-           └── OpenGLFramebuffer.h/cpp  ← OpenGL 实现
-```
-
-`FrameBuffer.h` 中定义了全部平台无关的枚举、规格 struct 和抽象接口。`OpenGLFramebuffer` 实现所有 GL 逻辑，包括格式映射层、DrawBuffers 管理、Resize 优化。
-
-Debug验证
-![[README.assets/Pasted image 20260720133559.png]]
-
+这次重构解决的是多附件描述、拾取数据承载和常规 Resize 成本。若要继续完成 MSAA，需要为每个颜色槽分别保存多采样资源，并增加一组可采样的目标纹理和明确的 Resolve 阶段；单纯把采样数调大还不能形成完整管线。
 
 ## 鼠标拾取 (Mouse Picking)
 
-### 设计目标
+有了场景视口和实体层级后，靠列表寻找物体很快就显得笨重。鼠标拾取解决的是一个很直接的问题：点击画面中的物体，Hierarchy 和 Inspector 就跟着切到这个实体；点到空白处则清除选择。
 
-点击视口中的实体即选中，点击空白取消选中——对齐 Unity/Unreal/Blender 的通用交互模式。基于 GPU 的像素级拾取，不依赖射线检测。
+这里采用 GPU 整数附件拾取。它复用正常场景渲染的几何和遮挡结果，不需要在编辑器里再维护一套射线与各类包围体求交。
 
-### 原理
+### Entity ID 跟着颜色一起写入
 
-利用 FBO 多附件（上一步重构的成果），在正常渲染的同时向第二个附件写入每个实体的唯一 ID：
-
-```
-渲染阶段：
-  附件 0 (RGBA8)     ← 正常颜色输出（显示用）
-  附件 1 (RED_INTEGER) ← 实体 ID 输出（拾取用，不可见）
-
-拾取阶段：
-  左键点击视口 → 坐标转换 → glReadPixels(附件1) → 得到实体 ID → 选中
-```
-
-### 数据流
-
-```
-Scene::OnUpdateEditor:
-  for each entity:
-    Renderer2D::SetEntityID((int)handle)  ← 当前实体 ID
-    Renderer2D::DrawQuad(...)              ← 顶点 EntityID 字段 = handle
-
-        ↓ GPU
-
-Texture.glsl (vertex):
-  flat out int v_EntityID = a_EntityID;   ← 每个 Quad 四个顶点 ID 相同，flat 插值
-
-Texture.glsl (fragment):
-  layout(location = 1) out int entityID;  ← 附件 1 输出
-  entityID = v_EntityID;
-
-        ↓ 每帧最后
-
-EditorLayer::OnImGuiRender:
-  左键点击且非 Gizmo 操作:
-    m_Framebuffer->ReadPixel(1, fbX, fbY)  ← 封装 GL 调用
-    m_ActiveScene->GetEntityByID(id)        ← 反向查找
-    m_HierarchyPanel.SetSelectedEntity(...)  ← 层级面板联动
-```
-
-### 关键改动点
-
-**1. QuadVertex 新增 EntityID 字段**
+Scene Framebuffer 的附件 0 保存 `RGBA16F` 场景颜色，附件 1 是 `RED_INTEGER`。每帧开始时，编辑器先把整数附件清成 `-1`：
 
 ```cpp
-struct QuadVertex {
-    glm::vec3 Position;
-    glm::vec4 Color;
-    glm::vec2 TexCoord;
-    float TexIndex;
-    float TilingFactor;
-    int   EntityID;      // ← 新增
-};
+RenderPass::Begin(scenePass);
+m_Framebuffer->ClearAttachment(1, -1);
 ```
 
-顶点布局中对应 `{ ShaderDataType::Int, "a_EntityID" }`。
+`-1` 表示当前像素没有实体。不能用 0 作为空值，因为 0 可能是有效的 EnTT entity ID。之后各条渲染路径把当前实体的临时整数 ID 写到 fragment output 的 location 1。
 
-**2. VAO 整数属性修复**
+```glsl
+layout(location = 0) out vec4 color;
+layout(location = 1) out int entityID;
 
-GLSL 中 `in int` 类型的顶点属性必须用 `glVertexAttribIPointer`（注意中间的 `I`），不能用 `glVertexAttribPointer`。后者将整数数据当作浮点解释，导致拾取 ID 错乱：
+entityID = v_EntityID;
+```
+
+Sprite 的 ID 是 `QuadVertex` 中的整数属性，并以 `flat` 方式传到 Fragment Shader。OpenGL VAO 为它调用 `glVertexAttribIPointer()`；若误用浮点版 `glVertexAttribPointer()`，GLSL 虽然能编译，读出的整数却会错。
+
+模型和地形也写入同一附件。普通模型通过 `u_EntityID` 提交，实例化模型从 Instance Buffer 读取 ID，地形使用自己的实体 Uniform。这样一次点击能覆盖当前完整编辑器里的 Sprite、Model 和 Terrain。
+
+```text
+Scene Pass
+  Color output    -> attachment 0, RGBA16F
+  EntityID output -> attachment 1, RED_INTEGER
+  Depth test      -> 决定当前可见片元
+
+左键点击 -> 坐标换算 -> ReadPixel(1, x, y) -> Scene 反查实体
+```
+
+材质裁剪也会影响拾取。Mask 被 `discard` 的像素不会留下 ID；Blend 像素的有效 Alpha 小于等于 `1/255` 时同样丢弃，其余透明片元按现有透明队列顺序写入。这让选择结果尽量贴近视口中真正画出来的表面。
+
+### 从 ImGui 坐标走到 Framebuffer
+
+ImGui 鼠标坐标以屏幕左上角为原点，Framebuffer 读取坐标以左下角为原点。编辑器先减去视口左上角，再按实际 Framebuffer 尺寸缩放，Y 轴在这一步翻转：
 
 ```cpp
-// OpenGLVertexArray::AddVertexBuffer
-if (IsIntType(element.Type))
-    glVertexAttribIPointer(index, ...);  // ← 整数类型专用
-else
-    glVertexAttribPointer(index, ...);   // ← 浮点类型
+int fbX = int(
+    (mx - m_ViewportBounds[0].x) / viewportWidth * spec.Width);
+int fbY = int(
+    (1.0f - (my - m_ViewportBounds[0].y) / viewportHeight)
+    * spec.Height);
 ```
 
-这是实现 GPU 拾取时最常见但最隐蔽的坑——shader 语法正确、FBO 配置正确，唯独顶点属性传错了类型。
+点击只在 Edit 模式、视口悬停且鼠标不位于 Gizmo 上方时处理。读取到非负 ID 后，`Scene::GetEntityByID()` 先通过 EnTT Registry 检查句柄是否仍然有效，再交给 Hierarchy。Hierarchy 同时更新共享的 `SelectionContext`，所以 Inspector 和其他选择消费者会收到同一个结果。
 
-**3. FBO 拾取附件清理**
+![使用鼠标拾取连续选择并摆放 Cube](README.assets/Pasted%20image%2020260720151128.png)
 
-`glClear(GL_COLOR_BUFFER_BIT)` 对整数格式附件行为是实现相关的，不可靠。且 `0` 是合法的 entt entity ID（第一个创建的实体），不能作为"无实体"标记值：
+### 当前取舍
 
-```cpp
-// 每帧渲染前
-m_Framebuffer->ClearAttachment(1, -1);  // glClearBufferiv → 拾取附件 = -1
-```
+`ReadPixel()` 最终调用一次同步 `glReadPixels()`，存在让 CPU 等待 GPU 的可能。当前只在左键点击时读取一个像素，没有放进每帧悬停逻辑，实际编辑负担很小。如果以后要做持续 Hover 高亮或框选，更合适的做法是增加异步 PBO 读回或单独的选择流程。
 
-```cpp
-// 点击时，-1 = 无实体 → 取消选中
-int id = m_Framebuffer->ReadPixel(1, fbX, fbY);
-if (id >= 0)
-    m_HierarchyPanel.SetSelectedEntity(m_ActiveScene->GetEntityByID((uint32_t)id));
-else
-    m_HierarchyPanel.SetSelectedEntity({});  // 点击空白取消选中
-```
-
-**4. Scene::GetEntityByID — 反向查找**
-
-```cpp
-Entity Scene::GetEntityByID(uint32_t id) {
-    entt::entity handle = (entt::entity)id;
-    if (m_Registry.valid(handle))       // entt 校验实体存在
-        return Entity{ handle, this };
-    return {};
-}
-```
-
-封装了 `entt::entity` 的内部表示，EditorLayer 不直接操作 entt 类型。
-
-**5. Framebuffer::ReadPixel — GL 调用封装**
-
-```cpp
-int OpenGLFramebuffer::ReadPixel(uint32_t attachmentIndex, int x, int y) const {
-    int pixel = -1;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_RendererID);
-    glReadBuffer(GL_COLOR_ATTACHMENT0 + attachmentIndex);
-    glReadPixels(x, y, 1, 1, GL_RED_INTEGER, GL_INT, &pixel);
-    return pixel;
-}
-```
-
-EditorLayer 只调用 `m_Framebuffer->ReadPixel(1, fbX, fbY)`——一行代码，零 GL 裸调用。
-
-### 坐标转换
-
-ImGui 鼠标坐标为屏幕空间（左上角原点），FBO 坐标为纹理空间（左下角原点），需翻转 Y 轴：
-
-```cpp
-int fbX = (int)((mx - vpBounds[0].x) / vpWidth  * fboWidth);
-int fbY = (int)((1.0f - (my - vpBounds[0].y) / vpHeight) * fboHeight);
-```
-
-### 交互行为
-
-| 操作 | 结果 |
-|------|------|
-| 左键点击实体 | 层级面板选中该实体，Gizmo 显示 |
-| 左键点击空白 | 取消选中，Gizmo 隐藏 |
-| Gizmo 拖拽中点击 | 不触发拾取（`!ImGuizmo::IsOver()` 保护） |
-
-### 文件改动总览
-
-```
-引擎层:
-  FrameBuffer.h          ← 新增 ReadPixel / ClearAttachment 接口
-  OpenGLFramebuffer.h/cpp ← 实现
-  OpenGLVertexArray.cpp   ← 整数属性用 glVertexAttribIPointer
-  Renderer2D.h/cpp        ← QuadVertex 加 EntityID + SetEntityID
-  Scene.h/cpp             ← GetEntityByID + OnUpdateEditor 传 EntityID
-
-Shader:
-  Texture.glsl            ← layout(location=5) in int a_EntityID
-                          ← layout(location=1) out int entityID
-
-编辑器:
-  EditorLayer.cpp         ← FBO 双附件 + ClearAttachment(-1) + 拾取逻辑
-```
-
-利用picking高效制作cube
-![[README.assets/Pasted image 20260720151128.png]]
-
+附件中保存的是当前 Scene 的 EnTT ID，不是实体 UUID。它只用于眼前这一帧和当前 Registry，不能写入场景文件，也不能跨 Scene 缓存。
 
 ## 着色器系统优化：Uniform 缓存与 UBO
 
-### 重构前的问题
+Shader 接口早期每上传一个 Uniform 都会调用一次 `glGetUniformLocation()`。功能没问题，但同一 Program 链接完成后，Location 在它的生命周期内不会变化，逐帧重复用字符串查询没有意义。相机矩阵也在多个 `BeginScene()` 重载中走普通 Uniform 上传，公共数据和材质私有数据混在了一起。
 
-**1. 每帧每次 Uniform 上传都做 `glGetUniformLocation`**
+这轮整理分成两部分：缓存单独 Uniform 的 Location，再用 Uniform Buffer 承载 Renderer2D 的相机块。
 
-```cpp
-void OpenGLShader::UploadUniformMat4(const std::string& name, const glm::mat4& matrix) {
-    GLint location = glGetUniformLocation(m_RendererID, name.c_str()); // ← 每次！
-    glUniformMatrix4fv(location, 1, GL_FALSE, glm::value_ptr(matrix));
-}
-```
+### Location 缓存要跟 Program 生命周期走
 
-每个 `BeginScene` 调用都重新查 `u_ViewProjection` 和 `u_Time` 的 location。`glGetUniformLocation` 涉及 GL 驱动的字符串哈希和遍历，虽然单次开销极小但逐帧累积无意义——shader 链接后 location 不变。
-
-**2. 每个 Shader 独立上传 Camera 数据**
-
-Renderer2D 的三个 `BeginScene` 重载各自调用 `UploadUniformMat4 + UploadUniformFloat`。后续若新增 shader，每个都需要重复上传相同的 camera VP 和时间。
-
-**3. 批处理重置代码重复**
-
-`QuadIndexCount / QuadVertexBufferPtr / TextureSlotIndex` 初始化在 4 处硬编码复制。
-
-### Uniform Location 缓存
-
-**原理**：`glGetUniformLocation` 在 Shader 链接后结果恒定。首次调用存入 `unordered_map`，后续 O(1) 查表。
+`OpenGLShader` 现在维护一张名称到 `GLint` 的缓存。所有整数、浮点、向量和矩阵上传都经过同一个查询入口：
 
 ```cpp
-// OpenGLShader 新增
-mutable std::unordered_map<std::string, GLint> m_UniformCache;
-
 GLint OpenGLShader::GetUniformLocation(const std::string& name) const
 {
-    auto it = m_UniformCache.find(name);
-    if (it != m_UniformCache.end())
-        return it->second;                           // 命中：O(1)
+    const auto cached = m_UniformCache.find(name);
+    if (cached != m_UniformCache.end())
+        return cached->second;
 
-    GLint loc = glGetUniformLocation(m_RendererID, name.c_str());  // 未命中：一次 GL
-    m_UniformCache[name] = loc;
-    return loc;
+    const GLint location =
+        glGetUniformLocation(m_RendererID, name.c_str());
+    m_UniformCache[name] = location;
+    return location;
 }
 ```
 
-所有 8 个 `UploadUniform*` 方法中的 `glGetUniformLocation` 替换为 `GetUniformLocation`。
+首次使用仍会询问驱动，后续上传直接查表，找不到的 `-1` 也会被缓存。缓存的有效期不能超过 OpenGL Program：Shader 热重载成功后会换成新的 Program ID，旧 Location 全部失效。因此事务式重载在替换 Program 时会清空 `m_UniformCache`；若新源码编译或链接失败，旧 Program 和旧缓存都保留。
 
-`m_UniformCache` 声明为 `mutable`：即使通过 `const Bind()` 调用也能写缓存（逻辑上缓存不影响 Shader 对象的"语义常量性"）。
+Renderer2D 的纹理采样器数组属于 Program 自身状态。Texture Shader 热重载成功后，渲染器会重新上传 `u_Textures[32]`，不能指望新 Program 继承旧值。
 
-### Uniform Buffer Object (UBO)
+### Camera UBO 的实际布局
 
-**动机**：Camera 数据（VP 矩阵 + 时间）是全局共享的——所有 Shader 都需要但不是每个 Shader 独有的。传统 uniform 上传需要每个 Shader 绑定后逐一 `UploadUniformMat4`，UBO 将其改为一次写入、所有 Shader 自动可见。
+`UniformBuffer` 提供平台无关的创建、绑定和局部更新接口。OpenGL 后端用 DSA 创建 Buffer，通过 `glBindBufferBase()` 绑定到指定槽位，再用 `glNamedBufferSubData()` 更新内容。
 
-**UniformBuffer 抽象**
-
-```
-Renderer/UniformBuffer.h          ← 平台无关接口
-Platform/OpenGL/OpenGLUniformBuffer.h/cpp ← GL 实现
-```
+Renderer2D 在 binding 0 创建一块 80 字节的 Camera Buffer：
 
 ```cpp
-class UniformBuffer {
-public:
-    virtual void Bind() const = 0;
-    virtual void Unbind() const = 0;
-    virtual void SetData(const void* data, uint32_t size, uint32_t offset = 0) = 0;
-
-    static Ref<UniformBuffer> Create(uint32_t size, uint32_t binding);
+struct CameraData
+{
+    glm::mat4 ViewProjection; // 64 bytes
+    float Time;               // 4 bytes
+    float _pad[3];            // 补到 80 bytes
 };
+
+static_assert(sizeof(CameraData) == 80);
 ```
 
-**GL 实现**：`glCreateBuffers` + `glNamedBufferData`（DSA 分配）+ `glBindBufferBase`（绑定到 binding point）+ `glNamedBufferSubData`（增量更新）。
-
-**Renderer2D 中的 CameraData**
-
-```cpp
-struct CameraData {
-    glm::mat4 ViewProjection;  // offset 0,  size 64
-    float     Time;            // offset 64, size 4
-    float     _pad[3];         // offset 68, size 12（std140 对齐到 16B 边界）
-};
-static_assert(sizeof(CameraData) == 80, "std140");
-
-Ref<UniformBuffer> CameraUniformBuffer;  // Init 时创建，binding point 0
-CameraData CameraBuffer;                 // 每帧更新
-```
-
-**std140 布局规则**：`mat4` 在 UBO 中被当作 4 个 `vec4`（每行 16 字节对齐），`float` 后需 padding 到下一个 `vec4` 边界。`static_assert` 在编译期验证结构体大小，防止对齐错误。
-
-**数据流变化**
-
-```
-之前:
-  BeginScene → Bind(TextureShader) → UploadUniformMat4("u_ViewProjection", vp) → UploadUniformFloat("u_Time", t)
-  问题：每次绑 Shader 都重新上传，多个 Shader 需重复
-
-之后:
-  s_Data.CameraBuffer.ViewProjection = vp;
-  s_Data.CameraBuffer.Time = GetTime();
-  s_Data.CameraUniformBuffer->SetData(&s_Data.CameraBuffer, 80);  // 一次 glBufferSubData
-  Bind(TextureShader)  // Shader 通过 layout(std140, binding=0) 自动读取
-  效果：所有 Shader 共享，只传一次
-```
-
-**Shader 端适配**
+三个 `BeginScene()` 重载负责算出各自的 ViewProjection、记录时间并更新这块 Buffer，然后统一进入 `StartBatch()`。当前 Texture Shader 的 Camera Block 只声明了 `u_ViewProjection`，也就是读取前 64 字节；`Time` 虽然已经上传，却没有在这个 Shader 的 UBO 声明中消费。全屏绘制仍通过普通 `u_Time` Uniform 传时间，旧文档所说的所有 Shader 自动共享 VP 和时间并不准确。
 
 ```glsl
-#version 330 core
-#extension GL_ARB_shading_language_420pack : enable  // binding 需要 420 或此扩展
-
-layout(std140, binding = 0) uniform CameraBlock {
-    mat4  u_ViewProjection;  // 变量名不变
-    float u_Time;
-};
-// Shader 主体代码一行未改——uniform 名相同，访问方式不变
-```
-
-`binding = 0` 对应 C++ 端 `UniformBuffer::Create(size, 0)` 的第二个参数。`std140` 保证 CPU/GPU 内存布局一致。
-
-### StartBatch 重构
-
-消除 `BeginScene × 3 + FlushAndReset` 中的重复批处理重置：
-
-```cpp
-void Renderer2D::StartBatch()
+layout(std140, binding = 0) uniform Camera
 {
-    s_Data.QuadIndexCount = 0;
-    s_Data.QuadVertexBufferPtr = s_Data.QuadVertexBufferBase;
-    s_Data.TextureSlotIndex = 1;
-}
+    mat4 u_ViewProjection;
+};
 ```
 
-### 文件清单
+`std140` 约束 CPU 和 GLSL 对矩阵、向量的对齐理解。80 字节结构给后续扩充 Camera Block 留了位置，但两端声明仍需同步；仅在 C++ 里加字段不会让 Shader 自动获得数据。
 
-```
-新增:
-  Renderer/UniformBuffer.h/cpp         ← 抽象 + 工厂
-  Platform/OpenGL/OpenGLUniformBuffer.h/cpp ← GL 实现
+### 这次优化覆盖到哪里
 
-修改:
-  Platform/OpenGL/OpenGLShader.h/cpp   ← Uniform 缓存
-  Renderer/Renderer2D.h/cpp            ← CameraUBO + StartBatch
-  assets/shaders/Texture.glsl          ← layout(std140, binding=0)
-```
+`StartBatch()` 统一重置索引数、CPU 顶点写指针和纹理槽，避免三个 `BeginScene()` 与 Flush 路径各自维护一份批次初始化。之后引擎也用同一套 `UniformBuffer` 抽象建立了 binding 1 的 Light UBO。
 
+UBO 适合 ViewProjection、光源环境这类跨 Draw 共享的数据。材质参数、实体 ID、采样器槽位仍会随 Shader 或 Draw 改变，继续使用普通 Uniform 更合适。Location 缓存减少查询次数，UBO 减少公共数据的重复提交，两者解决的不是同一个问题。
 
 ## Vulkan / SPIR-V 接口预埋
 
-### 背景
+这一阶段并没有实现 Vulkan 渲染器，做的是先把名称、依赖和少量工厂分支放进工程，暴露出 OpenGL 代码目前卡得有多深。回头看，这些预埋更像一份迁移清单，距离可以切换后端还有很长一段实现工作。
 
-Vulkan 后端实现是长期目标。当前 OpenGL 渲染层通过抽象接口隔离，切换后端只需实现一套 `Platform/Vulkan/` 类并在工厂中注册。在动手实现之前，先把接口层的缺口补上，避免后续重构时全项目联动修改。
+### 已经放进仓库的部分
 
-### 已完成的预埋
+`RendererAPI::API` 有 `None`、`OpenGL` 和 `Vulkan` 三个值，默认值仍是 OpenGL。Framebuffer、UniformBuffer、ComputeShader、PixelBuffer、Texture 和 Cubemap 等部分工厂识别 Vulkan 分支，但当前只会断言或返回空值。
 
-**1. 后端枚举**
+`Shader::CreateFromBinary()` 接受 Vertex 和 Fragment 两组 SPIR-V 字节码，接口已经存在，不过 OpenGL 与 Vulkan 两个分支目前都会断言。仓库中没有 `Platform/Vulkan/`，也没有 `VkInstance`、Device、Surface、Swapchain、Command Buffer、Descriptor Set 或 Pipeline 的实现。
 
-```cpp
-// RendererAPI.h
-enum class API { None = 0, OpenGL = 1, Vulkan = 2 };
-inline static void SetAPI(API api) { s_API = api; }  // 运行时切换
+依赖侧加入了两个子模块：
+
+- `Vulkan-Headers` 提供 Vulkan 类型和函数声明
+- `SPIRV-Cross` 作为独立静态库项目进入 Premake Workspace
+
+根 Premake 会读取 `VULKAN_SDK`，没有 SDK 时保留本地 Headers 路径；同时排除 SPIRV-Cross 自带的 samples 和 tests，避免它们混入引擎解决方案。当前 `Glimmer` 静态库没有包含 Vulkan Header 路径，没有链接 `vulkan-1.lib`，也没有链接或调用 SPIRV-Cross。它们现在只是可用依赖，还没进入运行链路。
+
+### 为什么现在不能调用 SetAPI(Vulkan)
+
+表面上有 `RendererAPI::SetAPI()`，实际后端选择还不统一。下面这些路径仍直接构造 OpenGL 类型：
+
+- `RenderCommand::s_RendererAPI` 固定创建 `OpenGLRendererAPI`
+- VertexBuffer、IndexBuffer 与 VertexArray 工厂直接返回 OpenGL 实现
+- 文件型 Shader 和源码型 Shader 直接创建 `OpenGLShader`
+- 从文件加载 Texture2D 的重载也绕过后端分支
+
+因此在程序运行中把枚举改成 Vulkan，只会让一部分资源走断言，另一部分继续创建 OpenGL 对象。这不是安全的运行时开关。
+
+```text
+当前状态
+  Renderer API 名称与部分 case 分支
+  Vulkan-Headers / SPIRV-Cross 子模块
+  SPIR-V 二进制工厂签名
+                |
+                v
+  尚缺统一后端工厂、Vulkan Context 和完整资源实现
 ```
 
-**2. 所有工厂占位 Vulkan 分支**
+### 真正接入时要补什么
 
-```cpp
-// FrameBuffer.cpp / UniformBuffer.cpp / Shader.cpp
-case RendererAPI::API::Vulkan:
-    GL_CORE_ASSERT(false, "Vulkan backend not yet implemented!");
-    return nullptr;
-```
+下一步应先统一 RendererAPI、Buffer、VertexArray、Texture 和 Shader 的创建入口，再建立 Vulkan Context、Surface、Swapchain 与帧同步。随后才能定义 Render Pass、Pipeline、Descriptor 和 Command Buffer 如何对应现有 Renderer2D/Renderer3D 调用。
 
-编译通过，运行时若误切到 Vulkan 会明确断言提示。后续实现 `Platform/Vulkan/OpenGLFramebuffer.cpp` 等文件后，替换这些 `case` 为 `CreateRef<VulkanFramebuffer>(spec)` 即可。
-
-**3. SPIR-V Shader 加载入口**
-
-```cpp
-// Shader.h — 接受 SPIR-V 二进制的工厂方法
-static Ref<Shader> CreateFromBinary(
-    const std::string& name,
-    const std::vector<uint32_t>& vertSPV,
-    const std::vector<uint32_t>& fragSPV);
-```
-
-OpenGL 实现直接断言不支持——因为 GL 端计划保持 GLSL 源码编译模式。Vulkan 实现中此方法调用 `vkCreateShaderModule` + `vkCreateGraphicsPipeline`。
-
-**4. premake 双路径 Vulkan 包含**
-
-```lua
--- 优先 Vulkan SDK 系统安装，回退 git submodule
-local vulkanSDK = os.getenv("VULKAN_SDK")
-if vulkanSDK then
-    IncludeDir["VulkanSDK"] = vulkanSDK .. "/Include"   -- vulkan.h
-    libdirs { vulkanSDK .. "/Lib" }                     -- vulkan-1.lib
-else
-    IncludeDir["Vulkan-Headers"] = "Glimmer/vendor/Vulkan-Headers/include"
-end
-```
-
-**5. git submodule 依赖**
-
-| 子模块 | 用途 | 编译方式 |
-|--------|------|---------|
-| `Vulkan-Headers` | `vulkan.h` + 平台扩展头 | 纯头文件，无编译 |
-| `SPIRV-Cross` | SPIR-V 反射/反编译（Shader 调试、Pipeline 自动生成） | StaticLib |
-
-SPIRV-Cross 的 premake 配置排除了 `main.cpp`（CLI 工具），定义 `SPIRV_CROSS_STATIC` 强制静态链接规避 Windows DLL 符号导入。
-
-### SPIR-V 在当前阶段不启用
-
-OpenGL 后端通过 `GL_ARB_gl_spirv` 扩展可以加载 SPIR-V 二进制，但收益微乎其微——15 个 shader 总编译时间 < 50ms，引入 glslc 离线编译步骤反而增加构建复杂度和调试成本。SPIR-V 启用时机对齐 Vulkan 后端实现，届时 GL 保持 GLSL 源码模式不变。
-
-### 后续 Vulkan 实现路径
-
-```
-P0: VulkanContext    ← Instance / Device / Surface / SwapChain
-P1: ShaderModule     ← SPIR-V 加载 (vkCreateShaderModule)
-    Pipeline         ← PSO (vkCreateGraphicsPipeline)
-    RenderPass       ← 附件描述
-P2: CommandBuffer    ← 录制模式替代即时 GL 调用
-    DescriptorSet    ← 替代当前 uniform 上传
-P3: Buffer/Texture   ← VkBuffer/VkImage 适配
-P4: Renderer2D       ← 应用层适配新渲染流程
-```
-
-所有接口已预埋——`RendererAPI::Vulkan` 枚举 + `SetAPI` + 工厂 `case Vulkan` + `CreateFromBinary` + premake 包含路径。实际 Vulkan 后端实现时只需在 `Platform/Vulkan/` 下新增对应类文件。
-
+SPIR-V 也不能只停留在 `CreateFromBinary()`。需要确定 GLSL 到 SPIR-V 的编译阶段、反射结果如何生成 Descriptor/Pipeline Layout、缓存怎样版本化，以及热重载失败时怎样保留上一条有效 Pipeline。在这些工作完成前，项目的可运行后端仍然只有 OpenGL。
 
 ## 内容浏览器 (Content Browser Panel)
 
-### 设计目标
+编辑器刚能保存场景时，我一直在资源管理器和 Glimmer 之间来回切换：找文件、确认路径，再回到编辑器加载。文件一多，这种操作很容易打断手头的场景编辑。Content Browser 就是在这个阶段加入的，它留在编辑器应用层，负责浏览 `assets/`、选择资产和发起拖放，不进入引擎核心。
 
-在编辑器内提供文件系统浏览能力，支持导航 assets 目录、按类型区分文件图标、双击加载场景、拖拽 `.glimmer` 到视口即打开。
+### 从文件列表长成资产入口
 
-### 架构
+面板第一次绘制时才解析 `assets/` 的绝对路径，构造 `EditorLayer` 时不会提前遍历磁盘。左边是递归目录树，右边按当前宽度计算网格列数；中间的 4 像素分隔条可以拖动，树和网格各自滚动。
 
-```
-Panels/ContentBrowserPanel.h/cpp  ← 应用层面板，低耦合
-
-依赖：
-  std::filesystem       ← C++17 文件系统遍历
-  ImGui                 ← UI 渲染
-  OnFileDoubleClicked   ← 回调通知 EditorLayer
-```
-
-和 `SceneHierarchyPanel` 一样放在 `Panels/` 目录下——属于编辑器上层建筑而非引擎核心。
-
-### 启动优化：延迟初始化
-
-初版在构造函数中调用 `std::filesystem::absolute()` + `directory_iterator` 遍历整个 assets 目录并缓存。这导致 EditorLayer 构造时同步触发磁盘 I/O，出现可感知的启动卡顿。
-
-```cpp
-// 之前：构造函数中同步 I/O
-ContentBrowserPanel() {
-    m_BaseDir = std::filesystem::absolute("assets");  // 磁盘 I/O
-    RefreshFiles();  // directory_iterator 遍历
-}
-
-// 之后：延迟到首个 OnImGuiRender
-ContentBrowserPanel() = default;
-
-void OnImGuiRender() {
-    LazyInit(m_BaseDir, m_CurrentDir);  // 仅首次执行路径解析
-    // 文件遍历改为每帧即时 directory_iterator（无预缓存）
-}
+```text
+Content Browser
+  assets 目录树     |     当前目录文件网格
+  单击切换目录      |     单击选择 / 双击打开 / 拖放
+                    |
+             可拖动分隔线
 ```
 
-移除了 `m_Files` 缓存 vector，改为每帧即时遍历——assets 下不到 50 个文件，OS 文件系统缓存使遍历几乎零开销。
+目录树只展开用户点开的节点，叶子目录不画多余箭头。回退按钮到达 `assets/` 后停止，面板内部的导航路径不会越过项目资产根。文件网格每帧直接遍历当前目录，没有维护另一份文件缓存，所以在外部新增文件后通常能马上看到。
 
-### Font Awesome 图标集成
+![带目录树和文件网格的 Content Browser](README.assets/Pasted%20image%2020260721105118.png)
 
-**字体加载（ImGuiLayer::OnAttach）**
+单击普通文件时，面板会调用 `AssetManager::ImportAsset()`。AssetManager 先确认文件位于项目 `assets/` 内，再按规范化相对路径去重；支持的类型会取得稳定 `AssetHandle` 并写入 `AssetRegistry.yaml`。随后 `SelectionContext` 切换为资产选择，Inspector 显示该资产的信息，原来的实体选择被清除。
 
-```cpp
-// 合并模式：在已有字体上附加图标 glyph
-ImFontConfig faConfig;
-faConfig.MergeMode = true;
-faConfig.GlyphMinAdvanceX = 16.0f;
-static const ImWchar faRanges[] = { 0xf000, 0xf2ff, 0 };
-io.Fonts->AddFontFromFileTTF("assets/fonts/FontAwesome/fa-solid-900.otf", 16.0f, &faConfig, faRanges);
-```
+`.glimmer` 场景文件走的是另一条路。它没有注册为通用 Asset，双击后由 `EditorLayer` 创建新 Scene 并交给 `SceneSerializer` 反序列化；成功后才替换当前编辑场景，命令历史和旧选择也会清理。
 
-`MergeMode = true` 是关键——不替换已有字体，而是在同一个字体 atlas 中追加图标 glyph。渲染时可以用同一个 `ImGui::Text()` 同时显示文字和图标。
+### 拖放为什么仍使用文件路径
 
-**图标码点**
+Content Browser 对所有普通文件都发送名为 `SCENE_FILE` 的拖放载荷，内容是一条绝对路径。这个名字是早期只拖场景时留下的，现在接收方会根据扩展名和导入后的 AssetType 决定动作：
 
-```cpp
-#define ICON_FA_FOLDER  "\xef\x81\xbb"  // 
-#define ICON_FA_CODE    "\xef\x87\x89"  // 
-#define ICON_FA_CUBE    "\xef\x86\xb2"  // 
-#define ICON_FA_IMAGE   "\xef\x80\xbe"  // 
-#define ICON_FA_GLOBE   "\xef\x82\xac"  // 
-#define ICON_FA_FILE    "\xef\x85\x9b"  // 
-```
+- 场景拖到视口后打开
+- Terrain Material 赋给已有地形，必要时创建地形实体
+- `.glsky` 或 `.hdr` 赋给 Sky Light
+- 普通图片拖到视口时按高度图创建 Terrain
+- Texture、Model 和 Material 拖到组件字段时写入对应 Handle
 
-| 文件类型 | 图标 | 说明 |
-|---------|------|------|
-| 文件夹 |  | `std::filesystem::is_directory()` |
-| .glsl |  | Shader 着色器 |
-| .obj |  | 3D 模型 |
-| .png/.jpg |  | 贴图 |
-| .glimmer |  | 场景文件 |
-| 其他 |  | 通用文件 |
+接收区必须放在 `ImGui::Image()` 或具体属性控件之后，ImGui 才能把整个可见区域识别为 Drop Target。
 
-### 文件网格布局
+右键空白处还可以创建文件夹、Material、Terrain Material、Skybox、Scene 和 Shader，也可以生成 Cube、UV Sphere、Plane 几种基础几何。除 Scene 外，新建文件会立即导入 Asset Registry，省去手动刷新步骤。
 
-```cpp
-float cellSize = 80.0f;
-int columns = max(1, (int)(panelWidth / cellSize));
-ImGui::Columns(columns);
+### 当前的粗糙处
 
-for (auto& entry : directory_iterator(m_CurrentDir)) {
-    ImGui::Selectable(icon + " " + name, &selected, AllowDoubleClick, {80, 80});
-    ImGui::NextColumn();
-}
-ImGui::Columns(1);
-```
+这个面板仍是直接文件系统视图，没有搜索、排序、过滤、重命名和删除工作流。目录树为了判断叶子节点会额外扫描子目录，右侧也会逐帧遍历当前目录；目前资产规模不大，做法简单够用，但不适合直接扩展到很大的内容库。
 
-`ImGui::Columns` 实现自适应列数网格——面板宽时列数多，窄时列数少。
-
-### 目录导航与保护
-
-```cpp
-// 回退按钮：仅在非根目录时生效
-if (ImGui::Button("  ..") && m_CurrentDir != m_BaseDir)
-    m_CurrentDir = m_CurrentDir.parent_path();
-
-// 路径显示：相对于 assets 根目录
-auto relative = std::filesystem::relative(m_CurrentDir, m_BaseDir);
-ImGui::TextDisabled("assets/%s", relative.string().c_str());
-```
-
-`m_BaseDir` 作为不可逾越的根——回退到 `assets/` 之后按钮不再有作用，防止浏览到项目外。
-
-### 目录切换时的迭代器保护
-
-双击文件夹进入时，`m_CurrentDir` 被更新，但当前帧的 `for (auto& entry : directory_iterator(...))` 循环仍在运行。虽然后续迭代不会引发 UB（`directory_iterator` 不依赖外部容器），但提前退出可以避免一帧内既渲染旧目录又准备新目录的状态不一致：
-
-```cpp
-if (isDir) {
-    m_CurrentDir = path;
-    ImGui::PopID();
-    ImGui::Columns(1);
-    ImGui::End();
-    return;  // 提前结束当前帧，下帧渲染新目录
-}
-```
-
-### 拖拽打开场景
-
-**拖拽源（ContentBrowserPanel）**
-
-```cpp
-if (!isDir && ImGui::BeginDragDropSource()) {
-    ImGui::SetDragDropPayload("SCENE_FILE", path, size);
-    ImGui::Text("Open %s", name);  // 光标跟随提示
-    ImGui::EndDragDropSource();
-}
-```
-
-**拖拽目标（EditorLayer Viewport）**
-
-```cpp
-if (ImGui::BeginDragDropTarget()) {
-    if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE")) {
-        SceneSerializer serializer(newScene);
-        serializer.Deserialize(payload->Data);
-    }
-    ImGui::EndDragDropTarget();
-}
-```
-
-Drop Target 必须放在 `ImGui::Image()` 之后——ImGui 的拖拽目标区域基于当前 item 位置决定。放在 Image 之前只覆盖标题栏区域，放在之后覆盖整个渲染画面。
-
-### 交互操作总览
-
-| 操作 | 效果 |
-|------|------|
-| 双击文件夹 | 进入该文件夹 |
-| 双击 .glimmer | 加载场景 |
-| 拖拽文件到视口 | 加载场景（同双击，操作更直觉） |
-| `<` 按钮 | 返回上级目录 |
-| 单击文件 | 选中高亮 |
-
-### 文件位置
-
-```
-GlimmerEditor-CyouBranch/src/Panels/
-  ├── ContentBrowserPanel.h
-  ├── ContentBrowserPanel.cpp
-  ├── SceneHierarchyPanel.h
-  └── SceneHierarchyPanel.cpp
-```
-
-### 目录树 + 可拖分隔线
-
-在原来的纯文件网格基础上增加了左侧目录树面板：
-
-```
-┌─ Content Browser ───────────────────────────────┐
-│   ..   assets/shaders                         │
-├────────────┬────────────────────────────────────┤
-│ 目录树     │ ←拖→│  文件网格                      │
-│   assets  │      │   BalatroVortex               │
-│    models │      │   Phong                       │
-│    shaders│      │  ...                          │
-│    textures     │                              │
-└────────────┴──────┴──────────────────────────────┘
-```
-
-**目录树实现**
-
-```cpp
-void DrawDirectoryTree(const std::filesystem::path& dir)
-{
-    for (auto& entry : directory_iterator(dir))
-    {
-        if (!entry.is_directory()) continue;
-
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
-                                  | ImGuiTreeNodeFlags_SpanAvailWidth;
-        if (!hasSubDirs)
-            flags |= ImGuiTreeNodeFlags_Leaf;  // 无子目录 → 无箭头
-
-        bool opened = ImGui::TreeNodeEx(name, flags);
-
-        // 单击目录名（非箭头）切换右侧视图
-        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-            m_CurrentDir = path;
-
-        if (hasSubDirs && opened)
-        {
-            DrawDirectoryTree(path);  // 递归
-            ImGui::TreePop();
-        }
-    }
-}
-```
-
-关键设计：
-- 不设 `DefaultOpen`——每级初始折叠，只有用户点击箭头才展开，避免一次性展开所有子目录
-- `IsItemToggledOpen()` 判断点击的是箭头还是名称：点击箭头 → 展开/折叠，点击名称 → 切换右侧视图
-- 递归 `DrawDirectoryTree` 实现任意深度目录树
-
-**可拖动分隔线**
-
-```cpp
-// 分隔线按钮（4px 宽）
-ImGui::Button("##Splitter", ImVec2(4.0f, -1.0f));
-
-if (ImGui::IsItemHovered())
-    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);  // ↔ 光标
-
-if (ImGui::IsItemActive())
-    m_SplitPos += ImGui::GetIO().MouseDelta.x;          // 拖拽调整
-
-m_SplitPos = clamp(m_SplitPos, 120.0f, 500.0f);        // 范围限制
-```
-
-分隔线本身是一个 `ImGui::Button`。`IsItemActive()` 在按住拖拽时为 true，`MouseDelta.x` 提供每帧水平位移。累加到 `m_SplitPos` 后 clamp 在 120~500px 区间。
-
-**左右面板布局**
-
-```cpp
-ImGui::BeginChild("TreePanel",  ImVec2(m_SplitPos, 0), true);  // 左：固定宽度
-// ... 树渲染 ...
-ImGui::EndChild();
-
-ImGui::SameLine();
-// ... 分隔线 ...
-ImGui::SameLine();
-
-ImGui::BeginChild("FilePanel",  ImVec2(0, 0), true);           // 右：填充剩余
-// ... 网格渲染 ...
-ImGui::EndChild();
-```
-
-`BeginChild` 将两个面板隔离为独立滚动区域。树的滚动和网格的滚动互不干扰。
-
-**子目录检测优化**
-
-```cpp
-// 检查是否有子目录（决定是否显示箭头）
-bool hasSubDirs = false;
-for (auto& sub : directory_iterator(path))
-    if (sub.is_directory()) { hasSubDirs = true; break; }
-```
-
-相比直接设置 Leaf 或 DefaultOpen，每级做一次轻量扫描来决定 TreeNode 形态——无子目录的节点不显示展开箭头。
-
-![[README.assets/Pasted image 20260721105118.png]]
-
-
+`SCENE_FILE` 载荷也已经名不副实。后续更稳妥的方案是统一传递带类型的 AssetHandle，仅让未注册的 Scene 保留路径载荷。这样接收方不用重复解析扩展名，也能减少字符串协议散落在多个面板里的情况。
 
 ## SpriteRenderer 贴图支持
 
-### 组件扩展
+最早的 Sprite 只有一项颜色，能画 UI 占位和纯色 Quad，却放不进真正的图片。第一次加贴图时，组件里直接保存过 `Ref<Texture2D>`，渲染很方便，保存场景却没法处理 GPU 对象。资产系统接入后，这个字段改成了稳定 Handle。
+
+### 组件只保存可持久化的数据
 
 ```cpp
-struct SpriteRendererComponent {
-    glm::vec4 Color{ 1.0f, 1.0f, 1.0f, 1.0f };
-    Ref<Texture2D> Texture;        // ← 新增：可选贴图
-    float TilingFactor = 1.0f;    // ← 新增：贴图重复倍数
+struct SpriteRendererComponent
+{
+    glm::vec4 Color{ 1.0f };
+    AssetHandle TextureHandle{ 0 };
+    float TilingFactor = 1.0f;
 };
 ```
 
-贴图为 `nullptr` 时退化为纯色渲染，行为与之前完全一致。
+`TextureHandle == 0` 或 Handle 无效时，Sprite 回退为纯色。Scene YAML 保存 Color、Texture Handle 和 TilingFactor，加载时再通过 AssetManager 延迟取得 `Texture2D`。组件因此可以安全复制到 RuntimeScene，也不会把 Renderer ID 或内存指针写入场景文件。
 
-### DrawSprite 便捷方法
+### DrawSprite 负责解析最终外观
 
-```cpp
-// Renderer2D::DrawSprite — 根据组件内容自动选择渲染路径
-void DrawSprite(const glm::mat4& transform, SpriteRendererComponent& src, int entityID)
-{
-    if (src.Texture)
-        DrawQuad(transform, src.Texture, src.TilingFactor, src.Color, entityID);
-    else
-        DrawQuad(transform, src.Color, entityID);
-}
+Scene 的 Edit 和 Play 渲染路径都把 Sprite 交给同一个 `Renderer2D::DrawSprite()`。函数先读取组件自身的颜色、TextureHandle 和 TilingFactor；实体若带有有效 `MaterialComponent`，则构造 `MaterialInstance`，用最终 Material 属性覆盖这三项。
+
+```text
+SpriteRenderer defaults
+        +
+Material + entity overrides（可选）
+        |
+        v
+最终 Color / BaseColorTexture / TilingFactor
+        |
+        v
+AssetManager::GetTexture2D()
+        |
+        +-- 有纹理 -> textured quad
+        +-- 无纹理 -> color quad
 ```
 
-调用方（`Scene::OnUpdateEditor`）无需区分纯色/贴图，统一一行 `DrawSprite`。
+这个优先级有意让共享 Material 和实体 Override 也能驱动 2D Sprite。代价是 Inspector 里修改 Sprite 自身字段后，如果实体同时绑定了 Material，画面可能没有变化；此时真正生效的是 Material 合并结果。
 
-### 创建贴图实体
+Renderer2D 把纹理放进批次的 32 个 Texture Slot，slot 0 固定保留白纹理。批次容量或纹理槽用完时才 Flush。Entity ID 仍随四个顶点写入整数附件，所以纯色和贴图 Sprite 都能被鼠标拾取。
 
-```cpp
-auto entity = m_ActiveScene->CreateEntity("Balatro Card");
-auto& sr = entity.AddComponent<SpriteRendererComponent>(color);
-sr.Texture = m_Texture;  // 指定贴图
-entity.GetComponent<TransformComponent>().Translation = { 2.0f, 1.0f, -3.0f };
-```
+### Inspector 中的使用方式
 
-贴图实体和纯色实体在 ECS 中统一管理，渲染时 `DrawSprite` 自动分流。
+Sprite Renderer 面板可以编辑 Color 和 Tiling，把 Content Browser 中的 `.png`、`.jpg`、`.jpeg`、`.tga` 或 `.bmp` 拖到纹理字段即可导入并保存 Handle；旁边的 `X` 会清空引用。
 
-### 层级面板拖放贴图
+![SpriteRenderer 使用 Texture Asset](README.assets/Pasted%20image%2020260721144641.png)
 
-选中实体的 Sprite Renderer 组件面板新增：
-
-- **Tiling 拖拽条** — 调整贴图重复倍数
-- **纹理状态** — 显示 "Loaded" 或 "None (drag here)"
-- **清除按钮** — 移除贴图，回退到纯色渲染
-- **Drop Target** — 从 Content Browser 拖 `.png`/`.jpg` 到面板即赋值 `Texture`
-
-```cpp
-if (ImGui::BeginDragDropTarget()) {
-    if (auto* payload = ImGui::AcceptDragDropPayload("SCENE_FILE")) {
-        auto ext = path.extension().string();
-        if (ext == ".png" || ext == ".jpg")
-            src.Texture = Texture2D::Create(path);
-    }
-    ImGui::EndDragDropTarget();
-}
-```
-
-### 文件清单
-
-```
-修改:
-  Scene/Components.h          ← SpriteRendererComponent 加 Texture + TilingFactor
-  Renderer/Renderer2D.h/cpp    ← DrawSprite + 带 entityID 的 DrawQuad 重载
-  Scene/Scene.cpp              ← OnUpdateEditor 改用 DrawSprite
-  Panels/SceneHierarchyPanel.cpp ← Texture 属性显示 + 拖放
-  EditorLayer.cpp              ← 贴图实体创建
-```
-
-![[README.assets/Pasted image 20260721144641.png]]
-
+这部分 UI 仍有技术债。Color、Tiling、纹理拖放和清除目前直接改组件，没有像 Transform 或 Material 那样进入 `CommandHistory`，所以 `Ctrl+Z` 不能可靠撤销这些操作。后面接入时应把连续数值拖动合并成一条命令，Handle 拖放则记录一次前后组件快照。
 
 ## 编辑/播放模式 (Edit/Play Mode)
 
-### 设计目标
+如果 Play 直接在编辑场景上运行脚本，测试过程中改掉的位置、临时生成的实体和运行时资源都会留在作者数据里。真正需要隔开的其实是场景所有权。Glimmer 进入 Play 时会复制一份 RuntimeScene，停止后整份丢弃。
 
-实现类似 Unity 的 Edit/Play 模式切换：编辑时自由操作场景和 Gizmo，播放时运行业务逻辑且禁止编辑器干预。
+### 进入 Play 时发生了什么
 
-### 状态枚举
+`EditorLayer` 同时维护三个引用：
+
+```text
+m_EditorScene  -> 作者正在编辑的源场景
+m_RuntimeScene -> Play 开始时创建的副本
+m_ActiveScene  -> 当前面板与渲染使用的场景
+```
+
+按下工具栏 Play 或 `Ctrl+P` 后，编辑器先退出临时 Debug Scene，再用 `Scene::Copy(m_EditorScene)` 创建运行时副本。复制过程保留实体 UUID 和受支持组件；Native Script 只复制创建、销毁函数，不复用旧 Instance；Terrain 只复制 Specification，GPU Runtime 会在副本中独立重建。
+
+Hierarchy 与 Inspector 随后切到 RuntimeScene，CommandHistory 指针被移除。切换前若选中了实体，编辑器会保存它的 UUID，在副本中找到同一个逻辑实体并恢复选择。EnTT ID 可能已经变化，因此这里不能沿用拾取用的临时整数 ID。
 
 ```cpp
-enum class SceneState { Edit = 0, Play = 1 };
-SceneState m_SceneState = SceneState::Edit;
+m_RuntimeScene = Scene::Copy(m_EditorScene);
+m_ActiveScene = m_RuntimeScene;
+m_ActiveScene->OnRuntimeStart();
+m_SceneState = SceneState::Play;
 ```
 
-### UI 按钮
+`OnRuntimeStart()` 目前没有主动工作。Native Script 在第一次 `OnUpdateRuntime()` 遇到尚未实例化的组件时创建对象，依次调用 `OnCreate()` 和当帧 `OnUpdate()`。
 
-菜单栏右侧，绿色 ▶ Play / 红色 ■ Stop：
+### 两种模式的每帧分流
 
-```cpp
-if (isPlaying) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-    if (ImGui::Button("Stop"))  m_SceneState = SceneState::Edit;
-} else {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
-    if (ImGui::Button("Play"))  m_SceneState = SceneState::Play;
-}
-```
+Edit 使用 `EditorCamera`，不更新 Native Script；Play 先运行脚本，再寻找 Primary SceneCamera。找到主相机后，模型、地形、Skybox、Sprite、透明队列和后处理沿用同一套渲染编排，只是 View、Projection 与相机位置来自场景实体。
 
-### OnUpdate 分流
+Play 场景没有 Primary Camera 时，脚本仍会更新，但 Scene 不提交模型、地形和 Sprite 绘制，ShadowRenderer 也会禁用。这个状态不会自动借用 EditorCamera，缺相机应当被当作场景配置问题处理。
 
-```cpp
-if (m_SceneState == SceneState::Edit)
-{
-    m_EditorCamera.OnUpdate(ts);                            // 自由相机：右键/中键/WASD
-    glm::mat4 vp = EditorCamera.GetProjection() * EditorCamera.GetViewMatrix();
-    m_ActiveScene->OnUpdateEditor(ts, vp);                  // 用 EditorCamera VP 渲染
-}
-else // Play
-{
-    m_ActiveScene->OnUpdateRuntime(ts);                     // 脚本更新 + ECS 主相机渲染
-    m_ActiveScene->OnViewportResize(...);                   // 主相机投影更新
-}
-```
+编辑器工具在两种模式间有明确分界：
 
-两个渲染路径：
+- EditorCamera 输入、Gizmo、相机视锥和鼠标拾取只在 Edit 工作
+- Undo/Redo 快捷键只在 Edit 且没有临时 Debug Scene 时工作
+- Play 中的 Hierarchy 与 Inspector 面向 RuntimeScene，命令历史关闭
 
-| 路径 | 相机来源 | 渲染方式 | 使用场景 |
-|------|---------|---------|---------|
-| `OnUpdateEditor` | EditorCamera（编辑器自由相机） | 外部传入 VP 矩阵 | Edit 模式 |
-| `OnUpdateRuntime` | ECS `GetPrimaryCameraEntity()` | 脚本驱动 + 实体相机 | Play 模式 |
+第三条容易误解。面板并没有把所有运行时组件字段锁成只读，部分直接编辑路径仍能修改 RuntimeScene；这些变化只是不会写回 EditorScene，按 Stop 后一起丢弃。
 
-两者都通过 `DrawSprite` 渲染——贴图和纯色统一处理。
+![Edit 模式下使用 EditorCamera 调整场景](README.assets/Pasted%20image%2020260721155626.png)
 
-### 模式差异
+![Play 模式使用场景主相机运行](README.assets/Pasted%20image%2020260721155635.png)
 
-| 维度 | Edit | Play |
-|------|------|------|
-| 相机控制 | EditorCamera (右键轨道/中键平移/滚轮缩放) | ECS 主相机实体（可被脚本驱动） |
-| Gizmo | ✅ 可拖拽移动/旋转/缩放 | ❌ 隐藏 |
-| 鼠标拾取 | ✅ 点击选实体 | ❌ 禁用 |
-| 相机可视范围 | ✅ 选中相机实体显示锥体线框 | ❌ 不显示 |
-| EditorCamera 事件 | ✅ 接收鼠标/键盘 | ❌ 忽略 |
+### Stop 如何恢复编辑现场
 
-### OnUpdateRuntime 渲染修复
+停止播放时，RuntimeScene 先调用 `OnRuntimeStop()`。每个已有 Native Script Instance 都会收到 `OnDestroy()`，随后由绑定的销毁函数释放。编辑器把 ActiveScene 切回 EditorScene，释放 RuntimeScene，重新连接面板的 CommandHistory。
 
-Play 模式最初使用旧的 `DrawQuad(transform, color)` 渲染，完全忽略 `SpriteRendererComponent::Texture`。编辑模式下拖放贴图后切换到 Play 模式看不到变化——原因是两个渲染路径不一致。统一改用 `DrawSprite` 后，贴图实体在两个模式下行为一致。
-
-### 相机实体可视化
-
-ECS 主相机实体挂有 `SpriteRendererComponent`（半透明黄色）作为场景中可见标记，同时支持 Gizmo 交互。选中后视口中绘制相机锥体线框：
-
-```
-逆投影 8 个 NDC 角点 → 世界空间 → EditorCamera VP 投影 → ImDrawList 画线
-```
-
-编辑模式
-![[README.assets/Pasted image 20260721155626.png]]
-播放模式
-![[README.assets/Pasted image 20260721155635.png]]
-
+选择同样按 UUID 映射回源场景。脚本位移、运行时创建的实体、Terrain Runtime 和手动改过的运行时组件都随副本释放，EditorCamera 的观察位置则一直由编辑器持有，所以停止后还能回到之前的工作视角。
 
 ## Compute Shader 基础设施
 
-### 设计目标
+Compute Shader 最初只是编辑器里的 256×256 渐变测试。那张图的价值很有限，但它确认了文件编译、Image 绑定、Dispatch 和 Barrier 这条最短路径能跑通。后来地形生成、侵蚀、水文与气候模拟都沿着这套接口扩展，早期测试代码反而退出了主流程。
 
-为 GPU 并行计算提供平台无关的 Compute Shader 支持。Compute Shader 是后续所有 GPU 驱动模拟（水流、蒸发、侵蚀、粒子）的地基——CPU 无法实时计算百万像素的物理迭代。
+![早期 Compute Shader 渐变输出验证](README.assets/Pasted%20image%2020260722150427.png)
 
-### 抽象接口
+### 接口刻意保持得很小
 
-```cpp
-enum class ImageAccess { Read = 0, Write = 1, ReadWrite = 2 };
-enum class ImageFormat { RGBA8 = 0, RGBA16F = 1, RGBA32F = 2, R32F = 3 };
-
-class ComputeShader {
-public:
-    virtual void Bind() const = 0;
-    virtual void Dispatch(uint32_t x, uint32_t y, uint32_t z) const = 0;
-
-    // 绑定输出纹理为 image2D（for imageStore / imageLoad）
-    virtual void BindImageTexture(uint32_t binding, uint32_t textureID,
-                                  uint32_t level, ImageAccess access,
-                                  ImageFormat format) = 0;
-
-    // GPU 内存屏障：确保 Compute 写入对后续渲染/读取可见
-    static void Barrier();
-
-    static Ref<ComputeShader> Create(const std::string& filepath);
-};
-```
-
-`ImageAccess` 和 `ImageFormat` 枚举隔离 GL 常量——EditorLayer 完全不接触 `GL_WRITE_ONLY` 等裸值。
-
-### OpenGL 实现
-
-```
-ComputeShader::Create(filepath)
-  → glCreateShader(GL_COMPUTE_SHADER)
-  → glShaderSource + glCompileShader
-  → glCreateProgram + glAttachShader + glLinkProgram
-  → glDetachShader + glDeleteShader  (shader object 可释放)
-
-Bind()             → glUseProgram
-Dispatch(x, y, z)  → glDispatchCompute
-BindImageTexture() → glBindImageTexture
-Barrier()          → glMemoryBarrier
-```
-
-编译流程与 Vertex/Fragment Shader 一致——共享 `ReadFile` + 错误日志风格的实现。
-
-### 计算 Shader 示例
-
-```glsl
-#version 450 core
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
-layout(rgba8, binding = 0) uniform image2D u_Output;
-
-void main() {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    vec4 color = vec4(float(pixel.x)/256.0, float(pixel.y)/256.0, 0.5, 1.0);
-    imageStore(u_Output, pixel, color);
-}
-```
-
-### 调用流程
+`ComputeShader` 目前提供 Program 绑定、三维 Dispatch、少量 Uniform 上传和 Storage Image 绑定。公共枚举把访问方式与纹理格式从 OpenGL 常量中隔离出来：
 
 ```cpp
-auto cs = ComputeShader::Create("assets/shaders/TestCompute.glsl");
+enum class ImageAccess { Read, Write, ReadWrite };
+enum class ImageFormat { RGBA8, RGBA16F, RGBA32F, R32F };
 
-auto tex = Texture2D::Create(256, 256);
-cs->Bind();
-cs->BindImageTexture(0, tex->GetRendererID(), 0,
-                     ImageAccess::Write, ImageFormat::RGBA8);
-cs->Dispatch(256/16, 256/16, 1);
+shader->BindImageTexture(
+    binding, texture->GetRendererID(), 0,
+    ImageAccess::Write, ImageFormat::R32F);
+shader->Dispatch(groupX, groupY, 1);
 ComputeShader::Barrier();
-
-// tex 现在包含 Compute Shader 输出结果
-// 可直接用 ImGui::Image((void*)(uintptr_t)tex->GetRendererID(), ...) 显示
 ```
 
-### 纹理 GPU ID 暴露
+OpenGL 后端负责 `glBindImageTexture()` 和 `glDispatchCompute()`。Uniform Location 会缓存；文件型 Compute Program 支持轮询热重载，新源码只有在完整编译、链接成功后才替换旧 Program，失败时继续保留上一版本。读取 GLSL 时也会剥离 UTF-8 BOM，避免 `#version` 前出现驱动不接受的字节。
 
-为支持 `BindImageTexture` 传递纹理 ID，`Texture` 基类新增 `GetRendererID()` 方法。`OpenGLTexture2D` 返回 `m_RendererID`（`glCreateTextures` 生成的 GL uint）。
+`ComputeShader::Barrier()` 当前统一提交 Image Access、Shader Storage 和 Texture Fetch 三类全局内存屏障。它的范围偏宽，但使用规则简单：一个 Dispatch 产生的 Image 写入要被下一次计算或图形采样读取时，先执行 Barrier。
 
-### 验证方式
+### 真正难的是资源所有权
 
-编辑器启动后在 "Compute Output" 面板中看到 256×256 的红→绿渐变图像，即确认 Compute Shader 基础设施工作正常。
+只提供 Dispatch 还不够。地形模拟里最容易出错的是同一张纹理在一个阶段内既读又写，或者过早交换前后状态。现在的生成和环境模拟都使用明确的 Ping-Pong：
 
-### 文件清单
-
-```
-新增:
-  Renderer/ComputeShader.h/cpp              ← 抽象接口 + 工厂
-  Platform/OpenGL/OpenGLComputeShader.h/cpp  ← GL 实现
-  assets/shaders/TestCompute.glsl            ← 验证 Shader
-
-修改:
-  Renderer/Texture.h                         ← GetRendererID()
-  Platform/OpenGL/OpenGLTexture2D.h          ← 实现 GetRendererID()
-  EditorLayer.h/cpp                          ← 验证测试 + 预览窗口
+```text
+ReadTexture  --只读--> Compute Pass --只写--> WriteTexture
+                                           |
+                                      全局 Barrier
+                                           |
+                                      Swap Read/Write
 ```
 
-![[README.assets/Pasted image 20260722150427.png]]
+Terrain Generator 先生成 `R32F` Height，再执行有限次 Authoring Erosion，随后派生 Normal/Slope、Analysis 和 Material Weights。GPU Hydrology 用多组 Ping-Pong 保存 Water、Flux、Velocity、Sediment 与 Runtime Height；GPU Climate 则推进 Temperature、Atmospheric Moisture 和 Vegetation Potential，并输出 Rainfall、Evaporation 与 WaterSource。
 
+Climate 与 Hydrology 由同一个固定步协调器驱动，每个子步固定按 Climate、Barrier、Hydrology 的顺序执行。Shadow Pass 和九个 Terrain Chunk 可能在同一帧多次调用 Prepare，因此 Runtime 还用 FrameSerial 保证环境状态只前进一步。
+
+Compute Shader 热重载成功后，相关 Runtime 会按各自规则重新计算或继续使用新 Program。普通渲染帧只采样已经生成的纹理，不会为了显示结果把整张图读回 CPU。
+
+### 当前边界
+
+接口只覆盖项目现有用到的 `int`、`float`、`vec2` Uniform 和四种 Image Format，还没有 SSBO 抽象、间接 Dispatch、异步计算队列或资源状态追踪。Barrier 也由调用方手动放置，漏掉一次不会得到友好的验证信息。
+
+Vulkan 分支仍会断言。将来接入新后端时，Image Layout、Pipeline Barrier 和 Queue Ownership 需要进入后端实现；不能把 OpenGL 的一次全局 `glMemoryBarrier()` 原样理解成跨 API 的同步模型。
 
 ## GPU 数据读回 (GPU Readback)
 
-### 设计目标
+Compute 结果常驻 GPU 最省事，Terrain Shader 可以直接采样 Height、Water 或 Climate 纹理。CPU 只有在验证数值、生成统计或保存结果时才需要读回。把读回放进每个模拟帧，会重新把 GPU 并行流程拖回同步等待。
 
-Compute Shader 输出存储在 GPU 纹理中，需要读回 CPU 才能更新顶点缓冲、地形网格、或做 ImGui 预览。提供同步/异步两种方式。
+### 当前可靠路径是同步读回
 
-### 同步读回 (`Texture::GetImageData`)
-
-```cpp
-virtual void GetImageData(void* buffer, uint32_t size) const = 0;
-```
-
-GL 实现：`glGetTextureImage(rendererID, 0, format, type, size, buffer)`。阻塞 GPU 管线直到 DMA 完成。适合少量像素（如鼠标拾取的单像素读取）或初始化阶段的一次性读回。
-
-### 异步读回 (`PixelBuffer` — 双缓冲 PBO)
+`Texture::GetImageData()` 由 OpenGL 后端调用 `glGetTextureImage()`。纹理对象知道自身的 Data Format 和 Data Type，因此 `RGBA8` 使用字节，`R32F`、`RG16F`、`RGBA16F` 等浮点格式按 `float` 传输。接口会检查目标指针和缓冲区大小。
 
 ```cpp
-class PixelBuffer {
-public:
-    virtual void BeginRead(uint32_t textureID) = 0;  // 发起异步 DMA
-    virtual const void* Map() = 0;                    // 上一帧数据就绪，零拷贝
-    virtual void Unmap() = 0;
-    virtual bool IsReady() const = 0;
-
-    static Ref<PixelBuffer> Create(uint32_t width, uint32_t height, uint32_t channels);
-};
+std::vector<float> water(pixelCount);
+waterTexture->GetImageData(
+    water.data(),
+    uint32_t(water.size() * sizeof(float)));
 ```
 
-**双缓冲原理**
+这是阻塞调用。Terrain Generator 的输出验证、Hydrology/Climate 的显式 Readback 和 GPU Contract 都使用它；普通环境模拟帧不读回。Hydrology 创建 Runtime 时也会同步读取一次初始 Height，用于 Reset 和侵蚀下界。
 
-```
-Frame 0: BeginRead → glGetTextureImage → PBO[0] DMA 开始（不阻塞）
-Frame 1: PBO[0] Ready → Map PBO[0] 可用 | BeginRead → PBO[1]
-Frame 2: PBO[1] Ready → Map PBO[1] 可用 | BeginRead → PBO[0]
-```
+鼠标拾取不走 Texture 接口。它从 Framebuffer 的整数附件同步读取单个像素，触发频率和数据规模都不同。
 
-每次 `BeginRead` 将 `glGetTextureImage` 的目标设为当前 PBO，GPU 异步 DMA 到 PBO。同时上一帧的 PBO 已经完成传输，`Map` 直接返回 CPU 可读指针（零拷贝，无需 `memcpy`）。
+### PixelBuffer 的现状
 
-**使用示例**
+`PixelBuffer` 封装了两张 Pixel Pack Buffer，API 名义上提供 `BeginRead()`、`IsReady()`、`Map()` 和 `Unmap()`。OpenGL 实现把 `glGetTextureImage()` 的目标指向 PBO，设计意图是让当前传输与上一份 CPU 读取交错。
 
-```cpp
-auto pbo = PixelBuffer::Create(1024, 1024, 4);
+但现有实现还不能保证真正异步：
 
-// 每帧
-pbo->BeginRead(tex->GetRendererID());   // 发起异步
-if (pbo->IsReady()) {
-    const void* data = pbo->Map();       // 零拷贝
-    // 更新地形顶点 / 处理数据...
-    pbo->Unmap();
-}
-```
+- 只按 `RGB/RGBA + GL_UNSIGNED_BYTE` 计算大小，不支持 Terrain 常用的浮点纹理
+- `BeginRead()` 后立刻把刚提交传输的同一张 PBO 标为可 Map
+- 没有 `GLsync` Fence，也没有查询 DMA 是否完成
+- `glMapBuffer()` 可能在数据未就绪时等待 GPU
 
-### 与已有拾取系统的关系
+更直接的一条事实是，当前引擎没有生产代码调用 `PixelBuffer::Create()`。它是尚未收口的基础设施，不能拿来证明全纹理读回已经无阻塞。
 
-`Framebuffer::ReadPixel` 使用的是同步 `glReadPixels`（单像素），适合鼠标拾取等低频场景。`PixelBuffer::BeginRead` 使用的是 `glGetTextureImage` + PBO，适合全纹理异步读回的高频场景（每帧地形更新）。两者底层都是 GL 像素传输，共享内存屏障语义。
-
-### 文件清单
-
-```
-新增:
-  Renderer/PixelBuffer.h/cpp              ← 异步 PBO 接口 + 工厂
-  Platform/OpenGL/OpenGLPixelBuffer.h/cpp  ← GL 双缓冲实现
-
-修改:
-  Renderer/Texture.h                      ← GetImageData()
-  Platform/OpenGL/OpenGLTexture2D.h/.cpp   ← 实现
-```
-
+若要继续完成这条路径，应让一张 PBO 接收本帧传输，另一张只在 Fence 已完成时开放映射，并让规格携带 Texture Format 或明确的字节步长。CPU 处理若要跨帧保留数据，还需要在 Unmap 前复制到自己管理的内存；Map 返回的指针只在映射期间有效。
 
 ## 多 Pass 渲染管线
 
-### 设计目标
+早期编辑器把 Framebuffer 的 Bind、Clear 和 Unbind 散落在 `OnUpdate()` 里。只有一张场景颜色图时还能看懂，加入阴影、HDR、Bloom 和显示映射后，目标纹理之间的关系开始变得混乱。RenderPass 先把最基础的生命周期收拢起来，后处理则逐步迁到独立的 `PostProcessRenderer`。
 
-将散落在 `OnUpdate` 中的 `Bind→Clear→Draw→Unbind` 调用形式化为声明式 Pass，为后续地形→水面→植被→后处理的多阶段渲染提供可扩展的结构。每个 Pass 是一个独立的渲染步骤，有自己的目标 FBO、清屏配置。
-
-### RenderPass 抽象
+### RenderPass 管理了什么
 
 ```cpp
-struct RenderPassSpecification {
-    Ref<Framebuffer> Target;             // 渲染目标
-    bool ClearColor = true;              // 是否清颜色
-    bool ClearDepth = true;              // 是否清深度
-    glm::vec4 ClearColorValue = { 0.1f, 0.1f, 0.1f, 1 };
-};
-
-class RenderPass {
-public:
-    static void Begin(const RenderPassSpecification& spec);  // Bind + Clear
-    static void End();                                        // Unbind
-    static const RenderPassSpecification& GetCurrent();
+struct RenderPassSpecification
+{
+    Ref<Framebuffer> Target;
+    bool ClearColor = true;
+    bool ClearDepth = true;
+    glm::vec4 ClearColorValue{ 0.1f, 0.1f, 0.1f, 1.0f };
 };
 ```
 
-`Begin` 绑定目标 FBO 并根据配置清屏，`End` 解绑。全局活跃 Pass 通过 `GetCurrent()` 可查询。
+`Begin()` 保存当前规格、绑定目标 Framebuffer 并按设置清屏，`End()` 解绑目标并清除 Active 状态。Framebuffer Bind 会同步 OpenGL Viewport。ShadowRenderer 临时绑定级联深度目标后，`RebindCurrentTarget()` 可以恢复外层 Scene Framebuffer 及其尺寸。
 
-### 使用示例
+这层封装很薄，也有一处容易被名字误导的行为：当 `ClearColor == true` 时，代码调用 `RenderCommand::Clear()`，OpenGL 实现会同时清 Color 和 Depth。因此 `ClearColor=true, ClearDepth=false` 目前仍会清深度；只有关闭 Color 后，`ClearDepth` 才单独决定是否调用 `ClearDepth()`。
 
-```cpp
-// Pass 1: 场景渲染
-RenderPassSpecification scenePass;
-scenePass.Target = m_Framebuffer;
-scenePass.ClearColorValue = { 0.1f, 0.1f, 0.1f, 1 };
-RenderPass::Begin(scenePass);
-  m_ActiveScene->OnUpdateEditor(ts, vp);
-RenderPass::End();
+RenderPass 只保存一个 Active Pass，不是可嵌套栈。调用 `End()` 时也假定当前确实存在 Pass。它更接近 FBO 生命周期助手，还不是 Render Graph。
 
-// Pass 2: 后处理（不清屏，叠加绘制到同一 FBO）
-RenderPass::End();
+### 当前视口帧怎样流动
 
-// Pass 3: 后处理
-RenderPassSpecification ppPass;
-ppPass.Target = m_PostProcessFB;
-RenderPass::Begin(ppPass);
-  Renderer2D::DrawPostProcess(shader, m_Framebuffer->GetColorAttachmentRendererID());
-RenderPass::End();
+```text
+Directional Shadow Cascades
+             |
+             v
+Scene Pass: RGBA16F Color + EntityID + Depth
+  Opaque/Mask -> Terrain -> Skybox -> Sprite -> Transparent
+             |
+             +--------------------+
+             |                    |
+             v                    v
+Half-res Bloom Extract       Scene Depth
+      Ping-Pong Blur              |
+             +---------+----------+
+                       v
+Tone Mapping: Fog -> EV -> ACES -> Gamma
+                       |
+                       v
+                RGBA8 Display FBO
+                       |
+                       v
+                  ImGui Viewport
 ```
 
+Scene Pass 结束后，`EditorLayer` 只整理 Scene Color、Depth、相机逆 ViewProjection、相机位置和光照输入，再调用引擎侧 `PostProcessRenderer::Execute()`。Bloom 使用两张半分辨率 `RGBA16F` Framebuffer 做软阈值提取与横纵 Ping-Pong 模糊；Tone Mapping 输出到独立的 `RGBA8` Display Framebuffer，视口最终显示这张纹理。
 
+![早期纯色 Pass 验证](README.assets/Pasted%20image%2020260722160621.png)
 
-### Pass 间数据传递
+![加入全屏 Shader 后的后处理 Pass](README.assets/Pasted%20image%2020260722162113.png)
 
-Pass N 的输出（FBO 颜色附件）可以作为 Pass N+1 的输入纹理：
+Overlay Pass 代码仍保留在 `EditorLayer`，但整段处于注释状态，不属于当前启用链路。Bloom、Fog、Exposure EV 和 ACES White Point 设置也只是编辑器运行时状态，没有写入 Scene YAML。
 
-```cpp
-// Pass 1 输出 → m_Framebuffer 的颜色附件
-// Pass 2 读取: m_Framebuffer->GetColorAttachmentRendererID()
-DrawPostProcess(shader, m_Framebuffer->GetColorAttachmentRendererID());
-```
+### 还缺少的调度能力
 
-这是下 Stage 地形→水面→后处理链的基础通信模式。
-
-### 与之前对比
-
-| 维度 | 之前 | 之后 |
-|------|------|------|
-| 渲染步骤表达 | 散落的 `Bind/Clear/Unbind` 调用 | `RenderPass::Begin/End` 声明式 |
-| 新增 Pass | 需要手动写 Bind/Clear/Unbind 三段 | 一行 `Begin(spec)` + `End()` |
-| Pass 状态 | 无查询 | `GetCurrent()` 可读当前 Target |
-
-### 文件清单
-
-```
-新增:
-  Renderer/RenderPass.h/cpp         ← Pass 抽象
-
-修改:
-  EditorLayer.cpp                    ← OnUpdate 用 RenderPass 重构
-```
-
-新增纯色pass
-![[README.assets/Pasted image 20260722160621.png]]
-
-应用之前的全屏动态shader+后处理pass
-![[README.assets/Pasted image 20260722162113.png]]
-
+现有 Pass 不声明输入输出依赖，不自动安排 Barrier、资源复用或执行顺序，也不会检测同一纹理的读写冲突。PostProcessRenderer 的顺序仍由 C++ 显式编排。这个阶段的收获是把目标 FBO 和清理边界写清楚；若以后增加 TAA、SSR 或更多跨帧资源，再考虑引入真正的 Render Graph 会更合适。
 
 ## 高度图地形系统
 
-### 设计目标
+### 这一章解决了什么
 
-高度图地形系统以规则平面网格作为几何载体，由顶点着色器采样高度纹理并改变顶点的 Y 坐标。Shader 根据高度梯度重建法线，再按海拔混合草地、岩石和积雪颜色。
+地形最早只需要回答一个问题：一张灰度图，怎样稳定地变成场景里的可编辑几何？当前做法仍沿用这条主线。规则网格提供拓扑，顶点 Shader 采样高度纹理并沿 Y 轴位移，`TerrainRenderer` 再把它接入场景深度、阴影和材质流程。
 
-当前实现用于验证完整的 `高度数据 → Texture2D → Terrain Pass → 顶点位移 → 法线重建 → 地形着色` 链路，并作为程序化地形、Compute Shader 噪声生成、水流模拟和侵蚀可视化的基础。
+这个入口很实用。程序化生成器出问题时，可以换回磁盘高度图，先判断故障出在数据生成还是绘制链路；美术也能直接拖入已有图片，不必理解 Compute Shader。
 
-### TerrainMesh 网格生成
+### 数据放在哪里
 
-```cpp
-TerrainMesh(gridSize)
-  → 生成 (gridSize+1)² 顶点 (x, y=0, z) + uv
-  → 生成 gridSize² × 6 索引（Quad 三角化）
-  → 构建 VertexArray + IndexBuffer
-```
+地形现在是普通 ECS 实体，由 `TransformComponent` 和 `TerrainComponent` 组成。组件只保存可复制、可序列化的 `TerrainSpecification`，其中包括高度图 `AssetHandle`、网格分辨率和高度缩放。网格、纹理引用及模拟对象都放在 `TerrainRuntime`，复制 Scene 或进入 Play 时会重新建立，不写入 YAML。
 
-`TerrainMesh` 只负责拓扑结构，不保存高度。最大高度由 Shader Uniform 控制，因此调整山体高度不需要重新创建网格。构造函数会检查 `gridSize > 0`，避免除零和无效网格。
-
-当前测试使用 `gridSize = 256`：
-
-| 项目 | 数值 |
-| --- | ---: |
-| 网格单元 | 256 × 256 |
-| 顶点数量 | 66,049 |
-| 索引数量 | 393,216 |
-| 最大有效索引 | 66,048 |
-
-### 高度图输入
-
-系统提供两种可切换输入，两者使用完全相同的地形渲染路径。
-
-#### 文件高度图
-
-```cpp
-m_HeightMapTexture =
-    Texture2D::Create("assets/textures/heightmap-example.png");
-```
-
-当前示例图片尺寸为 `2017 × 2017`，用于验证 PNG 解码、纹理创建、采样和地形位移。
-
-#### GPU 程序化高度图
-
-编辑器启动时创建 `TerrainGenerator` 与 R32F `SimulationGrid`。高度图不再由 CPU 生成并上传，而是由 `GenerateFBM.comp` 写入 GPU 纹理，再作为 Terrain Pass 的高度输入。
-
-生成器由低频大陆轮廓、丘陵、受掩码限制的 Ridged fBm 山脉、沟谷侵蚀近似和高频细节组合而成。具体算法、参数与验证流程见 README 末尾的“拟真程序化地形生成”章节。
-
-Settings 面板提供：
-
-- `Use Procedural Height Map`：在 Compute 生成高度图和 PNG 高度图之间切换；
-- `Terrain Max Height`：实时调整最大高度，默认值为 `24.0`。
-
-`Terrain` 面板提供 Seed、噪声参数、侵蚀近似参数和 256/512/1024 分辨率控制；参数变更或 Compute Shader 热重载后会自动重新生成。
-
-### Terrain Pass
-
-地形在场景 Pass 之后绘制，并继续使用场景 Framebuffer：
-
-```cpp
-RenderPassSpecification terrainPass;
-terrainPass.Target = m_Framebuffer;
-terrainPass.ClearColor = false;
-terrainPass.ClearDepth = false;
-RenderPass::Begin(terrainPass);
-
-activeHeightMap->Bind(0);
-m_TerrainShader->UploadUniformInt("u_HeightMap", 0);
-RenderCommand::DrawIndexed(
-    m_TerrainMesh->GetVertexArray(),
-    m_TerrainMesh->GetIndexCount());
-
-RenderPass::End();
-```
-
-Terrain Pass 不清除场景颜色和深度，地形与场景实体可以通过同一深度缓冲区建立遮挡关系。
-
-### 地形 Shader（Terrain.glsl）
-
-#### 顶点位移与边缘采样
-
-```glsl
-float SampleHeight(vec2 uv)
-{
-    vec2 sampleUV = clamp(
-        uv,
-        u_TexelSize * 0.5,
-        vec2(1.0) - u_TexelSize * 0.5);
-
-    return texture(u_HeightMap, sampleUV).r;
-}
-
-float h = SampleHeight(uv);
-vec3 worldPos = a_Position;
-worldPos.y = h * u_MaxHeight;
-```
-
-采样位置限制在首尾半个 Texel 内，避免纹理使用重复寻址时从高度图另一侧取值并产生边缘接缝。
-
-#### 中心差分法线
-
-```glsl
-float hL = SampleHeight(uv - vec2(u_TexelSize.x, 0.0));
-float hR = SampleHeight(uv + vec2(u_TexelSize.x, 0.0));
-float hD = SampleHeight(uv - vec2(0.0, u_TexelSize.y));
-float hU = SampleHeight(uv + vec2(0.0, u_TexelSize.y));
-
-vec3 normal = normalize(vec3(
-    (hL - hR) * u_MaxHeight / (2.0 * u_SampleSpacing),
-    1.0,
-    (hD - hU) * u_MaxHeight / (2.0 * u_SampleSpacing)
-));
-```
-
-`u_SampleSpacing = terrainGridSize / (heightMapWidth - 1)`，表示相邻高度采样点在地形世界空间中的距离：
-
-| 高度图 | 世界空间采样间距 |
-| --- | ---: |
-| 256×256 程序化高度图 | 约 1.003922 |
-| 2017×2017 PNG 高度图 | 约 0.126984 |
-
-不能将该间距固定为 `1.0`，否则高分辨率高度图的法线坡度会失真。
-
-#### 高度材质和光照
-
-片段着色器按照归一化高度混合草地、岩石和积雪颜色，并叠加环境光、漫反射和高光：
-
-```glsl
-float t1 = smoothstep(0.05, 0.35, v_Height);
-float t2 = smoothstep(0.55, 0.80, v_Height);
-
-vec3 baseColor = mix(grass, rock, t1);
-baseColor = mix(baseColor, snow, t2);
-```
-
-当前颜色用于确认高度层级和光照是否正确，还不是完整的 PBR 地形材质。
-
-### 数值模拟与编译验证
-
-CPU 端使用和编辑器相同的高度函数进行了数值检查：
-
-| 测试项 | 结果 |
-| --- | ---: |
-| 归一化最低高度 | 0.06860 |
-| 归一化最高高度 | 0.91418 |
-| 平均高度 | 0.29238 |
-| `MaxHeight = 24` 时最高点 | 约 21.94 |
-| 顶点与索引范围 | 正常 |
-| Debug x64 编译 | 通过 |
-
-如果程序化模式正常而 PNG 模式异常，问题通常位于图片加载或纹理格式；如果两种模式都异常，应检查 Terrain Pass、纹理槽位、Uniform 和相机矩阵。
-
-### 已解决问题
-
-- `maxHeight` 传入 `TerrainMesh` 后没有被使用；
-- 高度图加载语句曾被乱码注释吞掉；
-- 固定法线采样间距无法适配 2017×2017 高度图；
-- 纹理重复寻址导致地形边缘接缝；
-- Terrain Pass 清除深度后会破坏场景遮挡；
-- 只有文件高度图时难以区分资源错误与渲染错误。
-
-### 文件清单
+外部高度图的使用路径很短：
 
 ```text
-Glimmer/src/Glimmer/
-  Scene/TerrainComponent.h
-  Renderer/TerrainMesh.h
-  Renderer/TerrainMesh.cpp
-
-GlimmerEditor-CyouBranch/
-  src/EditorLayer.h
-  src/EditorLayer.cpp
-  assets/shaders/Terrain.glsl
-  assets/textures/heightmap-example.png
+Content Browser 中的图片
+    -> 导入为 Texture2D Asset
+    -> 拖到 Terrain Inspector，或拖进视口新建 Terrain
+    -> TerrainRenderer 按 AssetHandle 解析纹理
+    -> 顶点 Shader 采样高度并完成位移
 ```
 
-### 历史限制与当前状态
+将 `Procedural` 关闭后，Inspector 会显示高度图拖放入口。切换图片走编辑器命令，因此可以 Undo/Redo。外部图片模式目前只提供高度本身，程序化路径生成的 Normal/Slope、Analysis 和 Material Weights 不会沿用，这一点在排查材质差异时很容易忽略。
 
-本节最初记录的是高度图地形仍由 `EditorLayer` 持有的原型阶段。该所有权描述已经被后续实现替代：当前地形以 `Terrain Entity + TransformComponent + TerrainComponent` 进入 Scene，`TerrainRenderer` 负责绘制，`TerrainRuntime` 持有不参与序列化的 GPU 资源，编辑器和运行场景共享同一组件提交路径。
+### 网格与采样
 
-目前仍然有效的限制是：
+`TerrainMesh` 只生成规则网格和 Skirt 顶点，不把高度烘进 Vertex Buffer。`HeightScale` 改变时无需重建网格，Shader 会使用高度图尺寸计算 `u_TexelSize`，并按地形世界尺寸计算 `u_SampleSpacing`。后一个值不能写死为 `1.0`，否则高分辨率图片的坡度和法线会偏掉。
 
-1. 地形仍是固定网格，尚无 Chunk、LOD、视锥剔除和流送；
-2. 尚未建立独立 TerrainMaterial 资产、四层 PBR、Splat/Material Weights 和 Triplanar；
-3. 尚未形成完整的 Normal、Slope、Curvature、Flow 派生图缓存；
-4. Authoring Erosion 与固定步长 Runtime Erosion 尚未落地；
-5. 高度变化后的局部网格、碰撞体和派生资源更新策略仍需明确。
+当前地形被拆成固定 `3×3` Chunk，Runtime 为它准备三档共享 LOD Mesh。每帧根据相机距离选择层级，再做迟滞和相邻级差约束；视锥外的 Chunk 不提交，Skirt 负责遮住不同层级交界处的裂缝。这里仍是一张完整高度纹理，没有动态 Chunk 流送。
 
-具体实施顺序和验收条件已经统一收录到 `Documents/PROJECT_STATUS.md`，本历史章节不再维护第二份任务列表。
+### 绘制时我刻意保留的边界
 
-![[README.assets/Pasted image 20260722175227.png]]
-![[README.assets/Pasted image 20260723134803.png]]
+Terrain 与普通场景几何共用颜色和深度目标，所以它必须尊重已经写入的深度。早期原型曾在 Terrain Pass 再清一次 Depth，结果地形总能盖住先画的模型。现在清理由场景帧统一负责，`TerrainRenderer` 只提交可见 Chunk。
+
+纹理寻址使用 Clamp to Edge，采样点也按 Texel 尺寸处理边缘。这样做看似琐碎，却解决了高度图左右两端互相取样形成的接缝。地形渲染 Shader、阴影采样、四层 `TerrainMaterial` 以及环境诊断都复用同一份 Runtime Height，后续功能无需各自维护一套高度来源。
+
+### 当前边界
+
+- 外部高度图不会自动生成程序化路径的三张派生图。
+- Chunk 布局固定为 `3×3`，目前没有大世界流送和动态细分。
+- Runtime 水文、侵蚀与气候修改不会自动烘回图片，也不会随 Scene 保存。
+
+这套实现留下的经验很直接：先把高度数据、几何拓扑和运行时资源拆开。地形功能越往后加，这个边界越省事。
 
 ## Shader 实时热重载
 
-### 设计目标
+### 为什么要做
 
-Shader 热重载允许开发者保存 `.glsl` 文件后直接观察新的渲染结果，不需要重新编译 C++、重新生成解决方案或重启编辑器。
+调 Shader 时，重启编辑器的成本比编译本身更烦。热重载让文件保存后直接得到新画面，语法写错也能继续看着上一个有效版本修改。它缩短的是渲染调试循环，并不改变 Shader 的资产边界。
 
-系统必须同时满足：
+### 从保存文件到替换 Program
 
-- 文件修改后自动检测；
-- Shader 编译和链接发生在拥有 OpenGL Context 的渲染线程；
-- 新 Program 成功前继续使用旧 Program；
-- 编译失败不触发断言、不退出编辑器、不产生黑屏；
-- 修复 Shader 后能够再次自动恢复；
-- Graphics Shader 和 Compute Shader 使用一致的状态接口。
-
-### 整体流程
+`FileWatcher` 轮询主文件的 `last_write_time`。时间戳变化后会等待 200 ms，确认写入稳定再返回一次变更，避开编辑器保存时的临时文件和连续写入。轮询发生在正常更新流程里，没有后台线程拿着 OpenGL Context 编译 Shader。
 
 ```text
-保存 .glsl 文件
-    → FileWatcher 检测 LastWriteTime
-    → 等待 200 ms 防抖
-    → ShaderLibrary::ReloadChanged()
-    → 读取并预处理 Shader 源码
-    → 编译临时 Shader Stage
-    → 链接临时 Program
-        ├─ 失败：删除临时对象，保留旧 Program，记录错误
-        └─ 成功：替换 Renderer ID，清除 Uniform 缓存，删除旧 Program
-    → Shader Version + 1
+保存 .glsl / .comp
+    -> FileWatcher 防抖
+    -> ReloadIfChanged()
+    -> 读取并移除可选 UTF-8 BOM
+    -> 编译、链接临时 Program
+    -> 成功后交换 Program ID，清空 Uniform 缓存
 ```
 
-文件监控只检测磁盘变化，不创建线程调用 OpenGL。实际编译由编辑器更新循环触发，因此不会在错误线程访问图形上下文。
+这里需要守住的是延迟交换。新的 Stage 或 Program 只要有一步失败，临时对象就会被清理，原来的 `m_RendererID` 保持不动。修好文件再次保存后，Watcher 还能触发下一次尝试。成功重载会增加 Version；Uniform Location 在重新链接后可能变化，所以旧缓存必须清空。
 
-### FileWatcher
+### 谁负责触发重载
 
-通用文件监控位于核心库：
+图形 Shader 与 Compute Shader 共用 `ShaderReloadResult`，里面记录本次是否尝试、是否成功以及编译信息，但它们的管理入口不同。
 
-```text
-Glimmer/src/Glimmer/Core/FileWatcher.h
-Glimmer/src/Glimmer/Core/FileWatcher.cpp
-```
+- `ShaderLibrary` 管理编辑器中的文件型图形 Shader，`ShaderPanel` 提供 Auto Reload、Reload All 和单文件 Reload。
+- `Renderer2D`、`Renderer3D`、`TerrainRenderer` 与 `ShadowRenderer` 会在各自拥有的渲染阶段检查 Shader。
+- `TerrainGenerator`、GPU 水文和气候模块自行轮询所属 Compute Shader，重载成功后按模块规则重建派生结果。
 
-核心接口：
+这种分工比把全部 Shader 塞进 `EditorLayer` 更稳。资源的拥有者最清楚重载后需要补什么状态。例如 `Renderer2D` 必须重新上传 `u_Textures` Sampler 数组；否则 Program 虽然编译成功，批次里的纹理槽仍会错。
 
-```cpp
-class FileWatcher
-{
-public:
-    explicit FileWatcher(
-        const std::filesystem::path& path,
-        std::chrono::milliseconds debounce =
-            std::chrono::milliseconds(200));
+### 实际调试方式
 
-    bool Poll();
-    void Reset();
-};
-```
+打开 `Shaders` 面板并保持 Auto Reload 开启，修改已加载的文件即可。失败信息会留在面板和日志中，视口继续使用旧 Program。由内存字符串创建的 Shader 没有源文件路径，不能参与自动监控。
 
-`Poll()` 对比 `std::filesystem::last_write_time()`。发现时间变化后不会立即触发，而是等待文件时间稳定 200 ms，避免文本编辑器执行临时写入、重命名或连续保存时反复编译不完整文件。
+当前 Watcher 只盯主文件，项目也还没有 GLSL `#include` 依赖图。以后若引入公共 Include，需要让一次文件变更能标记全部依赖 Shader；眼下的独立 `.glsl` 与 `.comp` 文件不受这个限制。
 
-### 统一重载结果
+开发这部分时最容易犯的错，是把编译成功当成重载完成。Program 交换后的 Uniform、Sampler 以及依赖它生成的纹理，都需要由真正的拥有者恢复。
 
-Graphics Shader 和 Compute Shader 共用：
-
-```cpp
-struct ShaderReloadResult
-{
-    bool Attempted = false;
-    bool Success = false;
-    std::string Message;
-};
-```
-
-| 字段 | 说明 |
-| --- | --- |
-| `Attempted` | 本帧是否真正执行了重载 |
-| `Success` | 编译和链接是否全部成功 |
-| `Message` | 成功信息或完整编译错误 |
-
-Shader 同时提供：
-
-```cpp
-Reload();
-ReloadIfChanged();
-GetFilePath();
-GetVersion();
-GetLastReloadResult();
-IsFileBacked();
-```
-
-由内存字符串创建的 Shader 没有源文件路径，因此不能自动热重载。
-
-### 事务式 OpenGL Program 替换
-
-旧实现直接把新 Program 写入 `m_RendererID`，编译失败还会触发断言，不适合编辑期热重载。
-
-当前流程先构建独立 Program：
-
-```cpp
-uint32_t newProgram = 0;
-if (!BuildProgram(shaderSources, newProgram, error))
-{
-    // m_RendererID 保持不变
-    return failedResult;
-}
-
-uint32_t oldProgram = m_RendererID;
-m_RendererID = newProgram;
-m_UniformCache.clear();
-++m_Version;
-glDeleteProgram(oldProgram);
-```
-
-只有全部 Stage 编译成功且 Program 链接成功后才交换 ID。失败路径会清理本次创建的 Shader 和 Program，不影响正在渲染的旧版本。
-
-热重载成功后必须清空 Uniform Location 缓存，因为重新链接后的 Uniform Location 可能发生变化。
-
-### ShaderLibrary
-
-`ShaderLibrary` 新增：
-
-```cpp
-ReloadChanged();
-ReloadAll();
-GetAll();
-```
-
-编辑器中的以下 Shader 已统一交由 Library 管理：
-
-- BalatroVortex；
-- StarNest；
-- Model3D；
-- Terrain；
-- PostProcess；
-- Overlay；
-- Phong；
-- Toon；
-- Blinn-Phong；
-- Hologram。
-
-`ReloadChanged()` 只返回本帧真正尝试过重载的 Shader，避免每帧产生无意义状态和日志。
-
-### Renderer2D Shader
-
-Renderer2D 的 `Texture.glsl` 是核心渲染器内部持有的 Shader，不属于 EditorLayer 的 ShaderLibrary，因此由 Renderer2D 在 `BeginScene()` 时检测变化。
-
-Program 重新链接后，Sampler Uniform 会恢复为默认值。热重载成功时需要重新上传纹理槽数组：
-
-```cpp
-int32_t samplers[Renderer2DData::MaxTextureSlots];
-for (uint32_t i = 0; i < Renderer2DData::MaxTextureSlots; ++i)
-    samplers[i] = static_cast<int32_t>(i);
-
-textureShader->Bind();
-textureShader->UploadUniformIntArray(
-    "u_Textures",
-    samplers,
-    Renderer2DData::MaxTextureSlots);
-```
-
-否则可能出现所有实体使用错误纹理槽的问题。
-
-### Compute Shader
-
-Compute Shader 同样支持：
-
-- 文件变化检测；
-- 200 ms 防抖；
-- 临时 Program 编译；
-- 失败保留旧 Program；
-- 版本号和错误信息；
-- 修复后再次重载。
-
-Compute Shader 的拥有者需要在自己的更新阶段调用 `ReloadIfChanged()`。后续建立 Environment Simulation System 时，应由模拟系统统一管理 Compute Shader，而不是在 EditorLayer 中逐个轮询。
-
-### ShaderPanel
-
-编辑器新增独立面板：
-
-```text
-GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.h
-GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.cpp
-```
-
-功能包括：
-
-- `Auto Reload`：启用或暂停自动检测；
-- `Reload All`：手动重新编译全部文件 Shader；
-- 单个 Shader 的 `Reload`；
-- 显示 Library 名称；
-- 显示源文件路径；
-- 显示 Shader Version；
-- 显示最近一次成功或失败信息；
-- 成功状态使用绿色，失败状态使用红色。
-
-ShaderPanel 只调用核心接口，不包含 OpenGL API。
-
-### 使用方法
-
-1. 启动 `GlimmerEditor-CyouBranch`；
-2. 打开 `Shaders` 面板；
-3. 保持 `Auto Reload` 开启；
-4. 修改项目 `assets/shaders` 下已加载的 Shader；
-5. 保存文件；
-6. 文件稳定约 200 ms 后自动重载。
-
-如果写入语法错误：
-
-- Shaders 面板显示错误；
-- 控制台输出 Shader Stage 和编译器日志；
-- 视口继续显示上一个有效版本；
-- 修复并保存后自动恢复。
-
-### 新增源文件后的工程同步
-
-本机使用 Visual Studio 2026 时，应运行：
-
-```text
-scripts/Win-GenerateProject-vs2026.bat
-```
-
-该脚本调用：
-
-```bat
-vendor\bin\premake\premake5.exe vs2026
-```
-
-新增 `.h/.cpp` 后使用该脚本同步 Visual Studio 工程，不应运行 VS2022 脚本后再手动修改 PlatformToolset。
-
-### 文件清单
-
-```text
-新增:
-  Glimmer/src/Glimmer/Core/FileWatcher.h
-  Glimmer/src/Glimmer/Core/FileWatcher.cpp
-  Glimmer/src/Glimmer/Renderer/ShaderReload.h
-
-  GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.h
-  GlimmerEditor-CyouBranch/src/Panels/ShaderPanel.cpp
-
-修改:
-  Glimmer/src/Glimmer/Renderer/Shader.h
-  Glimmer/src/Glimmer/Renderer/Shader.cpp
-  Glimmer/src/Glimmer/Renderer/ComputeShader.h
-  Glimmer/src/Glimmer/Renderer/Renderer2D.cpp
-
-  Glimmer/src/Platform/OpenGL/OpenGLShader.h
-  Glimmer/src/Platform/OpenGL/OpenGLShader.cpp
-  Glimmer/src/Platform/OpenGL/OpenGLComputeShader.h
-  Glimmer/src/Platform/OpenGL/OpenGLComputeShader.cpp
-
-  GlimmerEditor-CyouBranch/src/EditorLayer.h
-  GlimmerEditor-CyouBranch/src/EditorLayer.cpp
-```
-
-### 验证结果
-
-完成了真实运行测试：
-
-1. 启动编辑器并等待场景加载完成；
-2. 临时向 `Terrain.glsl` 写入非法 Token；
-3. FileWatcher 检测变化；
-4. Fragment Shader 编译失败；
-5. 编辑器保持运行，旧 Terrain Program 继续渲染；
-6. 恢复原 Shader 文件；
-7. Shader 自动重载成功；
-8. Terrain Shader Version 从 1 更新为 2；
-9. SHA-256 检查确认测试文件完整恢复。
-
-Debug x64 完整编译通过，生成：
-
-```text
-bin/Debug-windows-x86_64/
-  GlimmerEditor-CyouBranch/
-    GlimmerEditor-CyouBranch.exe
-```
-
-### 当前限制与下一步
-
-当前热重载监控的是 Shader 主文件，尚未建立 `#include` 依赖图。如果公共 GLSL Include 文件发生变化，依赖它的 Shader 不会自动全部标记为 Dirty。
-
-后续可按以下顺序扩展：
-
-```text
-GLSL #include 预处理
-    → Include 依赖图
-    → 公共文件变化后重载所有依赖 Shader
-    → UBO/Sampler Binding 反射
-    → Shader 变体与编译缓存
-```
-
-这些扩展不是当前程序化地形开发的阻塞项。现阶段已经可以直接用于 fBm Compute Shader、Terrain Shader 和后续 PBR Shader 的快速迭代。
 ## 拟真程序化地形生成
 
-在已有的高度图 Terrain Pass、Compute Shader 与 Shader 热重载之上，程序化高度图改为由 GPU 直接生成。目标不是只得到随机起伏，而是构建具有“大尺度陆地—丘陵—山脉—沟谷—细节”层次的稳定地貌，同时让全部参数可在编辑器中实时调整。
+### 从随机噪声到可用地貌
 
-### 设计目标
+第一版生成器能造出起伏，却很像一张铺满均匀噪声的毯子。大陆、丘陵和山脊共用相近的噪声信号，层次挤在一起，Seed 换了，整体气质却没怎么变。这一章记录的工作，就是把 GPU 高度生成整理成一条可重复、可编辑的 Authoring 管线。
 
-旧版生成器将同一组 Value Noise 同时用于基础高度、山脊和大陆掩码。各层彼此高度相关，因此容易出现均匀、重复的噪声丘陵。
+`GenerateFBM.comp` 先生成 R32F 高度场。大陆轮廓控制低频分布，丘陵补足缓坡，Ridged fBm 与 Mountain Mask 决定山脉位置，Domain Warp 用来打散过直的边界。沟谷参数只是生成阶段的形态修饰，不承担水量或泥沙守恒；真实 Runtime 水文由后面的独立模拟系统负责。
 
-新版使用独立频段和不同随机偏移生成以下层级：
+### 规格由组件持有
 
-```text
-低频大陆轮廓
-    → 缓坡平原与丘陵
-        → 受掩码约束的山脉脊线
-            → 沟谷侵蚀近似与高频细节
-```
+`TerrainSpecification` 保存 Seed、频率、Octave、山脉方向、地质混合等参数，也保存高度/网格分辨率与 Compute Shader Handle。Inspector 修改这些值时会把预设切回 `Custom`，再让 Runtime 失效。面板不直接持有 `TerrainGenerator`，Scene 复制和 Edit/Play 隔离因此仍以组件值为边界。
 
-这使高山主要分布于特定区域，而不是在整张地图上等概率出现；低海拔区域保持更大、更连贯的平原空间。
+为了快速得到有明显差异的起点，项目提供 `Alpine`、`Plateau`、`Rolling Hills`、`Volcanic` 和 `Eroded Valley` 五个预设。预设只写入规格，之后手动调整仍走同一套生成流程，不存在隐藏的第二套算法。
 
-### 噪声与地貌组成
-
-`GenerateFBM.comp` 使用梯度噪声（Gradient Noise）替代 Value Noise。梯度噪声在格点处使用随机方向向量进行插值，配合五次 Fade 曲线，能得到更自然的连续坡面。
-
-每个 fBm octave 还会旋转并偏移输入坐标：
-
-```glsl
-position = mat2(0.80, -0.60, 0.60, 0.80) * position
-    + vec2(13.17, 7.31);
-```
-
-这能削弱常见的横纵轴条带和格子感。
-
-地形高度由五类信号组成：
-
-| 信号 | 用途 | 特征 |
-| --- | --- | --- |
-| `continentNoise` | 大陆与陆地范围 | 极低频，决定广阔陆块与平原分布 |
-| `rollingHills` | 丘陵底形 | 中低频，为陆地提供缓慢起伏 |
-| `RidgedFBM` | 山脉脊线 | 将噪声折叠为连续高脊，避免圆润噪声丘 |
-| `mountainMask` | 山区掩码 | 约束山脉只在特定大陆区域形成 |
-| `channels` | 沟谷近似 | 高次窄化噪声，从高地局部扣除高度 |
-
-域扭曲（Domain Warp）先扰动采样坐标，再生成丘陵、山脉和沟谷，可打破过于平行或规则的地形边界。
-
-最终高度计算保留低地，并对结果施加平滑幂曲线：
-
-```glsl
-height = 0.04 + broadLand * 0.20
-    + continental * foothills
-    + mountains * 0.42;
-height -= channels * u_ErosionStrength * continental;
-height = pow(clamp(height, 0.0, 1.0), 1.18);
-```
-
-这一步不是完整侵蚀模拟，而是视觉层面的沟谷近似：它不会模拟水量、流向、泥沙沉积或质量守恒。
-
-### 参数与编辑器控制
-
-`TerrainNoiseSettings` 是引擎侧的纯数据结构，正式参数由实体 `TerrainComponent` 的 Inspector 展示和编辑；UI 只修改可序列化规格并触发 Runtime 失效，不直接持有 `TerrainGenerator`，避免编辑器面板与 Compute 实现耦合。
-
-| 参数 | 默认值 | 作用 |
-| --- | ---: | --- |
-| `Seed` | `1` | 决定可复现的随机地貌 |
-| `Octaves` | `7` | 噪声层数；过高会增加细碎感与计算量 |
-| `Frequency` | `2.2` | 整体地貌尺度；越小则单个大陆/山系越大 |
-| `Lacunarity` | `2.0` | 每层频率倍率 |
-| `Persistence` | `0.48` | 高频层幅度衰减 |
-| `Domain Warp` | `0.65` | 地貌边界的扭曲程度 |
-| `Ridge Strength` | `0.58` | 山脊高度权重 |
-| `Continent Scale` | `0.32` | 大陆轮廓频率 |
-| `Erosion Strength` | `0.18` | 沟谷扣除强度 |
-| `Detail Strength` | `0.07` | 地表细节强度 |
-| `Offset` | `(0, 0)` | 在同一无限噪声场中平移采样位置 |
-
-Terrain 面板提供 `256×256`、`512×512`、`1024×1024` 三档分辨率。切换时 `SimulationGrid` 会重建内部的 R32F 双缓冲纹理，并在下次生成时写入新的尺寸；地形渲染会从高度图尺寸自动计算采样 texel 和网格间距。
-
-### GPU 生成链路
+### 一次生成包含哪些 Pass
 
 ```text
-TerrainComponent Inspector 参数变更 / Compute Shader 热重载
-    → TerrainGenerator::Generate(settings)
-        → UploadUniform(...)
-        → BindImageTexture(WriteTexture)
-        → Dispatch(ceil(width / 8), ceil(height / 8), 1)
-        → ComputeShader::Barrier()
-        → SimulationGrid::Swap()
-        → Terrain Pass 从 ReadTexture 采样并顶点位移
+Terrain Dirty / 手动 Regenerate / Compute Shader 重载成功
+    -> GenerateFBM.comp 写入 R32F Height Ping-Pong
+    -> 可选 ThermalErosion.comp 执行有限次数迭代
+    -> DeriveTerrainMaps.comp 生成三张 RGBA16F 派生纹理
+    -> TerrainRenderer 更新 Runtime 引用和 Generation Version
 ```
 
-`SimulationGrid` 维护两个同规格纹理。Compute 写入 `WriteTexture()`，内存屏障后交换读写索引；Terrain Pass 始终读取完成写入的 `ReadTexture()`。这样可避免读取正在写入的纹理，并为未来水流、湿度、泥沙等多轮迭代模拟复用同一套 Ping-Pong 结构。
+热力侵蚀属于 Authoring 操作，默认有限次执行，只有规格变脏或手动再生成时才运行。它不会随帧率暗中推进。每轮都从 Height Read 读取、向 Height Write 写入，Barrier 后交换两张纹理，避免在一次 Dispatch 中读写同一资源。
 
-### 文件职责
+派生阶段输出 `Normal/Slope`、`Analysis` 和 `MaterialWeights`。这些数据仍留在 GPU，供地形光照、四层材质混合和诊断视图采样。Scene YAML 只保存生成规格，Height 与派生纹理在加载后重建，这能避免把驱动参数和缓存结果一起保存后逐渐失配。
 
-```text
-Glimmer/src/Glimmer/
-  Simulation/SimulationGrid.h/.cpp             ← 通用 GPU 双缓冲标量场
-  Terrain/TerrainGenerator.h/.cpp               ← 地形参数上传、Dispatch 与高度图所有权
+### 渲染与模拟怎样接上
 
-GlimmerEditor-CyouBranch/
-  assets/shaders/Terrain/GenerateFBM.comp       ← 梯度噪声、多尺度地貌与沟谷近似
-  src/Panels/SceneHierarchyPanel.cpp            ← Terrain Component Inspector 与事务控制
-  assets/shaders/Terrain.glsl                    ← 高度图顶点位移、法线重建与基础地形着色
-```
+生成器产出的 Height 是地形后续系统的共同起点。`TerrainRenderer` 用它做顶点位移，固定 `3×3` Chunk 从同一张纹理的不同 UV 区域采样；三档 LOD 改变的是网格密度，不复制高度数据。TerrainMaterial 读取派生权重，Runtime 水文或侵蚀修改 Height 后会按需要刷新派生图。
 
-### 验证方式
+Authoring 与 Runtime 模拟必须分开看。前者由可序列化参数确定，适合反复生成同一地貌；后者有固定时间步和独立状态集，目前不会写回 `TerrainSpecification`。如果要保存模拟结果，需要单独设计显式 Bake，不能把运行时纹理偷偷塞进 Scene 序列化。
 
-1. 运行编辑器并在 Hierarchy 选中带有 `TerrainComponent` 的实体；
-2. 保持 `Use Procedural Terrain` 启用；
-3. 调整 `Seed` 或任一地貌参数，确认高度图预览和场景地形随之更新；
-4. 修改并保存 `GenerateFBM.comp`，确认日志出现 `Compute shader reloaded: GenerateFBM`，且地形自动重新生成；
-5. 切换 256/512/1024 分辨率，确认预览和 Terrain Pass 均继续稳定渲染。
+### 验证与现状
 
-### 当前边界与后续方向
+设置 `GLIMMER_TERRAIN_VALIDATE=1` 后，生成器会读回 Height 和三张派生图，检查数值范围、Material Weight 归一化以及同一规格重复生成的 Hash。这个入口会同步读回 GPU，只用于受控验证，不放进正常帧循环。
 
-当前系统在一张固定尺寸的高度图上生成静态地貌，并已加入有限次 Thermal Authoring Erosion 与派生图。它尚不包含：
-
-1. 真实水力侵蚀：降雨、水量、流速、沉积与蒸发；
-2. Chunk、LOD、无缝分块与大世界流送；
-3. 正式 TerrainMaterial 资产与按湿度驱动的分层 PBR 材质；
-4. 生成结果的磁盘烘焙、派生缓存导入与版本管理；
-5. GPU 统计/直方图，用于自动归一化不同 Seed 的高度范围。
-
-下一阶段若实现环境模拟，应优先在 `SimulationGrid` 上增加显式的多字段 Simulation Set（高度、水量、沉积、湿度）和固定时间步调度器，再接入水力侵蚀 Compute Pass，避免把模拟状态继续堆叠到 `EditorLayer`。
+目前仍使用固定范围的高度纹理与固定 `3×3` Chunk，没有动态大世界流送。生成结果也没有磁盘派生缓存或 Bake 格式。对现在的编辑器来说，这个边界够清楚：规格负责复现地貌，Runtime 负责昂贵资源，后续模拟在自己的时间轴上运行。
 
 ## UUID 与稳定实体标识
 
