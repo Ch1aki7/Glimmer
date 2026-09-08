@@ -2715,1286 +2715,268 @@ Authoring 与 Runtime 模拟必须分开看。前者由可序列化参数确定�
 
 ## UUID 与稳定实体标识
 
-为场景实体加入了独立于 `entt::entity` 的 64 位 UUID。`entt::entity` 只用于当前 Registry 内部索引，UUID 用于场景保存、加载、跨场景复制和未来实体引用。
+### 为什么 EnTT ID 不够用
 
-本次完成：
+`entt::entity` 很适合做 Registry 内部索引，但它只在当前 Scene 实例里有意义。删除实体、重新加载场景或复制到 Runtime Scene 后，同一个数值可能已经指向别的对象。编辑器命令、场景保存和跨 Scene 查找需要一份更稳定的身份，于是实体多了一层 64 位 UUID。
 
-- 新增线程安全的 `UUID` 类型，并排除无效值 `0`；
-- 新增 `IDComponent`，所有通过 `Scene` 创建的实体默认获得 UUID；
-- `Entity` 提供 `GetUUID()`；
-- `Scene` 提供 `CreateEntityWithUUID()` 和 `FindEntityByUUID()`；
-- Scene 内部通过 `unordered_map<UUID, entt::entity>` 进行快速查找；
-- 销毁实体时同步移除 UUID 映射；
-- YAML 场景格式升级为 `Version: 2`，保存并恢复 UUID；
-- 无 Version 的旧场景按 Version 1 加载，并为实体生成新 UUID。
+`UUID` 默认用 `mt19937_64` 生成非零值，随机引擎由 Mutex 保护。这里追求的是项目内稳定引用，并没有把它包装成分布式 ID 服务。`0` 被保留为无效值，`CreateEntityWithUUID()` 也会拒绝零值和当前 Scene 内的重复 UUID。
+
+### Scene 怎样维护身份
+
+每个通过 `Scene` 创建的实体都会获得 `IDComponent`。Scene 同时维护 `UUID -> entt::entity` 索引，因此编辑器命令可以记住 UUID，在 Undo 或 Redo 时重新找到目标，而不用长期保存一个可能失效的 EnTT Handle。
 
 ```text
 CreateEntity()
-    → 生成 UUID
-    → 添加 IDComponent
-    → 写入 UUID → entt::entity 映射
+    -> 生成 UUID
+    -> 添加 IDComponent
+    -> 写入 Scene UUID 索引
 
-Serialize()
-    → 保存 UUID
-
-Deserialize()
-    → CreateEntityWithUUID()
-    → 恢复稳定实体身份
+DestroyEntity()
+    -> 先移除 UUID 索引
+    -> 再销毁 Registry 实体
 ```
 
-相关文件：
+`FindEntityByUUID()` 还会检查 Registry 中的 Handle 是否仍然有效，发现陈旧记录时顺手清掉。这个防线不复杂，但能让查找失败安静地返回空实体，而不是把旧 ID 当成新实体继续使用。
 
-```text
-Glimmer/src/Glimmer/Core/UUID.h/.cpp
-Glimmer/src/Glimmer/Scene/Components.h
-Glimmer/src/Glimmer/Scene/Entity.h/.cpp
-Glimmer/src/Glimmer/Scene/Scene.h/.cpp
-Glimmer/src/Glimmer/Scene/SceneSerializer.cpp
-```
+### 复制与序列化的区别
 
-UUID 是下一步实现 `Scene::Copy`、编辑/运行场景隔离、实体引用和组件运行资源缓存的基础。
+这部分最初很容易混淆。复制单个实体时，目标是新对象，所以 `DuplicateEntity()` 会生成新的 UUID；`Scene::Copy()` 用于 Edit/Play 隔离，两个 Scene 中的逻辑实体需要对应起来，因此保留原 UUID。组件值会复制过去，脚本实例和 Terrain Runtime 等运行期对象则重新建立。
+
+当前 Scene YAML 是 Version 6，每个实体都保存 UUID。加载时通过 `CreateEntityWithUUID()` 恢复索引；没有 Version 的旧场景按 Version 1 读取，因为文件里没有稳定身份，加载器会为实体生成新 UUID。无窗口回归测试使用固定 UUID 做保存、加载和 `FindEntityByUUID()` 往返，避免只检查实体数量这种过于宽松的结果。
+
+UUID 解决的是实体身份，资源身份交给下一章的 `AssetHandle`。把两者分开后，Scene 可以稳定找到某个实体，组件也能稳定引用某份项目资源。
 
 ## AssetHandle 与基础资产管理系统
 
-在实体拥有稳定 UUID 后，下一步是让场景组件不再直接保存运行期资源指针。此前 `SpriteRendererComponent` 保存 `Ref<Texture2D>`，它只在当前进程中有效，无法稳定写入场景，也让组件承担了纹理加载和 GPU 生命周期职责。
+### 组件只记住自己引用了什么
 
-本阶段加入轻量级资产管理基础设施，使用稳定的 `AssetHandle` 连接场景数据与运行期资源：
+早期 `SpriteRendererComponent` 直接保存 `Ref<Texture2D>`。这样画图很方便，保存场景时却立刻遇到麻烦：智能指针不能写进 YAML，同一路径也可能被加载多次，组件还被迫参与 GPU 资源生命周期。`AssetHandle` 就是在这个阶段加进来的，它是资源的 64 位稳定身份，底层复用 `UUID`。
 
-```text
-assets 中的资源文件
-    → AssetManager::ImportAsset()
-    → 生成或复用 AssetHandle
-    → 写入 AssetRegistry.yaml
-    → 组件只保存 AssetHandle
-    → 渲染时由 AssetManager 解析并缓存 Texture2D
-```
-
-### 必要性
-
-直接在组件中保存 `Ref<Texture2D>` 存在以下问题：
-
-1. 智能指针不能持久化到 YAML；
-2. 场景复制后容易共享不应共享的运行期状态；
-3. 同一路径可能被重复加载，浪费内存和显存；
-4. 文件移动后，硬编码路径容易失效；
-5. Material、Model、Shader 难以使用统一方式管理。
-
-`AssetHandle` 基于 64 位 UUID。场景只记录稳定句柄，资源路径、类型和加载状态由资产系统管理，从而分离“场景引用什么”和“资源当前如何加载”。
-
-### 核心结构
-
-```cpp
-using AssetHandle = UUID;
-
-enum class AssetType
-{
-    None = 0,
-    Texture2D,
-    Model,
-    Shader,
-    Material
-};
-
-struct AssetMetadata
-{
-    AssetHandle Handle{ 0 };
-    AssetType Type = AssetType::None;
-    std::filesystem::path FilePath;
-};
-```
-
-- `AssetHandle`：资源的稳定身份；
-- `AssetType`：统一的资源分类；
-- `AssetMetadata`：记录句柄、类型和相对路径，不持有 GPU 对象；
-- `AssetManager`：维护注册表、路径索引和运行期纹理缓存。
-
-### 导入与注册表流程
-
-编辑器启动时以项目 `assets` 目录初始化 `AssetManager`，并读取 `assets/AssetRegistry.yaml`：
+Scene 组件现在只保存 Handle。路径、资源类型和运行期对象由 `AssetManager` 负责：
 
 ```text
-ImportAsset(path)
-    → 规范化绝对路径
-    → 检查文件存在且位于 assets 内
-    → 根据扩展名推断 AssetType
-    → 查询路径是否已有句柄
-        → 已存在：复用句柄
-        → 不存在：生成新 AssetHandle
-    → 更新内存注册表
-    → 按稳定顺序写入 AssetRegistry.yaml
+Scene / Material 中的 AssetHandle
+    -> AssetRegistry.yaml 查询 Metadata
+    -> 组合项目 assets 根目录与相对路径
+    -> 按类型加载资源
+    -> 放入对应运行期缓存
 ```
 
-注册表采用 YAML，并只保存相对 assets 的路径：
+这个分层后来覆盖到 Sprite、Model、Shader、Material、TerrainMaterial 和 Cubemap。场景文件不再夹带绝对路径，Renderer 也无需从组件里接管资源所有权。
+
+### 导入与注册表
+
+`ImportAsset()` 只接受项目 `assets` 目录内的现有文件。路径会转为规范化的项目相对路径，Windows 下的查找键还会统一大小写。同一路径再次导入时复用已有 Handle；新资源按扩展名判断类型，随后写入 `AssetRegistry.yaml`。
 
 ```yaml
 AssetRegistry:
   - Handle: 9195328290163695800
     Type: Texture2D
     FilePath: textures/balatro.png
+    ColorSpace: SRGB
+    Semantic: Color
 ```
 
-这样不会把开发机器的绝对路径写入项目。重复启动和重复导入同一资源时会复用原句柄，稳定排序也能减少无意义的版本控制差异。
+注册表按 Handle 排序输出，重复启动不会因为 `unordered_map` 的遍历顺序制造一整页 Diff。Texture Metadata 还记录 `SRGB/Linear` 与 `Color/Normal/Data/Height` 语义。首次导入会按文件名做推断，材质纹理拖放则写入明确语义；元数据变化时 Texture Cache 会失效，下次解析才按新颜色空间重新加载。
 
-### SpriteRendererComponent 迁移
+### 延迟加载和失败路径
 
-组件由直接保存纹理对象：
+`AssetManager` 为每种已支持资源维护独立缓存。`GetTexture2D()`、`GetModel()` 或 `GetMaterial()` 先检查 Handle 与类型，再复用缓存；未命中才访问磁盘。无效 Handle、类型不匹配或文件丢失都会返回空引用，调用方决定使用纯色、跳过 Draw，或在 Inspector 显示加载失败。
 
-```cpp
-Ref<Texture2D> Texture;
-```
+我更愿意让缺失资源在一个明确入口失败，而不是让各个 Renderer 猜路径。代价也很清楚：当前加载是同步的，首次命中仍可能卡住主线程；注册表没有文件移动监视、依赖图和自动修复。资源卸载与后台 GPU 上传队列也还没建立。现在这套系统适合中小型编辑器项目，还不是流式资产管线。
 
-改为保存资产句柄：
+### 数据各自落在哪里
 
-```cpp
-AssetHandle TextureHandle{ 0 };
-```
+| 位置 | 保存内容 |
+| --- | --- |
+| Scene 或 `.glmat` | 被引用资源的 `AssetHandle` |
+| `AssetRegistry.yaml` | Handle、类型、相对路径与 Texture Metadata |
+| `AssetManager` 缓存 | 当前进程已经加载的资源对象 |
 
-Renderer2D 在 `DrawSprite` 中按需解析：
-
-```text
-SpriteRendererComponent::TextureHandle
-    → AssetManager::GetTexture2D(handle)
-    → 查询运行期缓存
-        → 命中：复用 Texture2D
-        → 未命中：根据 Metadata 加载并缓存
-    → DrawQuad()
-```
-
-句柄无效、注册表中不存在或纹理加载失败时，渲染器回退为纯色 Quad，避免资源缺失导致场景崩溃。
-
-### Properties 面板拖放
-
-Sprite Renderer 属性现在支持：
-
-- 显示当前纹理文件名；
-- 使用 `X` 清除纹理句柄；
-- 接收 Content Browser 文件拖放；
-- 支持 PNG、JPG、JPEG、TGA 和 BMP，扩展名不区分大小写；
-- 拖放后先导入资产，再把返回句柄写入组件。
-
-属性面板只编辑 `TextureHandle`，不直接创建 OpenGL 纹理，从而保持编辑器 UI、资产管理和渲染后端低耦合。
-
-### 场景序列化
-
-`SpriteRendererComponent` 的 YAML 数据新增：
-
-```yaml
-SpriteRendererComponent:
-  Color: [1.0, 1.0, 1.0, 1.0]
-  Texture: 9195328290163695800
-  TilingFactor: 1.0
-```
-
-保存时写入纹理句柄和 `TilingFactor`；加载时仅在字段存在时恢复，因此没有纹理字段的旧场景仍可加载。
-
-| 数据位置 | 职责 |
-|---|---|
-| Scene YAML | 保存实体引用的 AssetHandle |
-| AssetRegistry.yaml | 保存句柄到资源路径和类型的映射 |
-| AssetManager 运行期缓存 | 保存已加载的 `Ref<Texture2D>` |
-
-### 文件职责
-
-```text
-Glimmer/src/Glimmer/Asset/
-  Asset.h                         资产句柄、类型与元数据
-  AssetManager.h/.cpp             注册表、导入、查询和纹理缓存
-
-Glimmer/src/Glimmer/Scene/
-  Components.h                    SpriteRendererComponent 保存 TextureHandle
-  SceneSerializer.cpp             纹理句柄与 TilingFactor 序列化
-
-Glimmer/src/Glimmer/Renderer/
-  Renderer2D.cpp                  绘制时解析纹理资产
-
-GlimmerEditor-CyouBranch/src/
-  EditorLayer.cpp                 初始化与关闭 AssetManager
-  Panels/SceneHierarchyPanel.cpp  Sprite 纹理属性和拖放赋值
-
-GlimmerEditor-CyouBranch/assets/
-  AssetRegistry.yaml              项目资产注册表
-```
-
-资产系统属于引擎核心，因此放在 `Glimmer/src/Glimmer/Asset`；具体项目的注册表和资源文件属于项目数据，因此放在 `GlimmerEditor-CyouBranch/assets`。
-
-### 验证结果
-
-1. 使用 VS2026 重新生成工程；
-2. `Debug | x64` 完整编译成功；
-3. 连续启动后 `AssetRegistry.yaml` 内容及哈希保持不变；
-4. 同一路径重复导入时复用原句柄；
-5. `git diff --check` 通过；
-6. 无效纹理句柄安全回退为纯色绘制。
-
-### 当前边界与下一步
-
-当前阶段已解决稳定引用、注册表和纹理缓存，但尚未包含：
-
-1. 资源文件新增、删除、移动和重命名监视；
-2. `.meta` 文件和资源导入配置；
-3. 异步加载、后台导入和主线程 GPU 上传队列；
-4. 资源依赖图、卸载和缺失资产修复；
-5. Model、Shader、Material 的完整加载器。
-
-基于该资产系统，下一步已经实现 `Material` 与 `MaterialComponent`。实体只引用材质句柄，材质资产再引用 Shader 和纹理句柄：
-
-```text
-Entity
-    → MaterialComponent
-    → Material AssetHandle
-    → MaterialAsset
-        → Shader AssetHandle
-        → Albedo/Normal/Roughness 等 Texture AssetHandle
-        → 可序列化材质参数
-```
+这个边界给后续材质系统省了很多事。材质可以引用 Shader 与纹理，实体再引用材质，整个链路只有 Handle 进入持久化文件。
 
 ## Material 资产与实体材质组件
 
-在 AssetHandle 基础设施完成后，材质不再是散落在 `EditorLayer` 或 Shader 调用附近的一组临时参数，而是成为可保存、可复用、可被实体稳定引用的项目资产。
+### 共享参数和实体差异分开保存
 
-本阶段建立以下数据链：
+材质最初只是散落在绘制代码旁边的一组颜色和数值。一旦两个实体需要共享外观，继续复制参数就会出现很现实的问题：改了一个，另外几个要不要跟着改？当前结构把答案写进数据模型里。
 
-```text
-Entity
-    → MaterialComponent::MaterialHandle
-    → AssetManager::GetMaterial()
-    → Material（.glmat）
-        → Shader AssetHandle
-        → BaseColor Texture AssetHandle
-        → BaseColor / Tiling / Metallic / Roughness
-    → Renderer2D::DrawSprite()
-```
-
-### 设计目标与职责边界
-
-材质系统需要同时处理两类数据：实体当前使用哪个材质，以及多个实体共享的材质参数。两者不应混在一个组件中，因此采用“轻组件、重资产”的结构：
-
-```cpp
-struct MaterialComponent
-{
-    AssetHandle MaterialHandle{ 0 };
-    MaterialOverrides Overrides;
-};
-```
-
-`MaterialComponent` 保存共享材质句柄和该实体的局部覆盖值。基础颜色、纹理和表面参数仍保存在 `.glmat` 文件及运行期 `Material` 对象中；只有显式启用的 Override 才写入场景组件。同一材质可以被多个实体引用，同时允许个别实体调整外观而不修改共享资产。组件仍不直接持有 Shader、Texture 或 OpenGL 对象。
-
-### Material 核心结构
-
-材质核心实现位于引擎 Renderer 模块：
-
-```cpp
-struct MaterialProperties
-{
-    glm::vec4 BaseColor{ 1.0f };
-    AssetHandle BaseColorTexture{ 0 };
-    float TilingFactor = 1.0f;
-    float Metallic = 0.0f;
-    float Roughness = 0.5f;
-};
-
-class Material
-{
-public:
-    static Ref<Material> Create(const std::filesystem::path& path);
-
-    bool Reload();
-    bool Save() const;
-
-    AssetHandle GetShaderHandle() const;
-    MaterialProperties& GetProperties();
-};
-```
-
-| 字段 | 作用 | 当前渲染状态 |
-|---|---|---|
-| `ShaderHandle` | 预留材质使用的 Shader 资产 | 尚未驱动渲染管线选择 |
-| `BaseColor` | 基础颜色或纹理 Tint | Renderer2D 已使用 |
-| `BaseColorTexture` | 基础颜色纹理句柄 | Renderer2D 已使用 |
-| `TilingFactor` | UV 平铺倍率 | Renderer2D 已使用 |
-| `Metallic` | 金属度 | 已保存，尚未参与 2D Shader |
-| `Roughness` | 粗糙度 | 已保存，尚未参与 2D Shader |
-
-Metallic 和 Roughness 目前是为后续 PBR 准备的数据结构，不代表 PBR 已完成。它们需要在后续 3D 材质 Shader、光源、HDR 和颜色空间流程中真正参与计算。
-
-### `.glmat` 材质文件
-
-材质使用 YAML 保存，扩展名为 `.glmat`：
-
-```yaml
-Material:
-  Shader: 0
-  BaseColor: [1.0, 0.2, 0.2, 1.0]
-  BaseColorTexture: 0
-  TilingFactor: 1.0
-  Metallic: 0.0
-  Roughness: 0.5
-```
-
-Shader 和纹理字段保存 AssetHandle，而不是绝对路径或运行期指针。具体路径继续由 `AssetRegistry.yaml` 管理。
-
-加载流程：
+`.glmat` 是共享 Material Asset，`MaterialComponent` 只保存它的 Handle 和该实体的 `MaterialOverrides`。多个实体引用同一材质时，编辑共享资产会一起变化；只想改其中一个，就在 Override Mask 中启用对应字段。
 
 ```text
-AssetManager::GetMaterial(handle)
-    → 验证 Metadata 类型为 Material
-    → 查询 MaterialCache
-        → 已加载：复用缓存
-        → 未加载：Material::Create(path)
-    → 解析 .glmat
-    → 校正参数范围
-    → 放入 MaterialCache
+MaterialHandle
+    -> AssetManager::GetMaterial()
+    -> 读取共享 .glmat
+    -> MaterialInstance 合并已启用的 Overrides
+    -> Renderer2D / Renderer3D / Shadow Pass 使用最终属性
 ```
 
-加载时执行基础约束：
+Override 会保存 Mask 和 Values。关闭某个字段只让它停止参与合并，原来的编辑值仍留着，重新打开时不用从头输入。Scene 序列化也只保存组件引用与局部覆盖，共享参数继续留在 `.glmat`。
 
-- `TilingFactor >= 0.01`；
-- `Metallic` 限制到 `[0, 1]`；
-- `Roughness` 限制到 `[0.04, 1]`。
+### `.glmat` 里有什么
 
-解析失败时返回空材质，并且不会把无效对象放入缓存。
+当前 Material 保存 Shader Handle、Base Color 与纹理，还包括 Metallic、Roughness、Normal、AO、Emissive 参数，以及 `Opaque / Mask / Blend` 和 Alpha Cutoff。纹理槽保存的仍是 AssetHandle，颜色空间与语义由 Asset Metadata 约束。
 
-### AssetManager 材质缓存
+加载时会收紧容易出错的范围，例如 Roughness 最低为 `0.04`，Normal Scale 限制在 `[0, 2]`，Alpha Cutoff 限制在 `[0, 1]`。解析失败的 Material 不进入缓存。Renderer2D 读取其中适合无光照批处理的颜色、纹理和平铺参数；Renderer3D 再消费 PBR、法线、AO、Emissive 与 AlphaMode。Metallic/Roughness 目前仍是标量，项目还没有单独贴图或 ORM 通道。
 
-AssetManager 新增独立的 Material 缓存：
+### 编辑时有两条路径
 
-```text
-AssetHandle
-    → AssetMetadata
-    → .glmat 文件
-    → Ref<Material>
-```
+实体 Inspector 修改 `MaterialComponent::Overrides`。这些操作进入 Scene 的 CommandHistory，不会写共享 `.glmat`；Play 模式下改到的是 Runtime Scene 副本，停止后丢弃。
 
-Material 缓存保存材质参数，Texture 缓存保存运行期 Texture2D。Material 的纹理字段仍然只是 Texture AssetHandle，Renderer 使用材质时再解析纹理，因此 Material 不依赖 OpenGL 等具体图形 API。
+在 Content Browser 选中 `.glmat` 后，Asset Inspector 编辑的是共享 `MaterialState`。每次命令都会保存到磁盘，Undo/Redo 也会写回对应状态。Play 模式把共享 Material 设为只读，防止运行时调试意外改掉项目资产。
 
-### Renderer2D 兼容接入
+保存失败不能只弹一句日志。`Material::Save()` 先写 `.tmp`，已有文件会临时改名为 `.bak`，替换失败时尝试恢复原文件。Inspector 也会把内存状态退回操作前，并且失败的命令不会进入 Undo 栈。这里多写了几步文件操作，但至少不会出现界面已经更新、磁盘仍是旧值的假象。
 
-为了不破坏已有 Sprite 场景，Renderer2D 使用兼容式覆盖：
+### 运行时解析
 
-```text
-没有有效 Material
-    → 使用 SpriteRendererComponent 的 Color、TextureHandle、TilingFactor
+Renderer 收到 Material Handle 与可选 Overrides 后构造最终属性。Material 和 Override 都提供 Version，Renderer3D 还会比较缓存中的 `MaterialState` 与 Overrides；共享材质或局部覆盖变化后，最终属性会重新合并。纹理仍由 AssetManager 延迟解析，Material 本身不保存 OpenGL Texture ID。
 
-存在有效 Material
-    → 使用 MaterialProperties 的 BaseColor、BaseColorTexture、TilingFactor
-```
+无效材质不会让场景崩溃。2D 路径可退回 Sprite 自带的 Color、TextureHandle 与 TilingFactor；3D 路径根据提交契约跳过无法形成有效渲染项的对象。这个回退让旧场景可以逐步迁移，也避免材质文件暂时损坏时把整个编辑器带走。
 
-最终仍通过已有批处理 `DrawQuad` 提交。无效材质时保留 Sprite 数据，纹理无效时回退为纯色 Quad。
+### 当前留下的缺口
 
-Metallic 和 Roughness 没有强行加入 Texture Shader，因为当前 Renderer2D 没有光照模型。后续应在 3D Material Pass 中通过 Material UBO 或其他跨 API 参数接口上传。
-
-### Properties 面板工作流
-
-选中带有 SpriteRendererComponent 的实体后，可以：
-
-1. 点击 `+ Add Material` 添加 MaterialComponent；
-2. 从 Content Browser 拖入 `.glmat`；
-3. 查看当前材质文件名；
-4. 编辑 Base Color、Tiling、Metallic 和 Roughness；
-5. 将图片拖到 Base Color Texture；
-6. 使用 `X` 清除材质或材质纹理。
-
-实体 Inspector 编辑的是 `MaterialComponent::Overrides`，不会调用 `Material::Save()`，因此不会修改共享 `.glmat`。只有在 Content Browser 中选中材质资产后，Asset Inspector 才允许编辑基础材质并写回文件。层级面板使用 `[Mat]` 标记拥有 MaterialComponent 的实体。
-
-### 场景复制与序列化
-
-`Scene::Copy()` 已将 MaterialComponent 纳入组件复制列表。进入播放模式时，Runtime Scene 会保留实体 UUID 和 Material AssetHandle：
-
-```text
-Editor Scene
-    → Scene::Copy()
-    → Runtime Scene
-    → 保留 UUID
-    → 保留 MaterialHandle
-```
-
-Material 阶段曾将场景 YAML 升级为 `Version: 3`。后续加入光源组件后，当前场景格式已经升级为 `Version: 4`：
-
-```yaml
-MaterialComponent:
-  Material: 13777784352782102236
-  Overrides:
-    Mask: 5
-    BaseColor: [0.2, 0.7, 1.0, 1.0]
-    BaseColorTexture: 0
-    TilingFactor: 1.0
-    Metallic: 0.0
-    Roughness: 0.5
-```
-
-场景始终保存基础材质句柄；只有存在实体覆盖时才额外写出 `Overrides`。`Mask` 标记哪些字段真正覆盖基础材质，其余值不会参与合并。没有 `Overrides` 节点的旧场景仍按纯共享材质加载，因此保持向后兼容。
-
-### 默认验证材质
-
-项目新增：
-
-```text
-GlimmerEditor-CyouBranch/assets/materials/DefaultSprite.glmat
-```
-
-该材质使用与 Red Square 原始颜色一致的红色，并默认挂载到 Red Square。这样能够验证材质解析、场景组件和 Renderer2D 覆盖路径，同时保持原测试场景的视觉预期。
-
-### 文件职责
-
-```text
-Glimmer/src/Glimmer/Renderer/
-  Material.h/.cpp                  材质数据、YAML 加载、保存与重载
-  Renderer2D.h/.cpp                材质参数解析与 Sprite 兼容绘制
-
-Glimmer/src/Glimmer/Asset/
-  AssetManager.h/.cpp              Material 缓存和句柄解析
-
-Glimmer/src/Glimmer/Scene/
-  Components.h                     MaterialComponent
-  Scene.cpp                        组件复制和编辑/运行渲染传递
-  SceneSerializer.cpp              MaterialComponent YAML 序列化
-
-GlimmerEditor-CyouBranch/src/
-  EditorLayer.cpp                  默认材质导入和测试实体挂载
-  Panels/SceneHierarchyPanel.cpp   材质组件与参数编辑 UI
-
-GlimmerEditor-CyouBranch/assets/
-  materials/DefaultSprite.glmat    默认测试材质
-  AssetRegistry.yaml               材质 AssetHandle 注册信息
-```
-
-### 验证结果
-
-1. 从 `scripts` 目录运行 `Win-GenerateProject-vs2026.bat`，工程生成成功；
-2. VS2026 `Debug | x64` 完整编译成功；
-3. Material 源文件已进入核心静态库；
-4. 编辑器运行期间未在材质解析或渲染路径提前退出；
-5. `.glmat` 成功导入 AssetRegistry；
-6. 重复启动后 AssetRegistry SHA256 保持一致；
-7. `git diff --check` 通过。
-
-### 历史边界与后续进展
-
-本节建立 Material Asset 时，3D Material Pass、基础 PBR、MaterialInstance 和材质事务尚未完成。后续章节已经补齐这些能力：3D Renderer 会使用材质 ShaderHandle、BaseColor、Metallic 和 Roughness；实体 Override 与共享 `.glmat` 已分离；MaterialHandle、Overrides 和共享 Material Asset 编辑均已接入 Undo/Redo 与失败回滚。
-
-当前仍待完成的是 Normal、AO、Emissive、Metallic-Roughness 等完整纹理通道，Material/Shader 参数布局反射，以及更严格的 sRGB/Linear 导入与验证。后续范围和验收条件以 `Documents/PROJECT_STATUS.md` 为准。
+材质的共享资产事务已经接入 Undo/Redo，Normal、AO 和 Emissive 也进入 3D 渲染。接下来仍需补齐 Metallic/Roughness Texture 或 ORM 约定，以及 Shader 参数布局反射。Terrain 使用独立 `.glterrainmat`，它有自己的四层数据与保存入口，不能和普通 `.glmat` 当成同一种资源解析。
 
 ## 统一光源组件与 Light UBO
 
-在 Material 资产和 ECS 引用完成后，下一项基础建设是统一光源数据。此前 `EditorLayer` 使用 `m_LightPos` 保存测试灯光位置，它不属于场景实体，无法序列化、无法随播放场景复制，也迫使每个 Shader 单独上传灯光 Uniform。
+### 把灯光从 EditorLayer 还给 Scene
 
-本阶段建立以下数据流：
+早期测试灯光只是 `EditorLayer` 里的一个位置变量。它能照亮模型，却不能随场景保存，也不会自然地复制到 Runtime Scene。现在方向光、点光源和 SkyLight 都是 ECS 组件，位置与朝向继续使用实体的 `TransformComponent`。这样移动 Gizmo 时，改到的就是场景数据，不再有第二套编辑器灯光状态。
 
-```text
-Scene Entity + Transform
-    → DirectionalLightComponent / PointLightComponent
-    → Scene::UploadLightEnvironment()
-    → LightEnvironment
-    → Renderer::UploadLightEnvironment()
-    → binding 1 Light UBO
-    → Terrain Shader
-```
+方向光取 Transform 的局部 `-Z` 轴作为照射方向，点光源位置来自 Translation。Scale 不参与强度或范围计算。`DirectionalLightComponent` 还保存 CSM 的分辨率、级联数量和 Bias 等参数；这些阴影设置交给 `ShadowRenderer`，不会挤进 Light UBO。
 
-### 建设目标
+### 每帧怎样收集
 
-统一光源系统需要满足：
-
-1. 光源属于 Scene，而不是 EditorLayer 临时变量；
-2. 光源能够保存、加载并复制到 Runtime Scene；
-3. Shader 共享同一份光源数据，不逐个散传 Uniform；
-4. 核心接口不暴露 OpenGL 调用；
-5. CPU 与 GLSL 的 std140 数据布局可验证；
-6. 为后续 Vulkan Descriptor Set 和 PBR 光照保留稳定结构。
-
-### ECS 光源组件
-
-新增两个场景组件：
-
-```cpp
-struct DirectionalLightComponent
-{
-    glm::vec3 Color{ 1.0f };
-    float Intensity = 1.0f;
-    float AmbientIntensity = 0.05f;
-    bool Enabled = true;
-};
-
-struct PointLightComponent
-{
-    glm::vec3 Color{ 1.0f };
-    float Intensity = 10.0f;
-    float Range = 10.0f;
-    bool Enabled = true;
-};
-```
-
-光源空间属性继续由通用 `TransformComponent` 管理：
-
-- 点光源位置来自 Translation；
-- 方向光方向来自 Rotation；
-- 方向光使用实体局部 `-Z` 轴作为前向方向；
-- Scale 不作为灯光强度或范围参数。
-
-这样 Gizmos 可以直接调整点光源位置和方向光朝向，无需重复实现变换系统。
-
-### LightEnvironment
-
-Renderer 模块新增与图形 API 无关的场景光照描述：
-
-```cpp
-struct DirectionalLight
-{
-    glm::vec3 Direction;
-    glm::vec3 Color;
-    float Intensity;
-    float AmbientIntensity;
-    bool Enabled;
-};
-
-struct PointLight
-{
-    glm::vec3 Position;
-    glm::vec3 Color;
-    float Intensity;
-    float Range;
-};
-
-struct LightEnvironment
-{
-    static constexpr uint32_t MaxPointLights = 16;
-
-    DirectionalLight Directional;
-    std::vector<PointLight> PointLights;
-};
-```
-
-当前支持一个有效方向光和最多 16 个有效点光源。Scene 每帧遍历组件，将 ECS 数据转换为 LightEnvironment，再交给 Renderer。
-
-### Scene 收集流程
-
-编辑模式和播放模式执行同一套收集逻辑：
+Edit 与 Play 使用同一个 `Scene::UploadLightEnvironment()`：
 
 ```text
-Scene::OnUpdateEditor() / Scene::OnUpdateRuntime()
-    → UploadLightEnvironment()
-    → 查找第一个 Enabled DirectionalLightComponent
-    → 从 Transform 计算世界方向
-    → 遍历 Enabled PointLightComponent
-    → 限制到 MaxPointLights
-    → Renderer::UploadLightEnvironment()
+Scene 遍历 Enabled Light Components
+    -> 取第一个 Directional Light
+    -> 收集最多 16 个 Point Lights
+    -> 取第一个有效 SkyLight
+    -> Renderer::UploadLightEnvironment()
 ```
 
-Scene 只负责把实体组件转换为通用光源数据，不创建 UBO，也不调用 OpenGL。
+`LightEnvironment` 是跨图形 API 的 CPU 描述。方向光和点光源会被打包进 binding 1 的 Uniform Buffer，SkyLight Handle 与强度则交给 `EnvironmentLighting` 解析环境贴图。Scene 只负责收集组件，不创建 OpenGL Buffer。
 
-### std140 GPU 数据布局
+当前选择规则很朴素：第一个启用的方向光生效，点光源按 Registry 遍历顺序截取前 16 个。这里还没有按距离筛选，也没有 Tiled 或 Clustered Lighting。灯多了以后，简单增加数组长度只会把问题推迟，并不会让光源选择更合理。
 
-Renderer 将 LightEnvironment 打包为固定尺寸 GPU 数据：
+### std140 布局
 
-```cpp
-struct alignas(16) GPUPointLight
-{
-    glm::vec4 PositionRange;
-    glm::vec4 ColorIntensity;
-};
-
-struct alignas(16) GPULightEnvironment
-{
-    glm::vec4 DirectionIntensity;
-    glm::vec4 DirectionalColor;
-    glm::vec4 AmbientColorIntensity;
-    glm::uvec4 LightCounts;
-    GPUPointLight PointLights[16];
-};
-```
-
-使用 vec4 打包可以避免 `vec3` 在 std140 中产生容易误判的填充：
-
-| GPU 字段 | 内容 |
-|---|---|
-| `DirectionIntensity.xyz` | 方向光照射方向 |
-| `DirectionIntensity.w` | 方向光强度 |
-| `DirectionalColor.rgb` | 方向光颜色 |
-| `AmbientColorIntensity.rgb` | 环境光颜色 |
-| `AmbientColorIntensity.w` | 环境光强度 |
-| `LightCounts.x` | 有效点光源数量 |
-| `PositionRange.xyz` | 点光源世界位置 |
-| `PositionRange.w` | 点光源范围 |
-| `ColorIntensity.rgb` | 点光源颜色 |
-| `ColorIntensity.w` | 点光源强度 |
-
-CPU 端通过静态断言验证布局：
-
-```cpp
-static_assert(sizeof(GPUPointLight) == 32);
-static_assert(sizeof(GPULightEnvironment) == 576);
-```
-
-### UniformBuffer 上传
-
-Renderer 初始化时创建 binding 1 的 UniformBuffer：
+GPU 数据使用 `vec4` 打包，避免 CPU 结构里的 `vec3` 与 GLSL std140 填充对不上：
 
 ```text
-Renderer::Init()
-    → UniformBuffer::Create(sizeof(GPULightEnvironment), 1)
-
-每帧：
-Renderer::UploadLightEnvironment()
-    → 清零并打包 GPU 数据
-    → 限制强度和范围的最小值
-    → UniformBuffer::SetData()
+DirectionIntensity    xyz = direction, w = intensity
+DirectionalColor     rgb = color
+AmbientColorIntensity rgb = color, w = ambient intensity
+LightCounts          x = point light count
+PointLights[16]      position/range + color/intensity
 ```
 
-binding 0 已由 Renderer2D Camera UBO 使用，因此 Light UBO 使用 binding 1。OpenGL 创建和上传细节仍封装在 `OpenGLUniformBuffer` 中。
+`GPUPointLight` 固定为 32 字节，完整 `GPULightEnvironment` 是 576 字节，编译期 `static_assert` 会检查这两个尺寸。没有有效方向光时，结构体保留 `0.03` 的低环境光，旧场景不会直接黑成一片，但也不会凭空得到方向光。
 
-如果场景没有有效方向光，系统保留强度为 `0.03` 的低环境光，避免旧场景完全黑屏，同时不会伪造直接光源。
+### 谁消费这份光照
 
-### Terrain Shader 可视接入
+`PBRModel.glsl` 与 `Terrain.glsl` 都声明 binding 1 的相同布局。Renderer 每帧只上传一次，Shader 各自计算方向光和点光源贡献。CSM 阴影贴图、Diffuse Irradiance、Specular Prefilter 与 BRDF LUT 通过各自 Renderer 绑定，Light UBO 不承担纹理资源所有权。
 
-当前帧流程中真正参与 3D 绘制的是 Terrain Pass，因此第一轮验证选择 Terrain Shader：
-
-```glsl
-layout(std140, binding = 1) uniform LightEnvironment
-{
-    vec4 u_DirectionalDirectionIntensity;
-    vec4 u_DirectionalColor;
-    vec4 u_AmbientColorIntensity;
-    uvec4 u_LightCounts;
-    PointLightData u_PointLights[16];
-};
-```
-
-Terrain Shader 目前计算：
-
-- 环境光；
-- 方向光漫反射；
-- Blinn-Phong 高光；
-- 最多 16 个点光源；
-- 点光源距离衰减；
-- 点光源范围平滑衰减。
-
-点光源衰减同时考虑距离平方和范围边界，超过 Range 的片元不再计算该光源。
-
-### Properties 与默认场景
-
-Properties 面板新增：
-
-- `+ Directional Light`；
-- `+ Point Light`；
-- Enabled；
-- Color；
-- Intensity；
-- Directional Ambient；
-- Point Light Range。
-
-层级面板使用 `[Sun]` 和 `[Point]` 标记光源实体。
-
-默认场景新增两个验证实体：
-
-```text
-Sun
-    Rotation = (-50, 30, 0)
-    DirectionalLightComponent
-
-Point Light
-    Position = (0, 12, 0)
-    Intensity = 80
-    Range = 40
-```
-
-旧的 `EditorLayer::m_LightPos` 和 Settings 中独立的 Light Position 控件已删除，避免两套灯光数据来源。
-
-### 场景复制与序列化
-
-光源组件已加入 `Scene::Copy()`，进入播放模式时会保留灯光参数和 Transform。
-
-当前场景格式升级为 `Version: 4`：
-
-```yaml
-DirectionalLightComponent:
-  Color: [1.0, 1.0, 1.0]
-  Intensity: 1.0
-  AmbientIntensity: 0.05
-  Enabled: true
-
-PointLightComponent:
-  Color: [1.0, 1.0, 1.0]
-  Intensity: 80.0
-  Range: 40.0
-  Enabled: true
-```
-
-光源组件是可选字段，Version 1～3 场景仍可按原有兼容流程加载。
-
-### 文件职责
-
-```text
-Glimmer/src/Glimmer/Renderer/
-  LightEnvironment.h               跨 API 的方向光、点光源和场景光照数据
-  Renderer.h/.cpp                  std140 打包、Light UBO 创建与上传
-  UniformBuffer.h/.cpp             跨 API UniformBuffer 接口
-
-Glimmer/src/Glimmer/Scene/
-  Components.h                     ECS 光源组件
-  Scene.h/.cpp                     光源收集、变换转换和 Runtime 复制
-  SceneSerializer.cpp              Version 4 光源组件序列化
-
-GlimmerEditor-CyouBranch/src/
-  EditorLayer.cpp                  默认 Sun 和 Point Light 测试实体
-  Panels/SceneHierarchyPanel.cpp   光源组件创建与属性编辑
-
-GlimmerEditor-CyouBranch/assets/shaders/
-  Terrain.glsl                     binding 1 Light UBO 可视验证
-```
-
-### 验证结果
-
-1. 从 `scripts` 目录运行 VS2026 工程生成脚本成功；
-2. `Debug | x64` 完整编译成功；
-3. CPU 端 std140 尺寸断言通过；
-4. Terrain Shader GLSL 450 编译成功；
-5. binding 1 Light UBO 未触发版本或链接错误；
-6. 编辑器运行 25 秒，Terrain、Compute、后处理及模型 Shader 均完成加载；
-7. 没有 Shader assertion、访问异常或 OpenGL 错误；
-8. `git diff --check` 通过。
-
-### 当前边界与下一步
-
-当前完成的是场景光源基础和 Terrain 可视验证，仍有以下边界：
-
-1. 只选择第一个 Enabled 方向光；
-2. 点光源固定上限为 16，尚未实现光源剔除或 Tiled/Clustered Lighting；
-3. Phong、Toon、Blinn-Phong、Hologram Shader 尚未迁移到 Light UBO；
-4. 当前帧流程没有实际调用 `Model::Draw()`；
-5. 尚未实现 Spot Light、阴影、IBL 和环境贴图；
-6. 尚未将 Camera 数据统一到 3D UBO；
-7. 光源 Gizmos 目前复用 Transform 操作，尚无专用范围或方向图标。
-
-下一步应建立真正的 3D Material Pass：恢复并规范模型提交路径，让 Material 的 ShaderHandle、BaseColor、Metallic、Roughness 与 LightEnvironment 在同一渲染流程中生效，再开始基础 PBR。
-
-![[README.assets/Pasted image 20260727101225.png]]
-![[README.assets/Pasted image 20260727101324.png]]
+当前 Scene YAML 是 Version 6，光源参数、Transform 和阴影设置都能保存并复制到 Play Scene。Inspector 中的连续灯光编辑也进入 CommandHistory。仍未支持 Spot Light；点光源上限和缺少空间剔除，是这套 UBO 接下来真正需要处理的地方。
 
 ## 3D Material Pass 与基础 PBR
 
-在统一光源组件和 Light UBO 完成后，本阶段将模型、材质、Shader 与场景实体接入同一条 3D 渲染流程，使 `Material` 中的 `BaseColor`、`Metallic` 和 `Roughness` 真正参与模型表面光照。
+### 从组件到 RenderItem
 
-### 建设目标与数据流
-
-旧流程由 `EditorLayer` 保存模型数组和全局 Shader 选择，模型无法稳定序列化，材质句柄也没有决定实际渲染管线。本阶段建立以下数据链：
+3D 模型最初由编辑器保存 Model 数组和全局 Shader 选择，场景里的实体并没有完整描述自己怎样被画出来。现在这条链路从 ECS 开始：`ModelRendererComponent` 保存 Model Handle，`MaterialComponent` 保存 Material Handle 与局部 Overrides，`Renderer3D` 负责把它们解析成 RenderItem。
 
 ```text
-Scene Entity
-    → TransformComponent
-    → ModelRendererComponent::ModelHandle
-    → MaterialComponent::MaterialHandle
-    → AssetManager
-        → Model
-        → Material
-            → ShaderHandle
-            → BaseColorTexture
-            → BaseColor / Metallic / Roughness
-    → Renderer3D
-    → LightEnvironment UBO
-    → PBRModel.glsl
+Scene Entity + Transform
+    -> Model / Material AssetHandle
+    -> AssetManager 解析资源
+    -> MaterialInstance 合并 Overrides
+    -> Renderer3D RenderQueue
+    -> PBR Shader + Light / Shadow / IBL
 ```
 
-`ModelRendererComponent` 只保存 `AssetHandle`，不持有 Model、Mesh 或 OpenGL 对象。它已接入 `Scene::Copy()`、场景序列化、Properties 拖放、Hierarchy 标记以及 Editor/Runtime 更新路径。场景格式升级为 `Version: 5`：
+Model 只持有导入后的 Mesh 与局部材质纹理，不再自己上传 Uniform 或发 Draw。缺少 Model、Material 或 Shader 时，提交会被计入 `SkippedModels` 并跳过。这个失败点放在 Renderer3D 入口，资源类就不必偷偷决定渲染策略。
 
-```yaml
-ModelRendererComponent:
-  Model: 8553044135784550654
-```
+### 队列取代逐对象立即绘制
 
-### Renderer3D
+提交阶段先解析材质和纹理，再按 AlphaMode 分流。Opaque 与 Mask RenderItem 根据 Shader、Material、纹理和 Mesh 状态排序；状态相同且 Shader 支持 Instancing 时，Renderer 会把 Transform 与 EntityID 写入实例 Buffer，每次最多提交 1024 个实例。单个对象或不支持 Instancing 的 Shader 仍走普通 Draw。
 
-新增的 `Renderer3D` 位于引擎核心 `Glimmer/Renderer`：
+Blend 项留到 `EndScene()`，按相机距离从远到近稳定排序，开启 SrcAlpha 混合并关闭深度写入。透明对象目前逐项绘制，不参加 Opaque Instancing。Mask 仍在不透明队列中写深度，片元 Alpha 低于 Cutoff 时由 Shader discard。
 
-```cpp
-Renderer3D::BeginScene(viewProjection, cameraPosition);
-Renderer3D::DrawModel(transform, modelHandle, materialHandle, entityID);
-```
+这套队列让我第一次能把场景提交数量和 GPU 绘制次数分开看清。DebugPanel 展示 Shader Bind、Texture Bind、Draw Call、Instance Count 与跳过数量，用来检查排序和批处理有没有真的省下状态切换。
 
-模型提交流程为：
+### 当前 PBR 数据
 
-```text
-ModelHandle → AssetManager::GetModel()
-MaterialHandle → AssetManager::GetMaterial()
-ShaderHandle → AssetManager::GetShader()
-    → Shader 热重载检查
-    → 上传相机、Transform 和材质参数
-    → 绑定材质纹理、Mesh 纹理或白纹理
-    → 遍历 Mesh
-    → RenderCommand::DrawIndexed()
-```
+`PBRModel.glsl` 使用 GGX、Schlick-GGX 与 Fresnel-Schlick 组成 Cook-Torrance 直接光照。Base Color 和 Emissive 按 sRGB 纹理加载，Normal、AO 及 Metallic/Roughness 数据按线性空间使用。普通 `.glmat` 提供 Metallic/Roughness 标量与 BaseColor、Normal、AO、Emissive 纹理；FBX 等导入模型还可以从 Mesh 材质取得独立 Metallic/Roughness 贴图作为补充。
 
-`Model` 现在只负责导入和持有 Mesh，不再直接上传 Shader 参数或发出绘制命令，从而分离资源解析与渲染提交职责。
+直接光来自 Light UBO。方向光可采样 1 到 4 级 CSM，环境部分使用 Diffuse Irradiance、Specular Prefilter 和共享 BRDF LUT。材质若没有有效纹理，Renderer 会绑定白色回退纹理，再由 `u_Has*Texture` 告诉 Shader 对应纹理槽是否真的有资源。
 
-### 基础 Cook–Torrance PBR
+Shader 同时向 `RGBA16F` 场景颜色附件和整数 EntityID 附件输出，模型因此能参与鼠标拾取。HDR 值在这里保持线性，材质 Shader 不做 Tone Mapping 或 Gamma 编码。
 
-新增 `assets/shaders/PBRModel.glsl`，支持：
+### 还没收口的部分
 
-- GGX 法线分布；
-- Schlick-GGX 几何遮蔽；
-- Schlick Fresnel；
-- Lambert 漫反射；
-- Metallic、Roughness 和 BaseColor；
-- BaseColor 纹理与 TilingFactor；
-- 一个方向光和最多 16 个点光源；
-- 点光源距离及 Range 衰减；
-- 线性 HDR 输出，Tone Mapping 和 Gamma 编码由独立显示 Pass 负责。
-
-Shader 还会向整数颜色附件输出实体 ID，保证 3D 模型可参与 Mouse Picking：
-
-```glsl
-layout(location = 0) out vec4 o_Color;
-layout(location = 1) out int o_EntityID;
-```
-
-### 默认验证资产
-
-新增项目测试资源：
-
-```text
-assets/shaders/PBRModel.glsl
-assets/materials/DefaultPBR.glmat
-assets/models/suzanne.obj
-```
-
-编辑器启动时导入这三类资产，把稳定句柄写入 `AssetRegistry.yaml`，并创建默认 `PBR Suzanne` 实体：
-
-```text
-PBR Suzanne
-    TransformComponent
-    ModelRendererComponent → suzanne.obj
-    MaterialComponent      → DefaultPBR.glmat
-```
-
-如果默认材质尚未绑定 PBR Shader，初始化流程会设置 ShaderHandle 并写回 `.glmat`。
-
-### EditorLayer 清理
-
-以下旧状态和入口已删除：
-
-- `m_3DShader`；
-- `m_Models`、`m_ModelNames` 和模型索引；
-- 全局模型与 Shader 下拉框；
-- 启动时重复构造五个 Model 对象的逻辑。
-
-现在模型、材质和 Shader 均由实体组件与 Properties 面板驱动，编辑器层不再拥有第二套 3D 资源管理路径。
-
-### 地形位置的当前处理
-
-下列组件化结构已经实现，不再是未来方案：
-
-```text
-Terrain Entity
-    → TransformComponent
-    → TerrainComponent
-        → HeightMapHandle
-        → Generation Parameters
-        → MaterialHandle
-    → TerrainRenderer
-```
-
-`TransformComponent` 现在统一控制地形位置、旋转和实体缩放；地形覆盖范围与高度倍率继续由 `TerrainSpecification` 描述，最终在 TerrainRenderer 中与实体 Transform 合成。非均匀缩放时法线必须通过逆转置矩阵变换，否则光照会失真。
-
-### 文件职责
-
-```text
-Glimmer/src/Glimmer/Asset/
-  AssetManager.h/.cpp              Model、Shader 缓存与句柄解析
-Glimmer/src/Glimmer/Renderer/
-  Renderer3D.h/.cpp                3D 场景状态、材质解析与模型提交
-  Model.h/.cpp                     模型导入和 Mesh 集合
-  Material.h/.cpp                  可序列化材质资产
-  LightEnvironment.h               跨 API 场景灯光数据
-Glimmer/src/Glimmer/Scene/
-  Components.h                     ModelRendererComponent
-  Scene.cpp                        Editor/Runtime 3D 实体提交
-  SceneSerializer.cpp              Version 5 模型组件序列化
-GlimmerEditor-CyouBranch/assets/
-  shaders/PBRModel.glsl            基础 Cook–Torrance PBR
-  materials/DefaultPBR.glmat       默认 PBR 材质
-  AssetRegistry.yaml               Model、Material、Shader 稳定句柄
-```
-
-### 验证结果
-
-1. VS2026 Premake 工程生成成功；
-2. `Debug | x64` 核心库编译成功；
-3. `Debug | x64` 编辑器编译和链接成功；
-4. PBR Shader、材质和 Suzanne 模型成功导入并持久化句柄；
-5. `DefaultPBR.glmat` 成功保存 PBR ShaderHandle；
-6. 编辑器完成运行初始化；
-7. `git diff --check` 通过。
-
-### 当前边界与下一步
-
-当前完成的是基础 Forward PBR 验证链，仍有以下边界：
-
-1. HDR Render Target 已在下一章节完成，场景主颜色附件升级为 RGBA16F；
-2. Tone Mapping 已从模型 Shader 迁移到独立显示 Pass；
-3. Texture2D 尚未区分 sRGB 颜色纹理与线性数据纹理；
-4. 尚未支持 Normal、Metallic、Roughness、AO 纹理；
-5. 尚未实现 IBL、环境贴图、阴影和反射探针；
-6. Renderer3D 仍为逐 Mesh 即时提交；
-7. Terrain 尚未进入统一的实体化 3D Material Pass。
-
-HDR Framebuffer 与独立 Tone Mapping 已在下一章节完成。后续应建立 TextureColorSpace 与 TextureCube 接口，再接入天空盒、PBR 纹理集和 IBL。
-
-![[README.assets/Pasted image 20260727111039.png]]
-![[README.assets/Pasted image 20260727111113.png]]
+普通 Material Asset 还没有 Metallic/Roughness Texture 字段或统一 ORM 槽，当前相关贴图主要来自模型导入数据。局部反射探针、蒙皮动画和更复杂的透明排序也未进入这条路径。自定义 3D Shader 若要参与 AlphaMode 或 Instancing，必须满足对应 Uniform 与顶点输入契约，单纯能链接成功还不够。
 
 ## 线性 HDR 场景缓冲与独立 Tone Mapping
 
-基础 PBR 验证完成后，原有帧图仍把场景直接绘制到 `RGBA8`，并允许在关闭后处理时直接把场景附件交给 ImGui。该流程会在光照计算结束后立即截断超过 `1.0` 的高亮信息，也让每个材质 Shader 被迫各自处理 Tone Mapping 和 Gamma 编码。
+### 先保住高光，再决定怎样显示
 
-本阶段将颜色流程重构为：
+当场景颜色还写在 `RGBA8` 时，PBR 高光和强点光源一旦超过 `1.0` 就会被截断。后面再调曝光，只是在放大一张已经丢失细节的图片。现在场景主颜色附件使用 `RGBA16F`，所有场景 Shader 输出线性 HDR；显示转换集中到帧末尾完成。
 
-```text
-线性场景渲染
-    → RGBA16F Scene Framebuffer
-        → 3D PBR
-        → Renderer2D
-        → Terrain
-        → 未来 Skybox
-    → 固定 Tone Mapping Pass
-        → Exposure
-        → ACES Filmic
-        → 可选 Grayscale
-        → Gamma Encode
-    → RGBA8 Display Framebuffer
-    → ImGui Viewport
-```
-
-### 为什么需要 HDR 场景目标
-
-`RGBA8` 每个通道只有 8 位归一化范围，写入时只能保存 `[0, 1]`。PBR 中点光源、高光和未来天空太阳区域经常产生大于 `1.0` 的辐射亮度。如果直接写入 RGBA8，这些值会提前被裁剪，后处理阶段无法区分普通白色和极亮区域。
-
-场景主颜色附件现改为半精度浮点：
-
-```cpp
-FramebufferSpecification sceneFramebufferSpec;
-sceneFramebufferSpec.Attachments = {
-    { FramebufferTextureFormat::RGBA16F },
-    { FramebufferTextureFormat::RED_INTEGER }
-};
-```
-
-附件职责保持明确：
+Scene Framebuffer 当前包含三份数据：
 
 | 附件 | 格式 | 用途 |
-|---|---|---|
-| Scene Color 0 | `RGBA16F` | 保存线性 HDR 场景颜色 |
-| Scene Color 1 | `RED_INTEGER` | 保存 Mouse Picking 实体 ID |
-| Scene Depth | `Depth24Stencil8` | 深度和模板测试 |
+| --- | --- | --- |
+| Color 0 | `RGBA16F` | 线性场景颜色 |
+| Color 1 | `RED_INTEGER` | EntityID 拾取 |
+| Depth | `Depth24Stencil8` | 深度测试与世界位置重建 |
 
-最终显示目标使用独立规格：
+EntityID 不经过后处理，鼠标仍直接读取 Scene Framebuffer 的整数附件。Viewport 显示的是 `PostProcessRenderer` 生成的 RGBA8 纹理。
 
-```cpp
-FramebufferSpecification displayFramebufferSpec;
-displayFramebufferSpec.Attachments = {
-    { FramebufferTextureFormat::RGBA8 }
-};
-```
+### PostProcessRenderer 的执行顺序
 
-`m_PostProcessFB` 同时承担“任意后处理”和“最终显示目标”两种含义，容易混淆，因此重命名为 `m_DisplayFramebuffer`。
-
-### 固定 Tone Mapping Pass
-
-HDR 场景不能直接显示到普通 RGBA8 Viewport，因此 Tone Mapping 不再是可整体关闭的视觉特效，而是帧图中固定存在的颜色空间转换步骤：
-
-```cpp
-RenderPassSpecification toneMappingPass;
-toneMappingPass.Target = m_DisplayFramebuffer;
-RenderPass::Begin(toneMappingPass);
-
-Renderer2D::DrawPostProcess(
-    toneMappingShader,
-    m_Framebuffer->GetColorAttachmentRendererID());
-
-RenderPass::End();
-m_FinalSceneTexture =
-    m_DisplayFramebuffer->GetColorAttachmentRendererID();
-```
-
-原来的开关逻辑为：
+后处理资源已经从 `EditorLayer` 收进引擎侧 `PostProcessRenderer`。它持有一个全分辨率 RGBA8 Display Framebuffer、两张半分辨率 RGBA16F Bloom Ping-Pong，以及 Tone Mapping、Bloom Extract 和 Blur Shader。
 
 ```text
-开启后处理 → PostProcess FBO
-关闭后处理 → 直接显示 Scene FBO
+RGBA16F Scene Color
+    -> 可选 Bloom 亮部提取与半分辨率双向模糊
+    -> 合并 Bloom
+    -> 用 Scene Depth 重建世界位置并计算距离/高度雾
+    -> Exposure EV
+    -> ACES Filmic + White Point
+    -> 可选 Grayscale
+    -> Gamma 2.2 编码
+    -> RGBA8 Display Texture
 ```
 
-现在统一为：
+Bloom 阈值会考虑当前 Exposure EV，提取出的颜色仍保持线性；模糊结果在 Tone Mapping 前加回 Scene Color。雾也在线性颜色上混合，可以使用手动颜色、方向光颜色，或从 SkyLight 的较粗 Mip 取环境色。没有相机时，依赖深度重建的雾会自动关闭。
 
-```text
-Scene RGBA16F
-    → ToneMapping.glsl
-    → Display RGBA8
-    → Viewport
-```
+### Sampler 和尺寸管理
 
-这保证所有显示路径都经过相同的曝光、Tone Mapping 和 Gamma 编码，避免切换开关时画面亮度和颜色空间发生突变。
+Display Framebuffer 跟随 Viewport 尺寸，Bloom 纹理保持一半宽高，最小为 `1×1`。`PostProcessRenderer::Resize()` 只在尺寸变化时重建附件。
 
-### ToneMapping Shader
+Tone Mapping Shader 同时声明 `sampler2D` 和 `samplerCube`。OpenGL 会检查整个 Program 的 Sampler 类型，即便当前雾分支没有执行，所以 Cube Sampler 固定使用纹理单元 2，Bloom 使用单元 3，不能依赖默认值都落在 0。这个问题在部分驱动上会直接让 Draw 失败，属于看起来像 Shader 逻辑、实际是绑定契约的典型坑。
 
-新增 `assets/shaders/ToneMapping.glsl`，集中负责 HDR 到显示空间的转换。
-
-核心流程：
-
-```glsl
-float exposureMultiplier = exp2(u_ExposureEV);
-vec3 hdrColor = max(sceneColor.rgb, vec3(0.0)) * exposureMultiplier;
-vec3 mappedColor = ACESFilm(hdrColor) / ACESFilm(vec3(u_ACESWhitePoint)).r;
-vec3 displayColor = pow(mappedColor, vec3(1.0 / 2.2));
-```
-
-当前采用 ACES Filmic 近似曲线。相比简单 Reinhard，ACES 能保留更自然的中间调和高光过渡，并为后续天空盒、太阳高亮、Bloom 和曝光控制提供更稳定的显示基础。
-
-Shader 参数：
-
-| Uniform | 作用 |
-|---|---|
-| `u_SceneTexture` | RGBA16F 场景颜色附件 |
-| `u_ExposureEV` | 摄影式曝光档位；每增加 1 EV，线性亮度翻倍 |
-| `u_ACESWhitePoint` | ACES 拟合曲线的显示白点归一参考 |
-| `u_ApplyGrayscale` | Tone Mapping 后、Gamma 前应用可选灰度效果 |
-
-灰度不再代表整个后处理是否启用，而只是 Tone Mapping Pass 中的一个可选效果。
-
-### 线性输出约定
-
-PBR Shader 已删除内部 Reinhard 和 Gamma 编码：
-
-```glsl
-o_Color = vec4(max(result, vec3(0.0)), alpha);
-```
-
-它现在只输出线性 HDR 光照结果。Tone Mapping 不属于单个材质，不能分别散落在 PBR、Terrain、Sprite 和未来 Skybox Shader 中。
-
-当前其他场景 Shader 的处理：
-
-- `Texture.glsl`：将颜色纹理和 Tint 的结果近似按 Gamma 2.2 解码到线性空间；
-- `Terrain.glsl`：将 Grass、Rock、Snow 调色板颜色转换到线性空间后再参与光照；
-- `PBRModel.glsl`：在线性空间执行 BRDF，直接输出 HDR Radiance；
-- `ToneMapping.glsl`：唯一负责 Tone Mapping 和 Gamma 编码的显示 Shader。
-
-当前纹理仍使用普通 `RGBA8` GPU 内部格式，因此 Sprite 和 PBR BaseColor 采用 Shader 手工解码。这是可运行的过渡方案，不代表完整的纹理颜色空间资产系统。
-
-### 后端无关的纹理绑定
-
-旧 `Renderer2D::DrawPostProcess()` 使用：
-
-```cpp
-std::dynamic_pointer_cast<OpenGLShader>(shader)->BindTexture(...);
-```
-
-这让引擎核心 Renderer2D 直接依赖 OpenGL 后端。现在改为：
-
-```cpp
-shader->BindTexture("u_SceneTexture", 0, inputTextureID);
-```
-
-具体后端通过 `Shader` 虚接口实现纹理绑定。未来 Vulkan 后端可以用 Descriptor Set 实现同一操作，而 Renderer2D 和 Tone Mapping Pass 不需要修改。
-
-### 编辑器控制
-
-Settings 面板新增：
-
-```text
-HDR Output
-    Exposure (EV)     -10 ～ +10
-    ACES White Point  1.0 ～ 32.0
-    Grayscale  On / Off
-```
-
-`Exposure (EV)` 控制进入 ACES 曲线前的线性亮度倍率，换算关系为 `multiplier = 2^EV`：`0 EV = 1×`、`+1 EV = 2×`、`-1 EV = 0.5×`。它不是灯光强度的替代品：灯光 Intensity 描述场景照明，EV 描述观察和显示映射。`ACES White Point` 将曲线在指定线性亮度处的响应归一为显示白，默认 `11.2`；调低会更早压缩高光，调高会保留更宽的高光范围。
-
-### 天空盒与 IBL 后续关系
-
-TextureCube、Cubemap 资产和可见 Skybox Pass 已在后续章节完成；尚未实现的 Diffuse/Specular IBL 与派生缓存已纳入 `Documents/PROJECT_STATUS.md` 的 P10：
-
-```text
-HDR + 基础 PBR
-    → TextureCube / Cubemap 资源抽象
-    → 可见 Skybox Pass
-    → Diffuse Irradiance Map
-    → Specular Prefilter Map
-    → BRDF LUT
-    → 完整 IBL
-```
-
-这个顺序的必要性：
-
-1. 天空盒通常包含太阳和高亮环境区域，必须写入 RGBA16F；
-2. 天空盒应和场景几何统一经过 Tone Mapping；
-3. 可见天空盒和 IBL 应复用同一 Cubemap 资产；
-4. 先验证 Cubemap 导入与采样，再生成 Irradiance 和 Prefilter，便于分层排错；
-5. TextureCube 的创建必须位于跨 API Texture 抽象和平台后端，不能在 `EditorLayer` 直接调用 OpenGL。
-
-计划中的可见 Skybox Pass 将在不清除已有几何的情况下绘制，并使用移除平移的 View 矩阵，使天空盒只随相机旋转、不随相机位置移动。
-
-### 文件职责
-
-```text
-Glimmer/src/Glimmer/Renderer/
-  FrameBuffer.h                     RGBA16F 跨 API 附件格式
-  Renderer2D.cpp                    全屏绘制与跨 API 输入纹理绑定
-
-Glimmer/src/Platform/OpenGL/
-  OpenGLFramebuffer.cpp             GL_RGBA16F 创建、调整尺寸和采样
-
-GlimmerEditor-CyouBranch/src/
-  EditorLayer.h                     Display FBO、Exposure EV、White Point、Grayscale 状态
-  EditorLayer.cpp                   HDR Scene Pass 与固定 Tone Mapping Pass
-
-GlimmerEditor-CyouBranch/assets/shaders/
-  PBRModel.glsl                     线性 HDR PBR 输出
-  Texture.glsl                      Sprite 颜色线性化
-  Terrain.glsl                      地形调色板线性化
-  ToneMapping.glsl                  EV、ACES White Point、Gamma 与可选灰度
-
-Documents/
-  PROJECT_STATUS.md                  IBL 后续顺序与验收条件
-```
-
-![[README.assets/Pasted image 20260727115626.png]]
-
-### 验证结果
-
-1. `FramebufferTextureFormat::RGBA16F` 已由 OpenGL 后端映射到 `GL_RGBA16F`；
-2. Scene FBO 使用 RGBA16F 与 RED_INTEGER 两个颜色附件；
-3. Display FBO 使用 RGBA8；
-4. VS2026 Premake 工程生成成功；
-5. `Debug | x64` 编辑器编译和链接成功；
-6. `ToneMapping.glsl` 运行期编译成功；
-7. 编辑器持续运行 45 秒，没有 Framebuffer assertion、Shader assertion 或初始化崩溃；
-8. 测试结束后相关编辑器和 MSBuild 进程已清理；
-9. `git diff --check` 通过。
-
-### 当前边界与下一步
-
-当前 HDR 显示链已经建立，但颜色空间资产基础仍需继续完善：
-
-1. Texture2D 尚未保存 `sRGB`、`Linear` 等颜色空间元数据；
-2. 颜色纹理目前由 Shader 手工 Gamma 解码；
-3. Normal、Height、Roughness 等数据纹理必须保持线性，不能套用颜色解码；
-4. 尚未提供 TextureCube 跨 API 接口；
-5. 尚未实现自动曝光、Bloom 和 HDR 调试视图；
-6. Terrain 与 Sprite 的颜色空间仍是过渡实现；
-7. Display FBO 目前会创建不必要的默认深度附件，后续可在 Framebuffer 规格中允许显式禁用。
-
-下一步建议先加入 `TextureColorSpace` 和纹理用途元数据，再实现 `TextureCube` 与可见天空盒。完成 Cubemap 资源链后，再进入 Irradiance、Prefilter 和 BRDF LUT，建立完整 IBL。
+后处理无法完全绕过。即使 Bloom、Fog 和 Grayscale 都关闭，场景仍会经过 Exposure、ACES 与 Gamma，保证 Viewport 始终收到显示空间颜色。Settings 目前是编辑器会话内的运行时状态，没有写进 Scene YAML；TAA 也尚未实现，当前没有 Jitter、Velocity 或 HDR History。
 
 ## 天空盒与 SkyLight 资产化
 
-### 实现结果
+这一章把天空从编辑器里的测试背景整理成场景资产，并继续补齐 PBR 所需的环境光。现在同一份 SkyLight 会同时参与可见背景、模型反射、地形环境光和后处理雾色，场景中只保存资源句柄与实体参数。
 
-天空盒已从 `EditorLayer` 内部测试纹理迁移为正式场景资产链：
+### 资源入口与场景数据
 
-1. `TextureCube` 表示后端无关的 GPU 立方体纹理；
-2. `.glsky` 描述六个方向的图片；
-3. `Cubemap` 解析描述并创建 `TextureCube`；
-4. `AssetManager` 为 `.glsky` 分配 `AssetHandle` 并缓存资源；
-5. `SkyLightComponent` 将 Cubemap 挂载到场景实体；
-6. Sky Light 可随 `.glimmer` 保存、加载并复制到播放场景；
-7. `.glsky` 可拖到 Properties 或直接拖入 Viewport；
-8. 天空盒写入 HDR Scene Framebuffer，并统一经过 Tone Mapping。
-
-默认新场景只创建 `Sun`、`Point Light` 和 `Sky Light`。之前的彩色方块、Suzanne、逻辑节点与测试实体相机已经移除。
-
-### 文件与职责
-
-```text
-Glimmer/src/Glimmer/
-├─ Asset/AssetManager.*       .glsky 导入、句柄与 Cubemap 缓存
-├─ Renderer/TextureCube.*     通用立方体纹理接口
-├─ Renderer/Cubemap.*         .glsky 解析与六面图片导入
-├─ Renderer/SkyboxRenderer.*  天空盒绘制
-└─ Scene/
-   ├─ Components.h            SkyLightComponent
-   ├─ Scene.*                 Sky Light 查询与场景复制
-   └─ SceneSerializer.cpp     Sky Light 场景序列化
-
-Glimmer/src/Platform/OpenGL/OpenGLTextureCube.*
-GlimmerEditor-CyouBranch/assets/skyboxes/*.glsky
-GlimmerEditor-CyouBranch/assets/textures/skybox/<name>/*
-```
-
-核心库只保存通用资产、渲染和场景能力；示例资源、Shader 与编辑器拖放逻辑保留在编辑器项目。
-
-### `.glsky` 描述格式
-
-推荐目录：
-
-```text
-assets/
-├─ skyboxes/sunset.glsky
-└─ textures/skybox/sunset/
-   ├─ right.jpg
-   ├─ left.jpg
-   ├─ top.jpg
-   ├─ bottom.jpg
-   ├─ front.jpg
-   └─ back.jpg
-```
-
-标准描述：
+Cubemap 有两种入口：六面 LDR 图片使用 `.glsky` 描述，Radiance `.hdr` 可以直接导入，也可以由 `.glsky` 的 `Source` 字段引用。相对路径始终以描述文件所在目录为基准，资源注册表统一把它们登记为 `AssetType::Cubemap`。
 
 ```yaml
 Cubemap:
-  ColorSpace: SRGB
-  Right: ../textures/skybox/sunset/right.jpg
-  Left: ../textures/skybox/sunset/left.jpg
-  Top: ../textures/skybox/sunset/top.jpg
-  Bottom: ../textures/skybox/sunset/bottom.jpg
-  Front: ../textures/skybox/sunset/front.jpg
-  Back: ../textures/skybox/sunset/back.jpg
-  MissingFaceColor: [20, 20, 20, 255]
+  Source: ../textures/studio.hdr
+  Resolution: 512
 ```
 
-图片路径相对于 `.glsky` 所在目录解析，不依赖可执行文件目录或本机绝对路径。普通 JPG/PNG 天空照片使用 `SRGB`，只有明确存储线性数据的图片才使用 `Linear`。
+六面格式仍支持 `Right / Left / Top / Bottom / Front / Back`、`ColorSpace` 和 `MissingFaceColor`。这种格式适合已经切好的 JPG/PNG；等距柱状 HDR 则会转换为线性 `RGBA16F TextureCube`，并生成直到 `1×1` 的普通 Mip Chain。
 
-六面映射：
-
-| 字段 | 方向 | OpenGL 面 |
-|---|---|---|
-| `Right` | +X | `GL_TEXTURE_CUBE_MAP_POSITIVE_X` |
-| `Left` | -X | `GL_TEXTURE_CUBE_MAP_NEGATIVE_X` |
-| `Top` | +Y | `GL_TEXTURE_CUBE_MAP_POSITIVE_Y` |
-| `Bottom` | -Y | `GL_TEXTURE_CUBE_MAP_NEGATIVE_Y` |
-| `Front` | +Z | `GL_TEXTURE_CUBE_MAP_POSITIVE_Z` |
-| `Back` | -Z | `GL_TEXTURE_CUBE_MAP_NEGATIVE_Z` |
-
-当前 `desert-evening` 示例只有五面，因此使用：
-
-```yaml
-Bottom: ""
-MissingFaceColor: [52, 38, 26, 255]
-```
-
-加载器会在运行时生成同分辨率的纯色底面，不修改原始图片。
-
-### 六面图片导入流程
-
-```text
-.glsky
-  → AssetManager::ImportAsset()
-  → AssetType::Cubemap + AssetHandle
-  → AssetManager::GetCubemap()
-  → Cubemap::Reload()
-  → 解析路径与颜色空间
-  → stb_image 解码为 RGBA
-  → 检查正方形和尺寸一致性
-  → TextureCube::Create() / SetFaceData()
-  → OpenGLTextureCube 上传六面
-```
-
-导入规则：
-
-- 至少存在一个有效图片面；
-- 每张有效图片必须为正方形；
-- 所有有效图片分辨率必须一致；
-- 空路径使用 `MissingFaceColor`；
-- 错误路径会停止创建并输出日志，不会静默回退；
-- 同一 `.glsky` 被多个实体引用时复用 AssetManager 缓存，不重复创建 GPU 纹理。
-
-### `SkyLightComponent`
+场景侧保持很轻：
 
 ```cpp
 struct SkyLightComponent
@@ -4005,776 +2987,272 @@ struct SkyLightComponent
 };
 ```
 
-- `CubemapHandle` 指向 `AssetType::Cubemap`；
-- `Intensity` 在 HDR Tone Mapping 之前调节天空盒强度；
-- `Enabled` 控制组件是否参与天空盒查询与绘制。
+`Scene` 取第一个启用且句柄有效的 SkyLight。`.glimmer` 保存 Handle、Intensity 和 Enabled；进入 Play 后组件随场景副本复制，Cubemap Runtime 仍由 `AssetManager` 缓存。Inspector 可以替换或重新加载环境资源，成功 Reload 会递增 Runtime Version。
 
-`Scene::GetSkyLightEntity()` 返回第一个启用的 Sky Light。当前场景建议只保留一个主 Sky Light，多环境混合尚未实现。`Scene::Copy()` 会复制组件，因此编辑场景与播放场景共享只读 Cubemap 资产，但组件状态相互独立。
+### 从背景图到 IBL
 
-### 场景序列化
+可见背景由 `SkyboxRenderer` 绘制。View 矩阵会去掉平移，顶点深度落在远平面；绘制期间深度函数临时切到 `LessEqual`，结束后恢复 `Less`。结果先写入 HDR Scene Framebuffer，再与场景一起完成 Bloom、雾和 Tone Mapping。
 
-场景格式已提升到 `Version: 6`：
-
-```yaml
-SkyLightComponent:
-  Cubemap: 14395647676425568118
-  Intensity: 1.0
-  Enabled: true
-```
-
-场景保存 Asset Handle，而不是绝对路径。实际文件由 `AssetRegistry.yaml` 解析：
-
-```yaml
-- Handle: 14395647676425568118
-  Type: Cubemap
-  FilePath: skyboxes/desert-evening.glsky
-```
-
-因此 `.glimmer`、`.glsky` 和 `AssetRegistry.yaml` 必须保持一致，不要随意修改已被场景引用的 Handle。
-
-### 编辑器操作
-
-Properties 工作流：
-
-1. 创建或选中实体；
-2. 点击 `+ Sky Light`；
-3. 从 Content Browser 将 `.glsky` 拖到 Cubemap 属性；
-4. 调整 `Enabled` 和 `Intensity`；
-5. 保存 `.glimmer`。
-
-也可以直接将 `.glsky` 拖入 Viewport：
-
-- 有选中实体：为其添加 Sky Light 或替换 Cubemap；
-- 无选中实体：自动创建 `Sky Light` 实体；
-- 完成后自动选中目标实体。
-
-Content Browser 继续使用统一的 `SCENE_FILE` payload 传递路径；接收端导入后，组件只保存 Asset Handle。
-
-### 渲染流程
+PBR 使用的是同一环境源派生出的三张资源：
 
 ```text
-EditorCamera / Primary Camera
-  → Scene::GetSkyLightEntity()
-  → AssetManager::GetCubemap(handle)
-  → SkyboxRenderer::Draw()
-  → HDR Scene FBO (RGBA16F)
-  → ToneMapping.glsl
-  → Display FBO (RGBA8)
-  → ImGui Viewport
+Cubemap Source
+  -> Diffuse Irradiance      32×32 RGBA16F，64 samples
+  -> Specular Prefilter      64×64 RGBA16F，64 samples，7 mips
+  -> Split-Sum BRDF LUT      64×64 RG16F，128 samples
 ```
 
-天空盒 View 矩阵移除平移，因此只随相机旋转；顶点输出使用 `xyww` 将深度放到远平面；绘制时深度函数临时切换为 `LessEqual`，结束后恢复 `Less`。天空盒进入 RGBA16F，与地形和模型统一经过曝光及 Tone Mapping。
+Diffuse Irradiance 负责低频漫反射；Specular Prefilter 用 GGX 重要性采样，把 Roughness 映射到不同 Mip；BRDF LUT 与环境内容无关，在 Renderer 初始化时生成并由进程共享。模型固定使用纹理槽 8/9/10，地形使用 20/21/22，避开材质、阴影和地形纹理已有的槽位。
 
-### 当前限制与下一步
+### 开发时的取舍
 
-当前完成的是可见天空盒与场景资产链，完整 IBL 仍需：
+环境卷积放在 `EnvironmentMapLoader` 与 `EnvironmentLighting`，没有塞进 OpenGL 纹理类。这样方向约定、采样算法和缓存规则留在 Renderer 核心层，后端对象只处理存储与传输。
 
-1. HDR/EXR 浮点 Cubemap 导入；
-2. Diffuse Irradiance Map；
-3. Specular Prefilter Map；
-4. BRDF LUT；
-5. PBR Shader 接入环境光与反射；
-6. 多 Sky Light 混合或空间环境探针；
-7. `.glsky` 资产热重载；
-8. 等距柱状图自动转换为 Cubemap。
+派生缓存使用 `源 Handle + Cubemap Runtime Version + 类型 + 分辨率 + 样本数` 作为键。正常帧命中活动键时不会读回源纹理，也不会重复卷积；资源 Reload 后，旧版本对应的条目会失效。Mip 0 保留源环境，较粗层才逐步扩散，这一点能避免低粗糙度反射一开始就发糊。
 
-建议顺序：
+目前缓存只存在于进程内存，没有磁盘派生文件和 LRU 预算。场景也还没有环境旋转、多 SkyLight 混合、局部 Reflection Probe 或动态场景反射；IBL 看到的是 SkyLight，不会反射场景实体。
 
-```text
-HDR Cubemap
-  → Irradiance Convolution
-  → Specular Prefilter
-  → BRDF LUT
-  → PBR IBL
-  → Sky Light 热重载与环境探针
-```
+### 验证记录
 
-### 验证结果
-
-- VS2026 Premake 工程生成成功；
-- `Debug | x64` 编译和链接成功；
-- `.glsky` 正确注册为 `AssetType::Cubemap`；
-- 五面图片加缺失面回退可创建完整 TextureCube；
-- 编辑器运行无 Shader、Framebuffer 或 Cubemap 断言；
-- 移除测试实体后编辑器仍正常启动；
-- `git diff --check` 通过。
-
-![[README.assets/Pasted image 20260727151210.png]]
-属性面板整改后
-![[README.assets/Pasted image 20260727170815.png]]
+P10 验收时，GTX 1050 / OpenGL 4.6 日志确认 BRDF LUT 只生成一次，Diffuse 与 Specular 各生成一次；PBR Lab 6/6 通过，78 项无窗口回归全部通过，并覆盖 LUT 的有限值、范围与 Roughness/掠射角响应。
 
 ## 编辑器基础收口
 
-### 建设目标
+组件逐渐增多后，早期那种由 `EditorLayer` 直接保存选择、面板顺手修改 Scene 的写法已经很难维护。这一轮收口的重点，是把选择、展示、命令和场景生命周期分开，让新增属性沿着同一条编辑路径接入。
 
-随着 Terrain、Material、Light 和环境组件持续增加，实体选择、属性编辑和撤销逻辑如果继续堆积在 `EditorLayer` 或层级面板中，会使面板之间互相依赖，也会让后续组件难以复用统一的编辑行为。本阶段先收口编辑器基础设施，使场景参数继续组件化时不必重复实现选择与命令逻辑。
+### 面板与选择边界
 
-本轮主要完成：
+`EditorLayer` 负责编辑场景、运行场景、相机、Framebuffer、后处理输入和各面板的生命周期编排；Hierarchy 负责实体列表与创建、复制、删除；Inspector 负责显示实体组件或资产内容。面板通过注入的 Scene、`SelectionContext` 和 `EditorCommandHistory` 工作，不拥有场景生命周期。
 
-- `SceneHierarchyPanel` 与 `InspectorPanel` 分离显示职责；
-- 使用统一 `SelectionContext` 管理 Entity/Asset 选择；
-- 建立 `EditorCommandHistory` 与快捷键入口；
-- 为实体生命周期建立基于 UUID 的快照和恢复流程；
-- 将实体创建、复制、删除和 Add Component 接入 Undo/Redo；
-- 让通用 `DrawComponent<T>` 的 Reset/Remove 操作具备命令化能力；
-- 隔离 Edit Scene 与 Runtime Scene 的命令历史。
+`SelectionContext` 只保留 Entity 或 Asset 中的一种选择。Hierarchy 选中实体时会清掉 AssetHandle，Content Browser 选中资产时会清掉 Entity。Inspector 因而只需按选择类型分流，也会在对象失效时停止访问旧组件。
 
-### SelectionContext
+### 一次操作对应一条命令
 
-`SelectionContext` 只允许一种有效选择类型：
+命令接口的 `Execute()` 与 `Undo()` 都返回成功状态。只有操作成功，`EditorCommandHistory` 才会在 Undo/Redo 双栈间移动命令；新命令成功执行后才清空 Redo。这项约束来自材质保存可能失败的实际情况：UI 已经改了内存值，并不代表磁盘操作也成功。
 
-```text
-None
-Entity -> 保存当前 Entity，清空 AssetHandle
-Asset  -> 保存当前 AssetHandle，清空 Entity
-```
+轻量且不会失败的操作使用 `LambdaEditorCommand`，需要保存前后完整状态的操作使用 `ValueEditorCommand<T>`。ImGui Slider 和 Gizmo 会连续产生值，`EditorValueTransaction<T>` 在控件激活时保存 Before，释放时提交 After，整次拖动只占一条历史记录。
 
-层级面板选中实体时调用 `SelectEntity`，内容浏览器选中资源时调用 `SelectAsset`。因此 Entity 与 Asset 不会在 Inspector 中同时残留，Inspector 也不需要读取 `EditorLayer` 的私有选中字段。
+当前命令范围包括：
 
-Inspector 根据选择类型进行分流：
+- 实体创建、复制、删除，以及组件添加、移除和重置；
+- Transform 与 Gizmo 连续编辑；
+- Terrain、Camera、Directional/Point/Sky Light 的连续参数；
+- HeightMap、SkyLight Cubemap、TerrainMaterial、MaterialHandle 等离散替换；
+- 实体 Material Overrides 的开关、数值、纹理和 Reset；
+- 共享 `.glmat` 的完整状态、保存与失败回滚。
 
-- Entity：显示实体名称与组件属性；
-- Asset：显示资源文件名、Handle、路径和资源类型；
-- None：显示未选择提示；
-- 已失效对象：显示失效提示，不继续访问组件。
+快捷键为 `Ctrl+Z` 撤销，`Ctrl+Y` 或 `Ctrl+Shift+Z` 重做。
 
-### CommandHistory
+### 实体恢复为何使用 UUID
 
-编辑器命令统一实现 `IEditorCommand`：
+销毁实体后，旧 `entt::entity` 已经失效，也可能被 registry 复用。`EntitySnapshot` 因此保存稳定 UUID、Transform 和当前支持的可选组件，命令执行时再通过 `FindEntityByUUID()` 查找，必要时用原 UUID 重建实体。
 
-```cpp
-class IEditorCommand
-{
-public:
-    virtual void Execute() = 0;
-    virtual void Undo() = 0;
-    virtual const char* GetName() const = 0;
-};
-```
+Terrain 快照只复制 `TerrainSpecification`，GPU Runtime 交给 Renderer 延迟重建；Native Script 只复制工厂回调，不复制正在运行的脚本实例。这两个限制防止 Undo 后的新实体继续引用已销毁的运行时对象。
 
-`EditorCommandHistory` 维护 Undo Stack 与 Redo Stack：
+### Edit、Play 与调试场景
 
-1. `Execute` 执行新命令，将命令压入 Undo Stack，并清空 Redo Stack；
-2. `Undo` 调用命令的反向操作，再将命令移动到 Redo Stack；
-3. `Redo` 重新执行命令，再将命令放回 Undo Stack；
-4. 打开新场景或替换编辑场景时清空历史，防止旧命令继续持有旧 Scene。
+进入 Play 前会清空选择，并由 Editor Scene 复制出 Runtime Scene；Hierarchy 和 Inspector 随后绑定运行时副本，CommandHistory 暂时置空。Stop 会丢弃运行时副本并重新绑定编辑场景，所以播放期间的试改不会写回原场景。
 
-对于 ImGui 拖动控件，属性会在拖动过程中实时更新，因此使用 `PushExecuted` 在控件结束编辑时记录“已发生”的操作，避免每一帧产生一条命令。Transform、Terrain、Directional/Point/Sky Light、Camera 与 Material 连续属性目前都采用该事务边界。
+DebugPanel 的临时 Lab 也沿用这条边界：Lab 激活时禁用命令历史和场景保存，Hierarchy 不枚举临时实体，退出后恢复原 Editor Scene。这样诊断工具可以创建真实 ECS 场景，又不会混进项目文件。
 
-快捷键如下：
-
-| 操作 | 快捷键 |
-| --- | --- |
-| Undo | `Ctrl+Z` |
-| Redo | `Ctrl+Y` |
-| Redo | `Ctrl+Shift+Z` |
-
-### EntitySnapshot 与 UUID 恢复
-
-不能在 Undo 命令中长期保存 `entt::entity`：实体销毁后 Handle 已失效，而且 Handle 可能被 registry 重新利用。因此实体命令使用 `EntitySnapshot` 保存稳定 UUID 和可序列化组件数据。
-
-当前快照覆盖：
-
-- `TagComponent`、`TransformComponent`；
-- Sprite、Model 与 Material 组件；
-- `TerrainComponent`；
-- Directional Light、Point Light 与 Sky Light；
-- `CameraComponent`；
-- Native Script 的实例化/销毁函数绑定。
-
-恢复流程为：
-
-```text
-Undo/Redo
-  -> Scene::FindEntityByUUID
-  -> 若不存在则 CreateEntityWithUUID
-  -> 恢复基础组件
-  -> 恢复可选渲染、地形、光照和相机组件
-  -> 重新同步 SelectionContext
-```
-
-`TerrainComponent` 的复制构造与复制赋值都只复制 `TerrainSpecification`，不会复用旧的 `TerrainRuntime` GPU 对象。地形复制、场景切换或命令恢复后由 `TerrainRenderer` 按需重新建立运行时资源。
-
-Native Script 快照只保存脚本工厂绑定，不复制正在运行的 `ScriptableEntity::Instance`，避免两个实体共同持有同一个脚本实例。
-
-### 实体生命周期命令
-
-以下层级面板操作已接入命令历史：
-
-- Create Entity：Undo 销毁新实体，Redo 使用原 UUID 恢复；
-- Duplicate Entity：保存复制结果的完整快照，Undo/Redo 不重新随机生成 UUID；
-- Delete Entity：删除前捕获快照，Undo 恢复组件和选择状态；
-- Add Component：保存组件初始值，Undo 移除，Redo 恢复。
-
-命令内部每次操作前都会通过 UUID 重新查找实体，并检查组件是否存在，避免使用已经失效的 Entity Handle 或重复添加/删除组件。
-
-### 通用组件菜单
-
-`InspectorPanel::DrawComponent<T>` 统一提供组件标题、折叠内容和右键菜单。Reset 与 Remove Component 不再直接修改 registry，而是创建 `LambdaEditorCommand`：
-
-- Reset 保存修改前组件和默认组件，支持双向恢复；
-- Remove 在删除前复制组件，Undo 时使用原始数据重新添加；
-- Transform 不允许删除，但可以 Reset；
-- 组件命令只持有 `Ref<Scene>`、UUID 和值快照，不保存组件引用。
-
-目前 Add Component 已覆盖 Camera、Sprite Renderer、Model Renderer、Material、Terrain、Directional Light、Point Light 和 Sky Light。其余仍使用手写 TreeNode 的属性区域会在下一步迁移到 `DrawComponent<T>`，迁移后即可统一显示 Reset/Remove 菜单。
-
-### Edit/Play 模式边界
-
-进入 Play 模式后，`SceneHierarchyPanel` 和 `InspectorPanel` 会切换到 Runtime Scene。为防止编辑器历史混入临时运行时对象，本轮增加以下约束：
-
-- Play 时暂时向两个面板注入空 CommandHistory；
-- Play 时禁用全局 Undo/Redo 快捷键；
-- Stop 后重新绑定 Editor Scene 的 CommandHistory；
-- 编辑场景原有历史不会捕获或长期持有 Runtime Scene。
-
-这样运行时调试修改仍然是临时状态，停止播放后恢复编辑场景，不会出现 Undo 修改错误 Scene 的情况。
-
-### 文件职责
-
-| 文件 | 职责 |
-| --- | --- |
-| `src/Editor/EditorCommand.h/.cpp` | 命令接口、双栈历史、实体快照与恢复 |
-| `src/Panels/SelectionContext.h` | Entity/Asset 互斥选择状态 |
-| `src/Panels/SceneHierarchyPanel.h/.cpp` | 实体列表与实体生命周期命令入口 |
-| `src/Panels/InspectorPanel.h/.cpp` | 选择分流、通用组件 UI 与组件命令入口 |
-| `src/EditorLayer.cpp` | 面板依赖注入、快捷键和 Edit/Play 状态编排 |
-
-这些文件均位于 `GlimmerEditor-CyouBranch`，属于编辑器工作流，不进入核心 `Glimmer` 运行时库。Scene、Entity、UUID 和组件数据仍由核心库提供。
-
-### 验证结果
-
-- VS2026 `Debug | x64` 编译和链接成功；
-- 通过已打开的 Glimmer VS 实例构建，失败项目为 0；
-- 连续第二次 VS 热构建耗时约 0.1 秒，增量状态正常；
-- `git diff --check` 通过；
-- 未运行 Premake，未删除 `bin` 或 `bin-int`；
-- Entity/Asset 选择互斥；
-- 实体创建、复制、删除与组件添加可进入 Undo/Redo 历史；
-- 播放模式不会执行编辑场景 Undo/Redo。
-
-建议交互验证顺序：创建实体 -> 添加 Terrain 或 Light -> `Ctrl+Z` 连续撤销 -> `Ctrl+Y` 连续恢复；随后删除实体并撤销，确认 UUID、组件和 Inspector 选择状态均恢复。
-
-### 当前边界与下一步
-
-当前命令系统已经覆盖实体和组件结构变化，但属性事务尚未全部统一：
-
-- Transform 连续拖动已经只生成一条命令；
-- Terrain、Directional Light、Point Light、Sky Light 和普通组件属性仍需统一接入属性事务；
-- `.glmat` 修改的是共享 Material Asset，需要建立 Asset Command，而不是错误地当作实体组件值处理；
-- Gizmos Transform 操作也应在开始拖动时快照、结束拖动时提交一条命令；
-- 后续可增加历史容量限制、命令合并和保存后的 Dirty 标记。
-
-下一步将抽取通用 Inspector 属性编辑事务，先覆盖 Terrain 与 Light，再单独建设 Material Asset 的保存、Undo 和 Redo 流程。
+目前 Tag、SpriteRenderer、ModelRenderer 等少数属性仍有直接修改路径。共享 Material 已有保存、撤销和失败回滚；TerrainMaterial 只有显式 Save/Reload，尚未进入 Asset Command，也没有统一的退出 Dirty 提示。这些是后续编辑器事务继续收口的位置。
 
 ## MaterialInstance 与实体材质 Override
 
-### 建设目的
-
-此前多个实体引用同一个 `.glmat` 时，实体 Inspector 直接修改 `Material::GetProperties()` 并调用 `Material::Save()`。由于 `AssetManager` 会按 `AssetHandle` 缓存并共享同一个 `Material` 对象，对任意实体调整颜色、纹理、金属度或粗糙度都会修改原始材质资产，并同步影响所有引用它的实体。
-
-本阶段将材质数据拆成两层：
+多个实体引用同一份 `.glmat` 时，直接修改 `Material` 会让所有引用者一起变化。`MaterialInstance` 解决的是这层共享边界：资产保存基础值，实体只保存自己明确覆盖的字段，渲染提交时再合并成最终材质。
 
 ```text
-Material Asset（.glmat，共享基础值）
-    -> MaterialComponent::MaterialHandle
-    -> MaterialOverrides（实体局部值）
-    -> MaterialInstance（运行时合并结果）
-    -> Renderer2D / Renderer3D
+.glmat MaterialProperties
+        + MaterialComponent::Overrides
+        -> MaterialInstance
+        -> Renderer2D / Renderer3D / ShadowRenderer
 ```
 
-这样既保留 `.glmat` 的复用能力，也允许实体拥有局部外观差异。`MaterialInstance` 不复制 Shader、Texture 或 GPU 对象，只在提交渲染时解析最终参数。
+### 覆盖数据怎么组织
 
-### 核心数据结构
+`MaterialComponent` 保存 `MaterialHandle` 与 `MaterialOverrides`。Override 由位掩码和一份候选 `MaterialProperties` 组成，现已覆盖 14 个字段：BaseColor、四类纹理、TilingFactor、Metallic、Roughness、AlphaMode、AlphaCutoff、NormalScale、AOStrength、EmissiveColor 和 EmissiveStrength。
 
-`MaterialOverride` 使用位掩码标记单个属性是否覆盖基础材质：
+关闭某个开关只移除对应 Mask 位，不抹掉它的候选值；重新启用时可以接着使用上次的输入。`Clear()` 才会同时重置 Mask 和全部 Values。ShaderHandle 仍来自基础 `.glmat`，实体不能覆盖 Shader，因为它会改变管线契约，不能当成普通表面参数处理。
 
-```cpp
-enum class MaterialOverride : uint32_t
-{
-    None             = 0,
-    BaseColor        = 1 << 0,
-    BaseColorTexture = 1 << 1,
-    TilingFactor     = 1 << 2,
-    Metallic         = 1 << 3,
-    Roughness        = 1 << 4
-};
+`MaterialInstance` 先复制基础属性，再替换 Mask 中启用的字段，并在合并点约束参数范围，例如 Roughness 最低为 `0.04`、TilingFactor 最低为 `0.01`。它只是一次轻量的 CPU 解析，不持有新的纹理或 GPU Material。
 
-struct MaterialOverrides
-{
-    uint32_t Mask = 0;
-    MaterialProperties Values;
+### 编辑、保存与运行时结果
 
-    bool IsEnabled(MaterialOverride property) const;
-    void SetEnabled(MaterialOverride property, bool enabled);
-    void Clear();
-    bool Empty() const;
-};
-```
+Entity Inspector 改的是 `MaterialComponent::Overrides`，不会保存 `.glmat`；Asset Inspector 改的是共享 Material，成功保存后所有未覆盖字段都会继承新值。实体的开关、连续参数、纹理拖放/清除与 Reset 都使用完整组件快照进入 Undo/Redo。Play 模式编辑的是 Runtime Scene 副本，共享 Material Asset 保持只读。
 
-当前允许实体覆盖：
+场景 YAML 只在 Override 非空时写出 `Overrides` 节点，并保存 Mask 与完整 Values。旧场景没有该节点时按纯共享材质加载；禁用字段的值仍会往返保存，为以后重新启用保留输入。实体复制、Scene Copy 和 `EntitySnapshot` 都按值复制这份局部状态。
 
-| 属性 | 用途 |
-| --- | --- |
-| `BaseColor` | 实体局部基础颜色或 Tint |
-| `BaseColorTexture` | 实体局部基础颜色纹理 |
-| `TilingFactor` | 实体局部 UV 平铺倍率 |
-| `Metallic` | 实体局部金属度 |
-| `Roughness` | 实体局部粗糙度 |
+### 渲染侧的处理
 
-Shader 仍由基础 `.glmat` 决定，不允许实体覆盖。Shader 会影响管线、顶点布局和参数布局，把它作为普通实例参数会导致渲染状态难以归类，也不利于后续排序与合批。
+Renderer3D 使用 `(EntityID, MaterialHandle)` 缓存合并结果，同时比较基础材质完整状态、Overrides 与版本。即使 Undo 恢复了旧版本号，或某条写入路径漏掉 Dirty，只要内容不同就会重新解析；超过 120 帧未使用的条目会在 `EndScene()` 回收。
 
-`MaterialComponent` 现在同时保存共享材质引用和局部覆盖数据：
+最终属性会进入 RenderQueue 的排序与兼容判断。Shader、Mesh、纹理或任何最终材质位模式不同都会拆开 Batch；相同组合才能走 Instanced Draw。ShadowRenderer 也读取同一个 MaterialInstance：Opaque 和 Mask 投射阴影，Mask 使用最终 BaseColor Alpha、纹理、Tiling 与 Cutoff 裁剪，Blend 当前跳过阴影提交。
 
-```cpp
-struct MaterialComponent
-{
-    AssetHandle MaterialHandle{ 0 };
-    MaterialOverrides Overrides;
-};
-```
+Renderer2D 继续沿用 Sprite 批处理，材质无效时回退到 Sprite 自身的颜色、纹理和 Tiling；它仍固定使用兼容的 2D Shader，不按 `.glmat` ShaderHandle 切换管线。
 
-### MaterialInstance 合并流程
+这套模型目前没有实体级 Shader Override。MaterialInstance 缓存已经落地，但 Metallic/Roughness 的独立贴图或 ORM 仍属于后续材质通道工作；共享资产方面，只有 Material 具备完整的 Undo、磁盘保存和失败回滚协议。
 
-`MaterialInstance` 位于核心库 `Renderer` 目录。构造时先复制基础 `MaterialProperties`，再只应用 `Mask` 中启用的字段：
+### 验证记录
 
-```text
-AssetManager::GetMaterial(MaterialHandle)
-    -> 取得共享 Material
-    -> 复制基础 MaterialProperties
-    -> 应用启用的 MaterialOverrides
-    -> 约束参数范围
-    -> 得到本次绘制使用的最终属性
-```
-
-合并后继续保持以下约束：
-
-- `TilingFactor >= 0.01`；
-- `Metallic` 位于 `[0, 1]`；
-- `Roughness` 位于 `[0.04, 1]`。
-
-未启用的字段始终继承基础材质。因此修改 `.glmat` 后，所有未覆盖字段仍会使用最新的共享值；只有明确覆盖的字段保持实体自己的值。
-
-### Inspector 编辑边界
-
-实体和资产采用两条不同的编辑路径：
-
-```text
-Hierarchy 选中 Entity
-    -> Entity Inspector
-    -> 编辑 MaterialComponent::Overrides
-    -> 不调用 Material::Save()
-
-Content Browser 选中 .glmat
-    -> Asset Inspector
-    -> 编辑共享 MaterialProperties
-    -> Material::Save()
-    -> 所有继承该字段的实体同步更新
-```
-
-实体 Material 面板为每个可覆盖属性提供启用开关。第一次启用时会复制当前基础值，避免控件突然跳到 `MaterialProperties` 的默认值。拖入纹理会自动启用 `BaseColorTexture` Override；`Reset Overrides` 会清除全部位标记，使实体重新完整继承基础材质。
-
-更换或移除实体的基础 `.glmat` 时会清空旧 Overrides，防止原材质的局部参数意外套用到结构或语义不同的新材质上。
-
-Asset Inspector 会提示当前操作修改的是共享资源，避免把资产编辑误认为实体局部编辑。
-
-### Renderer2D 与 Renderer3D 接入
-
-`Scene` 在编辑模式和运行模式的 2D、3D 绘制路径中都会把 `MaterialComponent::Overrides` 传给 Renderer。
-
-Renderer2D 解析后的颜色、Tiling 和纹理仍通过现有 Quad 顶点数据与纹理槽提交：
-
-- 不同 `BaseColor` 不会打断合批；
-- 不同 `TilingFactor` 不会打断合批；
-- 已存在于当前批次的纹理会复用纹理槽；
-- 单批超过可用纹理槽或索引容量时才执行 Flush；
-- Renderer2D 当前仍固定使用 `TextureShader`，`.glmat` 的 ShaderHandle 尚未参与 2D 管线选择。
-
-Renderer3D 使用合并后的 ShaderHandle 和 PBR 属性上传 Uniform，并解析最终基础颜色纹理。当前 Renderer3D 仍是逐模型、逐 Mesh 提交，本阶段没有新增额外拆批；后续真正建设 3D Instancing 时，应按 Shader、RenderState、Mesh、Material 和纹理组合生成 RenderKey，再把 Transform、EntityID 和可实例化材质参数写入 Instance Buffer 或 Material Buffer。
-
-`MaterialInstance` 本身不创建新的 GPU Material，也不会复制纹理。当前额外 CPU 成本主要是每个实体提交时进行一次属性复制和位掩码合并；实体数量显著增大后，可以增加版本号、Dirty 标记和解析结果缓存。
-
-### 场景复制与序列化
-
-场景 YAML 仅在存在覆盖时写出 `Overrides`：
-
-```yaml
-MaterialComponent:
-  Material: 13777784352782102236
-  Overrides:
-    Mask: 21
-    BaseColor: [0.2, 0.7, 1.0, 1.0]
-    BaseColorTexture: 0
-    TilingFactor: 2.0
-    Metallic: 0.1
-    Roughness: 0.6
-```
-
-`Mask` 是实际生效字段的唯一依据。完整写出 `Values` 可以保持格式稳定，也便于以后启用某一字段时恢复已保存的数据。
-
-兼容策略如下：
-
-- 旧场景没有 `Overrides`：覆盖集合保持为空，行为与原先一致；
-- 新场景有 `Overrides`：读取 Mask 和所有候选值；
-- `Scene::Copy()`、实体复制和 `EntitySnapshot` 按值复制 `MaterialComponent`，Override 会自然进入 Runtime Scene、Duplicate 和 Undo 恢复流程；
-- `.glmat` 继续只保存共享基础值，不包含任何实体 UUID 或场景局部数据。
-
-### 其它 Asset 组件审计
-
-本轮同时检查了可以挂载到实体的其它 AssetHandle 组件：
-
-| 组件 | 资源引用 | 实体局部数据 | 是否需要 Instance/Override |
-| --- | --- | --- | --- |
-| `SpriteRendererComponent` | `TextureHandle` | Color、TilingFactor | 不需要；组件没有反向修改 Texture 资产 |
-| `ModelRendererComponent` | `ModelHandle` | 当前无共享模型参数编辑 | 不需要 |
-| `SkyLightComponent` | `CubemapHandle` | Enabled、Intensity | 不需要；Cubemap 只读，环境强度已组件化 |
-| `TerrainComponent` | HeightMap、Shader 等句柄 | TerrainSpecification | 暂不需要；生成参数属于实体，底层资产未被反向修改 |
-| `MaterialComponent` | `MaterialHandle` | MaterialOverrides | 需要；基础材质包含可被多个实体共享的可编辑参数 |
-
-判断是否需要 Asset Instance 的标准不是“组件是否保存 AssetHandle”，而是“实体是否需要修改资产内部数据且不能影响其它引用者”。Texture、Model 和 Cubemap 当前都是只读引用；如果后续为它们增加每实体采样器、子网格可见性或环境旋转等设置，应优先把这些设置放入组件局部数据，而不是修改共享资产对象。
-
-### 文件职责
-
-| 文件 | 职责 |
-| --- | --- |
-| `Glimmer/src/Glimmer/Renderer/MaterialInstance.h/.cpp` | Override 位掩码、局部值和最终材质属性合并 |
-| `Glimmer/src/Glimmer/Scene/Components.h` | 在 MaterialComponent 中保存材质句柄与 Overrides |
-| `Glimmer/src/Glimmer/Scene/Scene.cpp` | 编辑/运行场景向 2D、3D Renderer 传递 Overrides |
-| `Glimmer/src/Glimmer/Scene/SceneSerializer.cpp` | Material Overrides 的兼容序列化与反序列化 |
-| `Glimmer/src/Glimmer/Renderer/Renderer2D.h/.cpp` | 将最终颜色、纹理和 Tiling 接入 Sprite 批处理 |
-| `Glimmer/src/Glimmer/Renderer/Renderer3D.h/.cpp` | 将最终 PBR 参数接入模型绘制 |
-| `GlimmerEditor-CyouBranch/src/Panels/SceneHierarchyPanel.cpp` | 实体 Material Override 编辑界面 |
-| `GlimmerEditor-CyouBranch/src/Panels/InspectorPanel.cpp` | 共享 `.glmat` Asset Inspector 与保存入口 |
-
-核心数据合并与渲染逻辑位于 `Glimmer`；实体/资产编辑交互位于 `GlimmerEditor-CyouBranch`，没有把 ImGui 或编辑器状态引入运行时核心库。
-
-### 验证结果
-
-- 新增核心源文件后重新运行 VS2026 Premake 脚本，工程文件成功包含 `MaterialInstance.h/.cpp`；
-- `Debug | x64` 完整编译和链接成功；
-- 同一 Visual Studio 实例再次增量构建成功，失败项目为 0，耗时约 0.1 秒；
-- `git diff --check` 通过；
-- 未删除 `bin` 或 `bin-int`，保留 Visual Studio 增量构建缓存；
-- Entity Inspector 不再调用 `Material::Save()`；
-- `.glmat` 的共享写入只保留在 Asset Inspector。
-
-建议交互验证：为两个实体挂载同一个 `.glmat`，只给其中一个实体启用 BaseColor 或纹理 Override；另一个实体和原始 `.glmat` 应保持不变。随后保存并重新打开场景，确认 Override 恢复；最后点击 `Reset Overrides`，确认该实体重新继承共享材质。
-
-### 当前边界与后续方向
-
-1. Material Override 的逐属性编辑尚未接入统一 Undo/Redo 属性事务；
-2. Renderer2D 暂不支持按 `.glmat` ShaderHandle 切换兼容批次；
-3. Renderer3D 尚未建立 RenderQueue、RenderKey、材质排序和 Instanced Draw；
-4. MaterialInstance 当前按绘制临时解析，尚无 Dirty/version 缓存；
-5. Normal、AO、Emissive 和更多 PBR 纹理加入后，需要扩展 Override Mask 和 Inspector，但应保持同一合并模型；
-6. 共享 `.glmat` 的 Asset Inspector 修改后续应进入 Asset Command，而不是组件命令。
-
-下一步建议优先将 Material Override 和 Material Asset 编辑分别接入组件属性命令与 Asset Command，然后再建设 3D RenderQueue。这样 Undo/Redo、共享资产语义和后续合批边界能够保持一致。
+无窗口回归覆盖完整 Material 保存/重载、14 项 Override 合并、数值 Clamp 与 Scene YAML 往返。真实 OpenGL Lab 还验证了材质差异会正确拆批：三个相同实例为一次 Draw，单个 Roughness Override 后变为两次 Draw；Alpha 场景则验证了 Opaque、Mask、Blend 的队列与回退行为。
 
 ## 项目品牌与 Windows 应用图标
 
-### 建设目标
+项目早期的 Logo 一直放在 `tmp/logo/`。这在试稿阶段没问题，但临时目录随时可能清理，也不适合作为构建输入。后来把源图、标准 PNG 和 Windows 图标统一迁到 `resources/`，三个可执行程序从此共用一份品牌资源。
 
-本轮将散落在 `tmp/logo/` 中的 Logo 源图迁移为正式项目资源，并为所有 Windows 可执行项目提供统一的应用图标。目标包括：
-
-- 品牌源图和派生图标具有稳定、可追踪的目录；
-- Sandbox 与两个编辑器使用同一个窗口、任务栏和 EXE 图标；
-- 图标直接嵌入可执行文件，不依赖运行时工作目录或额外资源复制；
-- 后续新增应用时只需复用同一份资源脚本；
-- `tmp/` 继续只保存可删除的中间文件，不承担正式资源职责。
-
-### 资源目录
+### 资源怎么保存
 
 ```text
 resources/
-├── branding/
-│   ├── GlimmerAppIcon.png          # 512×512 透明应用图标
-│   ├── GlimmerAppIcon-Source.png   # 应用图标高分辨率源图
-│   ├── GlimmerLogo-Crystal.png     # 水晶切面品牌方案
-│   └── GlimmerLogo-Minimal.png     # 简洁金属品牌方案
-└── windows/
-    ├── Glimmer.ico                 # Windows 多尺寸图标（16–256 px）
-    └── Glimmer.rc                  # 将图标嵌入 EXE 的资源脚本
+├─ branding/
+│  ├─ GlimmerAppIcon-Source.png
+│  ├─ GlimmerAppIcon.png
+│  ├─ GlimmerLogo-Crystal.png
+│  └─ GlimmerLogo-Minimal.png
+└─ windows/
+   ├─ Glimmer.ico
+   └─ Glimmer.rc
 ```
 
-`GlimmerAppIcon.png` 是从方形高分辨率源图确定性裁切和缩放得到的透明 PNG，没有重新生成或改变 Logo 设计。`Glimmer.ico` 包含 16、24、32、48、64、128 和 256 px 图像，兼顾资源管理器、窗口标题栏、任务栏和高 DPI 显示。
+高分辨率源图留作后续导出，`GlimmerAppIcon.png` 是文档和界面可直接使用的透明版本。`Glimmer.ico` 内含 16、24、32、48、64、128 和 256 px 图像，小尺寸标题栏与高 DPI 资源管理器都能取得合适层级。
 
-### Windows 资源接入
+### Windows 构建接入
 
-GLFW 的 Win32 后端会在可执行文件中查找名为 `GLFW_ICON` 的图标资源。共享资源脚本定义如下：
+GLFW 的 Win32 后端会查找名为 `GLFW_ICON` 的资源。共享 RC 文件只有一条声明：
 
 ```rc
 GLFW_ICON ICON "../resources/windows/Glimmer.ico"
 ```
 
-图标由 Windows Resource Compiler 在构建阶段写入 EXE。运行时不需要调用 `stbi_load()`，也不需要通过相对路径加载 PNG，因此从 Visual Studio、资源管理器或其它工作目录启动程序时行为一致。
+`Sandbox`、`GlimmerEditor` 和 `GlimmerEditor-CyouBranch` 的 Premake 配置都把这份 RC 加入 `files`。Visual Studio 生成 `ResourceCompile` 项后，图标会直接写进 EXE；运行时不读取 PNG，也不受启动目录影响。
 
-### Premake 工程接入
+这里选择共享 RC，而没有给每个应用复制一份图标文件。原因很实际：资源 ID、尺寸集合或 Logo 更新只需维护一个入口。改动 PNG、ICO、RC 或 Premake 后，应重新运行 `scripts\Win-GenerateProject-vs2026.bat`，不要手改随后会被覆盖的 `.vcxproj`。
 
-`Sandbox`、`GlimmerEditor` 和 `GlimmerEditor-CyouBranch` 的 `premake5.lua` 均在 `files` 中包含共享资源脚本：
+这条链路目前只覆盖 Windows。Linux 桌面图标和 macOS App Bundle 需要各自的打包方案，不能沿用 Win32 RC。正式品牌文件继续放在 `resources/branding/`，`tmp/` 只留可丢弃的中间产物。
 
-```lua
-files {
-    "src/**.h",
-    "src/**.cpp",
-    "../resources/windows/Glimmer.rc"
-}
-```
+### 验证记录
 
-新增 Windows `ConsoleApp` 或 `WindowedApp` 项目时应复用这一路径，不要复制并维护项目私有的 `.ico` 或 `.rc`。Premake 会生成对应的 `<ResourceCompile>` 项，Visual Studio 构建时自动调用资源编译器。
-
-修改 Logo、ICO、RC 或 Premake 后，重新生成 VS2026 工程：
-
-```bat
-scripts\Win-GenerateProject-vs2026.bat
-```
-
-生成后再构建目标配置。不要手动修改 `.vcxproj`，因为生成文件会在下一次运行 Premake 时被覆盖。
-
-### 文件职责
-
-| 文件 | 职责 |
-| --- | --- |
-| `resources/branding/GlimmerAppIcon-Source.png` | 应用图标的高分辨率原始版本 |
-| `resources/branding/GlimmerAppIcon.png` | README、界面或宣传场景使用的标准透明 PNG |
-| `resources/branding/GlimmerLogo-Crystal.png` | 水晶切面品牌展示图 |
-| `resources/branding/GlimmerLogo-Minimal.png` | 简洁金属品牌展示图 |
-| `resources/windows/Glimmer.ico` | Windows EXE、窗口和任务栏使用的多尺寸图标 |
-| `resources/windows/Glimmer.rc` | 声明 GLFW 约定资源名并将 ICO 嵌入应用 |
-| 各应用的 `premake5.lua` | 将共享 RC 文件加入具体可执行项目 |
-
-### 验证结果
-
-- 重新运行 VS2026 Premake，三个应用工程均生成 `ResourceCompile` 项；
-- VS2026 `Debug | x64` 全解决方案编译和链接成功；
-- 从 `GlimmerEditor-CyouBranch.exe` 成功提取到关联图标，确认资源已实际嵌入 EXE；
-- Sandbox、GlimmerEditor 和 GlimmerEditor-CyouBranch 共用同一图标资源；
-- 原 `tmp/logo/` 已在资源迁移完成后清理；
-- `git diff --check` 通过。
-
-### 当前边界与维护约定
-
-1. 当前 `.rc/.ico` 接入只负责 Windows；未来接入 Linux 或 macOS 时应分别补充桌面文件图标和应用 Bundle 图标，不应复用 Win32 RC；
-2. 更新应用图标时必须同步更新标准 PNG 与多尺寸 ICO，并至少验证 16、32 和 256 px 显示效果；
-3. 正式品牌资源统一保存在 `resources/branding/`，不要重新放入 `tmp/`；
-4. 所有 Windows 应用共享 `Glimmer.rc`，避免出现资源 ID、图标版本或视觉风格分叉；
-5. README 和其它 Markdown 文档引用品牌图片时使用仓库相对路径，保证 GitHub 和本地预览均可显示。
+当时重新生成了三个应用工程并完成 VS2026 `Debug | x64` 全量构建；从生成的 EXE 中成功提取到图标，确认资源已经嵌入，而非碰巧从工作目录加载。对应提交为 `3b14bd8`。
 
 ## 材质编辑事务与 Undo/Redo
 
-### 建设目标
+MaterialInstance 分清了共享 `.glmat` 和实体局部 Override，但最初的 Inspector 仍会直接改内存。拖动一个滑块可能产生几十个中间值，共享材质还会频繁落盘；文件被占用时，画面、磁盘和撤销栈甚至可能处在三个不同状态。材质事务就是为了解决这类不一致。
 
-MaterialInstance 已经区分共享 `.glmat` 与实体局部 Override，但此前 Inspector 仍直接修改内存：数值拖动会产生大量中间状态，共享材质每帧变化都立即保存，实体 Override 和纹理操作无法撤销，保存失败也没有可靠的历史栈语义。
+### 两种编辑对象，两套快照
 
-本次改造建立两类事务边界：
+实体材质使用完整 `MaterialComponent` 快照，里面有 MaterialHandle 和全部 Overrides。共享材质使用 `MaterialState`，一次保存 ShaderHandle 与完整 `MaterialProperties`。两者都走 `ValueEditorCommand<T>`，但 Apply 的落点不同：实体命令只改 Scene 组件，共享资产命令还要保存 `.glmat`。
 
-- `MaterialComponent` 事务负责实体的 MaterialHandle 与完整 Overrides；
-- `MaterialState` 事务负责共享 Material 的 ShaderHandle 与全部 MaterialProperties，并同步 `.glmat` 文件。
+```text
+Entity Inspector                 Asset Inspector
+MaterialComponent Before/After  MaterialState Before/After
+        -> Scene Component              -> Material Cache
+                                           -> .glmat
+```
 
-### 失败感知的 CommandHistory
+连续控件由 `EditorValueTransaction<T>` 管理。控件激活时截取 Before，拖动期间直接预览，释放时再提交 After，所以一次拖动只生成一条命令。纹理拖放、清除、Override 开关、MaterialHandle 替换和 Reset 属于离散操作，会直接提交完整快照。
 
-`IEditorCommand::Execute()` 与 `Undo()` 现在返回 `bool`。`EditorCommandHistory` 只有在操作成功后才移动命令：
+当前实体事务已覆盖 14 项 Material Override，包括 BaseColor、四类纹理、Metallic/Roughness、AlphaMode、AlphaCutoff、Normal/AO 参数和 Emissive 参数。共享 Asset Inspector 使用相同的完整属性集合。进入 Play 后共享 Material 变为只读，实体编辑则发生在 Runtime Scene 副本里，Stop 后直接丢弃。
 
-- 新命令 Execute 失败时不进入 Undo 栈，也不清空现有 Redo 栈；
-- Undo 失败时命令仍留在 Undo 栈；
-- Redo 失败时命令仍留在 Redo 栈；
-- 用户排除文件锁定、权限等问题后，可以再次执行原操作。
+### 失败不会推进历史
 
-`LambdaEditorCommand` 继续服务于不会失败的实体生命周期操作。新增的 `ValueEditorCommand<T>` 保存 Before/After，并通过统一 Apply 回调恢复任一状态；`EditorValueTransaction<T>` 在 ImGui Item 激活时捕获 Before，在 `IsItemDeactivatedAfterEdit` 时结束事务。
+`IEditorCommand::Execute()` 与 `Undo()` 返回 `bool`。Execute 失败时不压入 Undo Stack，也不清掉 Redo；Undo 或 Redo 失败时，命令仍留在原栈，处理完文件锁定或权限问题后可以重试。
 
-### 实体 MaterialComponent 事务
+共享材质的 Apply 会先设置目标状态，再调用 `Material::Save()`。保存失败时恢复先前内存状态，并把错误交给 Inspector 显示。这样撤销栈只记录真正完成的操作，画面也不会假装保存成功。
 
-以下 Inspector 操作现在都以完整 `MaterialComponent` 快照进入 Undo/Redo：
+### `.glmat` 的安全替换
 
-- 更换或清除 MaterialHandle；更换材质时一并清理 Overrides，Undo 会同时恢复旧 Handle 和旧 Overrides；
-- 启用或禁用 BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness Override；
-- 连续编辑 BaseColor、TilingFactor、Metallic 和 Roughness；
-- BaseColorTexture 拖放、清除以及自动启用纹理 Override；
-- `Reset Overrides`。
+`Material::Save()` 先把完整 YAML 写到同目录 `.tmp` 并检查 Flush，再把旧文件改名为 `.bak`，最后用临时文件替换正式文件。替换失败会尝试恢复备份；如果连恢复也失败，日志会保留备份路径供人工处理。成功后才清理 `.bak`。
 
-连续拖动期间场景保持实时预览，但只在控件结束编辑时生成一条命令。命令通过实体 UUID 重新查找目标，不依赖可能失效的 EnTT 临时句柄。
+这个流程比直接截断原文件多几步，但能保住上一份有效材质。它目前是 Material 专用协议；TerrainMaterial 虽然支持 Save/Reload，还没有接入 Asset Command、统一 Dirty 状态和退出保存提示。
 
-### 共享 Material Asset 事务
+### 验证记录
 
-`MaterialState` 同时保存 ShaderHandle 和 MaterialProperties。共享 Asset Inspector 的 Shader、BaseColorTexture 和所有数值修改都使用完整状态命令。
-
-连续拖动时只改变缓存中的 Material，以便所有继承实体实时更新；控件结束编辑后才保存一次 `.glmat` 并推入历史。Undo/Redo 都执行相同的“设置状态并保存”流程，因此内存缓存与磁盘文件保持一致。
-
-如果保存失败，Inspector 会显示错误，内存恢复到操作前状态，CommandHistory 不移动。进入 Play 后共享 Material Inspector 变为只读，避免 RuntimeScene 操作写回全局资产；实体组件仍只修改 RuntimeScene 副本，Stop 后被丢弃。
-
-### 安全落盘
-
-`Material::Save()` 不再直接截断目标 `.glmat`。新流程为：
-
-1. 将完整 YAML 写入同目录临时文件并检查 Flush 结果；
-2. 将原文件改名为备份；
-3. 将临时文件改名为正式文件；
-4. 替换失败时恢复备份，成功后清理备份。
-
-这保证普通写入失败或文件锁定不会破坏上一份有效材质文件。若备份恢复本身失败，日志会保留明确错误和备份路径供人工恢复。
-
-### 文件职责
-
-| 文件 | 职责 |
-| --- | --- |
-| `Glimmer/src/Glimmer/Renderer/Material.h` | `MaterialState` 与完整状态捕获/恢复 |
-| `Glimmer/src/Glimmer/Renderer/Material.cpp` | `.glmat` 解析与安全替换保存 |
-| `GlimmerEditor-CyouBranch/src/Editor/EditorCommand.*` | 失败感知历史、值命令与连续编辑事务 |
-| `GlimmerEditor-CyouBranch/src/Panels/InspectorPanel.*` | 共享 Material Asset 事务和保存反馈 |
-| `GlimmerEditor-CyouBranch/src/Panels/SceneHierarchyPanel.cpp` | 实体 MaterialComponent/Overrides 事务接入 |
-
-### 验证结果
-
-- VS2026、MSVC v145、`Debug | x64` 全解决方案连续两次构建成功；
-- 临时原生 C++ 冒烟测试使用实际 Material 和 EditorCommandHistory，验证 Execute → 文件重载 → Undo → 文件重载 → Redo；
-- 测试使用无删除共享权限的 Windows 文件句柄锁定 `.glmat`，Redo 正确失败，内存和磁盘均保持旧状态，命令留在 Redo 栈；解锁后同一 Redo 成功；
-- `GlimmerEditor-CyouBranch` 在 Intel Iris Xe、OpenGL 4.6 下完成全部 Shader/Compute Shader 初始化并稳定运行 8 秒；
-- `git diff --check` 通过；
-- 构建仍包含项目既有的 C4244、C4267 和 `strncpy` C4996 警告，本次未扩大范围处理。
-
-### 后续演进结果
-
-1. Terrain、Directional/Point/Sky Light 与 Camera 的连续控件已复用 `ValueEditorCommand` 和 `EditorValueTransaction` 完成迁移；
-2. Material 以外共享 Asset 尚无统一 Dirty 状态、退出保存提示或 Asset Command；
-3. MaterialInstance 最终状态缓存、版本管理和完整状态比较已在 Renderer3D RenderQueue/Instancing 阶段落地；
-4. 3D Opaque/Mask/Transparent RenderQueue、状态排序与 Opaque Instancing 已在后续阶段实现。
+原生冒烟测试跑过 Execute、文件重载、Undo、再次重载和 Redo。测试还用不共享删除权限的 Windows 文件句柄锁住 `.glmat`：Redo 按预期失败，内存与磁盘保持旧值，命令留在 Redo Stack；解锁后同一条 Redo 可以成功。VS2026 `Debug | x64` 全解决方案构建通过，编辑器在 Intel Iris Xe / OpenGL 4.6 下稳定运行 8 秒。
 
 ## 3D Opaque RenderQueue 与状态排序
 
-### 建设目标
+早期 `Renderer3D::DrawModel()` 边遍历 Scene 边绘制。共享同一个 Shader 和纹理的模型仍会反复绑定，渲染顺序也被 ECS 遍历顺序牵着走。引入 RenderQueue 后，提交与执行被拆开，后来的 Instancing、AlphaMode 和 Transparent Queue 都建立在这次改造上。
 
-此前 `Renderer3D::DrawModel()` 在遍历 Scene 时立即解析资产、绑定 Shader、绑定纹理并逐 Mesh 绘制。多个实体共享 Shader、Material 和 Texture 时仍会重复绑定，且没有统一提交边界支持后续 Instancing、透明队列或可见性处理。
-
-本次将模型渲染拆为三个阶段：
-
-1. `BeginScene` 保存 ViewProjection/Camera 并清空本帧队列和统计；
-2. `SubmitModel` 解析资产和 MaterialInstance，将每个 Mesh 展开为 RenderItem；
-3. `EndScene` 排序 Opaque Queue、缓存 GPU 状态并统一执行。
-
-### RenderItem 与 RenderKey
-
-每个 RenderItem 保存：
-
-- Mesh、Shader 和最终 Texture 的强引用，保证队列执行前资源有效；
-- 合并 Overrides 后的 MaterialProperties；
-- Transform 和 EntityID；
-- 是否使用真实 BaseColorTexture；
-- 用于排序的 RenderKey。
-
-RenderKey 采用以下优先级：
+### 一帧分成提交和执行
 
 ```text
-ShaderHandle → MaterialHandle → Texture RendererID → Mesh 地址 → EntityID
+BeginScene
+  -> 保存 ViewProjection / CameraPosition，清空本帧队列
+SubmitModel
+  -> 解析 Model、MaterialInstance、Shader 和纹理
+  -> 每个有效 Mesh 生成一个 RenderItem
+FlushOpaqueAndMask
+  -> 排序、缓存状态、兼容批次 Instancing
+EndScene
+  -> 透明项远到近绘制，清理过期材质缓存
 ```
 
-Shader、Material 和 Texture 排在前面以减少昂贵状态切换；Mesh 地址在资源生命周期内稳定；EntityID 提供最终全序，使同一 Scene 中改变 ECS 提交顺序不会改变不透明队列执行顺序。该键只用于运行时帧内排序，不作为持久化 ID。
+RenderItem 持有 Mesh、Shader 和纹理的强引用，也保存最终 MaterialProperties、Transform、EntityID、纹理存在标记与相机距离。队列执行前资源不会悬空，EntityID 仍能写入整数附件供 Viewport 拾取。
 
-### 状态缓存与 Uniform 上传
+### 排序要比较最终状态
 
-执行阶段只在 Shader 真正变化时调用 Bind，并上传场景级 ViewProjection、CameraPosition 和 BaseColorTexture Slot。每个 Item 继续上传 Transform、EntityID、BaseColor、Metallic、Roughness、TilingFactor 和纹理存在标记，保证不同 Overrides 不会错误复用参数。
+当前 Opaque/Mask 排序键依次包含 ShaderHandle、MaterialHandle、六组纹理 GPU ID、Mesh 地址、完整最终材质位模式、纹理存在标记和 EntityID。最初只比较 BaseColor 纹理已经不够了；Normal、AO、Emissive、导入 Metallic/Roughness 和实体 Override 都会改变实际绑定或 Shader 输入。
 
-Texture2D 只在 GPU RendererID 变化时重新绑定。为使缓存有效，`OpenGLRendererAPI::DrawIndexed` 不再在每次 Draw 后调用 `glBindTexture(GL_TEXTURE_2D, 0)`；资源解绑不再由低层 Draw 命令隐式决定，而由下一位状态所有者覆盖。
+相邻 RenderItem 只有在 Shader、Mesh、全部纹理、最终材质值和纹理存在状态一致时才组成兼容 Batch。Shader 支持实例化且 Batch 大于一项时，Transform 与 EntityID 写入动态 Instance Buffer，单次最多提交 1024 个实例；不支持实例化的 Shader 仍走普通 Draw。
 
-无效 Model、Material、Shader、空 Mesh 或零索引 Mesh 不进入队列，并计入 SkippedModels 或直接跳过，不导致渲染崩溃。
+执行阶段会缓存已绑定 Shader 和每个纹理槽的 RendererID。Shader 变化时才上传场景级参数并绑定阴影、IBL；材质参数按兼容批次上传。底层 `DrawIndexed` 不再擅自解绑 Texture2D，下一位状态所有者负责覆盖它。这让上层缓存真正有效，也把 OpenGL 状态责任放回 Renderer3D。
 
-### Scene 接入顺序
+无效 Model、Material、Shader、空 Mesh 和零索引 Mesh 会被跳过，不会带着半套资源进入队列。统计中保留 Submitted/Skipped、Draw、Batch、Shader/Texture Bind、Instanced/Individual Draw 与 Material Cache Hit/Miss，DebugPanel 可以直接观察排序是否省下了状态切换。
 
-编辑和运行场景均使用相同流程：
+### 后续演进后的执行边界
 
-```text
-Renderer3D::BeginScene
-  → 遍历 ModelRendererComponent
-  → Renderer3D::SubmitModel
-  → Renderer3D::EndScene
-  → TerrainRenderer
-  → Renderer2D
-```
+章节名保留了最初的 Opaque Queue，但当前 Renderer3D 已把 Opaque 与 Mask 放进同一状态排序队列，Blend 放进独立 Transparent Queue。完整编辑器的顺序是 Opaque/Mask、Terrain、Skybox、Sprite、Transparent；透明项按实体原点到相机的距离由远到近稳定排序，启用标准 Alpha 混合并关闭深度写入，绘制结束后恢复默认状态。
 
-因此模型相对 Terrain、Sprite、Skybox 和 Tone Mapping 的 Pass 顺序保持不变。EntityID 仍作为逐 Item Uniform 写入整数附件，鼠标拾取协议没有变化。
+透明队列仍逐项 Draw，不做 Instancing，也没有 OIT；距离使用实体原点，尚未改成 Mesh Bounds 中心。Opaque/Mask 可以实例化，Mask 的材质差异会拆批。Renderer3D 的 MaterialInstance 合并结果也已经按 `(EntityID, MaterialHandle)` 缓存，120 帧未使用的条目会被回收。
 
-### 统计面板
+### 验证记录
 
-Renderer3D Statistics 提供：
-
-- SubmittedModels、SubmittedItems 和 SkippedModels；
-- DrawCalls、ShaderBinds、TextureBinds；
-- ImmediateModeShaderBinds 和 ImmediateModeTextureBinds 估算；
-- SavedShaderBinds 和 SavedTextureBinds。
-
-`GlimmerEditor-CyouBranch` 的 Stats 面板同时显示 Renderer2D 与 Renderer3D 数据。绑定估算使用改造前行为：每个有效 Model 绑定一次 Shader，每个 Mesh 绑定一次 Texture。
-
-### 验证结果
-
-- 临时原生 OpenGL 宿主加载同一个最小模型和 DefaultPBR Material 三次，并以 `30,10,20` 与 `20,30,10` 两种 EntityID 提交顺序执行；两次统计一致；
-- 每轮得到 3 个 SubmittedItems、3 个 DrawCalls，ShaderBinds 从立即模式估算 3 降为 1，TextureBinds 从 3 降为 1；
-- 同轮提交无效 ModelHandle，SkippedModels 增加 1 且无崩溃；
-- Debug 运行时断言验证队列已排序、每个 RenderItem 都被执行、绑定次数不高于旧模式估算；
-- VS2026、MSVC v145、`Debug | x64` 全解决方案构建成功；
-- 完整编辑器在 Intel Iris Xe/OpenGL 4.6 下完成 Terrain、Skybox、Renderer2D、Tone Mapping 和 Compute Shader 初始化并稳定运行 8 秒；
-- `git diff --check` 通过。
-
-### 资产审计发现
-
-当前 `GlimmerEditor-CyouBranch/assets/AssetRegistry.yaml` 包含多个 Model Handle，但新检出中缺少对应的 Wavefront `.obj` 文件。根因是 Visual Studio 通用忽略规则 `*.obj` 同时误伤了模型资源。
-
-`.gitignore` 已增加 `!**/assets/**/*.obj`，今后恢复或新增的模型可以正常进入 Git。当前缺失模型仍需从原设备、远程历史或备份找回；RenderQueue 对这类失效 Handle 会安全跳过并计入统计。
-
-### 当前边界与下一步
-
-1. 当前只处理不透明队列，没有 BlendMode、透明分类或反向距离排序；
-2. Opaque Queue 已支持严格兼容的 Instancing Batch，不同最终材质状态不会错误合并；
-3. MaterialInstance 已有 version/Dirty 与最终属性缓存；
-4. 下一主线是建立 AlphaMode 和独立 Transparent RenderQueue。
+最初的真实 OpenGL 宿主用两种 EntityID 顺序提交三个相同模型，两次都得到 3 个 RenderItem，Shader Bind 从 3 降到 1，Texture Bind 从 3 降到 1，并安全跳过一个无效 Handle。后续 Instancing Lab 把三个完全兼容的模型收成一次 Draw；加入 Roughness Override 后拆为两次 Draw，说明优化没有跨过材质兼容边界。
 
 ## 项目工作文档同步约定
 
-为保证不同设备和不同 Codex 会话读取到一致的项目状态，仓库使用三份职责互补的工作文档：
+项目功能多起来以后，单靠 README 很快就会遇到一个问题：开发过程、当前架构和下一步计划混在一起，隔几天再看，很难判断某段话到底是现状还是旧设想。为此，仓库把长期信息拆到三份文档中，并在根目录 `AGENTS.md` 固定了每次任务的读取与收尾规则。
 
-| 文档 | 负责内容 |
+| 文档 | 保存什么 |
 | --- | --- |
-| `Documents/PROJECT_STATUS.md` | 当前主线、后续任务、完成里程碑、验收证据与技术债 |
-| `ARCHITECTURE.md` | 当前已经落地的模块职责、依赖关系、生命周期、数据流与实现边界 |
-| `README.md` | 功能演进、使用和维护方式、实现笔记、验证结果与知识库 |
+| `Documents/PROJECT_STATUS.md` | 唯一当前主线、验收条件、完成记录、优先级和技术债 |
+| `ARCHITECTURE.md` | 已经落地的模块职责、所有权、依赖、数据流和边界 |
+| `README.md` | 功能用途、开发思路、操作方式、验证记录和踩坑笔记 |
 
-每次完成代码、资源、构建或工作流任务时，都要同步审查这三份文档：
+这三个文件解决的问题不同。排期变化只改 PROJECT_STATUS；代码改变模块关系时才改 ARCHITECTURE；用户或开发者能感知到的行为变化写进 README。计划中的结构不能提前写成架构事实，已经完成的工作也不能继续挂在当前主线里。
 
-1. 将任务结果和验证证据写入 `PROJECT_STATUS.md`，并保持“当前主线”只有一个；
-2. 如果模块职责、依赖或跨层数据流发生变化，同步修改 `ARCHITECTURE.md`，且只记录已经实现的事实；
-3. 如果功能行为、使用方式或维护流程发生变化，在本节上方、`## KB` 之前新增或更新相应 README 功能章节；
-4. 没有内容变化的文档无需制造无意义修改，但必须确认它仍与源码和另外两份文档一致；
-5. 三份文档发生冲突时，以当前源码为准，并在同一任务中完成修正。
+每项任务结束前都要复核三份文档。没有事实变化的文件保持原样，但要确认它与源码以及另外两份文档没有冲突。真有冲突时以源码为准，当次就修正，避免把过期上下文带到下一台设备或下一次会话。
+
+这套约定看起来像额外步骤，实际省掉了大量重新考古的时间。对应制度建立时，三份文档的职责和触发条件做过交叉检查，根 `AGENTS.md` 也同步加入了执行规则。
 
 ## 生态系统路线整合
 
-原独立的“程序化地形与环境模拟路线图”已经按文档职责拆分并融合：可执行阶段、依赖顺序和验收条件进入 `Documents/PROJECT_STATUS.md`；已经落地的模块职责和长期架构边界进入 `ARCHITECTURE.md`；本 README 继续记录用户可见行为、实现过程和验证方式。后续不再维护并行路线文件，避免 M0/M1 等已完成事项再次被误当作下一步。
+程序化地形与环境模拟最初有一份独立路线图。随着 HeightMap、材质、渲染队列和水文模拟陆续完成，那份文件开始同时承担计划、实现说明和历史记录，已经完成的 M0/M1 也容易被误读成待办。后来把路线拆回三文档体系，不再维护第二份平行计划。
 
-当前可作为后续生态建设基础的能力包括：
+### 路线放在哪里
 
-- TerrainComponent、TerrainRuntime、TerrainRenderer 与外部/程序化 HeightMap；
-- Graphics/Compute Shader 热重载、SimulationGrid、GPU Ping-Pong 和数据读回；
-- Material/MaterialInstance、基础 Cook–Torrance PBR、Light UBO；
-- HDR Scene Buffer、ACES Tone Mapping、TextureCube、SkyLight 与可见天空盒；
-- UUID、Scene Copy、场景序列化、Edit/Play 隔离、SelectionContext 和 Undo/Redo 基础。
+可执行阶段、依赖顺序和验收条件统一进入 `Documents/PROJECT_STATUS.md`；模块已经怎样连接写入 `ARCHITECTURE.md`；README 继续保留每项能力的开发过程和使用边界。当前主线以 PROJECT_STATUS 中唯一的 `当前主线` 为准，README 章节顺序只反映建设历史，不承担排期。
 
-未来每个阶段除自身验收外，还遵守以下公共验证约束：
+截至当前状态，地形链已经走过程序化生成、派生图、Authoring Erosion、四层 TerrainMaterial、Chunk LOD、阴影、运行时水文侵蚀和 CPU/GPU 气候场。P14 正在把气候结果接到 Terrain Material Weight 与植被闭环。这里不再复制完整任务表，因为复制一份很快就会产生两种答案。
 
-1. 使用独立 Lab 场景验证，不向默认编辑场景永久写入测试实体；
-2. 程序化生成在相同 Seed 和参数下可复现，只在 Dirty 或显式请求时 Dispatch；
-3. Compute Pass 不得无保护地读写同一纹理，结果必须无 NaN/Inf；
-4. 水流、侵蚀和气候模拟使用固定时间步，保持状态非负，并记录质量守恒误差；
-5. GPU Runtime 和派生缓存不写入场景文件，场景只保存业务参数与 AssetHandle；
-6. 根据改动范围验证构建、编辑器首帧、场景保存/重载、Edit → Play → Stop、Undo → Redo 和 `git diff --check`；
-7. 构建完成后保留 `bin` 与增量缓存，除非用户明确要求清理。
+### 沿用至今的工程约束
+
+- 同一 Seed 与参数必须得到可复现的程序化结果，生成只由 Dirty 或显式请求触发；
+- Compute Pass 使用明确的 Ping-Pong 所有权，不在同一资源上无保护读写；
+- 水文和气候按固定时间步推进，状态保持非负，并通过显式 Readback 检查质量预算；
+- GPU Runtime、派生纹理和模拟缓存不进入 Scene YAML，场景只保存重建所需参数与 AssetHandle；
+- 调试场景放进隔离 Lab，不把测试实体写入默认 Editor Scene；
+- 验证按改动范围覆盖无窗口回归、真实 GPU Lab、保存往返、Edit/Play 隔离与差异检查。
+
+有些约束是踩过坑以后留下的。比如每帧 GPU Readback 会把异步 Compute 重新变成同步流程，Runtime Height 若偷偷写回场景又会混淆 Authoring 与 Play。把这些限制放进共同路线，比在各个模块里重复解释更稳妥。
 
 ## 3D Instancing 与 MaterialInstance 缓存
 
-在已有 Opaque RenderQueue 状态排序之上，Renderer3D 现在可以把兼容的重复模型合并为实例化绘制。目标不是盲目按模型名合批，而是保证 Mesh、Shader、纹理和最终材质参数完全一致时才共享一次 DrawCall。
+Opaque RenderQueue 先解决了排序和重复绑定，DrawCall 数量却没有下降：三个完全相同的模型仍要画三次。Instancing 的目标很具体，只有 Mesh、Shader、纹理和最终材质状态完全一致的项才共享 Draw，其余情况宁可逐项执行。
 
-### 实例输入与渲染接口
+### 实例输入契约
 
-`BufferElement` 新增 `PerVertex / PerInstance` 输入频率。OpenGL VertexArray 不再让每个 VertexBuffer 从 attribute 0 重新开始，而是持续分配位置；Mat3/Mat4 会拆成多个列属性，实例元素使用 `glVertexAttribDivisor(..., 1)`。
-
-公共 `RendererAPI` / `RenderCommand` 增加 `DrawIndexedInstanced`，OpenGL 后端封装 `glDrawElementsInstanced`。Renderer3D 维护最多 1024 项的动态 Instance Buffer，每项包含：
+`BufferLayout` 为每个元素记录 `PerVertex` 或 `PerInstance`。OpenGL VertexArray 连续分配 Attribute Location，矩阵拆成列属性；实例数据通过 `glVertexAttribDivisor(..., 1)` 每个实例推进一次。
 
 ```cpp
 struct InstanceData
@@ -4784,804 +3262,323 @@ struct InstanceData
 };
 ```
 
-PBRModel Shader 使用 location 4–7 接收实例矩阵，location 8 接收 EntityID。`u_UseInstancing` 在实例和普通绘制路径间切换，因此单物体、不同材质拆批和鼠标拾取仍共用同一 Shader。Shader 在初次链接及热重载后检查这三个输入；不满足契约的 Shader 不会报错或强行实例化，而是自动逐项 DrawIndexed。
+PBRModel 使用 location 4 到 7 接收 Transform，location 8 接收 EntityID。`u_UseInstancing` 在实例路径和普通路径之间切换，所以 Viewport 拾取仍能得到每个实例自己的 EntityID。Shader 在链接和热重载后检查 `a_InstanceTransform`、`a_InstanceEntityData` 与 `u_UseInstancing`；缺少任一符号就逐项 `DrawIndexed`，不会强行套用错误布局。
 
-### 严格兼容合批
+公共 RendererAPI 提供 `DrawIndexedInstanced`，OpenGL 后端落到 `glDrawElementsInstanced`。Renderer3D 的动态 Instance Buffer 单次容纳 1024 项，更大的兼容批次会按 1024 自动分块。
 
-Opaque Queue 的排序键加入最终 MaterialProperties 的浮点位模式。连续 RenderItem 只有同时满足以下条件才会合批：
+### 合批边界
 
-- Mesh、Shader 和实际绑定纹理相同；
-- BaseColor、BaseColorTexture、TilingFactor、Metallic、Roughness 完全相同；
-- 是否使用 BaseColor Texture 的状态相同。
+当前兼容判断比较 Shader、Mesh、六组实际纹理、完整最终 `MaterialProperties` 和纹理存在标记。六组纹理包括 BaseColor、Normal、AO、Emissive，以及模型导入的 Metallic 与 Roughness。实体即使引用同一份 `.glmat`，只要 Override 合并后的结果不同就会拆批；两种 Override 写法得到同一最终状态时则可以合并。
 
-因此两个实体即使引用同一 `.glmat`，只要 Override 的最终结果不同就会拆批；不同 Override 写法若最终状态完全一致则可以安全合并。超过 1024 项的 Batch 自动拆成多个实例 DrawCall。
+透明项不进入这条实例化路径。Opaque 与 Mask 可以合批，Mask 的 Base Alpha、纹理、Tiling 或 Cutoff 不同都会拆开。自定义 Shader 若没有实例输入契约，也会保留正确的普通 Draw，只是拿不到 DrawCall 优化。
 
 ### MaterialInstance 缓存
 
-Material 和 MaterialOverrides 增加运行期 version/Dirty。Inspector 修改共享材质或实体 Override 时会推进版本。Renderer3D 使用 `(EntityID, MaterialHandle)` 缓存最终 ShaderHandle 和 MaterialProperties，并保存完整 MaterialState、Overrides 和最后使用帧：
+重复模型每帧重新合并材质也有一笔 CPU 成本。Renderer3D 因此用 `(EntityID, MaterialHandle)` 缓存 ShaderHandle 与最终属性，并保留基础 `MaterialState`、完整 Overrides、版本和最后使用帧。
 
-- 基础材质和 Overrides 都未变化时直接命中；
-- 任一最终输入变化时重新解析 MaterialInstance；
-- 每次仍比较完整状态，保证 Undo/Redo 恢复旧版本号或遗漏 Dirty 时不会使用过期缓存；
-- 120 帧未使用的项自动回收。
+命中判断会比较完整状态，version 只作为运行期变更信息。这样 Undo/Redo 恢复旧版本号，或某条写入路径漏掉 Dirty 时，只要内容不同仍会重新解析。缓存项超过 120 帧未使用后在 `EndScene()` 回收，不让临时实体永久占用表。
 
-Stats 面板新增 Batch/Instance Count、Instanced/Individual Draws、Saved Draws 和 Material Cache Hit/Miss，可直接观察重复模型带来的收益。
+DebugPanel 的 Renderer3D 统计会显示 BatchCount、InstanceCount、Instanced/Individual Draw、SavedDrawCalls 和 Material Cache Hit/Miss。它们比单看 FPS 更容易判断合批是否真的发生。
 
-### 验证结果
+### 验证记录
 
-- 临时真实 OpenGL 场景提交 3 个相同 Cube/DefaultPBR：`3 Items → 1 Instanced Draw`，节省 2 次 DrawCall；
-- 第三个实体启用不同 Roughness Override：`3 Items → 2 Draws`，证明差异材质会拆批；
-- 再加入 2 个使用不兼容 Phong Shader 的模型：`5 Items → 4 Draws`，其中兼容的两个 Cube 合为 1 Draw，Phong 两项逐个回退；
-- PBR 实例 Transform/EntityID Shader 完成真实驱动编译和运行，最终无测试注入编辑器稳定运行 8 秒；
-- VS2026、v145、`Debug | x64` 全解决方案构建成功；相同命令二次增量构建约 3 秒且未重新编译源码；重新运行 VS2026 Premake 后，既有 SPIRV-Cross samples/tests 排除规则正确进入工程；
-- `git diff --check` 通过；测试实体和日志已移除，`bin` 与 `bin-int` 增量缓存保留。
+真实 OpenGL 临时场景中，三个相同 Cube 从 3 Draw 收到 1 个 Instanced Draw；给其中一个实体增加 Roughness Override 后变成 2 Draw。再加入两个不支持实例契约的 Phong 实体，最终是 5 Items / 4 Draws，两个 Phong 项逐个回退。实例 Transform 与 EntityID 经过真实驱动编译和运行验证，VS2026 `Debug | x64` 全解决方案构建通过；对应提交为 `9053c6a`。
 
 ## Transparent RenderQueue 与材质 AlphaMode
 
-在 Opaque RenderQueue 和 3D Instancing 稳定后，模型材质现在可以明确选择 `Opaque`、`Mask` 或 `Blend`。RGBA 图片不再因为所有模型共用不透明执行路径而把全透明区域写入深度和 EntityID；完整编辑器会在 Skybox 之后单独绘制 Blend 对象。
+RGBA 纹理接入模型后，所有材质继续走不透明路径会留下很直观的错误：透明区域照样写深度和 EntityID，后面的物体也被挡住。为此，Material 明确区分 `Opaque`、`Mask` 和 `Blend`，Renderer3D 则把需要混合的项留到场景后段执行。
 
-### 材质字段与编辑方式
-
-`.glmat` 新增两个可选字段：
+### 三种 Alpha 行为
 
 ```yaml
 Material:
-  Shader: 15365846500528399802
-  BaseColor: [1, 1, 1, 1]
-  BaseColorTexture: 9195328290163695800
-  TilingFactor: 1
-  Metallic: 0
-  Roughness: 0.5
-  AlphaMode: Blend
+  AlphaMode: Mask
   AlphaCutoff: 0.5
 ```
 
-- `Opaque`：忽略 BaseColor/Texture 的 Alpha 分类，参加状态排序和 3D Instancing；
-- `Mask`：有效 Alpha 小于 AlphaCutoff 时丢弃片元，保留不透明深度写入；
-- `Blend`：进入独立透明队列，开启标准 Alpha 混合、深度测试，关闭深度写入。
+- `Opaque` 进入状态排序与 Instancing，保持深度写入；
+- `Mask` 计算有效 Alpha，低于 Cutoff 的片元直接丢弃，其余部分仍按不透明物体处理；
+- `Blend` 进入透明队列，开启 `SrcAlpha / OneMinusSrcAlpha` 混合，保留深度测试并关闭深度写入。
 
-旧 `.glmat` 没有这两个字段时按 `Opaque` 和 `0.5` 加载。共享 Material Inspector 可以直接修改 Alpha Mode/Cutoff；实体 MaterialComponent 也可以分别启用这两个 Override。两种入口都沿用完整状态 Undo/Redo，场景 YAML 会保存 Override Mask 和对应值。
+有效 Alpha 是 `BaseColor.a × BaseColorTexture.a`。Mask 被丢弃的位置不会写颜色、深度或 EntityID；Blend 在 Alpha 小于等于 `1/255` 时也会丢弃，避免肉眼不可见的片元抢走 Viewport 拾取结果。旧 `.glmat` 没有新字段时按 `Opaque / 0.5` 加载。
 
-### 双队列与 Pass 顺序
+AlphaMode 和 AlphaCutoff 同时存在于共享 Material 与实体 Overrides，Inspector 编辑、Undo/Redo、MaterialInstance 合并和 Scene YAML 往返使用同一字段。自定义 3D Shader 若要声明支持这套行为，需要消费 `u_AlphaMode` 与 `u_AlphaCutoff`；Renderer 不会替 Shader 自动补上裁剪代码。
 
-`Renderer3D::SubmitModel` 解析最终 MaterialInstance 后按 AlphaMode 分类：
+### 为什么要拆队列
 
-```text
-SubmitModel
-  ├─ Opaque / Mask → FlushOpaqueAndMask
-  │                   └─ 状态排序与兼容 Instancing
-  └─ Blend          → TransparentQueue
-                      └─ Skybox 后由 EndScene 远到近普通绘制
-```
-
-完整编辑器的场景 Pass 顺序为：
+`SubmitModel()` 先解析最终 MaterialInstance。Opaque 与 Mask 进入同一个状态排序队列，可以按严格材质条件实例化；Blend 进入 TransparentQueue，按实体原点到相机的平方距离由远到近稳定排序，并逐项 Draw。
 
 ```text
-Opaque/Mask Models → Terrain → Skybox → Sprite Batch → Transparent Models
+Opaque / Mask Models
+  -> Terrain
+  -> Skybox
+  -> Sprite Batch
+  -> Transparent Models
 ```
 
-完整编辑器调用 Scene Update 时延迟整个 Sprite Pass：Scene 只保存 ViewProjection 和待执行标记，不开始 Batch 或遍历 Sprite；EditorLayer 绘制 Skybox 后再调用 `Scene::FlushSpritePass`，此时才执行 Renderer2D 的 Begin、Sprite 遍历、Submit 和 End。这样纹理槽/索引容量触发的自动 Flush 也不可能发生在 Skybox 前。RenderDoc 曾确认旧顺序是 Sprite Draw 早于 Skybox，透明像素因此先与 Clear Color 混合；新的调用链让 Sprite Alpha 直接与 Skybox 颜色混合。没有 Skybox 编排的旧宿主继续使用默认的立即绘制行为。
+Sprite Pass 曾经在 Skybox 前实际 Flush，透明像素先和 Clear Color 混合，随后天空盒又覆盖背景。RenderDoc 抓帧定位到顺序问题后，完整编辑器改为让 Scene 暂存 Sprite Pass，等 Skybox 绘制完成再调用 `FlushSpritePass()`。不负责 Skybox 编排的旧宿主仍使用立即执行的默认路径。
 
-TransparentQueue 以实体 Transform 原点到相机的平方距离由远到近稳定排序；距离相同时以 RenderKey 保证确定顺序。透明对象首版不参与 Instancing，避免把需要排序的实例错误合并。结束透明 Pass 后会恢复 Blend 禁用、DepthWrite 启用、DepthFunc Less 和标准 BlendFunc。
+透明 Pass 结束会恢复 Blend 禁用、DepthWrite 启用和 `DepthFunc::Less`。Renderer2D、Skybox 和 Renderer3D 各自声明并恢复所需状态，不再依赖上一段渲染碰巧留下正确的 OpenGL 配置。
 
-### Shader、Alpha 与拾取约定
+### 当前边界与验证
 
-PBRModel 使用以下有效 Alpha：
+透明排序仍使用实体原点，没有按 Mesh Bounds 中心计算；Transparent 不参与 Instancing，也没有双面材质或 OIT。Sprite 与 3D Blend 属于两套队列，当前没有跨队列距离排序。阴影侧只接收 Opaque 与 Mask，Blend 默认跳过，避免半透明表面投出整块实心阴影。
 
-```text
-effectiveAlpha = BaseColor.a × BaseColorTexture.a
-```
-
-- Mask 在 `effectiveAlpha < AlphaCutoff` 时执行 `discard`，被裁剪区域不写颜色、深度或 EntityID；
-- Blend 在 `effectiveAlpha <= 1/255` 时执行 `discard`，避免完全透明像素覆盖拾取附件；
-- 其余 Blend 片元按远到近绘制，较近可见片元最终写入 EntityID；
-- 自定义 3D Shader 若要完整支持 AlphaMode，需要消费 `u_AlphaMode` 和 `u_AlphaCutoff` 并遵守相同约定。
-
-RendererAPI/RenderCommand 提供 Blend Enable、Blend Function、Depth Write 和 Depth Function 控制。OpenGL 初始化默认禁用混合并启用深度写入；Renderer2D 在自己的 Batch 内显式启用并恢复 Alpha 混合，Skybox 使用只读深度，Transparent 使用只读深度加 Alpha 混合，各阶段均恢复规范默认状态。
-
-### 统计与验证
-
-Renderer3D 统计面板新增 Opaque、Mask、Transparent Item 数和 Transparent DrawCall。真实 OpenGL 烟测使用 `GlimmerEditor-CyouBranch/assets/textures/balatro.png`，该 RGBA 图片实际包含 0～255 的 Alpha：
-
-- 旧材质缺少 Alpha 字段时成功按 Opaque/0.5 加载；
-- 新材质字段完成保存、重载，实体 AlphaMode/AlphaCutoff Override 完成场景 YAML 往返；
-- 2 个相同 Opaque、1 个 Mask、2 个不同距离 Blend 共得到 `5 Items / 4 Draws`；
-- 两个 Opaque 合并为 1 次 Instanced Draw，两个 Blend 保持 2 次普通 Draw；
-- PBRModel、Skybox、Terrain 和 Compute Shader 在 Intel Iris Xe / OpenGL 4.6 下完成真实驱动编译；
-- VS2026、v145、`Debug | x64` 全解决方案构建成功；移除测试注入后完整编辑器稳定运行 8 秒。
-
-当前边界：透明排序使用实体原点而不是 Mesh Bounds 中心；尚不支持透明 Instancing、双面材质、Order Independent Transparency 或自定义 Shader 自动注入 Alpha 逻辑。
+真实 OpenGL 烟测使用带 0 到 255 Alpha 的 `balatro.png`：2 个相同 Opaque、1 个 Mask、2 个不同距离 Blend 得到 `5 Items / 4 Draws`，其中 Opaque 合为一次 Instanced Draw，两个 Blend 各画一次。旧材质兼容、新字段保存重载和实体 Override YAML 往返也在同一轮通过。
 
 ## 可扩展 Debug 面板与 GPU Instancing Lab
 
-当前完整编辑器在 `Window → Debug` 提供独立诊断窗口。DebugPanel 是后续渲染、资源、Scene 和 Terrain 测试的统一宿主；首版包含 Renderer3D Overview 和 Rendering 页签下的 GPU Instancing Lab，测试逻辑由独立 `InstancingLabTool` 管理，不写入 Renderer3D 或默认编辑场景。
+渲染优化只看一帧日志很难判断对错，往默认场景塞几千个测试实体又会污染项目。`Window -> Debug` 因此成为编辑器里的诊断入口：面板展示统计，独立 Tool 创建可控的测试场景，正式 Renderer 仍走正常代码路径。
 
-### 临时场景边界
+### 临时场景的所有权
 
-点击 Generate 后，Lab 创建一个只存在于内存中的 Scene，并通过 EditorLayer 的受控回调临时切换 `m_ActiveScene`：
-
-```text
-EditorScene 保持引用
-  ↓
-InstancingLabTool 创建临时 Scene 和真实 ECS 实体
-  ↓
-EditorLayer 将 ActiveScene 指向 Lab
-  ↓
-Scene → Renderer3D 走正常收集、材质缓存、排序和绘制链路
-  ↓
-Exit / New / Open / Play / Editor Detach
-  ↓
-释放 Lab Scene，恢复 EditorScene
-```
-
-Lab 激活期间不会记录 Undo/Redo，并禁止场景保存；Scene Hierarchy 只显示 Lab 提示，不逐行枚举大量测试实体，避免 ImGui CPU 开销干扰 Renderer3D 压力结果。Debug 面板关闭只隐藏窗口，不隐式销毁测试；明确退出 Lab 或触发生命周期清理后才释放临时 Scene。
-
-### Instancing 预设
-
-- **Maximum Instancing**：全部实体强制 Opaque，并共享 Model、Material 和最终参数，验证最大合批以及 1024 实例分块；
-- **Material Split**：实体交替覆盖 Roughness 0.2/0.8，排序后形成两个兼容批次组，验证 MaterialOverrides 拆批；
-- **Transparent Comparison**：全部实体覆盖为 Blend，验证 TransparentQueue 保持普通 Draw、Instanced Draw 为 0。
-
-Model 和 Material 默认使用 `assets/models/geos/Cube.obj` 与 `assets/materials/DefaultPBR.glmat`，也可以从 Content Browser 拖入 Debug 面板替换。Count XYZ、Spacing 和 Origin 控制三维网格；总实体数有 100000 的安全上限。默认 `50×1×50` 生成 2500 个实体，单 Submesh 最大合批的理论值为：
+Instancing Lab 会创建真实 ECS Scene，再通过 EditorLayer 回调临时替换 `m_ActiveScene`。`m_EditorScene` 始终保留，退出 Lab、切换场景、进入 Play 或关闭编辑器时都会恢复。Lab 激活期间禁用 CommandHistory 和场景保存，Hierarchy 只显示提示，不枚举成千上万个实体干扰 CPU 统计。
 
 ```text
-2500 Entities / Items
-→ 1024 + 1024 + 452
-→ 3 Instanced Draw Calls
-→ 2497 Saved Draw Calls
+Editor Scene 保留
+  -> Tool 创建临时 Scene
+  -> EditorLayer 切换 Active Scene 与面板上下文
+  -> Scene / Renderer3D 正常提交和绘制
+  -> Exit 时释放临时 Scene，恢复 Editor Scene
 ```
 
-### 理论值与实际值
+关闭 Debug 窗口只隐藏面板，不会偷偷销毁正在观察的场景。Instancing Lab 与 PBR Material Lab 互斥，同一时刻只有一个 Tool 可以占用临时场景边界。
 
-Lab 按实体数、Model Submesh 数、预设分组和每批 1024 上限计算理论统计，并与当前帧 `Renderer3D::Statistics` 对照：
+### Instancing Lab 怎么用
 
-- Submitted Items；
-- Draw Calls；
-- Instanced Draw Calls；
-- Individual Draw Calls；
-- Instance Count；
-- Material Cache Hit/Miss 与 Saved Draw Calls。
+默认网格是 `50×1×50`，共 2500 个 Cube，实体上限为 100000。Count、Spacing 和 Origin 可以调整，Model 与 Material 也能从 Content Browser 拖入。常用预设有三种：
 
-生成后首个尚未完成渲染的 UI 帧显示 Pending；当前帧 Items 匹配后，全部统计一致且没有 Skipped Model 时显示 PASS，否则显示 FAIL。Select First/Middle/Last 可选择代表实体，并继续使用整数 EntityID 附件验证同一次 Instanced Draw 中的拾取差异。
+- Maximum Instancing 让所有实体共享最终状态，用来观察 1024 实例分块；
+- Material Split 交替设置两档 Roughness，预期拆成两个材质组；
+- Transparent Comparison 把全部实体设为 Blend，预期 Instanced Draw 为 0。
 
-### 实现与验证
+2500 个单 Submesh 实体在 Maximum Instancing 下会拆成 `1024 + 1024 + 452`，理论值是 3 个 Instanced Draw，节省 2497 次 Draw。Tool 会按实体数、Submesh 数、预设和分块上限计算预期 Items、Draws 与 InstanceCount，再逐帧对比 Renderer3D Statistics。数据尚未对应新场景时显示 Pending，一致且没有 Skipped Model 时才显示 PASS。
 
-DebugPanel 只负责窗口和分类，`InstancingLabTool` 拥有参数、临时 Scene、理论统计与代表 UUID；EditorLayer 只负责 ActiveScene、Hierarchy/Inspector Context 和 CommandHistory 边界。后续类似测试应作为独立 Tool 加入 Debug 面板，而不是扩张 EditorLayer 或把测试分支写进 Renderer3D。
+首个、中间和末尾代表实体可以直接选中，用来检查同一次 Instanced Draw 写出的不同 EntityID。这个小功能很有用，它能抓到画面看似正确、拾取却全部落到同一实体的实例数据错误。
 
-重新运行 VS2026 Premake 后，新 Debug/Panel 源文件已加入工程；VS2026、v145、`Debug | x64` 全解决方案构建成功，完整编辑器稳定运行 8 秒，`git diff --check` 通过。
+### 后续接入的诊断工具
+
+DebugPanel 现在还包含 PBR Material Lab、Terrain Overview 和 Terrain Sampling Benchmark。InstancingLabTool 后来又承载 CSM 性能与视觉验证：自动基准使用固定 2500 实体，在 9 组 Cascade/Resolution 配置间轮换，每组预热 15 帧并收集 30 个新的 GPU Timer 样本；视觉预设则生成 Opaque、Mask、Blend 投影对照和级联着色场景。
+
+这些扩展继续遵守原来的边界。Tool 拥有参数、临时 Scene 和预期统计；DebugPanel 只负责分类与窗口；EditorLayer 只处理场景切换和生命周期。首版 Instancing Lab 验收时重新生成了 VS2026 工程，全解决方案构建通过，完整编辑器稳定运行 8 秒。
 
 ## PBR 材质纹理通道扩展与 Material Lab
 
-基础 Cook–Torrance PBR 原本只有 BaseColor Texture 与 Metallic/Roughness 标量。本阶段补齐模型材质常用的 Normal、AO 和 Emissive 纹理，并把同一字段契约贯通共享 `.glmat`、实体 MaterialOverrides、Inspector、Scene YAML、MaterialInstance 缓存、Renderer3D 排序/合批和 PBRModel Shader。
+基础 Cook-Torrance PBR 最初只有 BaseColor 纹理，金属度和粗糙度则是两个标量。Normal、AO 和 Emissive 加入后，改动贯穿 `.glmat`、实体 Overrides、Inspector、Scene YAML、MaterialInstance、RenderQueue 与 Shader；少改一处，保存往返或合批就会悄悄丢字段。
 
-### 材质字段与默认行为
+### 字段与颜色空间
 
-```cpp
-struct MaterialProperties
-{
-    glm::vec4 BaseColor{ 1.0f };
-    AssetHandle BaseColorTexture{ 0 };
-    AssetHandle NormalTexture{ 0 };
-    AssetHandle AOTexture{ 0 };
-    AssetHandle EmissiveTexture{ 0 };
+MaterialProperties 当前提供 BaseColor、Normal、AO、Emissive 四个资产纹理 Handle，并配有 NormalScale、AOStrength、EmissiveColor 和 EmissiveStrength。旧文件缺少这些字段时使用无纹理、Normal/AO 强度 1、Emissive 强度 0，因此旧材质加载后不会自行发光或改变表面方向。
 
-    float Metallic = 0.0f;
-    float Roughness = 0.5f;
-    float NormalScale = 1.0f;
-    float AOStrength = 1.0f;
-    glm::vec3 EmissiveColor{ 1.0f };
-    float EmissiveStrength = 0.0f;
-};
-```
+纹理元数据按内容解释：
 
-旧 `.glmat` 和旧 Scene 没有这些字段时仍可加载：新增 Texture Handle 默认为 0，Normal/AO 强度默认为 1，EmissiveStrength 默认为 0，因此旧材质不会自行发光，也不会改变原有法线和环境光结果。Metallic/Roughness 当前仍是标量；独立贴图或 ORM 打包通道尚未实现。
+| 通道 | 颜色空间 | 语义 |
+| --- | --- | --- |
+| BaseColor | sRGB | Color |
+| Normal | Linear | Normal |
+| AO | Linear | Data/Height |
+| Emissive | sRGB | Color |
 
-### 颜色空间契约
+BaseColor 与 Emissive 是颜色输入，采样后进入线性 HDR 计算；Normal 和 AO 保存数值，不能执行 Gamma 解码。Inspector 拖放时会写入相应元数据，元数据变化会清除该 Texture Handle 的 GPU 缓存。Renderer 只读取语义兼容的纹理，不在 Draw 中改写 AssetRegistry。
 
-| 通道 | TextureColorSpace | 语义 | 原因 |
-| --- | --- | --- | --- |
-| BaseColor | sRGB | Color | 采样时由 GPU 解码为线性颜色，再进入 BRDF |
-| Normal | Linear | Normal | RGB 保存方向数据，不能执行 Gamma 解码 |
-| AO | Linear | Data/Height | 单通道遮蔽系数属于数值数据 |
-| Emissive | sRGB | Color | 发光贴图是颜色输入，解码后在线性 HDR 空间累加 |
+### Shader 里的处理
 
-共享 Material Inspector 和实体 Override Inspector 在贴图拖放时写入对应元数据；元数据变化会使 AssetManager 清除该 Texture Handle 的 GPU 缓存。Renderer3D 绘制时只读取与 slot 契约兼容的纹理，不在渲染循环中修改 AssetRegistry，避免共享资产状态因 Draw Call 产生隐式变化。
+四个材质纹理固定占用纹理单元 0 到 3。缺图时绑定白纹理保证槽位有效，同时使用独立的 `u_Has*Texture` 阻止错误采样。Renderer3D 的排序和兼容判断包含纹理 GPU ID、存在状态与完整最终材质参数，所以贴图或强度 Override 不同的实体会拆批。
 
-### Renderer3D 纹理与合批契约
+Normal Map 通过 World Normal 与 World Tangent 构造 TBN。切线先做 Gram-Schmidt 正交化，模型导入器对退化 UV 和零切线提供稳定正交基回退，避免出现 NaN。当前 Tangent 仍是 `vec3`，镜像 UV 所需的 Handedness 还没有保存。
 
-四类纹理使用固定纹理单元：
+AO 只调制环境光和 IBL，不重复压暗方向光、点光等直接照明。Emissive 不进入 BRDF，它把 sRGB 解码后的纹理乘以颜色与强度，直接加到线性 HDR Radiance，最后再经过 Exposure、Bloom 和 Tone Mapping。
 
-```text
-slot 0 → BaseColor
-slot 1 → Normal
-slot 2 → AO
-slot 3 → Emissive
-```
-
-Renderer3D 将四个 Texture GPU ID、纹理存在状态以及所有最终材质参数写入 RenderKey/MaterialSortKey。只有 Mesh、Shader、四类纹理和最终 MaterialProperties 全部相同的连续项才能进入同一个 Opaque Instancing Batch；任一实体启用不同贴图或强度 Override 都会正确拆批。缺少纹理时绑定白纹理作为安全占位，但 `u_Has*Texture` 会阻止 Shader 采样该 slot。
-
-### Normal、AO 与 Emissive 计算
-
-顶点阶段向片元阶段传递 World Normal 与 World Tangent。片元阶段先执行 Gram–Schmidt 正交化并构造 TBN，将法线贴图从切线空间转换到世界空间：
-
-```glsl
-vec3 tangent = normalize(v_WorldTangent
-    - normal * dot(v_WorldTangent, normal));
-vec3 bitangent = normalize(cross(normal, tangent));
-vec3 tangentNormal = texture(u_NormalTexture, uv).xyz * 2.0 - 1.0;
-tangentNormal.xy *= u_NormalScale;
-normal = normalize(mat3(tangent, bitangent, normal) * tangentNormal);
-```
-
-模型加载器对退化 UV 和零切线增加稳定正交基回退，避免 `normalize(vec3(0))` 产生 NaN。当前 Tangent 仍是 `vec3`，镜像 UV 所需的 Handedness 留待后续扩展。
-
-AO 只调制尚未包含遮挡信息的环境项，不重复压暗方向光和点光源的直接光：
-
-```glsl
-float ao = mix(1.0, texture(u_AOTexture, uv).r, u_AOStrength);
-vec3 result = albedo * ambientColor * ambientIntensity * ao;
-```
-
-Emissive 不参与 BRDF，也不受光源方向影响；EmissiveColor 与 sRGB 纹理解码后直接加入线性 HDR Radiance，再统一经过 Exposure 与 ACES Tone Mapping：
-
-```glsl
-result += linearEmissiveColor * emissiveSample * u_EmissiveStrength;
-```
-
-Opaque、Mask、Blend、透明 Alpha discard 和整数 EntityID 输出继续使用原有路径；Normal/AO/Emissive 不改变透明深度策略和拾取语义。
+共享 `.glmat` 目前仍没有 MetallicTexture、RoughnessTexture 或 ORM 字段。模型导入路径已经可以携带独立 Metallic/Roughness 运行时纹理，并在材质缺失对应来源时通过纹理单元 11/12 参与 PBR；这些纹理尚未资产化为 Material Handle，也不会自动生成 `.glmat`。
 
 ### PBR Material Lab
 
-打开 `Window → Debug → Rendering → PBR Material Lab`，点击 Generate 后会创建隔离的临时 Scene，并排生成六个 UV Sphere：
+`Window -> Debug -> Rendering` 中的 PBR Lab 会生成六个并排的 UV Sphere，分别检查 Normal、AO、Emissive、Dielectric Smooth、Metal Smooth 和 Metal Rough。球体使用真实 MaterialOverrides 与 Renderer3D 链路，面板按 Model 的 Submesh 数计算预期 RenderItem，实际数量一致且没有跳过项时显示 PASS。
 
-1. Normal Map；
-2. Ambient Occlusion；
-3. Emissive；
-4. Dielectric Smooth；
-5. Metal Smooth；
-6. Metal Rough。
-
-可以从 Content Browser 拖入 Sphere Model、Material 及三类测试纹理。数字按钮用于选择对应球体；面板会对比预期 RenderItem 与 Renderer3D 实际 `RenderedItems`，无跳过项时显示 PASS。PBR Lab 与 Instancing Lab 互斥，共享临时场景、禁止保存和退出恢复边界。
-
-自动回归可在启动编辑器前设置：
-
-```powershell
-$env:GLIMMER_PBR_LAB_AUTORUN = "1"
-```
-
-该入口会自动生成六球场景，并在系统临时目录执行两项往返验证：旧式最小 `.glmat` 加载后保存/重载全部新字段，以及包含新 MaterialOverrides Mask/Values 的 Scene YAML 保存/加载。临时文件在验证后删除。
-
-本次验证结果：Premake VS2026 生成成功；VS2026 v145 `Debug | x64` 全解决方案构建成功；自动 Lab 稳定运行 8 秒，日志记录 `PBR Material/YAML roundtrip PASS` 与 `PBR Material Lab PASS: rendered 6/6 items`，测试进程正常结束且无临时文件、日志或编辑器进程残留。
+设置 `GLIMMER_PBR_LAB_AUTORUN=1` 可在启动时自动生成场景，并在系统临时目录执行旧 `.glmat` 兼容、完整 Material 保存重载和 Scene Override YAML 往返。验证文件完成后删除，不写入项目资产。验收日志记录 `PBR Material Lab PASS: rendered 6/6 items`，VS2026 `Debug | x64` 全解决方案构建与真实 OpenGL 运行均通过。
 
 ## 无窗口回归测试与 Windows 一键验证
 
-编辑器内的 Instancing/PBR Lab 适合验证真实 OpenGL 绘制，但依赖窗口、GPU 和完整资源环境。为了让新设备拉取仓库后能够先验证数据层和构建链，本阶段增加独立的 `GlimmerRegressionTests` 控制台目标。它不创建 Application、Window 或 Renderer Context，失败时直接返回非零进程退出码。
+DebugPanel Lab 能验证真实 Shader、Framebuffer 和 DrawCall，但它依赖窗口与 GPU，新设备上的第一轮排错不该从这里开始。`GlimmerRegressionTests` 是独立 ConsoleApp，只链接可在 CPU 侧验证的引擎与编辑命令代码，不创建 Application、Window 或 OpenGL Context；断言失败直接返回非零退出码。
 
-### 当前测试范围
+### 这套测试负责什么
 
-测试文件统一创建在系统临时目录，并在进程退出时清理，不会修改 `assets` 或默认编辑场景。当前覆盖：
+测试文件通常写进系统临时目录，进程结束时清理，不修改项目资产或默认 Scene。当前覆盖的范围已经包括：
 
-- 旧式最小 `.glmat` 缺少新字段时恢复兼容默认值；
-- 完整 MaterialState 的 ShaderHandle、四类纹理、PBR 标量、Emissive 与 AlphaMode 保存/重载；
-- MaterialOverrides 只替换启用字段，并验证 Roughness、NormalScale、AOStrength、Emissive 和 AlphaCutoff 的运行时 Clamp；
-- 固定 UUID 的最小 Scene 保存/加载，验证 Tag、Transform、ModelHandle、MaterialHandle 和 Overrides Mask/Values；
-- 加载后的 `UUID → entt::entity` 索引能够通过 `FindEntityByUUID` 恢复稳定实体身份。
+- Material、TerrainMaterial 和 Scene YAML 往返，以及旧字段的兼容默认值；
+- MaterialInstance Override 合并、参数 Clamp 和稳定 UUID 查找；
+- OBJ/FBX 到 MeshSource 的 CPU 导入，Cerberus FBX 使用仓库内版本化样本；
+- Terrain 规格复制、Runtime 隔离、Preset、Chunk Layout 和 Camera Frustum Culling；
+- CommandHistory 的 Execute、Undo、Redo 状态迁移；
+- Shadow Frustum Culling 与 Environment Map 的纯数据基础；
+- Terrain 水文和气候 Runtime 的守恒、Reset、固定步与帧划分确定性。
 
-正常执行任一断言失败都会返回退出码 1。测试程序还保留显式失败入口，用于验证脚本或 CI 是否正确传播失败：
+GPU Shader 编译、纹理采样、Framebuffer、Instancing 和实际 Draw 仍交给完整编辑器与 Debug Lab。把两类测试分开后，数据层失败不会被显卡环境掩盖，渲染问题也不用硬塞进一个伪造 Context 的单元测试里。
 
-```powershell
-.\scripts\Verify-Windows.bat -SkipGenerate -SkipBuild -ForceTestFailure
-$LASTEXITCODE # 预期为 1
-```
+### Windows 一键入口
 
-### 新设备标准流程
-
-首次拉取建议直接包含全部子模块：
-
-```powershell
-git clone --recurse-submodules <repository-url>
-cd Glimmer
-```
-
-如果仓库已经拉取，但依赖目录为空：
+新设备先初始化递归子模块，然后在仓库根目录运行：
 
 ```powershell
 git submodule update --init --recursive
-```
-
-安装 Visual Studio 2026 的“使用 C++ 的桌面开发”工作负载后，在仓库根目录运行：
-
-```powershell
 .\scripts\Verify-Windows.bat
 ```
 
-脚本依次执行：
+脚本会检查子模块和 Assimp Debug 产物，缺失时补建依赖；随后运行 Premake VS2026、构建 `GlimmerEngine.slnx` 的 `Debug | x64`，最后执行测试程序。`.bat` 没有 `pause`，并原样传播 PowerShell、MSBuild 或测试进程的退出码，终端和后续 CI 都能直接判断结果。
 
-```text
-检查递归 Git 子模块
-→ 检查 Assimp Debug 生成头与静态库，缺失时自动构建
-→ vendor/bin/premake/premake5.exe vs2026
-→ 生成 GlimmerEngine.slnx 与各 vcxproj
-→ MSBuild Debug | x64 全解决方案
-→ GlimmerRegressionTests.exe
-→ 以退出码报告最终结果
-```
-
-脚本优先从 PATH 或 Visual Studio Installer 的 `vswhere.exe` 查找 MSBuild。非标准安装位置可以显式传入：
-
-```powershell
-.\scripts\Verify-Windows.bat `
-    -MSBuildPath "D:\Microsoft Visual Studio\2026\MSBuild\Current\Bin\MSBuild.exe"
-```
-
-已经生成并构建过工程时，可以只运行回归：
+已经生成并构建过工程时，可以只跑测试：
 
 ```powershell
 .\scripts\Verify-Windows.bat -SkipGenerate -SkipBuild
 ```
 
-`.bat` 不包含 `pause`，会原样返回 PowerShell/测试进程的退出码，适合本地终端和后续 CI；它同时显式使用 `ExecutionPolicy Bypass`，避免新电脑默认策略阻止仓库内验证脚本。
+`-ForceTestFailure` 会把 `--force-failure` 传给测试程序，用来确认失败码没有在脚本层丢失。测试目标禁用了 Debug 增量链接，原因是一次损坏的 `.ilk` 曾生成缺失系统导入表的 EXE；数据测试本身没错，进程却以 `0xC0000005` 提前退出，这类构建缓存问题必须和断言失败分开。
 
-VS2026 Premake 当前生成的解决方案入口是 `GlimmerEngine.slnx`。仓库中的旧 `.sln` 可能由 VS2022 或更早版本产生，不应据此判断新测试目标是否已经进入解决方案。
-
-### 与 Debug Lab 的关系
-
-无窗口测试只覆盖确定性的状态、合并、YAML 往返和编辑命令状态迁移；Shader 编译、Framebuffer、DrawCall、Instancing 和纹理语义仍由 DebugPanel Lab 或完整编辑器验证。两种测试互补，但都遵守相同隔离原则：测试实体只存在于临时 Scene，不向 `m_EditorScene` 或默认 `.glimmer` 文件永久写入。
-
-初始测试目标验证使用统一脚本完成 Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和测试执行；Terrain 生命周期与预设回归随后将正常断言扩展到 46 项并保持全部 PASS，`--force-failure` 仍返回退出码 1。
+初版一键入口有 23 项断言，Terrain 阶段扩到 46 项；P13C 验收时已达到 114 项并全部通过，当前套件还加入了气候 Runtime。历史数字保留作里程碑证据，不拿旧计数冒充今天固定不变的测试规模。
 
 ## Terrain 生命周期与 Inspector 编辑事务收口
 
-### 收口目标
+Terrain 同时有可保存配置和一大组 GPU Runtime。若复制实体时顺手共享 Runtime，两个 Scene 会指向同一套 Height、Mesh、水文或气候状态，Play 模式改一下就可能污染编辑场景。这里的规则很干脆：复制规格，丢弃 Runtime，由目标 Scene 自己重建。
 
-Terrain 的可保存配置与 GPU 运行时资源必须严格分离。实体复制、场景保存/加载、Edit → Play 或 Undo/Redo 只能传递 `TerrainSpecification`；`TerrainGenerator`、网格与高度纹理属于目标 Scene 自己的 `TerrainRuntime`，不得跨实体或跨 Scene 共享。
+### Specification 与 Runtime 的界线
 
-同时，Terrain、Light 和 Camera 的连续参数需要与 Transform、Material 保持一致：拖动时实时看到结果，释放控件后只生成一条可逆命令，而不是每帧向 Undo Stack 写入一条记录。
-
-### Terrain 复制与运行时失效
-
-`TerrainComponent` 同时定义复制构造和复制赋值，二者只复制规格并清空 Runtime：
-
-```cpp
-TerrainComponent(const TerrainComponent& other)
-    : Specification(other.Specification) {}
-
-TerrainComponent& operator=(const TerrainComponent& other)
-{
-    if (this != &other)
-    {
-        Specification = other.Specification;
-        Runtime.reset();
-    }
-    return *this;
-}
-```
-
-这一约束覆盖四条路径：
+`TerrainComponent` 保存 `TerrainSpecification` 和 `Ref<TerrainRuntime>`。复制构造与复制赋值只复制 Specification，并将 Runtime 置空。Duplicate Entity、`Scene::Copy()`、`EntitySnapshot` 和 Undo/Redo 都会经过这条语义。
 
 ```text
-Duplicate Entity ─┐
-Scene::Copy       ├─> 复制 TerrainSpecification
-EntitySnapshot    ┤   清空 TerrainRuntime
-Undo / Redo       ┘   下一次 Draw 时按需重建 GPU 资源
+TerrainSpecification
+  -> 可复制、可撤销、写入 Scene YAML
+
+TerrainRuntime
+  -> Mesh / LOD / Chunk 状态
+  -> Height 与派生纹理
+  -> Generator / Hydrology / Climate GPU 状态
+  -> 只属于当前 Scene，不序列化
 ```
 
-场景 YAML 仍只保存 `TerrainSpecification`。反序列化完成后 `Runtime` 为空，`TerrainRenderer` 根据 HeightMapResolution、MeshResolution、资源 Handle 和 Dirty 状态延迟创建或重建资源，因此保存文件中不会出现 OpenGL ID、纹理对象或生成器指针。
+`TerrainRenderer::Prepare()` 在下一次绘制时创建空 Runtime，并检查 MeshResolution、HeightMapResolution、资源 Handle 和生成版本。程序化地形按需创建 Generator；外部 HeightMap 则解析纹理并重新建立派生图。水文与气候 Runtime 也跟随 `GenerationVersion` 重建，不会继续使用旧高度对应的模拟状态。
 
-### 连续属性事务
+场景文件只保存重建所需的 TerrainSpecification，包括 Preset、Noise、Authoring 参数、HeightMap 与 Shader Handle、TerrainMaterialHandle。OpenGL ID、生成器指针、运行时 Height、Water、Sediment 和 Climate 纹理都不进入 YAML。
 
-Inspector 使用 `EditorValueTransaction<T>` 记录控件激活瞬间的完整组件值；拖动期间组件继续直接更新以提供实时预览；控件释放后，通过 `PushExecuted` 写入一条已经发生的 `ValueEditorCommand<T>`：
+### Inspector 的一次拖动
 
-```cpp
-if (ImGui::IsItemActivated())
-    transaction.Begin(valueBeforeWidget);
+Terrain 连续控件使用 `EditorValueTransaction<TerrainComponent>`：按下时保存完整 Before，拖动中实时预览，释放时把 Before/After 作为一条 `ValueEditorCommand` 压入历史。Apply、Undo 和 Redo 通过组件复制赋值恢复规格，同时让旧 Runtime 失效。
 
-if (ImGui::IsItemDeactivatedAfterEdit())
-{
-    const T before = transaction.GetBefore();
-    transaction.Reset();
+Preset、分辨率、高度、Noise、Geology 和 Authoring Erosion 参数都沿用这条事务边界。HeightMap、Compute Shader 与 TerrainMaterial 的拖放或清除属于离散命令。Light、SkyLight 和 Camera 的连续属性也复用了同一套做法。
 
-    history.PushExecuted(
-        std::make_unique<ValueEditorCommand<T>>(
-            commandName, before, valueAfterWidget, apply));
-}
-```
+`Regenerate` 只把运行时标记为 Dirty，用当前规格重新生成，不改可序列化数据，所以不会制造一条空洞的 Undo。旧 `TerrainPanel` 曾自己持有 Generator 指针与第二份 Noise 状态，但它没有接入当前 EditorLayer，后来已经删除；正式参数只由组件 Inspector 拥有。
 
-当前已覆盖：
+### 验证记录
 
-- Terrain 的生成模式、分辨率、高度、全部 Noise 参数和 Offset；
-- Directional Light 的启用、颜色、直接光强度与环境强度；
-- Point Light 的启用、颜色、强度与范围；
-- Sky Light 的启用、强度与 Cubemap 替换；
-- Camera 的 Primary、投影类型、FOV、裁剪面、正交尺寸与固定宽高比。
-
-高度图和 Cubemap 拖放属于离散操作，直接生成一条命令。Terrain 命令在 Apply/Undo/Redo 时会经过组件复制赋值，从而同时恢复完整规格并使旧 Runtime 失效。`Regenerate` 只刷新派生运行时数据，不改变可序列化状态，因此不进入 Undo Stack。
-
-### 面板所有权
-
-旧 `TerrainPanel` 从未接入当前 EditorLayer，并自行持有 `TerrainGenerator*`、Noise 设置和 Dirty 状态，会形成第二套参数来源，现已删除。正式 Terrain 参数唯一入口是组件 Inspector；长期 Debug 面板仍可以加入地形诊断工具，但只能观察或创建隔离测试场景，不能成为正式场景数据的所有者。
-
-EditorLayer 继续只编排 Editor/Runtime/Active Scene、Framebuffer、Render Pass、相机与面板生命周期，不持有 TerrainMesh、HeightMap 或 Terrain Shader 的业务状态。
-
-### 验证结果
-
-- `scripts\Verify-Windows.bat` 完整通过 VS2026 Premake 生成与 MSBuild 18.8.2 `Debug | x64` 全解决方案构建；
-- P6 完成时 35 项无窗口断言全部 PASS；P7 加入预设测试后扩展为 46 项；
-- 完整 `GlimmerEditor-CyouBranch` 在项目工作目录下稳定运行 8 秒并完成 Shader/Compute 初始化；
-- Terrain Transform 与 Specification 在实体复制后保持一致，副本 Runtime 为空；
-- Scene YAML 往返保留全部 Terrain 规格且不持久化 Runtime；
-- Edit → Play 的 `Scene::Copy` 不共享 Runtime，运行场景修改不会污染编辑场景；
-- Terrain 值命令完成 Apply → Undo → Redo，且一次连续编辑只对应一次 Undo。
+无窗口测试验证了实体复制、Scene YAML、Edit 到 Play 的 Scene Copy，以及 Terrain 命令 Apply、Undo、Redo：规格保持一致，副本 Runtime 始终为空，运行场景修改不会回写编辑场景。P7 时该组回归随 Preset 扩到 46 项；后续水文与气候测试继续沿用同一 Runtime 隔离约束。
 
 ## 山脉生成、派生图与 Authoring Erosion
 
-### 新增操作
+最早的程序化高度更像均匀噪声起伏，能画出地表，却很难得到有方向的山链、台地或沟谷。山脉生成这一轮把地貌参数、有限次热侵蚀和派生图串成一条 Authoring 管线，用户点击 Regenerate 后能得到可复现的基础地形。
 
-选中 Terrain 实体后，Inspector 的 `Preset` 可以直接切换以下地貌：
+### Preset 与可调参数
 
-- `Alpine`：方向明确、连续分布的高山山链；
-- `Plateau`：具有阶地和宽阔顶部的高原；
-- `Rolling Hills`：低起伏、适合植被场景的丘陵；
-- `Volcanic`：带主锥体和火山口的中心地貌；
-- `Eroded Valley`：沟谷更强、侵蚀轮次更多的山谷地貌；
-- `Custom`：保留当前全部手调参数。
+Inspector 提供 Alpine、Plateau、Rolling Hills、Volcanic 和 Eroded Valley 五个 Preset。选择 Preset 会一次性写入 Seed、Noise、HeightScale 和 Thermal Erosion，并作为一条命令进入 Undo/Redo；之后手动修改任一地貌参数，Preset 会回到 Custom。
 
-选择预设会一次性更新 Seed、Noise、HeightScale 和 Authoring Erosion，并作为一条命令支持 Undo/Redo。继续调整任一地貌参数后，Preset 自动变为 `Custom`。
+方向性山链由 MountainDirection 与 MountainWidth 控制，PlateauStrength 负责台地过渡，Channel Erosion 在基础噪声里刻出沟谷。后续地质细化又加入 GeologyBlend、GeologyScale、RiftStrength 和 TrendStrength，用多套结构场混合断层、裂谷与大尺度走向。它们都属于生成参数，不是逐帧模拟状态。
 
-新增参数包括：
+Thermal Erosion 有 Enable、Iterations、Talus 和 Strength。Iterations 在运行时限制为最多 128，Strength 限制到 0.5。它处理局部坡差，和 GenerateFBM 中的 Channel Erosion 是两件事：前者多轮搬运高度，后者直接参与基础形状函数。
 
-| 参数 | 作用 |
-| --- | --- |
-| `Mountain Direction` | 旋转各向异性山链的主方向 |
-| `Mountain Width` | 控制山链横向宽度与延展比例 |
-| `Plateau Strength` | 将连续高度向稳定台地过渡 |
-| `Enable Thermal Erosion` | 是否在基础高度生成后运行有限次热侵蚀 |
-| `Thermal Iterations` | Authoring 阶段迭代次数，范围 0～128 |
-| `Talus` | 允许保留的局部坡差阈值 |
-| `Thermal Strength` | 每轮搬运强度，上限 0.5 |
-| `Channel Erosion` | 基础生成阶段的沟谷刻蚀强度，不等同于 Thermal Erosion |
-
-`Regenerate` 会显式使当前 Terrain Runtime 失效。Inspector 底部显示 Generation Version 和本次 Compute Dispatch 数；默认 Alpine 为 `1 + 28 + 1 = 30` 次 Dispatch。
-
-### 三段式 Compute 管线
+### 三段 Authoring 管线
 
 ```text
-Terrain Dirty / Regenerate / Compute Shader 热重载
-  ↓
 GenerateFBM.comp
-  └─ 大陆、丘陵、方向性山链、台地/火山/沟谷预设
-  ↓
+  -> 大陆、山链、台地、火山、沟谷和地质结构
 ThermalErosion.comp × N
-  └─ ReadTexture → WriteTexture → Barrier → Swap
-  ↓
+  -> Read Height / Write Height / Barrier / Swap
 DeriveTerrainMaps.comp
-  ├─ Normal.xyz + Slope
-  ├─ Curvature + Flow Potential
-  └─ Grass + Soil + Rock + Snow Weights
-  ↓
-Terrain Shader 采样 Height、派生法线和四层权重
+  -> Normal+Slope / Curvature+Flow+Height / 四层 Material Weights
 ```
 
-生成高度使用 R32F `SimulationGrid`。Thermal Erosion 的每轮 Dispatch 都严格只读当前纹理、只写另一张纹理，之后执行 Memory Barrier 并交换读写索引，因此不存在同纹理无保护读写。
+高度使用 `R32F SimulationGrid`。每轮热侵蚀只读当前纹理、只写另一张纹理，Barrier 后再交换索引，没有同纹理的无保护读写。默认 Alpine 是 1 次生成、28 次热侵蚀和 1 次派生，共 30 次 Dispatch。
 
-侵蚀属于有限次 Authoring 操作：只有 Terrain 为 Dirty、Compute Shader 热重载成功或用户点击 `Regenerate` 时才运行。普通渲染帧只采样上次生成结果，不会隐式继续改变地形。未来固定时间步 Runtime Erosion 必须使用另一套状态与调度器。
+三张派生图都是运行时 `RGBA16F`：Normal/Slope 保存编码法线与坡度，Analysis 保存曲率、局部 Flow Potential 和高度，MaterialWeight 保存 Grass、Soil、Rock、Snow 四层归一化权重。P14 正在为这份静态地貌权重加入气候与植被反馈，但动态生态输入不会反过来重跑整条 Authoring 管线。
 
-### 派生图布局
+### 与运行时侵蚀的分工
 
-派生图均为 `RGBA16F` 运行时纹理：
+Authoring Erosion 只在 Terrain Dirty、用户 Regenerate 或 Compute Shader 成功热重载后运行，普通渲染帧不会继续改变基础高度。P13 的水文侵蚀使用另一套固定步 Runtime Height、Water 与 Sediment 状态；它不改生成初态，也没有隐式 Bake。运行时高度真的变化时，每个 Color Frame 最多刷新一次派生图，Shadow 和九个 Chunk 的重复 Prepare 不会重复推进模拟。
 
-| 纹理 | 通道布局 | 当前用途 |
-| --- | --- | --- |
-| Normal/Slope | RGB 为编码后的对象空间法线，A 为坡度 | Terrain 顶点法线与后续分层材质 |
-| Analysis | R 为曲率，G 为局部 Flow Potential，B 为高度 | 后续湿度、积雪和侵蚀可视化 |
-| Material Weights | RGBA 为 Grass、Soil、Rock、Snow | 当前基础颜色混合及下一阶段 TerrainMaterial |
+三个 Authoring Compute Shader 都支持热重载。成功编译后 Terrain 变为 Dirty 并完整重建；失败时继续保留上一份有效 Program 和地形结果。
 
-四层权重在 Compute 阶段归一化。派生图只存在于 `TerrainRuntime`，不写入场景 YAML；场景只保存 Preset、Noise、Authoring 参数以及三个 Compute Shader Handle，加载后按需重建。
+### 验证记录
 
-### Shader 热重载与失效
-
-`TerrainGenerator` 同时监听：
-
-- `GenerateFBM.comp`；
-- `ThermalErosion.comp`；
-- `DeriveTerrainMaps.comp`。
-
-任一 Shader 成功热重载都会把 Terrain 标记为 Dirty，并重新执行完整三段管线；编译失败继续保留上一有效 Program，不替换现有地形结果。
-
-### 验证结果
-
-- VS2026 / MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；
-- 46 项无窗口断言全部 PASS，五类预设重复应用结果一致且参数处于安全范围；
-- Intel Iris Xe、OpenGL 4.6 下 Generate、Thermal Erosion、Derive Maps 三个 Compute Shader 均成功编译；
-- 默认 Alpine 每次生成执行 30 次 Dispatch；
-- 相同 Seed 与参数连续生成两次，Height 与全部派生图组合哈希均为 `4345498711584764525`；
-- GPU 读回确认全部值无 NaN/Inf、Height/派生通道范围合法，Grass/Soil/Rock/Snow 权重和为 1；
-- 显式验证入口为环境变量 `GLIMMER_TERRAIN_VALIDATE=1`，仅验证模式执行第二次生成与同步读回，正常编辑流程没有额外 Dispatch 或 Readback。
+五类 Preset 的重复应用与参数范围通过无窗口回归。真实 OpenGL 验证覆盖 Generate、Thermal Erosion 和 Derive Maps：同一 GPU 上相同 Seed/参数连续生成的组合哈希一致，全部 Height 与派生通道有限且在合法范围内，四层材质权重和保持为 1。同步 Readback 只在 `GLIMMER_TERRAIN_VALIDATE=1` 验证模式执行，普通编辑流程没有这笔开销。
 
 ## TerrainMaterial 四层 Triplanar PBR
 
-P7 已经从高度图派生 Grass、Soil、Rock、Snow 四通道权重，但当时 Terrain Shader 只用四种固定颜色做可视化。现在地形拥有独立的 `TerrainMaterial` 资产：它不复用普通模型材质的 `.glmat`，而以 `.glterrainmat` 保存四层纹理和混合参数。
+这一轮给地形补上了独立的 `TerrainMaterial` 资产。它负责把地形生成阶段得到的高度、坡度、曲率和湿润度，转换成草地、泥土、岩石、积雪四层材质。地形网格只提供形状，地表看起来像山坡、裸岩还是雪线，由这层资产决定。
 
-### 新增操作
+### 为什么单独做一种材质资产
 
-在 Content Browser 空白处右键，选择：
+普通模型材质围绕 Mesh Slot 工作，地形材质却要处理固定的四层混合和一组派生图。硬塞进 `MaterialInstance` 会让模型材质背上很多用不到的字段，所以这里使用 `.glterrainmat`，并让 `TerrainComponent` 只保存它的 Asset Handle。场景 YAML 不保存运行时生成的纹理，也不会复制一份共享材质参数。
 
-```text
-Create Asset → Terrain Material (.glterrainmat)
-```
+四层结构保持固定，编辑时更容易理解，也让 Shader 的绑定布局稳定：
 
-选择该资产后，Inspector 可以编辑：
+| 层 | 常见用途 | 可调内容 |
+| --- | --- | --- |
+| Grass | 平缓、湿润区域 | Base Color、Albedo、Normal、AO、Tiling、Metallic、Roughness |
+| Soil | 草地与岩石之间的过渡 | 同上 |
+| Rock | 陡坡和高曲率区域 | 同上 |
+| Snow | 高海拔区域 | 同上 |
 
-- 全局 `Triplanar Sharpness`、`Weight Contrast`；
-- Height、Slope、Curvature、Moisture 四类影响强度；
-- Grass、Soil、Rock、Snow 各自的 Base Color、Tiling、Metallic、Roughness、Normal Scale 和 AO Strength；
-- 每层独立的 Albedo、Normal、AO 纹理。
+全局参数负责控制 Triplanar 锐度和权重对比度，也能分别调节高度、坡度、曲率、湿润度对混合结果的影响。贴图按用途注册：Albedo 使用 sRGB/Color，Normal 和 AO 保持 Linear。缺图时会回退到层的 Base Color、几何法线和 `AO = 1`，因此材质仍能正常显示。
 
-Albedo 拖入后登记为 `sRGB + Color`，Normal 为 `Linear + Normal`，AO 为 `Linear + Data`。点击 `Save Terrain Material` 原子保存文件，`Reload from Disk` 丢弃内存修改并重新读取磁盘。Terrain 实体的组件区域可以拖入或清除 `.glterrainmat`；也可以直接把该资产拖进 Viewport：选中对象是 Terrain 时替换其材质，否则创建一个使用该材质的新 Terrain。
+### 从派生图到最终地表
 
-编辑器默认启动场景会创建一个 Alpine 程序化 Terrain，但其 `TerrainMaterialHandle` 保持为 0。Terrain Shader 和三个 Compute Shader 仍会生成高度及派生图，材质阶段使用内建 Grass/Soil/Rock/Snow 颜色与 PBR 数值，不解析 `.glterrainmat`，也不会加载四层 Albedo/Normal/AO 具体纹理。将 `assets/materials/DefaultTerrain.glterrainmat` 拖到该 Terrain 即可启用完整纹理，清空 Terrain Material 槽位则回到基础颜色路径。
+`TerrainRenderer` 先绑定 Height、Normal/Slope、Analysis 和 MaterialWeight 四张地形纹理，再绑定四层材质贴图。Shader 根据最终权重混合各层 PBR 参数，并以世界坐标在 X、Y、Z 三个方向投影纹理。投影权重来自世界法线，所以近乎垂直的山壁不会像普通 UV 那样被拉成长条，网格 LOD 改变时纹理密度也能保持一致。
 
-仓库自带 `assets/materials/DefaultTerrain.glterrainmat`，并已配置四套 ambientCG 1K PNG PBR 资源：Grass001、Ground054、Rock027 和 Snow005。Grass/Soil/Rock 使用 Color、NormalGL、AmbientOcclusion；Snow005 原始套装没有 AO，因此 Snow 层保持空 AO Handle 并稳定回退为 1。下载包中的 Roughness、Displacement 和 NormalDX 当前保留在资源目录，但不会注册为 TerrainMaterial 运行时输入。
+四层是材质表达模型，实际采样量由质量档位决定。当前默认的 Full 4 Layers 会完整计算四层；Top-2 会保留权重最高的两层，Dominant 档进一步只让主层提供 Normal/AO，Auto Distance 则在近处 Top-2 和远处主层细节之间平滑切换。编辑器因此保有稳定的完整质量基线，低端设备也能按距离控制 Terrain、CSM、IBL 和诊断纹理共同带来的采样开销。
 
-默认世界空间 Tiling 分别为 Grass `0.7`、Soil `0.4`、Rock `0.35`、Snow `0.55`。所有纹理层的 Base Color 设为白色，避免再次乘色改变已经校准的 Albedo；后续仍可用 Base Color 进行艺术化染色。
+开发时我刻意保留了两条边界：
 
-### 资产与场景边界
+- Asset Inspector 的 Save/Reload 仍是显式操作，材质字段还没有接入统一的 Command History、Dirty 和退出保存提示；
+- 默认内存场景的 `TerrainMaterialHandle` 为 `0`，此时使用内建回退材质。只有场景明确引用 `.glterrainmat` 时，才会加载资产中的贴图。
 
-```yaml
-TerrainMaterial:
-  Version: 1
-  TriplanarSharpness: 4.0
-  WeightContrast: 1.15
-  HeightInfluence: 0.65
-  SlopeInfluence: 1.0
-  CurvatureInfluence: 0.35
-  MoistureInfluence: 0.65
-  Layers:
-    - Name: Grass
-      BaseColor: [0.18, 0.48, 0.12]
-      AlbedoTexture: 0
-      NormalTexture: 0
-      AOTexture: 0
-      Tiling: 0.12
-      Metallic: 0.0
-      Roughness: 0.88
-      NormalScale: 1.0
-      AOStrength: 1.0
-```
+当前 MaterialWeight 仍由静态地貌派生。P14 已经产出 Temperature、Humidity 和 VegetationPotential，但这些动态场尚未回写材质权重；这项工作留在气候与植被闭环里处理，避免每个气候步都重复整套地形派生。
 
-Scene YAML 只在 `TerrainComponent` 中保存 `TerrainMaterialHandle`。四层配置属于共享资产；Height、Normal/Slope、Analysis 和 Material Weights 仍是 `TerrainRuntime` 的派生 GPU 纹理，不会写进场景文件。
-
-`.glterrainmat` 使用独立 `TerrainMaterial` YAML 根、AssetType 和 AssetManager 缓存，因此不会向普通 `.glmat` 增加地形专用字段，也不会进入 `MaterialInstance + MaterialOverrides` 继承链。
-
-### 四层混合规则
-
-Compute 阶段给出的四通道基础权重会在 Fragment Shader 中继续结合地貌上下文：
-
-```glsl
-float slope = 1.0 - clamp(normal.y, 0.0, 1.0);
-float curvature = analysis.r * 2.0 - 1.0;
-float moisture = clamp(
-    (1.0 - height) * 0.45
-    + flowPotential * 0.70
-    + max(-curvature, 0.0) * 0.25,
-    0.0, 1.0);
-
-weights.grass *= 1.0 + moisture * moistureInfluence * (1.0 - slope);
-weights.soil  *= 1.0 + moisture * moistureInfluence;
-weights.rock  *= 1.0 + slope * 3.0 * slopeInfluence;
-weights.snow  *= 1.0 + highAltitude * (1.0 - slope) * 3.0 * heightInfluence;
-weights = normalizeWeights(pow(weights, vec4(weightContrast)));
-```
-
-结果是陡坡优先岩石，高海拔且平缓的位置增强积雪，低地、汇流和凹地增强湿度，再驱动土壤和植被。参数不是重新生成高度图的开关，只影响材质阶段，因此编辑后可以立即观察结果。
-
-### Triplanar Mapping
-
-规则地形网格只有平面 UV；如果直接用它采样，近乎垂直的山壁会把纹理压成狭长条。Triplanar Mapping 改用世界坐标分别投影到三个平面：
-
-```glsl
-vec3 projectionWeights = pow(abs(worldNormal), vec3(sharpness));
-projectionWeights /= projectionWeights.x
-    + projectionWeights.y + projectionWeights.z;
-
-vec4 xProjection = texture(map, worldPosition.zy * tiling);
-vec4 yProjection = texture(map, worldPosition.xz * tiling);
-vec4 zProjection = texture(map, worldPosition.xy * tiling);
-vec4 sampleValue = xProjection * projectionWeights.x
-    + yProjection * projectionWeights.y
-    + zProjection * projectionWeights.z;
-```
-
-面朝哪个轴，就更多使用与该轴垂直的投影；转折处按法线平滑混合。Albedo、Normal 和 AO 使用同一世界空间尺度，因而不依赖 Terrain 网格 UV，也不会随网格分辨率改变贴图密度。
-
-### PBR 与纹理槽
-
-四层各自计算线性 Albedo、世界空间细节法线、Metallic、Roughness 和 AO，再按最终权重混合。光照沿用 Model 的 Cook–Torrance GGX/Smith/Schlick 直接光；AO 只调制环境项，最终颜色保持在线性 `RGBA16F` Scene Buffer 中，之后统一经过 ACES Tone Mapping。
-
-```text
-Slot 0      Height
-Slot 1      Normal / Slope
-Slot 2      Curvature / Flow Potential
-Slot 3      Grass / Soil / Rock / Snow Weights
-Slot 4–6    Grass Albedo / Normal / AO
-Slot 7–9    Soil Albedo / Normal / AO
-Slot 10–12  Rock Albedo / Normal / AO
-Slot 13–15  Snow Albedo / Normal / AO
-```
-
-Renderer 只绑定符合语义契约的 Texture Asset。贴图为空或语义不匹配时不会误采样：Albedo 回退 Base Color，Normal 回退派生/几何法线，AO 回退 1。
-
-### 验证结果
-
-- VS2026 / MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；
-- 53 项无窗口断言全部 PASS，覆盖 TerrainMaterial 四层参数/纹理保存重载、注册表类型/缓存隔离、独立 YAML 根和 Scene TerrainMaterialHandle 往返；
-- Intel Iris Xe、OpenGL 4.6 下新版 Terrain Shader 与 Generate/Thermal Erosion/Derive Maps 三个 Compute Shader 均编译成功；
-- `GLIMMER_TERRAIN_VALIDATE=1` 下默认 Alpine 仍为 30 次 Dispatch，两次 GPU 输出哈希均为 `4345498711584764525`。
-- Grass/Soil/Rock/Snow 的 11 张运行时纹理已逐项验证文件、注册表和 Handle 引用；直接运行既有编辑器二进制时没有纹理缺失或语义拒绝日志，本次纯资源配置不要求重新编译。
-- 默认 Alpine Terrain 保持 `TerrainMaterialHandle = 0` 后，VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功；RTX 4060/OpenGL 4.6 下 Terrain 与 Generate/Thermal Erosion/Derive Maps 均成功编译，启动代码不会导入默认 TerrainMaterial 或其 11 张运行时纹理。
-- VS 启动时的撕裂/显示异常最终确认来自显卡切换与独显选择，不是 Terrain Shader。完整纹理路径最坏约执行 36 次层纹理采样，加上 Height/派生图后接近 40 次/像素；该数字仅作为后续 Top-2 层裁剪和质量分级的性能优化基线。
+验证覆盖 `.glterrainmat` 的保存与加载、场景 Handle 往返、缺失贴图回退、四层权重归一化，以及 Debug/Release 构建。默认材质资产可直接在 Terrain Inspector 中拖放和重载。
 
 ## 方向光 Shadow Map 与 CSM
 
-P9 已加入 Model 与 Terrain 共用的 Directional Shadow Map，并扩展为最多四级 CSM。Scene 在正常 HDR 颜色 Pass 前，从第一个启用且勾选 `Cast Shadows` 的方向光生成多张纯深度图；PBRModel 和 Terrain 随后根据片元的视空间深度选择级联，判断当前片元是否被遮挡。
+单张方向光阴影图在近处容易糊，分辨率拉高后又会把大量像素花在远景。这一轮把方向光阴影改成 Cascaded Shadow Maps，按相机深度把可见范围切成 1 到 4 段，让近景得到更密的阴影采样，远景继续保留轮廓。
 
-### 新增操作
+### 一帧阴影是怎样生成的
 
-选择 Directional Light 后，Inspector 提供：
+场景取第一个启用且打开 `Cast Shadows` 的方向光。它的 Resolution、Cascade Count、Shadow Distance、Bias、Split Lambda 和 Blend Width 随场景序列化；深度纹理、Framebuffer 和 Light ViewProjection 只属于运行时。
 
-- `Cast Shadows`：启用或关闭方向光阴影；
-- `Shadow Resolution`：512、1024、2048、4096；
-- `Cascade Count`：1～4，级联越多，近景有效阴影分辨率越高，但深度 Draw Call 也会增加；
-- `Shadow Distance`：阴影覆盖到相机前方的最远距离；
-- `Shadow Bias`：基础深度偏移，用于平衡 Shadow Acne 与 Peter Panning。
-- `Split Lambda`：0 为均匀分割，1 为对数分割；默认 0.65，在近景精度和远景覆盖之间折中。
-- `Cascade Blend`：0～0.30，控制相邻级联在 Split 两侧的重叠比例；默认 0.10，用于消除级联硬切换。
+每帧的处理顺序如下：
 
-打开 `Window → Debug → Overview`，在 `Directional Shadows` 下勾选 `Visualize Cascades`，可用固定颜色检查当前片元所属级联：第 1～4 级依次为红、绿、蓝、黄。Split 重叠区会按实际 `Cascade Blend` 权重在两种颜色之间渐变，因此可直接观察覆盖范围、分界位置和过渡宽度。该开关只在本次运行中生效，不保存到场景，也不改变阴影深度、透明度或实体拾取结果。
+1. 使用 Practical Split 计算各级联距离，并为相邻级联留出混合区；
+2. 用包围球稳定光空间范围，再把投影中心吸附到 Shadow Texel，减轻相机移动时的阴影抖动；
+3. 按级联视锥剔除模型和 Terrain Chunk，只把可能投影到该范围的物体放进 Shadow Queue；
+4. 把 Opaque 与 Mask 模型按 Mesh 和最终 Mask 状态排序，相容项合并成最多 1024 个实例的深度批次；Terrain 走自己的 Chunk/LOD 深度路径；
+5. PBRModel 和 Terrain 在颜色阶段按视空间深度选择级联，用 3x3 PCF 采样，并在重叠区平滑混合。
 
-同一区域的 `GPU Time` 显示整段 CSM Shadow Pass 的 GPU 耗时。首次运行会短暂显示 `pending`；OpenGL 使用四槽 Time Query 延迟读取，只有结果已经可用时才更新毫秒值，不会为了刷新面板调用阻塞式 GPU Readback。
+Shadow Pass 使用独立的 `Depth32F` Framebuffer，不写颜色附件。模型阴影也有自己的缓存 VAO，实例矩阵占用 location 4 到 7；这样深度批次不会改坏 Renderer3D 正在使用的实例缓冲。
 
-这些设置会进入 Scene YAML。Shadow Framebuffer、Depth Texture 和 Light VP 只属于运行时资源，不会写入场景。
+### 材质透明度与光照边界
 
-### 渲染流程
+Mask 材质会沿用最终 `MaterialInstance` 的 BaseColor Alpha、贴图 Alpha、Tiling 和 Cutoff。材质没有覆盖贴图时，再回退到 Mesh 导入的 BaseColor 贴图。Blend 物体暂时不写阴影，因为半透明投影需要抖动、透射或排序策略，直接写实心深度会得到错误结果。
 
-```text
-Scene 找到首个启用且 CastShadows 的 Directional Light
-  → TerrainRenderer::Prepare 生成/复用地形 Height 与派生图
-  → 根据 Camera Frustum 与 Practical Split 计算 1～4 个级联
-  → 按 Cascade Blend 扩展相邻级联并建立重叠区
-  → 每级执行包围球稳定化与 Shadow Texel Snap
-  → 使用 Mesh/Terrain Bounds 对当前级联执行保守六平面剔除
-  → 依次绑定各级 Depth32F Framebuffer
-  → Opaque/Mask Model 按 Mesh + Mask 状态排序并构造每级 Instancing Batch
-  → Blend Model 默认跳过 Shadow Pass，避免错误的实心投影
-  → ShadowDepth.glsl 实例化绘制兼容 Model，独立绘制 Terrain
-  → 恢复 Scene Framebuffer 与 Viewport
-  → 正常 Opaque / Terrain / Skybox / Sprite / Transparent
-  → PBRModel 与 Terrain 执行 3×3 PCF，并在 Split 重叠区混合相邻级联
-```
+接收端只用阴影衰减方向光的直接光照，Ambient、Emissive、Point Light 和 IBL 保持不变。当前也只支持方向光 CSM，点光和聚光阴影还没有进入这条管线。纹理槽按渲染器分区：模型使用 4 到 7，Terrain 使用 16 到 19，避免和材质、IBL 资源互相覆盖。
 
-Shadow 深度资源使用无颜色附件的 `Depth32F` Framebuffer；Framebuffer 后端会为 depth-only FBO 设置 `GL_NONE` Draw/Read Buffer。Shadow Pass 只清理深度，不污染主 Scene 的 HDR Color、Entity ID 或 Depth。
+### 调试与性能记录
 
-接收阶段先根据视空间深度选择级联，再把世界位置乘以对应 Light VP 并映射到 `[0, 1]`，随后比较当前深度和对应 Shadow Map。进入 Split 两侧的重叠区时，两级各执行一次 PCF，并用 `smoothstep` 从近级平滑过渡到远级：
+Debug Panel 可以显示级联着色，红、绿、蓝、黄分别对应四段；这个开关只影响当前运行，不写入场景。GPU 计时采用非阻塞查询，基准工具只在拿到新样本后推进，防止把旧结果重复计入。
 
-```glsl
-float slopeBias = max(
-    u_ShadowBias * (1.0 - max(dot(normal, lightDirection), 0.0)),
-    u_ShadowBias * 0.25);
+固定 `2500` 个实例的 Maximum Instancing 场景跑过 `1/2/4` 级联与 `1024/2048/4096` 分辨率的九组组合。RTX 4060 上从 `1024 x 1` 的平均 `0.748 ms` 增长到 `4096 x 4` 的 `6.313 ms`；同一最高档在 Iris Xe 上为 `11.224 ms`。这组数据确认成本主要跟级联数量和分辨率增长，也说明默认值需要给画质和显存留余地。
 
-int cascadeIndex = SelectCascade(abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z));
-float nearVisibility = SampleCascadeVisibility(boundary, worldPosition, normal, lightDirection);
-float farVisibility = SampleCascadeVisibility(boundary + 1, worldPosition, normal, lightDirection);
-float blend = smoothstep(split - width, split + width, viewDepth);
-return mix(nearVisibility, farVisibility, blend);
-```
-
-对周围 `3×3` Texel 求平均得到软化后的可见度，仅调制方向光直接照明；Ambient、Emissive 和 Point Light 不会被错误乘上方向光阴影。
-
-Mask 材质进入 Shadow Pass 时不再按完整三角形轮廓写深度。Scene 会同时提交实体的 MaterialHandle 和 Overrides，ShadowRenderer 通过 `MaterialInstance` 得到最终材质，再让 ShadowDepth 使用和 PBRModel 一致的裁剪条件：
-
-```glsl
-float textureAlpha = u_HasBaseColorTexture != 0
-    ? texture(u_BaseColorTexture, v_TexCoord * u_TilingFactor).a
-    : 1.0;
-
-if (clamp(u_BaseColorAlpha * textureAlpha, 0.0, 1.0) < u_AlphaCutoff)
-    discard;
-```
-
-因此树叶、铁丝网或镂空贴图的透明区域不会写入 Shadow Map，接收面上会得到对应的镂空阴影。模型贴图优先使用最终 Material BaseColorTexture，未设置时沿用 Mesh 自带纹理；纹理语义仍必须是 sRGB Color。ShadowDepth 分别从 location 3 读取 Model UV、从 location 1 读取 Terrain Height UV，透明裁剪不会破坏地形顶点位移。
-
-Blend 材质采用明确的首版策略：不进入 Directional Shadow Queue。半透明表面没有单一正确的二值深度，直接写入会投出与透明度无关的实心轮廓；因此当前优先避免错误阴影，而不是伪装成透射阴影。Opaque 与 Mask 仍正常投影。未来若需要玻璃彩色透射、随机抖动或透射率累积，应作为独立的 Transparent Shadow 能力实现，而不是混入现有 Depth-only CSM。
-
-每个级联不再逐模型立即 Draw。通过 Frustum 测试的子网格先进入 Shadow Queue，随后按 Mesh 和最终 Mask 状态排序；Opaque 只要求 Mesh 相同，Mask 还要求 BaseColor Texture、BaseColor Alpha、AlphaCutoff 与 TilingFactor 全部一致。兼容批次把 Transform 写入动态 Instance Buffer：
-
-```cpp
-RenderCommand::DrawIndexedInstanced(
-    shadowVertexArray,
-    static_cast<uint32_t>(instanceTransforms.size()),
-    mesh->GetIndexCount());
-```
-
-单次最多上传 1024 个实例，超出后自动分块。Shadow VAO 与主 Renderer3D VAO 分开缓存：它复用 Mesh 的逐顶点缓冲和索引缓冲，但挂载自己的 location 4～7 Transform Buffer，因此两个渲染器不会覆盖彼此的实例属性。单项批次自动回退普通 Draw，Terrain 继续保持独立深度 Draw。
-
-### 独显性能对照操作
-
-1. 在 `Window → Debug → Rendering → GPU Instancing Lab` 选择 Model 与 Material；
-2. 使用 `Maximum Instancing`，从较小的 `Count XYZ` 开始生成，再逐步增加实体数；
-3. 调整相机使待测实体处于稳定构图，设置 `Warmup Frames` 与 `Samples / Configuration`；默认值为每组预热 15 帧、采集 30 个新 GPU Query 结果；
-4. 点击 `Start Shadow Benchmark`。工具会自动测试 `1/2/4 Cascades × 1024/2048/4096 Resolution` 共 9 组配置，测试期间不要移动相机、缩放窗口或切换显卡设置；
-5. 在结果表读取每组 `Avg/Min/Max ms`、`Draws` 和 `Saved`；测试可随时取消，关闭 Debug 窗口或切换页签不会中断；
-6. 回到 `Overview` 开启 `Visualize Cascades` 检查覆盖与 Blend，再关闭调试色观察 Acne、Peter Panning 和移动相机时的级联跳变。
-
-若要集中完成视觉检查，将 Preset 改为 `Shadow Visual Validation` 后点击 Generate。工具会忽略 Count/Spacing，固定生成 8 个模型实体：长距离地面、橙色 Opaque 对照板、使用 `balatro.png` Alpha 的 Mask 镂空板、不会投射实心阴影的青色 Blend 对照板，以及沿相机深度分布的四个彩色标记。相机会自动框定测试区；`Frame Cascade Range` 恢复长距离级联构图，`Frame Casters` 切换到 Opaque/Mask/Blend 近景。
-
-视觉面板提供以下纯运行时控制：
-
-- `Visualize Cascades`：用红、绿、蓝、黄显示实际级联与重叠过渡；
-- `Shadow Bias`：逐步降低直到出现表面条纹即为 Acne 边界，逐步升高并观察阴影是否脱离物体即为 Peter Panning；
-- `Split Lambda`：观察四个深度标记附近的级联覆盖重新分配；
-- `Cascade Blend`：从 0 增大，确认硬分界变为连续过渡；
-- `Shadow Distance`：确认超出距离的物体不再接收方向光阴影。
-
-该预设仍是临时内存 Scene，不进入场景保存、Undo/Redo 或资产文件；退出 Lab 后恢复原编辑场景。
-
-也可以从 `GlimmerEditor-CyouBranch` 工作目录启动可重复的视觉入口：
-
-```powershell
-$env:GLIMMER_SHADOW_VISUAL_AUTORUN = ''1''
-$env:GLIMMER_SHADOW_VISUAL_CLOSEUP = ''1''          # 可选：投影物近景
-$env:GLIMMER_SHADOW_VISUALIZE_CASCADES = ''1''      # 可选：级联着色
-..\bin\Debug-windows-x86_64\GlimmerEditor-CyouBranch\GlimmerEditor-CyouBranch.exe
-```
-
-GTX 1050/OpenGL 4.6 实际窗口验证中，全景构图显示深度标记跨越不同级联，重叠边界保持连续；近景构图中 Opaque 接触阴影稳定、`balatro.png` Mask 保持镂空轮廓，默认 Bias 下未见明显大面积 Acne 或 Peter Panning。青色 Blend 板自身正常透明绘制，但地面不出现对应的实心矩形阴影，与回归策略一致。
-
-每次配置切换后的预热会排空异步 Query 延迟；采样仅在 GPU 返回新结果时推进，不会重复使用面板中缓存的上一帧数值。结果只存在于当前临时 Lab，不写入场景或资产。测试时仍需保持窗口分辨率、相机、模型数量、Shadow Distance 与驱动设置一致。GPU Time 只统计 Shadow Pass，不包含 Scene Color、Terrain Compute、Tone Mapping 或 ImGui，因此适合比较级联数、分辨率与实例数量对阴影本身的影响。
-
-需要在固定机器上重复采样时，可从 `GlimmerEditor-CyouBranch` 工作目录启动无人值守入口：
-
-```powershell
-$env:GLIMMER_SHADOW_BENCHMARK_AUTORUN = '1'
-..\bin\Debug-windows-x86_64\GlimmerEditor-CyouBranch\GlimmerEditor-CyouBranch.exe
-```
-
-该入口固定使用 `50×1×50` Maximum Instancing 场景、15 帧预热和每组 30 个样本。OpenGL Context 启动日志会给出 Vendor、Renderer 和 Version；完成后日志依次输出 9 行 `Shadow Benchmark Result` 并正常关闭编辑器，便于确认实际使用的 GPU 并复制结果。不要同时设置 `GLIMMER_PBR_LAB_AUTORUN`。
-
-### 当前边界与验证
-
-- 当前支持 1～4 级 CSM、Practical Split、Shadow Texel Snap、可调重叠混合与运行时级联调试着色；
-- Mesh 在构造时缓存局部 AABB；每个级联会把 Model 子网格 Bounds 变换到 Light VP Clip Space，8 个角点全部位于同一平面外才剔除；Terrain 使用网格 XZ 范围与 HeightScale 构造保守 Bounds；
-- Debug → Overview 的 `Directional Shadows` 区域显示 Cascades、Candidate/Rendered、Frustum Culled、Draw Calls、Instanced/Individual、Instances、Saved Draws 与非阻塞 GPU Time；可通过移动相机或生成重复模型确认剔除、合批及耗时，也可启用 `Visualize Cascades` 检查分级和重叠过渡；
-- Debug → Rendering 的 Instancing Lab 可自动完成 9 组 CSM 性能采样并显示 Avg/Min/Max；计时样本带单调序号，只有新的异步 Query 结果才会被纳入统计；
-- Model Shadow Pass 已按每个级联独立合批；不同 Mesh 或不同最终 Mask 状态会正确拆批，Terrain 保持独立提交；
-- Alpha Mask 已按最终 MaterialInstance 的 BaseColor Alpha、纹理 Alpha、TilingFactor 与 AlphaCutoff 裁剪 ShadowDepth；Blend 默认跳过 Shadow Pass，尚未实现抖动、彩色透射或透射率累积阴影；
-- Terrain 在 Shadow Pass 前显式 Prepare，因此首帧即可使用生成后的高度参与投影；
-- VS2026 `Debug | x64` 全解决方案构建成功；立即重复同配置构建只执行增量项目检查，没有重新编译源文件；64 项断言与最终汇总全部 PASS，包含阴影设置往返、四类 Bounds 剔除、Shadow Saved Draw 计算，以及 Opaque/Mask/Blend 投影策略；
-- 新增级联调试着色、Alpha Mask 与 Shadow Instancing 后，Intel Iris Xe/OpenGL 4.6 下 ShadowDepth、PBRModel、Terrain 和三个 Terrain Compute Shader 均重新编译成功；PBR Material Lab 渲染 6/6 项且没有跳过模型，默认地形的 Height UV 与 Compute 路径正常。自动测试不判定颜色和投影轮廓，仍需手动勾选 `Visualize Cascades` 检查分区，并用带 Alpha 的 BaseColor Texture + Mask 材质确认透明区域不产生阴影。
-- PBR Lab 的紧凑布局得到 `24 candidates / 24 rendered / 0 culled / 4 draw calls / 4 instanced / 20 saved / 4 cascades`：每个级联把 6 个相同 Mesh 合并为一次 Draw，并确认保守测试没有误删投影。把模型移出 Shadow Frustum 后可在 Debug → Overview 观察 `Frustum Culled` 增加。
-- OpenGL Time Query 已在 Intel Iris Xe 上非阻塞返回，PBR Lab 四级 Shadow Pass 得到一次 `0.278 ms` 验证样本；该数字只验证计时范围和读取链路，正式性能结论必须按上面的固定场景步骤在 RTX 4060 上采集多组稳定值。
-- 自动 Shadow Benchmark 接入后，VS2026 `Debug | x64` 最终编辑器目标构建成功，61 项无窗口回归断言全部 PASS。固定 2500 实体、15 帧预热、每组 30 样本的无人值守测试确认 OpenGL Renderer 为 `NVIDIA GeForce RTX 4060 Laptop GPU`，结果如下：
-
-| Cascades | Resolution | Avg ms | Min ms | Max ms | Draws | Saved |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 1024 | 0.058 | 0.055 | 0.065 | 3 | 2260 |
-| 2 | 1024 | 0.665 | 0.580 | 0.682 | 4 | 2276 |
-| 4 | 1024 | 1.066 | 1.060 | 1.090 | 5 | 2563 |
-| 1 | 2048 | 0.965 | 0.961 | 0.980 | 3 | 2261 |
-| 2 | 2048 | 1.451 | 1.449 | 1.467 | 4 | 2277 |
-| 4 | 2048 | 2.414 | 2.400 | 2.444 | 5 | 2562 |
-| 1 | 4096 | 1.666 | 1.663 | 1.677 | 3 | 2260 |
-| 2 | 4096 | 3.182 | 3.178 | 3.194 | 4 | 2278 |
-| 4 | 4096 | 6.313 | 6.304 | 6.319 | 5 | 2562 |
-
-同场景 Iris Xe 的 `4096 × 4` 平均为 `11.224 ms`，RTX 4060 为 `6.313 ms`，最高档约快 1.78 倍；RTX 各组 Min/Max 也更集中。定量性能由固定基准覆盖，级联边界、Mask 轮廓、Acne、Peter Panning 与 Blend 策略则由 GTX 1050 的全景/近景实际视口验收覆盖，P9 至此完成。
+视觉验收另外覆盖了级联接缝、Mask 轮廓、Acne、Peter Panning，以及 Blend 不投实心阴影。P9 完成时通过 VS2026 `Debug | x64` 构建和 64 项无窗口回归。
 
 ## Renderer2D 空批次残留修复
 
-实体移除 `SpriteRendererComponent` 后，下一帧仍会正常执行空的 Sprite Pass。旧实现把此时的 `QuadIndexCount = 0` 继续传入 `DrawIndexed`，但渲染 API 中的零参数表示“使用 VertexArray 的完整 IndexBuffer”，因此上一帧留在动态 VBO 中的 Quad 会被预生成索引重新绘制，并使用 0 号白纹理槽显示为白块。
+移除实体的 `SpriteRendererComponent` 后，画面偶尔还会留下上一帧的白色方块。问题出在两个接口对数字 `0` 的理解不同：Renderer2D 用 `QuadIndexCount = 0` 表示本帧没有 Sprite，底层 `DrawIndexed(0)` 却把它解释成绘制 VertexArray 的完整 IndexBuffer。动态 VBO 里的旧顶点因此又被预生成索引提交了一次，并落到 0 号白纹理。
 
-修复后，空批次在 Renderer2D 边界直接跳过：
+修复放在批次所有者 `Renderer2D::Flush()` 中：
 
 ```cpp
 void Renderer2D::Flush()
@@ -5593,101 +3590,86 @@ void Renderer2D::Flush()
 }
 ```
 
-这样不会改变 `DrawIndexed(0)` 对模型等其他调用方的既有行为，同时保证添加、移除或 Undo/Redo `SpriteRendererComponent` 后，空 Sprite 帧不提交 Draw Call，也不会重画上一帧的残留顶点。
+我没有修改 `DrawIndexed(0)` 的全局约定，因为模型等调用方可能还在依赖绘制完整索引缓冲的语义。让 Renderer2D 在空批次处提前返回，范围更小，也能保证添加、移除及 Undo/Redo Sprite 组件后，空帧不会绑定纹理、增加 Draw Call 或重画旧数据。
 
-验证：VS2026 `Debug | x64` 编辑器目标构建成功；55 项无窗口断言及最终汇总全部 PASS；默认 Alpine 场景在 Intel Iris Xe/OpenGL 4.6 下稳定启动，未出现 OpenGL 或 Shader 错误。
+修复通过 VS2026 `Debug | x64` 编辑器构建、55 项无窗口断言和 Intel Iris Xe/OpenGL 4.6 默认 Alpine 场景启动检查。
 
 ## tmpTerrain 地质地貌迁移实验
 
-本次没有直接复制 `tmp/tmpTerrain` 的 HLSL，而是把其中可独立验证的 Worley 地质块、陡峭区遮罩、裂谷和大尺度趋势重写进现有 `GenerateFBM.comp`。因此新效果继续复用 Terrain Entity、Compute Shader 热重载、Runtime Dirty、Thermal Erosion、派生图、TerrainMaterial、CSM 和场景序列化，不新增第二套地形生命周期。
+这次实验的目标很直接：看看 `tmp/tmpTerrain` 原型里哪些地貌思路值得留下，又能否接进 Glimmer 已有的 Terrain 管线。最后我只迁移了 Worley 地质块、陡峭区遮罩、裂谷和大尺度趋势，并把它们重写进 `GenerateFBM.comp`。原型代码没有整段照搬，Terrain Entity、热重载、Dirty 重建、热侵蚀、派生图和场景序列化仍走原来的生命周期。
 
-### 可编辑参数
+### 接进现有生成器
 
-Terrain Inspector 的 `Geological Features` 区域新增：
+Inspector 的 `Geological Features` 区域提供四个参数：
 
-- `Geology Blend`：原始 Glimmer 高度与新增地质塑形之间的混合量；设为 0 会跳过新增分支并恢复原生成公式；
-- `Geology Scale`：控制 Worley 地质块和裂谷结构的尺度；
-- `Rift Strength`：控制狭长低地/裂谷对高度的削减；
-- `Trend Strength`：控制沿 Mountain Direction 形成的大尺度高低趋势。
+| 参数 | 用途 |
+| --- | --- |
+| Geology Blend | 在原高度与地质塑形结果之间混合，设为 0 可精确回到旧生成公式 |
+| Geology Scale | 调整 Worley 地质块和裂谷的尺度 |
+| Rift Strength | 控制狭长低地对高度的削减量 |
+| Trend Strength | 沿 Mountain Direction 加入大尺度高低趋势 |
 
-修改任一参数会把预设切换为 Custom，并通过现有 Inspector 事务生成单次 Undo/Redo 命令；Terrain Runtime 被标记 Dirty，下一次 Prepare 重新生成 Height、Normal/Slope、Analysis 和 Material Weights。四项参数随 Scene YAML 保存。重新选择 Alpine、Plateau、Rolling Hills、Volcanic 或 Eroded Valley 时会载入各自较保守的地质参数，其中 Alpine/Eroded Valley 较强，Rolling Hills/Volcanic 较弱。
+修改参数会把 Preset 切到 Custom，并通过 Inspector 事务压成一次 Undo/Redo。Terrain Runtime 随后标记为 Dirty，下一次 `Prepare()` 才重建 Height、Normal/Slope、Analysis 和 MaterialWeight。四项参数会写入 Scene YAML，各个内置 Preset 也有自己的保守默认值。
 
-### Compute 流程
+生成顺序没有因此分叉：
 
 ```text
-现有 Domain Warp / Continental / Ridged Mountain / Channel
-  → 可选 Worley 地质块与 Steep Region Mask
-  → 狭长 Rift 削减
-  → Mountain Direction 驱动的大尺度 Trend
-  → Geology Blend 与原高度混合
-  → 既有 Preset 特化
-  → Thermal Erosion Ping-Pong
-  → Normal / Curvature / Flow Potential / Material Weights
+原有 Domain Warp / Continental / Ridge / Channel
+  -> Worley Relief / Steep Mask / Rift / Directional Trend
+  -> Geology Blend
+  -> Preset 修正
+  -> Thermal Erosion Ping-Pong
+  -> Normal / Analysis / MaterialWeight 派生
 ```
 
-原型中的水流、泥沙、蒸发和气象耦合没有迁移。其单个 `TerrainData_CS` 在写入 WaterFlow 后只执行 Workgroup Barrier，却立即读取相邻 Workgroup 的结果，不能保证跨组可见性。正式接入时应按固定时间步拆成 Rain/Evaporation、Flux、Water Update、Velocity、Sediment、Erosion/Deposition 与 Derive Maps 等独立 Dispatch，每一步使用明确的 Ping-Pong 资源和全局 Memory Barrier。
+### 原型里没有迁移的部分
 
-### 验证
+我没有接入原型中的水流、泥沙、蒸发和气象代码。它在同一次 Dispatch 中写入 WaterFlow，做完 Workgroup Barrier 后便读取相邻 Workgroup 的结果；这个同步只能约束组内线程，跨组数据仍可能不可见。把这种代码塞进正式 Terrain 路径，画面也许能动，结果却无法稳定复现。
 
-- GTX 1050/OpenGL 4.6 下 GenerateFBM、ThermalErosion、DeriveTerrainMaps 与 Terrain Shader 全部编译成功；
-- 默认验证场景执行 30 次 Dispatch，两轮输出均通过有限值、范围和四层权重归一化检查，确定性 Hash 为 `16881604791310884879`；
-- VS2026 `Debug | x64` 全解决方案构建成功；
-- 64 项无窗口回归断言全部 PASS，新增参数已覆盖 Scene YAML 往返和五类 Terrain Preset 范围。
+后来的 P13 水文实现沿用了这次实验确定的边界：Rain/Source、Flux、Water Update、Sediment、Erosion/Deposition 和 Derive Maps 分成独立 Dispatch，状态使用 Ping-Pong 纹理，阶段间设置全局 Memory Barrier。P14 气候也通过统一的固定步环境时钟与水文耦合，没有回头复用原型的单 Pass 写法。
+
+这部分在 GTX 1050/OpenGL 4.6 上完成真实 Shader 验证。默认 Alpine 一次生成包含 30 次 Dispatch，两轮输出的有限值、范围和四层权重归一化均通过，确定性 Hash 为 `16881604791310884879`；当时的 VS2026 `Debug | x64` 构建和 64 项无窗口回归也全部通过。
 
 ## TerrainMaterial Top-2 采样与 GPU 基准
 
-四层 TerrainMaterial 的原始质量路径会对 Grass、Soil、Rock、Snow 全部执行 Albedo、Normal、AO 的三平面读取，最坏接近 40 次纹理采样/像素。此次优化不改变高度、派生权重或 PBR 光照公式，而是在最终混合权重已经包含高度、坡度、曲率与湿度修正后，先选出贡献最高的两层，再进入具体纹理采样。
+四层 Triplanar PBR 的画质不错，代价也很实在。Grass、Soil、Rock、Snow 都读取 Albedo、Normal 和 AO，每张贴图又要做三个方向的投影，最重路径接近每像素 40 次纹理采样。这个阶段的工作是给它增加可控的质量档位，并用真实 GPU 数据判断省下来的采样是否值得。
 
-### 质量档位
+### 四种采样方式
 
-Debug → Overview → Terrain 的 Sampling 提供四档：
+权重筛选发生在 Height、Slope、Curvature 和 Flow/Moisture 修正完成之后，因此不会改变地形生成、权重派生或 PBR 光照公式。
 
-- Full 4 Layers：完整四层采样，作为最高质量与性能基线；
-- Top 2 Layers：只保留贡献最高的两层，两层仍读取 Albedo、Normal 和 AO；
-- Top 2 + Dominant Normal/AO：两层读取 Albedo，但 Normal/AO 只读取主导层；
-- Auto Distance：性能档位；近景使用 Top-2 完整细节，远景使用主层 Normal/AO。Detail Distance 默认为 80 世界单位，阈值前后各 15% 组成 smoothstep 过渡带，次要层法线和 AO 不会在单个距离点硬切。
+| 模式 | 实际处理 |
+| --- | --- |
+| Full 4 Layers | 四层都贡献 Albedo、Normal、AO、Metallic 和 Roughness |
+| Top 2 Layers | 只保留权重最高的两层，重新归一化后采样完整 PBR 数据 |
+| Top 2 + Dominant Normal/AO | 两层混合 Albedo，Normal 和 AO 只取主层 |
+| Auto Distance | 近处保留 Top-2 细节，远处淡出次层 Normal/AO |
 
-当前默认改为 Full 4 Layers。地貌派生权重在进入材质采样前已经结合 Height、Slope、Curvature、Flow/Moisture 并归一化；Full-4 让 Grass、Soil、Rock、Snow 四层都按连续权重贡献 Albedo、Normal、AO、Metallic 和 Roughness。Top-2 会把较弱的两层归零，再对主、次两层重新归一化，因此原本宽而细腻的多层过渡可能变窄；Dominant/Auto 还会减少或随距离淡出次层 Normal/AO，容易使表面细节随相机距离变化。Full-4 视觉最稳定、材质交界最自然，因此作为编辑器默认画质基线；其余档位继续用于低端设备和性能比较。
+Auto Distance 的 Detail Distance 默认为 80 个世界单位，阈值前后各 15% 组成 `smoothstep` 过渡带。这里不能硬切。次层法线如果在某个距离突然消失，相机前后移动时会看到整片山坡闪一下，比省下几次采样更显眼。
 
-TerrainMaterialHandle 为 0 时仍走无具体材质纹理的内建颜色路径。它既保持默认编辑器启动轻量，也可作为“不加载 11 张材质纹理”的基础对照；分配 DefaultTerrain.glterrainmat 后才进入完整纹理路径。
+当前编辑器默认使用 Full 4 Layers。Top-2 会收窄原本由三层或四层共同形成的过渡，Dominant 和 Auto 还可能让表面细节随观察距离变化；完整四层更适合作为编辑画质基线。性能紧张时再从 Debug Panel 切换模式。`TerrainMaterialHandle = 0` 的默认内存场景仍使用内建颜色，它不会加载 DefaultTerrain 的 11 张材质贴图，也可以作为轻量对照。
 
-### Renderer 与诊断边界
+### 计时方式与结果
 
-TerrainRenderer 现在由 Scene 通过 BeginScene/EndScene 包围 Color Pass，并持有独立的非阻塞 GPUTimer。OpenGL 后端轮转 Time Query，只有结果可用时才读取；Debug UI 显示最近的 GPU ms、样本号、Terrain DrawCall 和实际绑定的材质纹理数，不会为统计等待 GPU。
+`TerrainRenderer` 有自己的非阻塞 GPU Timer。统计只有在新的 Query 结果可用时才更新，面板不会为了显示耗时卡住 CPU。`TerrainSamplingBenchmarkTool` 只切换运行时采样模式并读取 Statistics，不拥有 Scene；每档先收集 15 个新样本预热，再记录 30 个新样本。
 
-TerrainSamplingBenchmarkTool 位于编辑器 Debug 目录，只读取 TerrainRenderer Statistics 并切换运行时采样模式，不持有 Scene、Entity 或 EditorLayer 内部状态。每次模式切换后先接收 15 个唯一 GPU Query 预热样本，再记录 30 个唯一耗时样本，避免重复统计旧结果。手动使用步骤：
+GTX 1050/OpenGL 4.6 的固定 Alpine 场景得到以下结果：
 
-1. 给 Terrain 分配包含具体纹理的 TerrainMaterial；
-2. 固定相机和视口尺寸；
-3. 打开 Window → Debug → Overview；
-4. 点击 Start Terrain Benchmark，期间不要移动相机或缩放窗口；
-5. 在面板或日志中比较 Full-4、Top-2 和 Dominant Normal/AO。
+| Sampling Mode | Average | Minimum | Maximum | 相对 Full-4 |
+| --- | ---: | ---: | ---: | ---: |
+| Full 4 Layers | 10.681 ms | 10.449 ms | 11.510 ms | 基线 |
+| Top 2 Layers | 6.026 ms | 5.790 ms | 6.661 ms | 降低 43.6% |
+| Top 2 + Dominant Normal/AO | 4.226 ms | 4.006 ms | 5.122 ms | 降低 60.4% |
 
-无人值守验证可设置 GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN=1 后启动编辑器。该入口只在本次诊断运行中给默认 Terrain 分配 DefaultTerrain、固定 EditorCamera，完成三档测试后正常退出，不保存场景。GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3 可用同一固定场景单独打开四档画面，供截图对照。
-
-### GTX 1050 验证
-
-同一编辑器窗口、分辨率、DefaultTerrain、Alpine 地形和固定相机下，OpenGL 4.6 / NVIDIA GeForce GTX 1050 的结果为：
-
-| Sampling Mode | Samples | Average | Minimum | Maximum | 相对 Full-4 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Full 4 Layers | 30 | 10.681 ms | 10.449 ms | 11.510 ms | 基线 |
-| Top 2 Layers | 30 | 6.026 ms | 5.790 ms | 6.661 ms | 降低 43.6% |
-| Top 2 + Dominant Normal/AO | 30 | 4.226 ms | 4.006 ms | 5.122 ms | 降低 60.4% |
-
-Full-4、Top-2 和 Auto 固定视口截图已逐档检查，山体轮廓、草/岩混合和 Triplanar 投影方向一致，未发现新增条带接缝。Terrain 图形 Shader 与 GenerateFBM、ThermalErosion、DeriveTerrainMaps 均在 GTX 1050 上成功编译。Premake VS2026 重新生成、Debug x64 全解决方案构建和 64 项无窗口回归全部通过，构建输出目录未清理。
-
-默认档位调整后新增回归断言，确认 TerrainRenderer 运行时状态和 Statistics 都以 Full-4 初始化；当前 97 项具体无窗口断言全部 PASS，VS2026 `Debug | x64` 编辑器目标构建成功，GTX 1050 / OpenGL 4.6 默认场景持续运行并成功加载 Terrain 与相关 Compute Shader。该选择明确偏向画质：既有基准中 Full-4 为 `10.681 ms`，Top-2 为 `6.026 ms`，因此性能受限时仍应手动选择 Top-2、Dominant 或 Auto，而不是误认为默认调整没有成本。
+自动验证入口 `GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN=1` 会临时给默认 Terrain 分配 DefaultTerrain、固定相机，完成三档测试后正常退出，不保存场景。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 用于逐档截图。固定视口检查没有发现新的轮廓变化、Triplanar 方向错误或条带接缝；默认档调整也有回归断言锁定为 Full-4。
 
 ## HDR 环境 Cubemap 与 Mip Chain 基础
 
-P10 的第一阶段先统一“环境源如何进入 Renderer”，尚未提前实现完整 IBL。现在 SkyLight 可以继续引用传统六面 `.glsky`，也可以直接使用 Radiance `.hdr` 等距柱状图；两种来源最终都得到遵守同一六面方向约定、带完整 Mip Chain 的 TextureCube。
+IBL 开工前先碰到一个更基础的问题：Renderer 只认识六张 LDR 天空盒图片，常见的 Radiance `.hdr` 等距柱状环境图进不来。这个阶段先统一环境源，把六面 `.glsky` 和单张 `.hdr` 都转换成相同方向约定、带完整 Mip Chain 的 `TextureCube`。天空盒和后续环境光从这里开始共享同一份输入。
 
-### 导入与描述格式
+### 资产入口
 
-直接把位于项目 `assets` 内的 `.hdr` 拖到 Viewport 或 Sky Light 的 Cubemap 属性即可。AssetManager 会将其注册为 `AssetType::Cubemap`，而不是普通 Texture2D。
-
-如果需要一个可命名、可调整目标分辨率的环境资产，可以创建 `.glsky` 并使用：
+项目 `assets` 下的 `.hdr` 会直接注册为 `AssetType::Cubemap`，可以拖到 Viewport 或 SkyLight 的 Cubemap 属性。如果需要固定名称和输出面尺寸，则使用 `.glsky`：
 
 ```yaml
 Cubemap:
@@ -5695,187 +3677,122 @@ Cubemap:
   Resolution: 512
 ```
 
-`Source` 相对 `.glsky` 所在目录解析。Source 为空时仍使用原来的 `Right/Left/Top/Bottom/Front/Back` 六面字段，因此旧资产无需迁移。Content Browser、Viewport 拖放和 Cubemap Asset Inspector 均识别 `.hdr`；Inspector 会显示来源类型、实际源路径、格式、面尺寸、Mip 数和 Runtime 版本，并支持 Reload。
+`Source` 相对 `.glsky` 所在目录解析。留空时继续读取 `Right/Left/Top/Bottom/Front/Back` 六面字段，旧资产无需转换。Cubemap Inspector 会显示源类型、实际路径、格式、面尺寸、Mip 数和 Runtime Version，也可以显式 Reload。
 
-### 核心数据流
-
-```text
-.hdr / .glsky Source
-  → AssetManager Cubemap Handle
-  → Cubemap::Reload
-  → EnvironmentMapLoader::LoadEquirectangularHDR
-  → FloatImageData（线性 RGBA float）
-  → 双线性 Equirectangular-to-Cubemap 转换
-  → TextureCube RGBA16F
-  → GenerateMipmaps，直到 1×1
-  → SkyboxRenderer 可见背景
-```
-
-`EnvironmentMapLoader` 位于引擎核心 Renderer，而不是 EditorLayer 或 OpenGL 平台层。它处理经度循环、纬度钳制和 `+X/-X/+Y/-Y/+Z/-Z` 六面方向；OpenGL 后端只负责不可变存储、指定 Mip/面的数据上传和 Mip 生成。HDR 像素不会先压到 0～1，也不会执行 sRGB 解码，最终使用线性 `RGBA16F`。
-
-TextureCube 规格新增显式 `MipLevels`，完整链的级数为 `floor(log2(faceSize)) + 1`。传统六面 LDR Cubemap 也会生成完整链并使用 Trilinear Min Filter。当前自动生成的是普通颜色下采样 Mip，只用于稳定可见天空盒采样并准备资源接口；它不能替代按 Roughness 卷积的 Specular Prefilter。
-
-### Reload 与后续派生缓存
-
-Cubemap 成功加载后记录实际源路径、是否 HDR 和递增 Runtime Version。该版本不是新的持久资产 ID；它用于后续把派生 IBL 缓存键定义为：
+### 从经纬图到 GPU 纹理
 
 ```text
-Source Cubemap Handle + Runtime Version + Generation Parameters
+.hdr 或 .glsky Source
+  -> AssetManager Cubemap Handle
+  -> Cubemap::Reload()
+  -> EnvironmentMapLoader 解码线性 RGBA float
+  -> 双线性 Equirectangular-to-Cubemap
+  -> RGBA16F TextureCube
+  -> GenerateMipmaps() 直到 1x1
 ```
 
-这样 HDR 文件热重载或生成参数变化时，只失效对应 Irradiance、Prefilter 和 BRDF LUT，正常帧不会重复卷积。Diffuse Irradiance 与 Specular Prefilter 已在后续章节完成；当前还需继续实现 BRDF LUT。
+`EnvironmentMapLoader` 位于 Renderer 核心层，负责经度循环、纬度钳制和 `+X/-X/+Y/-Y/+Z/-Z` 的方向转换。OpenGL 层只创建不可变存储、上传指定面与 Mip，并调用 Mip 生成。HDR 数值全程保持线性，不会先压进 0 到 1，也不会走 sRGB 解码。
 
-### 验证
+`TextureCubeSpecification::MipLevels` 显式记录级数，完整链为 `floor(log2(faceSize)) + 1`。传统六面 LDR Cubemap 同样生成完整链并使用 Trilinear Min Filter。这里生成的是普通颜色下采样，适合稳定天空盒采样；粗糙度反射使用后续单独生成的 Specular Prefilter，不能拿普通 Mip 冒充。
 
-- VS2026 Premake 工程重新生成成功，`Debug | x64` 全解决方案构建成功；
-- 71 项无窗口回归全部通过，覆盖完整 Mip 级数、六面中心方向、经纬图实际采样方向、HDR 高亮值保持、Radiance 文件解码和 `.hdr` 资产类型；
-- 方向测试首次运行发现北极连续坐标在行号钳制后仍使用旧插值权重，现已改为先钳制连续纬度坐标再计算双线性权重；
-- NVIDIA GeForce GTX 1050 / OpenGL 4.6 短时启动验证通过，Skybox、ToneMapping、PBR、Terrain 与三个 Compute Shader 均加载成功，无 OpenGL、Framebuffer 或 Shader 断言；
-- 构建输出保留，未删除 `bin` 或 `bin-int`。
+### Reload 与派生资源
+
+Cubemap 每次成功加载都会更新源路径、HDR 标记和 Runtime Version。Environment Lighting 用下面这组信息管理派生缓存：
+
+```text
+Source Handle + Runtime Version + 派生类型 + 生成参数
+```
+
+因此 HDR Reload 只会让相关的 Diffuse Irradiance 和 Specular Prefilter 失效，普通帧不会重复卷积。BRDF LUT 与具体环境无关，作为进程级共享资源管理。后续章节记录了这三部分 IBL 的接入过程；当前代码已经完整使用这套缓存边界。
+
+验证曾抓到一个很隐蔽的极点问题：纬度行号虽然被钳制，双线性插值权重仍来自钳制前的坐标。修复为先钳制连续纬度，再计算权重。71 项无窗口回归覆盖完整 Mip 数、六面中心方向、经纬采样方向、HDR 高亮值和 Radiance 解码；GTX 1050/OpenGL 4.6 启动检查也通过，没有出现 Shader、Framebuffer 或 OpenGL 断言。
 
 ## Diffuse Irradiance 环境漫反射
 
-P10 第二阶段已经让 SkyLight 不再只是背景。模型和地形现在会从同一个 Cubemap 派生低频环境漫反射，因此关闭 Directional Light 后，非金属表面仍能接收到来自天空不同方向和颜色的柔和照明。
+HDR Cubemap 接通后，SkyLight 仍只是背景图，关掉方向光，模型和地形很快就暗成一片。P10 的第二步是从同一张环境图生成低频漫反射，让朝向不同的表面接收到对应方向的天空颜色。
 
-### 运行链路
+### 环境光怎样进入材质
 
-```text
-Scene 中第一个启用的 SkyLightComponent
-  → LightEnvironment：Cubemap Handle + Intensity
-  → AssetManager::GetCubemap
-  → EnvironmentLighting 派生缓存
-  → TextureCube 浮点六面读回
-  → EnvironmentMapLoader 余弦加权卷积
-  → 32×32 RGBA16F Diffuse Irradiance
-  ├─ Renderer3D / PBRModel：slot 8
-  └─ TerrainRenderer / Terrain：slot 20
-```
-
-Scene 只提交可序列化的 Cubemap Handle 和 SkyLight Intensity；卷积数据、GPU TextureCube 和缓存统计不进入场景文件。EditorLayer 没有新增 OpenGL 调用或 IBL 算法。
-
-### 漫反射积分
-
-Diffuse Irradiance 保存的是法线半球上的：
+Scene 只提交第一个启用的 `SkyLightComponent`，内容是 Cubemap Handle、Intensity 和 Enabled 状态。`EnvironmentLighting` 解析资产并生成 Irradiance，Renderer3D 与 TerrainRenderer 再把它绑定到各自预留的纹理槽：
 
 ```text
-E(N) = ∫ L(ω) × max(dot(N, ω), 0) dω
+SkyLight Cubemap Handle + Intensity
+  -> AssetManager::GetCubemap()
+  -> EnvironmentLighting 派生缓存
+  -> 读取线性浮点六面数据
+  -> EnvironmentMapLoader 余弦卷积
+  -> 32x32 RGBA16F Irradiance Cubemap
+  -> PBRModel slot 8 / Terrain slot 20
 ```
 
-实现使用确定性 Hammersley 序列进行余弦重要性采样，默认输出 `32×32` 六面图，每像素 64 个样本。对于常量环境，结果应为 `π × Radiance`，对应回归测试已验证。Shader 再使用 Fresnel-Schlick-Roughness 计算：
+卷积使用确定性的 Hammersley 序列，默认每个像素取 64 个样本。Irradiance 保存法线半球上的入射光积分：
 
 ```text
-Diffuse IBL = (1 - F) × (1 - metallic) × albedo × irradiance / π
-              × AO × SkyLightIntensity
+E(N) = integral L(w) * max(dot(N, w), 0) dw
 ```
 
-没有有效 SkyLight/Irradiance 时，Shader 保留原方向光 Ambient 回退。金属材质所需的环境镜面反射已由下一章节的 Specular Prefilter 补入；在 BRDF LUT 完成前，其能量与掠射角响应仍是阶段性近似。
-
-### 派生缓存和失效
-
-缓存键已经落实为：
+Shader 随后计算：
 
 ```text
-Cubemap AssetHandle
-+ Cubemap Runtime Version
-+ Irradiance Resolution
-+ Irradiance Sample Count
+Diffuse IBL = (1 - F) * (1 - metallic) * albedo * irradiance / PI
+              * AO * SkyLightIntensity
 ```
 
-同一活动键在后续帧直接复用，不执行 TextureCube 读回或卷积。点击 Cubemap Inspector 的 Reload 会递增 Runtime Version；修改生成参数也会形成新键。生成新版本后，同一源环境的旧版本内存项会被移除。当前缓存仅存在于进程内，重新启动编辑器仍会生成一次；持久化磁盘缓存和 LRU 内存预算留作后续基础建设。
+这里保留 Fresnel 项，是为了让漫反射和镜面反射共享同一份能量分配。金属表面的漫反射自然趋近于零。没有有效 Irradiance 时，Shader 继续使用原有 Ambient Color 回退，场景不会因为环境资产失效而全黑。
 
-### 如何查看效果
+### 缓存为何带 Runtime Version
 
-1. 场景中保留启用的 Sky Light，并给它分配 `.glsky` 或 `.hdr`；
-2. 给模型使用 PBRModel 材质，或者观察 Terrain；
-3. 暂时关闭 Directional Light 的 Enabled；
-4. 非金属区域应保留随法线方向变化的环境颜色，而不是退化为统一黑色；
-5. 调整 Sky Light Intensity，应同时改变可见天空盒和 Model/Terrain 环境漫反射强度。
+卷积放在 CPU 上做，逐帧生成肯定不可接受。缓存键由 Cubemap Handle、Runtime Version、派生类型、Resolution 和 Sample Count 组成。同一键直接复用 GPU 纹理；Reload Cubemap 会推进 Version，只清理该源的旧版本。Diffuse 与 Specular 使用不同派生类型，改一边的参数不会误伤另一边。
 
-### 验证
+```text
+Handle + Runtime Version + DiffuseIrradiance + Resolution + Sample Count
+```
 
-- VS2026 `Debug | x64` 的 Cyou 编辑器与回归测试项目增量构建成功；
-- 74 项无窗口回归全部通过，新增覆盖常量环境余弦积分和缓存键的复用/版本/参数失效；
-- NVIDIA GeForce GTX 1050 / OpenGL 4.6 下，默认 `32×32 / 64 samples` Irradiance 在相邻日志秒内完成且只记录一次生成；
-- PBR Material Lab 成功渲染 6/6 模型，PBRModel、Terrain、ShadowDepth 和既有 Compute Shader 均编译通过；
-- 未删除 `bin`、`bin-int`，构建产物保留。
+这份缓存目前只在进程内存中，重启编辑器后仍需生成一次，也没有 LRU 预算。Scene YAML 只保留源 Handle 和光照强度，Irradiance 像素、GPU 对象及缓存统计都不序列化。EditorLayer 只负责把场景环境交给 Renderer，没有卷积算法或 OpenGL 调用。
+
+常量环境回归确认积分结果为 `PI * Radiance`。这一阶段完成时，74 项无窗口测试通过；GTX 1050/OpenGL 4.6 上默认 `32x32 / 64 samples` 只生成一次，PBR Material Lab 的 6 个模型和 Terrain 均正常接收环境漫反射。后续 Specular Prefilter 与 BRDF LUT 已经接入同一条 Environment Lighting 管线。
 
 ## Specular Prefilter 粗糙度环境反射
 
-P10 第三阶段加入了按粗糙度分级的环境镜面反射。模型和地形不再直接从可见 Skybox 的普通 Mip 猜测反射，而是从同一源 Cubemap 生成经过 GGX 卷积的专用 Prefilter Mip Chain。
+漫反射解决了暗面，金属和光滑表面仍缺少环境反射。直接采样 Skybox 的普通 Mip 看似省事，但普通下采样没有遵守 GGX 分布，Roughness 增大时高亮的形状和能量都会失真。于是 P10 的下一步生成专用 Specular Prefilter Mip Chain，并配套 Split-Sum BRDF LUT。
 
-### 生成与渲染链路
+### Prefilter 和 Roughness
+
+`EnvironmentMapLoader` 使用 Hammersley 序列做 GGX 重要性采样。默认输出 `64x64 RGBA16F` Cubemap，共 7 层 Mip，每像素 64 个样本。Mip 0 直接保留源环境，后续 Mip 逐级提高 Roughness；材质越粗糙，Shader 选择的 LOD 越高，太阳一类的集中高亮也就扩散得更宽。
 
 ```text
 SkyLight Cubemap
-  → EnvironmentLighting 检查独立 Specular 缓存键
-  → 读取一次线性浮点六面源数据
-  → EnvironmentMapLoader：Hammersley + GGX 重要性采样
-  → 64×64 RGBA16F Specular Prefilter，共 7 层 Mip
-  ├─ Renderer3D / PBRModel：slot 9
-  └─ TerrainRenderer / Terrain：slot 21
-
-EnvironmentLighting 初始化
-  → Hammersley + GGX 可见性积分
-  → 64×64 RG16F Split-Sum BRDF LUT，128 samples
-  ├─ Renderer3D / PBRModel：slot 10
-  └─ TerrainRenderer / Terrain：slot 22
-
-Fragment Shader
-  → reflect(-V, N)
-  → textureLod(prefilter, reflection, roughness × maxLod)
-  → Prefilter × (F0 × BRDF.x + BRDF.y)
-  → AO × SkyLightIntensity
+  -> EnvironmentLighting Specular 缓存
+  -> GGX Prefilter，64x64，7 Mips
+  -> PBRModel slot 9 / Terrain slot 21
+  -> textureLod(reflection, roughness * maxLod)
 ```
 
-Mip 0 直接采样源环境，保留低 Roughness 材质需要的清晰反射；Mip 1～6 逐级提高 GGX Roughness。材质 Roughness 越大，Shader 选择的 LOD 越高，太阳等集中高亮会扩散为更宽、更柔和的反射。派生链是专用卷积结果，不等同于 Skybox 的普通颜色下采样 Mip。
+Diffuse 和 Specular 只有在缓存缺失时才读回源 Cubemap。两者同时缺失时共用一次 CPU 浮点数据，然后分别生成；正常渲染帧只绑定已有纹理。Reload 或参数变化通过统一缓存键准确失效，旧 Runtime Version 的条目会被移除。
 
-### 缓存边界
+### BRDF LUT 的取舍
 
-Diffuse 与 Specular 共用统一键结构，但由派生图类型隔离：
-
-```text
-Cubemap AssetHandle
-+ Cubemap Runtime Version
-+ Derived Map Type
-+ Resolution
-+ Sample Count
-```
-
-因此修改 Irradiance 参数不会误命中 Prefilter，修改 Prefilter 参数也不会强制重建仍然有效的 Irradiance。只有任一派生图缺失时才读回源 Cubemap，单次更新可复用这份 CPU 浮点数据完成所需生成；正常帧只绑定缓存纹理。同一 Handle Reload 后，旧 Runtime Version 项会被移除。
-
-### Split-Sum BRDF LUT
-
-BRDF LUT 与具体 HDR 环境无关，只描述 `N·V` 和 Roughness 对 GGX 镜面 BRDF 的 scale/bias。它在 Renderer 初始化时由 `EnvironmentMapLoader` 在 CPU 上预积分一次，上传为线性 `RG16F Texture2D`；切换或 Reload SkyLight 不会重新生成。Shader 已按标准 Split-Sum 公式消费：
+Prefilter 处理环境方向，二维 BRDF LUT 则预积分 `N dot V` 与 Roughness 对 GGX 镜面项的 scale/bias：
 
 ```text
 Specular IBL = PrefilteredEnvironment(R, roughness)
-             × (F0 × BRDF.x + BRDF.y)
+             * (F0 * BRDF.x + BRDF.y)
+             * AO * SkyLightIntensity
 ```
 
-初版曾使用 `128×128 / 256 samples`，在 GTX 1050 的 Debug 构建中增加约 5 秒启动等待。二维 LUT 足够平滑且使用双线性采样，因此默认调整为 `64×64 / 128 samples`，实测在日志相邻秒内完成；设置接口仍允许后续离线生成更高质量版本。
+LUT 与具体 HDR 无关，所以 `EnvironmentLighting::Init()` 只生成一次线性 `RG16F Texture2D`，模型绑定 slot 10，Terrain 绑定 slot 22。切换 SkyLight 或 Reload Cubemap 都不会重算它；只有 LUT 设置变化时才重新生成。
 
-### 如何查看效果
+初版使用 `128x128 / 256 samples`，GTX 1050 的 Debug 启动因此多等了约 5 秒。二维结果本身很平滑，又有双线性过滤，我最后把默认值降到 `64x64 / 128 samples`。肉眼没有发现明显差异，启动生成则缩短到相邻日志秒内。高质量参数入口仍然保留，之后若做离线缓存可以继续使用。
 
-1. 给场景 Sky Light 分配含明显太阳或高亮区域的 `.hdr`；
-2. 使用 PBRModel 或观察 Terrain，保持相机能看到环境高亮的反射方向；
-3. 将 Metallic 调高以弱化漫反射，再从低到高调整 Roughness；
-4. 低 Roughness 应看到较集中反射，高 Roughness 应平滑扩散；
-5. 同一进程日志只应出现一次 BRDF LUT；同一环境持续运行时只出现一次 Diffuse 和一次 Specular 生成记录。
-
-### 验证
-
-- 78 项无窗口回归全部 PASS；除 Prefilter 测试外，新增验证 BRDF LUT 全部值有限且有界，并正确响应 Roughness 与掠射角 Fresnel；
-- NVIDIA GeForce GTX 1050 / OpenGL 4.6 下生成 `64×64`、7 层、每像素 64 样本的 Prefilter，运行日志只记录一次生成；
-- PBR Material Lab 渲染 6/6；`64×64 / 128 samples` BRDF LUT 在 GTX 1050 / OpenGL 4.6 下生成一次，`PBRModel`、`Terrain`、`ShadowDepth` 和三条地形 Compute Shader 均成功加载；
-- 回归测试项目使用非增量链接重建，修复此前损坏的增量链接测试 EXE；未删除 `bin`、`bin-int`，编辑器构建产物保留。
+78 项无窗口回归覆盖 Prefilter 粗糙度响应、BRDF LUT 有限范围和掠射角 Fresnel。GTX 1050/OpenGL 4.6 实测中，Prefilter、Diffuse 和 BRDF LUT 都只记录一次生成；PBRModel、Terrain 与 PBR Material Lab 的 6 个模型正常渲染。
 
 ## Terrain 固定 3×3 Chunk、LOD 与剔除
 
-P11 把原先整块提交的 Terrain 拆成固定 `3×3` 区域，但不改变场景中的 `TerrainSpecification`、整体世界尺寸或 HeightMap 内容。在稳定 Chunk 坐标与剔除边界后，Color Pass 会为每块选择三档距离 LOD，并用 Skirt 遮盖不同分辨率接缝。
+Terrain 最初始终以整张网格提交。只要山地有一小角进入视野，全部三角形都会参与 Color 和 Shadow Pass；想加 LOD 时，也找不到比整块地形更细的切换单位。P11 先把地形固定拆成 `3x3` 九块。这个规模谈不上动态地形系统，但足够把共享网格、剔除、LOD 稳定性和接缝处理验证清楚。
 
-### 共享网格与坐标
+### 九个区域，共用三份网格
 
-`TerrainChunkLayout` 是 Terrain 核心目录中的纯 CPU 布局工具。对于原始 `MeshResolution`，共享 Chunk Mesh 分辨率按以下方式计算：
+`TerrainChunkLayout` 是纯 CPU 布局工具。它把整体世界尺寸和 Height UV 各分成三份：
 
 ```text
 SharedMeshResolution = ceil(MeshResolution / 3)
@@ -5883,48 +3800,27 @@ ChunkWorldSize       = TerrainWorldSize / 3
 ChunkUVScale         = (1/3, 1/3)
 ```
 
-九个 Chunk 不各自创建 Mesh，也不复制 Height、Normal/Slope、Analysis、Material Weights 或 TerrainMaterial 纹理。`TerrainRuntime` 只创建 LOD0、LOD1、LOD2 三份共享模板，分辨率约为 `1 / 1/2 / 1/4`；绘制每块时选择其中一份并上传 `UVOffset / UVScale / LocalOffset / LocalScale`。三档网格都会映射到相同的 Chunk 世界尺寸和全局 Height UV，因此改变密度不会缩小区域或重复地形。
+九个 Chunk 不复制 HeightMap、派生图或 TerrainMaterial，也不各建一份 Mesh。`TerrainRuntime` 只持有 LOD0、LOD1、LOD2 三个共享模板，分辨率约为完整 Chunk 的 `1`、`1/2`、`1/4`。绘制时上传每块的 UV Offset、UV Scale、Local Offset 和 Local Scale，同一份高度纹理便能覆盖正确区域。
 
-```text
-TerrainComponent / TerrainRuntime
-  ├─ 一套 Height + Derived Maps + TerrainMaterial 绑定
-  ├─ 三份 Shared TerrainMesh（LOD0 / LOD1 / LOD2）
-  └─ TerrainChunkLayout[9]
-       ├─ Color Pass：剔除后按距离选择 LOD Mesh
-       └─ Shadow Pass：逐块 Bounds 测试后固定使用 LOD0
-```
+Color Pass 为每块建立局部 AABB，再乘实体 Transform 与相机视锥测试。Shadow Pass 使用相同的 Chunk Bounds 对当前 Cascade 做剔除。判定很保守：只有八个包围盒角点全部落在同一 Clip Plane 外才丢弃，横跨视锥边缘的地块会继续提交。阴影目前固定使用 LOD0，避免投影轮廓随着相机距离改变。
 
-ShadowDepth 使用与颜色通道相同的 Chunk UV 和局部变换。Color Pass 与 `ShadowRenderer` 都不再把 Terrain 当成一个整体 Bounds：每块根据局部 XZ 范围和 HeightScale 建立 AABB，乘上 Terrain 实体 Transform 后分别测试 Camera ViewProjection 或当前 Cascade Light VP，剔除后才提交该块绘制。
+### 让 LOD 切换少露破绽
 
-判定使用共用的八角点保守算法：只有 AABB 八个角点全部落在同一个 Clip Plane 外侧时才剔除。横跨视锥边界的 Chunk 会继续绘制，以避免因包围盒部分可见而误删地形。
+Color Pass 按 Chunk 世界中心到相机的距离选择三级 LOD，默认阈值是 `90 / 180`。每块保存上一帧级别，跨过阈值外侧 5 个世界单位后才切换；这段迟滞能压住相机停在阈值附近时的来回跳动。初选结束后还会约束上下左右邻块，级别最多相差一级。
 
-### 距离 LOD 与接缝
+不同分辨率的边缘会产生 T-Junction。每份 `TerrainMesh` 因此复制四条边界顶点，并用 `a_Skirt` 标记让 Vertex Shader 向下拉出裙边。Skirt 只盖住侧面缝隙，表面仍采样原来的 Height 和 Normal；Color 与 Shadow 都使用它。
 
-Color Pass 以 Chunk 世界中心到相机的距离选择 LOD0/1/2，默认中档和远档阈值为 `90 / 180` 世界单位。首次绘制直接按距离选择；之后保留每块上帧级别，只有越过阈值外侧 5 单位后才切换，避免相机在阈值附近轻微移动时反复跳级。选择完成后再约束四方向相邻块，使其最多相差一级。
+Debug Panel 会显示 Candidate、Submitted、Culled、三级 LOD 数量和提交三角形数。完整可见时 Candidate 固定为 9，Submitted 与 Culled 的和也应为 9。`Visualize Terrain LODs` 用红、绿、蓝标出 LOD0/1/2，环境变量 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 可用于固定相机检查，设置不会写入场景。
 
-不同密度边缘会形成 T-Junction。每份 `TerrainMesh` 因此在四边复制一圈顶点，Shader 用 `a_Skirt` 标记把它们向下延伸；竖向裙边覆盖潜在缝隙，但不改变表面 Height/Normal 采样。Shadow Pass 固定使用 LOD0，并同样绘制 Skirt，避免阴影轮廓随相机距离变化。
-
-### 如何观察
-
-打开 `Debug → Overview → Terrain`：完整可见时 Candidate 应为 9，Submitted 与 Frustum Culled 之和始终为 9，Shared Meshes 为 3。`LOD Chunks (0 / 1 / 2)` 显示本帧实际提交的各级数量，`Submitted Triangles` 会随远处块使用低级网格而下降。拖动 `LOD Distances` 可以立即调整中/远阈值；把两值调小应看到更多 LOD2，把两值调大则更多 LOD0。移动相机跨过阈值时检查边界，不能出现能看到天空盒或 Clear Color 的裂缝。
-
-勾选 `Visualize Terrain LODs` 后，LOD0、LOD1、LOD2 分别覆盖为红、绿、蓝。它适合同时观察九块的分级、阈值迟滞和相邻级差；关闭后立即恢复正常 TerrainMaterial。无人值守或固定相机检查可以在启动前设置 `GLIMMER_TERRAIN_LOD_VISUALIZE=1`，该环境变量不保存到场景。
-
-### 验证
-
-- 88 项无窗口回归覆盖共享网格向上取整、九块完整覆盖、视锥判定，以及 LOD 分辨率、距离阈值、迟滞和相邻级差；
-- VS2026 `Debug | x64` 回归测试与整解决方案构建成功；
-- 最终 EXE 使用项目工作目录在 Intel Iris Xe / OpenGL 4.6 下持续运行 15 秒，Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功加载，无断言、崩溃或 Shader 错误；
-- LOD 调试着色通过 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 在同一真实 OpenGL 环境中启动验证；日志确认模式启用且新版 Terrain Shader 成功编译；
-- 固定相机最终截图显示近、中、远区域连续呈现红、绿、蓝三档；不同颜色交界处未露出天空盒或 Clear Color，未观察到孤立越级 Chunk，P11 接缝与 LOD 分布验收通过；
-- Color Pass Chunk 剔除接入后，最终 EXE 默认场景仍正常显示连续 Terrain，未发生可见 Chunk 误删；Camera Frustum 的内/外/边界/实体 Transform 判定由新增回归断言覆盖；
-- 未删除 `bin`、`bin-int`，构建产物继续保留。
+88 项无窗口回归覆盖九块完整覆盖、共享网格向上取整、视锥边界、距离阈值、迟滞和相邻级差。Intel Iris Xe/OpenGL 4.6 的固定截图确认三档区域连续，颜色交界处没有露出 Skybox 或 Clear Color；默认场景也没有出现 Chunk 误剔除。当前边界仍是固定 `3x3`、离散三级 LOD 和 Skirt，尚未实现动态 Chunk 层级或连续几何 Morph。
 
 ## Scene Depth 距离雾
 
-P12 第一阶段在现有 HDR Scene Pass 和 Tone Mapping 之间接入距离雾。Scene Framebuffer 除 `RGBA16F` 场景颜色和整数 EntityID 外，显式保留一张可采样的 `Depth24Stencil8`；后处理阶段使用当前相机的逆 ViewProjection 将屏幕 UV 与深度还原到世界位置，再计算相机到该片元的真实世界距离。
+P12 开始时，远近山体的颜色和对比度几乎一样，画面很难读出尺度。我先在 HDR Scene Pass 与显示映射之间加入距离雾。它直接使用 Scene Depth 重建世界位置，所以雾效跟真实世界距离走，不依赖 Terrain Shader，也能覆盖模型和其他写入深度的几何体。
 
-雾在曝光和 ACES Filmic 之前混合，因此 Fog Color 与 Scene HDR Color 都处于线性空间，只经过一次 Tone Mapping 和 Gamma。深度接近 1 的像素代表没有场景几何，当前策略保留 Skybox 原色，避免把天空误当成远平面实体。
+### 从深度还原距离
+
+Scene Framebuffer 保留 `RGBA16F` Color、整数 EntityID 和可采样的 `Depth24Stencil8`。后处理使用屏幕 UV、Depth 与当前相机的逆 ViewProjection 还原片元位置：
 
 ```glsl
 vec4 clip = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
@@ -5933,25 +3829,17 @@ world /= world.w;
 
 float distanceToCamera = length(world.xyz - u_CameraPosition);
 float rangeWeight = smoothstep(startDistance, endDistance, distanceToCamera);
-float opticalWeight = 1.0 - exp(-density * max(distanceToCamera - startDistance, 0.0));
-float fogWeight = rangeWeight * opticalWeight;
-linearColor = mix(linearColor, fogColor, fogWeight);
+float opticalWeight = 1.0 - exp(-density
+    * max(distanceToCamera - startDistance, 0.0));
 ```
 
-### 使用方法
+Depth 接近 1 的像素没有场景几何，Shader 会保留 Skybox 原色。这个判断很小，却避免了整片天空被当成远平面染成统一雾色。雾在曝光和 ACES 前混合，Scene Color 与 Fog Color 都处在线性 HDR 空间，最后只做一次 Gamma。
 
-打开 `Settings → Distance Fog`：
+Settings 中可以调整 Density、Start、End 和 Color，默认值为 `0.012 / 60 / 260`。Fog Color 有 Manual、Sky Light 和 Directional Light 三种来源：Sky Light 按视线读取 Cubemap 的模糊 Mip，Directional Light 使用当前主光的 `Color * Intensity`；来源无效时回退 Manual。
 
-- `Enabled`：开启或关闭距离雾；
-- `Density`：控制距离增加时的指数衰减速度；
-- `Start / End`：控制近景保护区和完全进入远景雾的范围；
-- `Color`：线性 HDR 雾色。
-- `Color Source`：选择 Manual、Sky Light 或 Directional Light；Sky Light 按当前视线方向读取环境 Cubemap 的模糊低 Mip，Directional Light 使用首个启用主光的 Color×Intensity；来源不可用时回退 Manual；
-- `Height Fog`：开启指数高度密度；`Base Height` 是参考雾层高度，`Height Falloff` 越大，雾随世界高度上升衰减越快。
+### 高度雾为什么沿射线积分
 
-默认参数为 Density `0.012`、Start `60`、End `260`。调试启动可以设置 `GLIMMER_DISTANCE_FOG_VISUALIZE=1`；该开关和全部雾参数当前只存在于编辑器会话，不保存到 Scene YAML。
-
-高度雾不是简单地用片元终点高度乘权重，而是沿相机到片元的整条射线积分指数密度：
+只看片元终点高度会漏掉相机与物体之间经过的低空雾层。当前实现沿整条视线积分指数密度：
 
 ```glsl
 float cameraDensity = exp(-falloff * (cameraY - baseHeight));
@@ -5961,195 +3849,158 @@ float heightIntegral = abs(denominator) > epsilon
     : cameraDensity;
 ```
 
-因此俯视低谷时整段低空路径会积累更多雾，高处山脊和相机附近细节相对清晰；相机穿过 Base Height 时公式连续。实现对指数输入和积分结果进行了钳制，避免极端调试参数生成 Inf/NaN。
+俯视山谷时，穿过低空的路径会积累更多雾；高处山脊和相机附近仍能保留细节。相机越过 Base Height 时公式保持连续，指数输入与积分结果也有钳制，调试参数拉得很极端时不会制造 Inf 或 NaN。
 
-### 验证
-
-- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；
-- Intel Iris Xe / OpenGL 4.6 下 ToneMapping、Terrain、ShadowDepth、GenerateFBM、ThermalErosion 与 DeriveTerrainMaps 均成功编译；
-- 固定 Terrain 相机截图确认近景保留原材质对比度，远景逐步向雾色衰减，天空深度不参与世界位置雾化；无 Shader 错误、断言或崩溃；
-- 高度雾 + SkyLight 色源固定相机截图确认环境色调一致、远处低地衰减增强且近景高处仍保留细节；重新构建回归目标后 88 项无窗口测试继续全部 PASS；
-- 下一阶段校准 ACES/曝光并评估 Bloom，当前实现仍不代表完整大气散射。
+这些参数目前属于 `PostProcessSettings` 的运行时状态，不写 Scene YAML。`GLIMMER_DISTANCE_FOG_VISUALIZE=1` 可以用固定设置启动检查。P12 验证时，Intel Iris Xe/OpenGL 4.6 的固定相机画面确认近景对比度、远景衰减和 SkyLight 雾色都符合预期；88 项无窗口回归通过。当前效果仍是解析距离雾和高度雾，没有体积阴影、光柱或完整大气散射。
 
 ## HDR Bloom 后处理
 
-P12 的首版 Bloom 复用现有 HDR Scene Color，不向材质或光源增加专用发光标记。超过软阈值的高亮区域进入半分辨率 `RGBA16F` Ping-Pong 缓冲，经过水平/垂直高斯模糊后加回 Scene HDR。
+Tone Mapping 接入 HDR 后，太阳和 Emissive 高亮虽然有足够亮度，缩到显示范围时却显得很硬。Bloom 用周围像素的光晕把这种亮度重新表现出来。首版直接复用 Scene HDR Color，没有给材质或光源增加额外的 Bloom 标记。
+
+### 一条尽量简单的 Bloom 链
 
 ```text
 Scene RGBA16F
-  → Bloom Extract（EV 后亮度阈值，保留未曝光 Radiance）
-  → Half Resolution RGBA16F
-  → Horizontal / Vertical Gaussian Blur
-  → Scene + Bloom
-  → Distance / Height Fog
-  → 2^EV
-  → ACES White Point
-  → Gamma
+  -> 按 EV 判断 Threshold / Soft Knee
+  -> Half-resolution RGBA16F
+  -> 水平与垂直 Gaussian Blur
+  -> 按 Intensity 加回 Scene HDR
+  -> Distance / Height Fog
+  -> 2^EV -> ACES White Point -> Gamma
 ```
 
-提取阶段使用 Threshold 和 Soft Knee。Threshold 决定明确进入 Bloom 的显示亮度，Soft Knee 在阈值附近建立平滑过渡，避免高光边缘突然截断。阈值判断乘当前 EV，使用户调节曝光时 Bloom 感知阈值保持一致；输出仍保存原始 HDR Radiance，因此合成后只统一乘一次 EV。
+提取时先用当前 EV 计算显示亮度，再判断 Threshold。用户调曝光后，肉眼看到的 Bloom 起点因此不会乱跑；写入模糊缓冲的仍是未曝光 Radiance，合成结果最后统一乘一次 `2^EV`。Soft Knee 在阈值附近提供渐进权重，省掉高光边缘那圈明显的硬切。
 
-Settings 的 `Bloom` 区域提供：
+模糊缓冲使用视口一半的宽高和 `RGBA16F`，两张 Framebuffer 交替执行横向、纵向高斯采样。默认 Threshold `1.0`、Soft Knee `0.5`、Intensity `0.08`、Blur Passes `6`。关闭 Bloom 会跳过提取与模糊 Pass；Resize 时两张缓冲跟随 Display Framebuffer 调整，最小尺寸保持为 `1x1`。
 
-- `Enabled`：完全跳过或执行 Bloom Pass；
-- `Threshold`：高光提取阈值，默认 `1.0`；
-- `Soft Knee`：阈值过渡宽度，默认 `0.5`；
-- `Intensity`：加回 Scene HDR 的强度，默认 `0.08`；
-- `Blur Passes`：半分辨率水平/垂直模糊次数，默认 `6`，范围 `1～12`。
+我当时刻意把强度压得很低。默认画面只让太阳一类 HDR 高光轻微扩散，Terrain 中间调不会整体泛白。Bloom 在雾之前加回线性颜色，远处光晕随后和场景一起受 Fog 衰减，不会像贴在屏幕上一样穿过雾层。
 
-### 验证
-
-- VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；
-- Intel Iris Xe / OpenGL 4.6 下 BloomExtract、BloomBlur、ToneMapping、Terrain、ShadowDepth 与三条 Terrain Compute Shader 均成功编译；
-- 固定 Terrain 相机画面中，默认参数只在太阳等 HDR 高光周围产生柔和扩散，地形中间调没有整体泛白；高度雾继续衰减远处 Bloom，没有出现光晕穿透雾层；
-- 当前为经典双缓冲高斯 Bloom；Mip Pyramid/Kawase、Lens Dirt 和自动曝光联动属于后续优化，不是首版范围。
+Intel Iris Xe/OpenGL 4.6 验证覆盖 BloomExtract、BloomBlur 与 ToneMapping Shader，固定 Terrain 画面没有出现整屏泛白或雾层穿透；88 项无窗口回归和 VS2026 `Debug | x64` 构建通过。当前仍是经典半分辨率双缓冲高斯 Bloom，尚无 Mip Pyramid、Kawase、Lens Dirt 或自动曝光。
 
 ## TAA 接入评估
 
-P12 对 Temporal Anti-Aliasing 做了管线级评估，但没有加入只有历史颜色 Alpha 混合的简化版本。当前 Glimmer 已有 Scene HDR、Depth、EntityID、Bloom 和 Tone Mapping，但缺少完整 TAA 所需的时域数据：
+P12 期间我评估过 Temporal Anti-Aliasing，最后决定先不接。原因并不玄乎：当时管线只有当前帧 HDR、Depth 和 EntityID，缺少可靠的像素运动数据。若直接把上一帧颜色按固定 Alpha 混回来，静止截图可能更平滑，编辑器一动就会留下残影。
 
-- 相机投影没有 Halton 等亚像素 Jitter；
-- Renderer 不保存上一帧 ViewProjection；
-- Scene FBO 没有 Motion Vector/Velocity 附件；
-- Entity/Renderer3D Instancing/Sprite 不保存上一帧 Transform；
-- 没有 HDR History Ping-Pong、Resize/Play/Stop/场景切换/相机跳变失效规则；
-- 没有邻域 Clamp、反遮挡判断和透明响应 Mask。
+当前源码仍缺少这些前置条件：
 
-只使用当前 Depth 重建世界位置并投影到上一帧，最多只能正确处理静态地形和静态相机运动。移动模型、GPU Instancing、Sprite、Blend 透明物体及编辑器 Gizmo 会缺少自身速度，产生拖影或历史残留。因此本阶段不引入会降低编辑器可靠性的“伪 TAA”。
+- 相机投影没有 Halton 一类的亚像素 Jitter，也不保存 Previous ViewProjection；
+- Scene FBO 没有 RG16F Velocity Attachment；
+- Model、GPU Instancing 和 Sprite 没有 Previous Transform 数据；
+- 后处理没有 HDR History Ping-Pong，也没有 Resize、Play/Stop、场景切换和相机跳变时的失效规则；
+- Shader 没有 Depth Disocclusion、Neighborhood Clamp 和 Transparent/Emissive Reactive Mask。
 
-后续正式 TAA 的最低接入顺序为：
+仅靠当前 Depth 重建世界位置，再投影到上一帧，只能照顾静态几何与相机运动。移动模型、实例、Sprite、Blend 物体和编辑器 Gizmo 都缺少自身速度，历史颜色会拖在后面。这样的结果不适合成为编辑器默认抗锯齿。
+
+以后正式接入时，最低顺序应是：
 
 ```text
 Projection Jitter
-→ Current / Previous Clip Position
-→ RG16F Velocity Attachment
-→ HDR History Ping-Pong
-→ Depth Disocclusion + Neighborhood Clamp
-→ Reactive Mask for Transparent / Emissive
-→ History Reset on resize, scene/camera/state changes
+  -> Current / Previous Clip Position
+  -> RG16F Velocity Attachment
+  -> HDR History Ping-Pong
+  -> Depth Disocclusion + Neighborhood Clamp
+  -> Transparent / Emissive Reactive Mask
+  -> Resize、场景和相机状态变化时清空 History
 ```
 
-EntityID 不参与历史混合，拾取仍读取当前帧整数附件；TAA 只处理 HDR Scene Color，并且应在 Bloom 提取之前稳定当前场景颜色。达到上述边界后再重新评估接入。
+TAA 只应处理 HDR Scene Color，并放在 Bloom 提取之前。EntityID 继续读取当前帧整数附件，不能参与历史混合，否则鼠标拾取会和画面产生一帧或多帧错位。到目前为止这项功能仍未实现，这一章记录的是接入条件和暂缓理由。
 
 ## 后处理渲染器职责收拢
 
-P12.1 将原本直接写在 `EditorLayer` 中的 Bloom 与 Tone Mapping 执行逻辑迁入引擎侧 `PostProcessRenderer`。这次调整不改变画面公式、默认参数或 Settings 操作，只收拢资源所有权和 Pass 边界，避免后续水文模拟继续扩大编辑器协调层。
+雾和 Bloom 最初直接写在 `EditorLayer` 里。功能能跑，但编辑器已经同时管着 Scene、相机、资产和面板，再把 Framebuffer 分配、Shader 参数和 Pass 顺序留在那里，后面每加一种效果都要继续膨胀。P12.1 因此把整条显示链迁到引擎侧 `PostProcessRenderer`。
 
 ```text
 EditorLayer
-  ├─ 渲染 Scene HDR / EntityID / Depth
-  ├─ 收集 Camera、SkyLight、DirectionalLight 输入
-  └─ PostProcessRenderer::Execute(input)
-       ├─ Bloom Extract
-       ├─ Half-res Ping-Pong Blur
-       ├─ Fog / EV / ACES / Gamma
-       └─ 输出 Display Texture
+  -> 渲染 Scene HDR / EntityID / Depth
+  -> 收集 Camera、SkyLight、DirectionalLight 输入
+  -> PostProcessRenderer::Execute(input)
+       -> Bloom Extract
+       -> Half-resolution Ping-Pong Blur
+       -> Scene + Bloom
+       -> Fog -> EV -> ACES -> Gamma
+       -> Display Texture
 ```
 
-`PostProcessRenderer` 现在负责 Display Framebuffer、两张 Bloom Framebuffer、三张后处理 Shader 引用、Viewport Resize 和 Pass 执行；其 `PostProcessSettings` 集中保存 Bloom、雾、曝光、ACES 与灰度参数。Editor Settings 仍直接编辑这些纯运行时参数，它们不会写入 Scene YAML。Shader 继续加入同一个 `ShaderLibrary`，原有自动/手动热重载工作流不变。
+`EditorLayer` 现在只准备 `PostProcessInput`，其中包含 Scene Color/Depth、Inverse ViewProjection、Camera Position 和雾色所需的光源引用。`PostProcessRenderer` 自己持有 Display Framebuffer、两张 Bloom Framebuffer 和三张后处理 Shader，并在 Viewport Resize 时调整这些资源。
 
-### 验证
+`PostProcessSettings` 集中保存 Bloom、距离/高度雾、曝光、ACES White Point 和灰度开关。Settings 面板仍直接编辑这份运行时状态，操作方式和画面公式都没有改变；参数不会进入 Scene YAML。Shader 继续注册到编辑器共用的 `ShaderLibrary`，原来的自动与手动热重载也还有效。
 
-- Premake 已将新增的 `PostProcessRenderer.cpp` 纳入 Glimmer 静态库工程；
-- VS2026 `Debug | x64` 整解决方案构建成功；
-- 88 项无窗口回归全部 PASS；
-- 最终编辑器以项目工作目录和 `GLIMMER_DISTANCE_FOG_VISUALIZE=1` 启动并持续运行 15 秒，无提前退出；现有 Settings 操作、Viewport 输出和 Scene EntityID 拾取边界保持不变。
+这次重构的判断标准很朴素：编辑器决定何时执行后处理，引擎对象负责怎样执行。这样水文和气候调试继续增加时，`EditorLayer` 只需传输入，不会重新卷入画面算法。P12.1 完成时通过 VS2026 `Debug | x64` 构建、88 项无窗口回归和 15 秒编辑器启动检查，Viewport 输出与 EntityID 拾取没有变化。
 
 ## 固定步长水文 CPU 参考模型
 
-P13A 首先建立不依赖窗口和 GPU 的 `TerrainHydrologyRuntime`，用小网格固定算法契约，再迁移到 Compute Shader。它与有限次数的 Authoring Thermal Erosion 完全分离：Height 是水文初始化时的只读快照，Water、四向 Flux 和 Velocity 是独立运行时字段，不会写入 Scene YAML。
+P13A 没有一上来就写 Compute Shader。我先做了不需要窗口和 GPU 的 `TerrainHydrologyRuntime`，用小网格把水量、流向和时间步语义定死。CPU 版本更慢，却容易逐格断言，也能在出现质量误差时直接检查中间状态。
+
+### 水流核心
+
+每格保存 Height、Water、四向 Flux 和二维 Velocity。P13A 阶段 Height 是初始化快照，水文只更新其余字段：
 
 ```text
-旧 Height + 旧 Water + 旧 Flux
-  → 四邻域水面高差
-  → Left / Right / Down / Up Flux
-  → 按当前可用水量缩放总出流
-  → 汇总邻居入流与自身出流
-  → 新 Water + Velocity
-  → 固定步完成
+旧 Height + Water + Flux
+  -> 比较四邻域水面高度
+  -> 更新 Left / Right / Down / Up Flux
+  -> 按当前可用水量限制总出流
+  -> 汇总邻居入流和本格出流
+  -> 新 Water + Velocity
 ```
 
-首版使用封闭边界，边缘不会把水排出网格。每格的总出流如果超过当前水量在本步内能提供的体积，会统一缩放四个方向，因此 Water 不会因为一次过大的高差而变为负数。降雨以 `深度/秒` 加入每个单元，并计入质量统计。
+首版使用封闭边界，水不会从网格四周流失。Rainfall 以每秒水深加入单元，并计入总水量预算。如果某格的计划出流超过当前步可提供的体积，四个方向会按同一比例缩小；这种限幅让 Water 保持非负，也保留原来的流向比例。
 
-### 固定步长操作语义
+后来 P13B/P13C 在同一参考模型中加入 Sediment、Capacity/Saturation 和 Erosion/Deposition，Height 也因此成为可变运行时状态。基础水流顺序没有换掉，新增阶段在它后面执行；更完整的质量交换由后续章节单独记录。
 
-- `Play`：允许 `Advance(frameDelta)` 将帧时间累积并执行固定步；
-- `Pause`：帧时间不推进模拟；
-- `SingleStep`：只在暂停状态执行一个固定步；
-- `Reset`：恢复初始化 Height/Water，清空 Flux、Velocity、累计时间和统计；
-- `MaxSubsteps`：限制单帧追赶次数，超出的完整步时间记入 `DroppedTime`，避免卡顿后发生“螺旋式补帧”。
+### 固定步语义
 
-统计包含 Step Count、Simulated Time、Accumulator、Dropped Time、Water/Rainfall Volume、Mass Error、最小/最大水深、最大速度和有限性。当前阶段只有代码接口和无窗口测试，没有新增编辑器操作；下一阶段才会接入 GPU Water/Flux/Velocity Ping-Pong、Terrain Height 初始化和 DebugPanel 控制。
+`Advance(frameDelta)` 只在 Play 状态累积帧时间，并按 `FixedTimeStep` 执行零到多个子步。Pause 不消费时间；Single Step 只允许在暂停时推进一次。Reset 会恢复初始 Height、Water 和 Sediment，清空 Flux、Velocity、累加器与统计。
 
-### 验证
+`MaxSubsteps` 限制单帧追赶次数。卡顿留下的完整步时间会计入 `DroppedTime`，只保留不足一个固定步的余数。宁可明确丢掉过期模拟时间，也不能在下一帧无上限补算，把编辑器拖进持续卡顿。
 
-- 相同 1 秒模拟分别以 `0.04×25` 与 `0.01×100` 帧输入，执行相同固定步数并得到一致 Water/Velocity；
-- 封闭边界无降雨时质量误差小于 `1e-5`，水深非负且所有水量/速度有限；
-- 三格山峰测试中水从高水面流向左右低处，盆地测试中低格蓄水多于两侧高格；
-- 8 条新增水文断言与原有测试合计 96 项具体无窗口断言全部 PASS；VS2026 `Debug | x64` 整解决方案构建成功。
+统计会记录 Step Count、Simulated Time、Accumulator、Dropped Time、水量与质量误差、深度范围、最大速度和有限性。当前扩展版还包含泥沙与地形质量数据。
+
+CPU 基线用 `0.04 x 25` 和 `0.01 x 100` 两种帧划分运行同一秒，最终 Water 与 Velocity 一致。封闭边界无降雨时质量误差低于 `1e-5`，三格山峰和盆地用例也确认水会流向低处。P13A 当时新增 8 条水文测试，总计 96 项无窗口断言通过。
 
 ## GPU 水文与 Debug 可视化
 
-P13A 第二阶段将 CPU 参考模型的字段和固定步语义迁移到 GPU。程序化 Terrain 的 Height 保持只读，水文状态采用三组独立 Ping-Pong：
+CPU 契约稳定后，P13A 才把相同字段迁到 GPU。程序化 Terrain 提供 `R32F` Height，Water、Flux 和 Velocity 各自拥有读写纹理，单步的前半段算流量，后半段更新水深与速度：
 
-| 字段 | 格式 | 用途 |
+| 字段 | 初始格式 | 用途 |
 | --- | --- | --- |
-| Water | `R32F × 2` | 当前/下一步水深 |
-| Flux | `RGBA16F × 2` | 左、右、下、上四向流量 |
-| Velocity | `RGBA16F × 2` | XY 保存地形平面速度，ZW 预留 |
+| Water | `R32F x 2` | 当前与下一步水深 |
+| Flux | `RGBA16F x 2` | 左、右、下、上四向流量 |
+| Velocity | `RGBA16F x 2` | XY 平面速度，ZW 预留 |
 
 ```text
 Height(Read) + Water(Read) + Flux(Read)
-  → HydrologyFlux.comp
-  → Flux(Write)
-  → Barrier + Swap
-  → HydrologyUpdate.comp
-  → Water(Write) + Velocity(Write)
-  → Barrier + Swap
+  -> HydrologyFlux.comp -> Flux(Write)
+  -> Global Memory Barrier + Swap
+  -> HydrologyUpdate.comp -> Water(Write) + Velocity(Write)
+  -> Global Memory Barrier + Swap
 ```
 
-两次 Dispatch 之间使用全局 Memory Barrier，避免把 Workgroup 内屏障误当成整张纹理完成信号。普通 PNG/JPG 高度图不是 `R32F` Storage Texture，因此首版只对程序化 Terrain 建立 GPU 水文状态。
+两次 Dispatch 之间必须使用全局 Memory Barrier。Workgroup Barrier 只保证单个线程组内部同步，无法说明相邻组已经写完纹理，这正是早期地貌原型里最不可靠的部分。普通 PNG/JPG 高度图也不能直接作为这条路径要求的 `R32F` Storage Texture，所以 GPU Runtime 只为程序化 Terrain 创建。
 
-### 如何观察
+### 当前运行方式
 
-打开 `Debug → Overview`，在 Terrain 区域底部找到 `Runtime Hydrology`：
+`TerrainRuntime` 按 GenerationVersion 创建水文资源，地形重新生成后旧模拟会被替换。P13A 最初由 Hydrology 自己推进固定步；P14 接入气候后，`TerrainEnvironmentGPU` 统一拥有累加器，每个子步按 Climate、Barrier、Hydrology 的顺序执行。Hydrology 和 Climate 的 Play/Single Step 都进入这一个时钟。
 
-1. 勾选 `Visualize Water Depth`；初始 Water 为 0，因此画面不变；
-2. 将 `Rainfall` 保持默认 `0.020 depth/s`，勾选 `Play`；
-3. 等待数秒，低地和沟谷会逐渐出现蓝色覆盖；深蓝表示蓄水，偏亮青色表示流速更高；
-4. 取消 `Play` 后点击 `Single Step`，每次只推进一个固定步，便于观察边界变化；
-5. 点击 `Reset` 会把 Water、Flux、Velocity、累加器和统计全部清零；
-6. 暂停后点击 `Validate / Readback`，查看 Water Volume/Error、Depth Min/Max、Max Speed 和 `Finite: PASS`。
+`TerrainRenderer` 使用 FrameSerial 保证同一 Color Frame 只推进一次。Shadow Prepare 和九个 Chunk 的重复访问只读取结果，不会悄悄多跑模拟。普通帧也不做 GPU Readback；统计读取与 Contract 验证都需要显式请求。
 
-`Validate / Readback` 检查当前场景正在运行的水文状态。`Run GPU Contract` 则执行一个独立的受控验证：临时创建 `3×1` 的高-低-高盆地，用同一 GPU 水文实例先后按 `0.04×25` 和 `0.01×100` 两种帧划分运行 100 个固定步，并自动检查：
+Debug Panel 可以 Play、Pause、Single Step、Reset，也能调整 Rainfall 并查看 Water 诊断。当前面板还扩展到 Sediment、Capacity、Saturation、运行时侵蚀和气候 Source/Sink。水深着色只是 Terrain Fragment Shader 的诊断覆盖，不会抬高网格，也没有折射、反射、透明水面或岸线泡沫。
 
-- Water/Velocity 有限且 Water 非负；
-- 相对质量误差不超过 `2e-3`；
-- 中央低地水深显著高于两侧高地；
-- 两种帧划分的最终 Water 最大差值不超过 `5e-4`。
-
-跨设备或无人值守验证可在启动编辑器前设置 `GLIMMER_HYDROLOGY_VALIDATE=1`。验证只执行一次并输出 `GPU hydrology contract validation PASS/FAIL`，正常帧不会创建临时验证资源或触发同步读回。
-
-水深显示目前是 Terrain Fragment Shader 中的诊断着色，不会抬高网格，也没有折射、反射、透明水面或岸线泡沫。它用于确认流向和蓄水位置，正式水体几何与材质属于后续渲染阶段。
-
-### 当前验证
-
-- Premake VS2026 工程重新生成成功，`Debug | x64` 解决方案及编辑器增量构建成功；
-- 104 项无窗口回归全部 PASS，覆盖 CPU 水文方向、守恒、非负、重置、补帧上限、盆地蓄水和帧划分确定性；
-- GTX 1050 / OpenGL 4.6 以 `GLIMMER_HYDROLOGY_VALIDATE=1` 运行真实 Compute 链路并 PASS：相对质量误差 `7.38228e-7`，中央盆地水深 `0.599998`、两侧最大水深 `6.28643e-7`，两种帧划分最大差值 `0`；
-- HydrologyFlux、HydrologyUpdate、Terrain 和既有图形 Shader 均成功创建，编辑器无断言或提前退出；P13A 数值验收完成。
+P13A 的受控 GPU Contract 使用 `3x1` 高低高盆地，分别以 `0.04 x 25` 和 `0.01 x 100` 运行 100 个固定步。GTX 1050/OpenGL 4.6 得到相对质量误差 `7.38228e-7`、中央水深 `0.599998`、两侧最大值 `6.28643e-7`，两种帧划分最大差值为 0。`GLIMMER_HYDROLOGY_VALIDATE=1` 可在启动时运行同一验证；正常帧不会创建这些临时资源。
 
 ## Tone Mapping 跨驱动 Sampler 修复
 
-一次跨电脑拉取后，GTX 1050 / NVIDIA 531.29 上的 Viewport 只显示黑色，而相同代码在另一台电脑上可以正常显示。RenderDoc 证明 Scene、Terrain、Bloom 和最终全屏命令都已提交；真正失败的是 Tone Mapping 的最后一次 `DrawElements(6)`：
+这次问题很典型：同一份代码在一台电脑上正常，换到 GTX 1050 / NVIDIA 531.29 后，Viewport 只剩黑屏。我起初沿着 Scene FBO、Terrain 和 Bloom 的输出往后查，RenderDoc 却显示这些阶段都已经提交，真正失败的是 Tone Mapping 最后一次 `DrawElements(6)`：
 
 ```text
 GL_INVALID_OPERATION: State(s) are invalid: program texture usage.
 ```
 
-`ToneMapping.glsl` 同时声明 `sampler2D u_SceneTexture` 和 `samplerCube u_FogSkyLight`。旧实现只在 Fog Color Source 选择 Sky Light 时才把 Cube sampler 设置到 slot 2；默认 Manual 模式下它保持 GLSL 默认值 0，与 Scene Texture 的 slot 0 冲突。OpenGL 会验证整个已链接 Program 的 sampler 类型，即使本帧不执行 Cubemap 采样分支；严格驱动因此拒绝 Draw，Display FBO 只留下此前成功写入的黑色 Clear。较宽松驱动或已有 Uniform 状态可能掩盖问题，但不能作为合法行为依赖。
+问题出在 sampler 槽位。`ToneMapping.glsl` 同时声明了 `sampler2D u_SceneTexture` 和 `samplerCube u_FogSkyLight`。旧代码只在 Fog Color Source 选择 Sky Light 时把 Cubemap 设置到 slot 2；使用默认 Manual 模式时，`u_FogSkyLight` 会保留 GLSL 默认值 0，恰好与 Scene Texture 冲突。
 
-PostProcessRenderer 现在每帧显式声明完整绑定契约：
+这里容易被分支条件带偏。OpenGL 校验的是整个已链接 Program 的纹理类型，不会因为本帧没有执行 Cubemap 采样分支就忽略这个 sampler。宽松驱动可能暂时放过，严格驱动会直接拒绝 Draw。
+
+现在 `PostProcessRenderer` 每帧都会声明完整的绑定契约：
 
 | Slot | Sampler | 类型 |
 | ---: | --- | --- |
@@ -6158,83 +4009,60 @@ PostProcessRenderer 现在每帧显式声明完整绑定契约：
 | 2 | `u_FogSkyLight` | `samplerCube` |
 | 3 | `u_BloomTexture` | `sampler2D` |
 
-Fog 或 Bloom 关闭时也保留不冲突的 Uniform 槽位；只有实际需要时才绑定对应可选纹理。这样 Shader 热重载、默认设置和不同驱动都不再依赖上一次 Program 状态或 sampler 默认值。
+Fog 或 Bloom 关闭时，可以不绑定对应的可选纹理，但 uniform 仍要落在互不冲突的槽位。修复后的资源布局不再依赖 sampler 默认值、上一帧状态或具体驱动的容错行为。这次排查也提醒我，Shader 资源契约要按 Program 看，不能只看当前会走到哪条分支。
 
-验证：VS2026 `Debug | x64` 编辑器目标增量构建成功，立即重复构建没有重新编译源文件；GTX 1050 默认 Manual Fog 下 Terrain/Skybox 画面恢复；修复后 RenderDoc API Validation 捕获包含最终 Tone Mapping Draw，且没有 High severity、`GL_INVALID_OPERATION` 或 `program texture usage`。`bin`、`bin-int` 均保留。
+验证时，VS2026 `Debug | x64` 编辑器目标增量构建通过；GTX 1050 在默认 Manual Fog 下恢复 Terrain 和 Skybox。修复后的 RenderDoc API Validation 能捕获最终 Tone Mapping Draw，且没有 High severity、`GL_INVALID_OPERATION` 或 `program texture usage` 报错。
 
 ## 模型导入边界与 Assimp 子模块准备
 
-这一阶段没有直接宣称“FBX 已支持”，而是先解决原模型系统最关键的耦合：旧 `Model.cpp` 同时解析 OBJ、计算切线、读取 MTL 并创建 GPU Mesh，后续若直接加入 Assimp，就会让 FBX 节点、骨骼、动画和材质处理全部进入 Renderer。
+准备接入 FBX 时，我先处理了旧模型系统的职责混杂。原来的 `Model.cpp` 同时负责 OBJ 解析、切线计算、MTL 读取和 GPU Mesh 创建。继续把 Assimp 塞进这里，节点、材质乃至后续骨骼数据都会顺着 `Model` 渗入 Renderer，后面很难拆开。
 
-当前模型数据链调整为：
+因此这一阶段先建立统一的 CPU 中间层：
 
 ```text
-OBJ 源文件
+模型源文件
   → ModelImporter（按扩展名分发）
-  → ObjModelImporter / tinyobjloader
-  → MeshSource（纯 CPU 中间数据）
+  → ObjModelImporter / AssimpModelImporter
+  → MeshSource（纯 CPU 数据）
   → Model
   → Mesh / VAO / VBO / IBO
   → Renderer3D
 ```
 
-`MeshSource` 保存源路径、Submesh、统一 `MeshVertex` 和源材质描述，不创建 Texture、Buffer 或任何 OpenGL 对象。`ObjModelImporter` 接管原有 OBJ 三角化、按材质拆分、顶点去重和稳定切线生成；`Model` 只负责把有效 Submesh 转换成运行时 Mesh。因此未来的 `AssimpModelImporter` 只需把 `aiScene` 转换到同一个 MeshSource，Renderer3D 不需要知道源文件来自 OBJ、FBX 还是 glTF。
+`MeshSource`、`SubmeshSource`、`MeshVertex` 和 `MeshMaterialSource` 只描述导入结果，不创建 Texture、Buffer 或 OpenGL 对象。OBJ 解析被移入 `ObjModelImporter`；Assimp 的 `aiScene`、`aiMesh` 等类型则留在 `AssimpModelImporter` 的私有实现里。这样，导入器只需要把不同文件格式翻译成同一种数据，渲染端不必知道源文件是 OBJ 还是 FBX。
 
-Assimp 使用官方 Git 子模块并固定在 `v6.0.5`：
+Assimp 采用官方 Git 子模块，固定在 `v6.0.5` 的提交 `392a658f9c271be965271f45e7521a1b80ea4392`。它没有被拆成源文件塞进 Premake 工程，而是由上游 CMake 生成静态库。构建使用 VS2026 x64 Developer Environment、NMake 和静态 CRT，并关闭 Exporter、Tests、Tools、Samples、Docs，只保留 OBJ、FBX、GLTF importer。选择 NMake 是一次实际的兼容性取舍：本机 CMake 4.3.3 使用 `Visual Studio 18 2026` Generator 时会卡在 `CompilerIdC.vcxproj`，同一套编译器在 Developer Environment 中可以稳定完成探测和构建。
 
-```text
-Glimmer/vendor/assimp
-commit 392a658f9c271be965271f45e7521a1b80ea4392
-```
-
-新设备初始化依赖：
+新设备只需先初始化子模块：
 
 ```bat
 git submodule update --init --recursive
 ```
 
-Assimp 不加入 Glimmer Premake 项目逐文件编译，而是通过上游 CMake 独立生成静态库：
+当前 Premake PreBuild 会调用 Ensure 脚本，检查头文件、Assimp/zlib 静态库、CMake Cache、构建配置、子模块提交和 Schema 2 stamp；缺失或过期时会自动重建。`scripts\Win-BuildAssimp-vs2026.bat` 仍保留给强制重建和单独排障使用，产物按 Debug/Release 放在忽略的 `Glimmer/vendor/assimp-build/vs2026-<Config>` 目录。
 
-```bat
-scripts\Win-BuildAssimp-vs2026.bat Debug
-scripts\Win-BuildAssimp-vs2026.bat Release
-```
+这一步建立边界时，FBX importer 还没有落地；现在它已经由下一章实现。当前 AssetManager 对外注册 `.obj` 和 `.fbx`，构建进 Assimp 的 `.gltf/.glb` 尚未开放，版本化 `.glmesh` 也还没有。模型每次加载仍会解析源文件，导入纹理也还是 Model 持有的运行时对象，没有转换成 AssetHandle 或自动生成 `.glmat`。
 
-脚本进入 VS2026 x64 Developer Environment，并使用 NMake 生成单配置构建目录。选择 NMake 是因为本机 CMake 4.3.3 配合 `Visual Studio 18 2026` Generator 时，两次停在 `CompilerIdC.vcxproj`；同一编译器在 Developer Environment 下可正常探测和编译。构建固定使用静态 CRT、关闭 Exporter/Tests/Tools/Samples/Docs，并将 importer 缩减为 OBJ、FBX、GLTF。生成结果位于忽略目录：
-
-```text
-Glimmer/vendor/assimp-build/vs2026-Debug/lib/assimp-vc145-mtd.lib
-Glimmer/vendor/assimp-build/vs2026-Debug/contrib/zlib/zlibstaticd.lib
-```
-
-该准备阶段当时的能力边界（已由下一节继续推进）：
-
-- `.obj`：继续支持，现已先转换成 MeshSource，再创建运行时 Mesh；
-- `.fbx`、`.gltf`、`.glb`：Assimp 库本身已经按这些 importer 构建，但 Glimmer 尚未实现 AssimpModelImporter，也没有在 AssetManager 中注册这些扩展名，因此目前仍不能加载；
-- `.glmesh`：尚未实现。MeshSource 目前只存在于内存中，关闭编辑器后仍会重新解析 OBJ；
-- OBJ/MTL 的 BaseColor 纹理仍沿用直接 Texture2D 路径，尚未转换为 AssetHandle 与 `.glmat`，后续烘焙阶段再统一；
-- Assimp 类型不得进入 Scene、Renderer3D、组件或公共 Model API，它只允许存在于 importer 私有实现中。
-
-本阶段验证结果：Premake VS2026 工程生成成功；Assimp Debug 静态库完整构建并确认只启用 OBJ/FBX/GLTF，立即重复脚本约 5 秒完成且没有重新编译源文件；OBJ→MeshSource 新增 3 条无窗口回归，连同既有功能共 100 项断言全部 PASS；`GlimmerEditor-CyouBranch` 的 `Debug | x64` 目标构建成功，立即重复构建只检查并输出既有目标。`bin`、`bin-int` 和 Assimp 独立构建产物均保留。
-
-下一阶段已在下节完成静态 FBX importer 与外部 PBR 贴图加载；版本化 `.glmesh`、自动 `.glmat` 烘焙、单位归一化、Skeleton、Animation、Morph Target 和 glTF 仍应分阶段建设。
+阶段验证包括 Assimp Debug 静态库完整构建、重复执行脚本约 5 秒且没有重编源文件、3 条 OBJ 到 MeshSource 的无窗口回归，以及当时共 100 项断言通过。编辑器 `Debug | x64` 目标也完成构建。后续功能继续扩展，但 Assimp 私有类型没有越过 importer 边界。
 
 ## 静态 FBX 与 Cerberus PBR 材质加载
 
-本阶段把 Assimp 从“可以独立编译”推进到实际引擎数据链。`.fbx` 现在会被 AssetManager 识别为 Model，并通过专用 `AssimpModelImporter` 转换为与 OBJ 共用的 MeshSource：
+边界稳定后，FBX 才真正接入运行时。AssetManager 现在会把 `.fbx` 识别为 Model，交给 `AssimpModelImporter` 转换；OBJ 仍走 `ObjModelImporter`。两条路径从 `MeshSource` 开始合流：
 
 ```text
 FBX + 外部纹理
-  → AssimpModelImporter（仅 importer 私有 Assimp 类型）
+  → AssimpModelImporter
   → MeshSource / SubmeshSource / MeshMaterialSource
-  → Model（按 MaterialIndex 共享纹理解码）
+  → Model（按 MaterialIndex 缓存纹理）
   → Mesh
   → Renderer3D / PBRModel
 ```
 
-静态导入启用了 Triangulate、JoinIdenticalVertices、GenSmoothNormals、CalcTangentSpace、ImproveCacheLocality、SortByPType、ValidateDataStructure 和 PreTransformVertices。最后一项把 FBX 节点 Transform 烘焙进顶点，因此当前结果适合静态场景模型，但不会保留原节点层级、骨骼或动画。
+静态导入启用了 Triangulate、JoinIdenticalVertices、GenSmoothNormals、CalcTangentSpace、ImproveCacheLocality、SortByPType、ValidateDataStructure 和 PreTransformVertices。`PreTransformVertices` 会把节点变换烘焙进顶点，省去了当前渲染路径处理层级的负担，代价也很明确：节点层级、骨骼和动画不会保留下来。这条路径只面向静态模型。
 
-材质读取支持 BaseColor、Normal、Metallic、Roughness、AO 和 Emissive。Cerberus FBX 本身只保存了 `Textures/Cerberus_A.tga` 的引用，其余贴图不在 FBX 材质连接中；importer 因此只在模型相邻目录、`Textures` 和 `Textures/Raw` 内按受限后缀查找 `_N`、`_M`、`_R`、`_AO`，不会递归扫描整个项目或按模糊名称随机匹配。Cerberus 最终解析到：
+材质导入会读取 BaseColor、Normal、Metallic、Roughness、AO 和 Emissive。Cerberus FBX 自身只引用 `Textures/Cerberus_A.tga`，其余通道需要从外部文件补齐。导入器只在模型目录、`Textures` 和 `Textures/Raw` 中检查 `_N/_Normal`、`_M/_Metallic`、`_R/_Roughness`、`_AO/_Occlusion` 等受控后缀，不会递归扫项目，也不会用模糊名称碰运气。
+
+当前版本化样本最终使用四张贴图：
 
 ```text
 Cerberus_A.tga       Base Color / sRGB
@@ -6243,122 +4071,82 @@ Cerberus_M.tga       Metallic / Linear
 Cerberus_R.tga       Roughness / Linear
 ```
 
-当前版本化样本不包含 AO。IBL 示例实体不再用 `Cerberus_A.tga` 冒充 AO，也不再引用不存在的 `Textures/Raw/Cerberus_N.tga`；Normal、Metallic 与 Roughness 均由模型的导入贴图回退路径提供。
+样本没有 AO，因此示例场景不会再拿 Base Color 冒充 AO。`Model` 按 MaterialIndex 缓存解码后的纹理，同一材质被多个 Submesh 引用时只上传一套。Renderer3D 中，MaterialInstance 显式提供的 BaseColor、Normal、AO、Emissive 优先，缺失通道回退到模型导入结果；导入的 Metallic 和 Roughness 使用 unit 11/12，避开 0～3 的材质、4～7 的 CSM 与 8～10 的 IBL 槽位，并覆盖 `.glmat` 中对应的标量值。
 
-Renderer3D 的覆盖顺序是：实体 MaterialInstance 中显式存在的 BaseColor、Normal、AO、Emissive 贴图优先，缺失通道使用模型导入贴图；Metallic/Roughness 当前由模型导入贴图覆盖 `.glmat` 的标量。新采样器使用 unit 11/12，避开已有的 0～3 材质、4～7 CSM 与 8～10 IBL。一个 FBX 材质被多个 Submesh 使用时只解码和上传一套纹理。
+实际使用时，把 FBX 和它的相对纹理目录一起放进 `GlimmerEditor-CyouBranch/assets`，再为实体设置 Model Renderer 和 Material。`.glmat` 提供 PBRModel Shader 与可编辑覆盖值，FBX 补足没有显式配置的导入纹理。Content Browser 写入的是 FBX AssetHandle，Scene YAML 仍只保存 ModelHandle 和 MaterialHandle，不会序列化 Assimp 对象或 GPU ID。
 
-### 使用流程
+当前限制需要保留在文档里：只开放静态 `.fbx`；`.gltf/.glb` 尚未注册；节点层级、骨骼、动画、Morph Target 和嵌入纹理暂不支持；DCC 单位不会自动换算；Tangent 仍是 vec3，没有镜像 UV 所需的 handedness。导入纹理也没有独立 AssetHandle，`.glmat` 暂无 Metallic/Roughness Texture 字段，ORM 打包和版本化 `.glmesh` 都还未实现。
 
-1. 新设备先初始化子模块，并构建对应配置的 Assimp 静态库：
+Cerberus 的 FBX 与 A/N/M/R 四张 TGA 作为跨设备回归样本保存在仓库中，但原许可说明文件尚未补齐。公开分发或商业使用前需要取得可再分发许可；无法确认时，应从发布资产中移除。
 
-   ```bat
-   git submodule update --init --recursive
-   scripts\Win-BuildAssimp-vs2026.bat Debug
-   ```
-
-2. 把 FBX 连同其相对纹理目录复制到 `GlimmerEditor-CyouBranch/assets` 内。例如应保留 `Cerberus_LP.FBX` 与同级 `Textures` 的关系。Content Browser 出于项目资产边界不会导入 `tmp` 外部路径。
-3. 在实体上添加 Model Renderer 和 Material 组件，把 FBX 拖到 Model，把一个使用 PBRModel Shader 的 `.glmat` 拖到 Material。`.glmat` 提供 Shader 和可编辑覆盖值，FBX 提供缺失的导入纹理。
-4. Content Browser 导入后会把 FBX Handle 写入 AssetRegistry；Scene YAML 仍只保存 ModelHandle/MaterialHandle，不保存 Assimp 对象或 GPU ID。
-
-`assets/models/Cerberus` 当前包含版本化的 FBX 与 A/N/M/R 四张 TGA，并作为跨设备回归样本。该资源来源此前标记为仅限非商业教育用途，但仓库中尚未包含原许可说明文件；公开分发或商业使用前必须补齐可再分发许可，无法确认时应从发布资产中移除。
-
-### 当前边界
-
-- 仅开放 `.fbx` 静态网格；`.gltf/.glb` 虽已在 Assimp 构建中启用，但尚未注册；
-- 不支持骨骼、动画、Morph Target、保留节点层级或嵌入纹理；
-- 未额外进行厘米/米单位归一化，使用 Assimp 实际输出；不同 DCC 来源仍需建立明确导入设置；
-- 导入纹理由 Model 运行时持有，尚不生成独立 AssetHandle、`.glmat` 或版本化 `.glmesh`；
-- `.glmat` 目前没有 Metallic/Roughness Texture 字段，只有 FBX 导入回退路径能使用这两张独立贴图；ORM 打包也未实现；
-- Tangent 仍是 vec3，没有保存镜像 UV 所需的 handedness。
-
-### 验证
-
-- Cerberus FBX 被解析为有效三角 Submesh，顶点与索引非空，全部切线有限且长度大于 0.9；
-- 正式 assets 中的 Cerberus A/N/M/R 四张 TGA 路径全部解析成功；
-- 104 项无窗口回归断言全部 PASS，测试不再因本机 `tmp` 缺失而静默跳过 FBX；
-- GlimmerEditor-CyouBranch `Debug | x64` 成功链接 Assimp 和 zlib，最终 EXE 持续运行 15 秒，无 Shader 断言或提前退出；
-- `bin`、`bin-int` 与 Assimp 独立构建产物均保留。
+后续跨设备收口验证中，Cerberus 能生成有效三角 Submesh，顶点、索引和切线检查通过，四张 TGA 均能从正式 assets 解析；104 项无窗口断言通过，Windows 验证脚本通过，编辑器 `Debug | x64` 成功链接 Assimp 和 zlib，并持续运行 10 秒，没有 Shader 断言或提前退出。
 
 ## Assimp 新设备构建自修复
 
-新设备首次构建时报错：
+这次故障出现在一台刚拉完仓库的新设备上。子模块已经初始化，Premake 工程也能生成，但编译 Glimmer 时停在：
 
 ```text
 fatal error C1083: 无法打开包括文件: "assimp/config.h": No such file or directory
 ```
 
-这不是 `vendor/assimp/include` 写错。Assimp 源码子模块只提交 `include/assimp/config.h.in`，上游 CMake 会根据平台与启用的 importer 生成真正的：
+起初看起来像 Include Path 写错了，实际缺的是 Assimp 的生成文件。源码子模块只有 `include/assimp/config.h.in`，真正的 `config.h` 要由上游 CMake 根据平台、配置和 importer 选项生成。仅把仓库和子模块拉下来，Assimp 仍不具备可链接状态。
+
+我不想让每台设备都靠人工记住一串前置命令，于是把依赖检查放进 Glimmer 的 PreBuildEvent：
 
 ```text
-Glimmer/vendor/assimp-build/vs2026-Debug/include/assimp/config.h
-Glimmer/vendor/assimp-build/vs2026-Release/include/assimp/config.h
+构建 Glimmer
+  → Win-EnsureAssimp-vs2026.bat <Configuration>
+  → 检查 config.h、Assimp/zlib 静态库和 CMakeCache
+  → 核对 Schema 2 stamp、构建配置、子模块提交和 ccache 状态
+  → 状态有效：直接继续
+  → 缺失或过期：调用 Win-BuildAssimp-vs2026.bat
+  → 完成后再编译 Glimmer
 ```
 
-因此仅拉取子模块、生成 Premake 工程还不够；对应配置的生成目录必须存在。现在 Glimmer 的 VS 工程在 PreBuildEvent 中执行快速检查：
+Debug 使用 Debug 静态库，Release 和 Dist 使用 Release 产物。构建脚本通过 `vswhere` 查找 VS 18.x/2026，再确认 v145 工具集，路径不依赖 Visual Studio 安装在哪个盘。CMake 优先使用 VS 附带版本，并通过 NMake 生成静态 CRT 库。
 
-```text
-构建 Glimmer Debug
-  → Win-EnsureAssimp-vs2026.bat Debug
-  → 校验 config.h、Assimp/zlib、CMake 配置和 Glimmer 构建指纹
-  → 子模块提交、配置、ccache 状态全部匹配：立即继续
-  → 任一缺失或过期：调用 Win-BuildAssimp-vs2026.bat Debug
-  → 上游 CMake/NMake 构建完成
-  → 编译 Glimmer
-```
+这里还踩过一个不太显眼的坑：PATH 中的 MinGW `ccache.exe` 会包裹 MSVC `lib.exe`，CMake 日志看似成功，最终却没有生成可用的 `.lib`。脚本现在显式设置 `ASSIMP_BUILD_USE_CCACHE=OFF`，并把这个状态写入 `glimmer-assimp-build.stamp`。Ensure 会同时检查 stamp 和 `CMakeCache.txt`，旧缓存、配置切换或 Assimp 提交变化都会触发重配。
 
-Release/Dist 同理使用 Release 产物。构建脚本通过 `vswhere` 限定查找 VS 18.x/2026，并验证激活的是 v145，不再假定安装在 C 盘；CMake 优先使用 VS 自带版本。脚本还显式关闭 Assimp 的 ccache，因为 PATH 中的 MinGW `ccache.exe` 可能错误包裹 MSVC `lib.exe`，出现 CMake 报告链接成功但 `.lib` 实际未生成的情况。
-
-成功构建后会写入被忽略的 `glimmer-assimp-build.stamp`，记录 Schema、配置、Assimp 子模块提交、工具集与 ccache 状态。Ensure 同时核对该指纹和 `CMakeCache.txt`，所以旧电脑留下的 `ccache=ON` 缓存或更新后的 Assimp 子模块不会再仅凭三个旧文件被误判为可用。PreBuild 路径基于 `$(ProjectDir)`，既支持解决方案构建，也支持单独构建 `Glimmer.vcxproj` 或依赖它的测试工程。
-
-一般操作只需初始化子模块、生成工程并正常构建：
+新设备的常规流程现在只有两步：
 
 ```bat
 git submodule update --init --recursive
 scripts\Win-GenerateProject-vs2026.bat
 ```
 
-也可以运行完整自动验证：
+之后正常构建解决方案或单独构建 `Glimmer.vcxproj` 都会走同一条 Ensure 路径。需要完整回归时运行 `scripts\Verify-Windows.bat`；需要强制重配依赖时，再单独执行 `scripts\Win-BuildAssimp-vs2026.bat Debug` 或 `Release`。
 
-```bat
-scripts\Verify-Windows.bat
-```
-
-需要主动重配 Assimp，而不是仅在缺失时补齐，可手动执行：
-
-```bat
-scripts\Win-BuildAssimp-vs2026.bat Debug
-scripts\Win-BuildAssimp-vs2026.bat Release
-```
-
-本次在旧缓存仍为 `ASSIMP_BUILD_USE_CCACHE=ON` 的设备上验证：新版 Ensure 会触发一次原地重配并写入构建指纹，之后快速命中约 118 ms；重新生成 VS2026 工程后，测试工程可脱离解决方案单独构建。回归测试关闭 Debug 增量链接，避免损坏的 `.ilk` 生成无系统导入表的 EXE；定向 Rebuild 后 104 项断言全部通过，完整 `Verify-Windows.ps1` 通过，编辑器保持运行 10 秒无提前退出，`bin` 与其余构建产物均保留。
+验证使用了一台仍保留 `ASSIMP_BUILD_USE_CCACHE=ON` 旧缓存的设备。首次构建能识别过期状态并原地重配，之后 Ensure 快速命中约 118 ms。重新生成 VS2026 工程后，测试工程可脱离解决方案单独构建；定向 Rebuild 的 104 项断言和完整 Windows 验证均通过，编辑器持续运行 10 秒，没有提前退出。
 
 ## CPU 无源泥沙输运
 
-P13B 第一阶段在 `TerrainHydrologyRuntime` 中增加独立的 Sediment 状态。它表示每格单位地表面积上的悬浮泥沙质量，不是地形高度，也不是 Water 的颜色通道；初始化快照、Reset 和统计均与 Water 分离。
+P13A 已经让 Water 和 Flux 在固定时间步内稳定运行，P13B 的第一步是给水流增加悬浮泥沙。我先把 Sediment 做成独立数组，单位是每格单位地表面积上的悬浮质量。它不借用 Water 的颜色通道，也不等同于 Terrain Height；初始化快照、Reset 和统计各自维护。
 
-每个固定步在水流 Flux 已确定后执行有限体积输运：
+这一阶段只研究输运。每个固定步在水流 Flux 求解完成后执行有限体积更新：
 
 ```text
 旧 Sediment × CellArea
-  → 当前格悬浮泥沙质量
+  → 本格悬浮泥沙质量
 ÷ ((旧 Water + RainfallDepth) × CellArea)
-  → 水中泥沙浓度
+  → 泥沙浓度
 × 四向 Water Flux
   → 四向泥沙质量流率
-  → 按当前可用泥沙质量限制总外运
-  → 汇总邻格入流 - 本格出流
+  → 按本格现有质量限制总外运
+  → 邻格入流 - 本格出流
   → 新 Sediment
 ```
 
-雨水只稀释浓度，不产生泥沙。首版边界与水文一致，四周封闭，因此 `SedimentBoundaryLoss` 为 0；统计使用“当前质量 + 边界损失 - 初始质量”计算 `SedimentMassError`。逐格外运限幅避免一次固定步带走超过现有质量的泥沙，最终统计同时检查 Sediment 非负和有限。
+这里有两个容易混在一起的量。雨水会增加水深，所以浓度会被稀释，但雨水本身不会凭空生成泥沙；Flux 表示水的体积流率，乘上浓度后才得到泥沙质量流率。每格的总外运还要按当前可用质量限幅，否则一个较大的固定步就可能把 Sediment 算成负数。
 
-当前阶段刻意不加入携沙能力、侵蚀或沉积：这些机制会形成 Sediment 与 Height 间的质量交换，需要单独定义源项和地形质量预算。现有 Transport Pass 只搬运既有悬浮泥沙，Height 保持逐值不变，也不会进入 Scene YAML 或污染有限次 Authoring Erosion。
+边界沿用水文模型的封闭条件，因此 `SedimentBoundaryLoss` 在这个阶段为 0。统计使用 `当前质量 + 边界损失 - 初始质量` 计算 `SedimentMassError`，并逐格检查非负和有限。
 
-本阶段是 CPU 数值基线，编辑器画面暂时不会显示泥沙。验证覆盖泥沙随水流向下游迁移、Water/Sediment Reset、封闭边界守恒、非负/有限、两种帧划分确定性和 Height 不变；新增 3 项断言后共 107 项无窗口回归全部 PASS，VS2026 `Debug | x64` 编辑器增量构建成功。下一步会按同一质量契约增加 GPU `R32F` Sediment Ping-Pong 和独立 Compute Transport Pass。
+我当时有意没有加入携沙能力、侵蚀和沉积。那些过程会在 Height 与 Sediment 之间交换质量，必须先定义单位换算、源项限幅和组合质量预算。先把无源输运单独验证，出了误差时就只需要检查通量与边界。当前代码已经在后续 P13C 接上侵蚀和沉积；两项速率保持默认 0 时，仍会回到这一章定义的无源行为。
+
+这轮验证覆盖下游迁移、Water/Sediment Reset、封闭边界守恒、非负与有限检查、两种帧划分确定性，以及 Height 逐值不变。新增 3 项后，当时共 107 项无窗口断言通过，VS2026 `Debug | x64` 编辑器增量构建成功。
 
 ## GPU 泥沙输运与诊断显示
 
-P13B 第二阶段把 CPU 的无源守恒契约迁移到 GPU。`TerrainHydrologyGPU` 新增独立 `R32F × 2` Sediment，不复用 Water 或 Terrain 派生图；每个固定步现在包含三个 Compute Pass：
+CPU 基线通过后，我把同一套输运规则迁到 `TerrainHydrologyGPU`。Sediment 使用两张独立的 `R32F` 纹理做 Ping-Pong，没有塞进 Water，也没有复用 Terrain 的 Normal、Slope 等派生图。在 P13B 这个阶段，一个固定步由三段 Compute 组成：
 
 ```text
 Height + 旧 Water + 旧 Flux
@@ -6370,144 +4158,108 @@ Height + 旧 Water + 旧 Flux
   → Barrier → Water / Velocity / Sediment Swap
 ```
 
-Sediment Transport 对本格和四邻格使用同一个纯读取流率函数：把悬浮质量除以“旧 Water + 本步 Rainfall”得到浓度，再乘当前 Water Flux 得到质量流率；外运总量不能超过本格现有泥沙。这样无需原子加法，也不会在同一 Dispatch 中依赖其它 Workgroup 的写入结果。Pass 只写 Sediment，不能修改 Height、Water 或 Authoring Erosion。
+`SedimentTransport.comp` 对本格和四个邻格调用同一套只读流率计算：用旧 Sediment 除以旧 Water 与本步 Rainfall 的总水量得到浓度，再乘当前 Water Flux。总外运仍受本格现有泥沙限制。每个 Invocation 只写自己的 Next Sediment，不需要原子加法，也不会读取另一个 Workgroup 尚未完成的结果。
 
-### 如何查看
+这段设计最看重的是资源所有权。Current 只读，Next 只写，Dispatch 结束后统一 Barrier 和 Swap。输运 Pass 不能碰 Height、Water 或有限次 Authoring Erosion。后续 P13B 加入 Capacity/Saturation，P13C 又加入 Height/Sediment 交换，但无源输运仍保留在管线前半段，没有另写一套算法。
 
-打开 `Debug → Overview → Runtime Hydrology`：
+调试入口位于 `Debug → Overview → Runtime Hydrology`。把 `Visualization` 切到 `Suspended Sediment`，设置 `Sediment Seed` 后点击 `Apply Seed`，再用 `Play` 或 `Single Step` 推进。Seed 只写一次初始状态，不会每帧补充泥沙。暂停后可用 `Validate / Readback` 检查质量误差和数值范围，`Run GPU Contract` 会运行受控盆地验证。
 
-1. 将 `Visualization` 选择为 `Suspended Sediment`；
-2. 调整 `Sediment Seed`，默认 `1.0 mass/area`；
-3. 点击 `Apply Seed`，这只写入一次初始状态，不会每帧生成泥沙；
-4. 保持 Rainfall 大于 0 并勾选 `Play`，棕橙色覆盖会随水流重新分布；
-5. 暂停并点击 `Validate / Readback`，查看 Sediment Mass/Error 与 Min/Max；
-6. 点击 `Run GPU Contract` 可检查标准盆地中的守恒、下游迁移和帧划分确定性。
+Terrain Shader 通过 slot 25 读取 Sediment；同一组诊断中的 Water 和 Velocity 使用 slot 23/24，后续 Capacity/Saturation 使用 26/27。棕橙色覆盖只是数值显示，不会修改地形材质。水文诊断模式互斥，避免多层颜色混在一起。`SedimentTransport.comp` 也加入事务式热重载，编译失败时继续保留上一份有效程序。
 
-Terrain Shader 固定使用 slot 23/24/25 读取 Water、Velocity 和 Sediment。诊断模式为互斥的 None/Water/Sediment，避免两种覆盖互相污染；棕橙色只是数值可视化，不代表最终泥水材质或地形颜色已经改变。
-
-### 验证
-
-- `SedimentTransport.comp`、HydrologyFlux、HydrologyUpdate 与 Terrain Shader 在 GTX 1050 / OpenGL 4.6 上全部编译成功；
-- GPU Contract：泥沙相对质量误差 `0`，源格从 `1` 降至 `0`、下游低地从 `0` 增至 `1`，两种帧划分最大差值 `0`；既有水量相对误差仍为 `7.38228e-7`；
-- VS2026 `Debug | x64` 编辑器增量构建成功，最终核心库重新链接后的 107 项无窗口回归全部 PASS；
-- 三个水文 Compute Shader 现已实际接入 `ReloadShadersIfChanged` 轮询，修改成功时事务式替换，失败时保留上一有效程序。
-
-该阶段仍没有侵蚀或沉积源项。后续只读 Capacity/Saturation 诊断已经完成 P13B；只有 P13C 才允许根据容量差异交换 Height 与 Sediment 质量。
+GTX 1050 / OpenGL 4.6 上，P13B 当时的三个水文 Compute Shader 和 Terrain Shader 均编译通过。受控 GPU Contract 得到泥沙相对质量误差 `0`，源格从 `1` 降至 `0`，下游格从 `0` 增至 `1`，两种帧划分最大差值为 `0`；已有水量相对误差仍为 `7.38228e-7`。编辑器增量构建和当时的 107 项无窗口断言也全部通过。
 
 ## 泥沙携沙能力与饱和度诊断
 
-P13B 最后阶段为 CPU/GPU 水文状态增加两个只读派生场：
+无源输运能回答泥沙去了哪里，却无法判断水流还带得动多少泥沙。P13B 收尾时，我给 CPU 和 GPU 水文状态补了两个只读派生场：
 
 ```text
 Capacity = CapacityScale × WaterDepth × Speed
 Saturation = Sediment / Capacity
 ```
 
-Capacity 表示当前水流每单位地表面积可承载的悬浮质量；Saturation 小于 1 表示欠饱和，接近 1 表示接近平衡，大于 1 表示过饱和。为了避免干格除零，Capacity 小于 `1e-6` 且仍有 Sediment 时使用上限 `1000` 表示强过饱和；没有 Sediment 时为 0。这个上限只是稳定的诊断编码，不是侵蚀率。
+Capacity 是每单位地表面积的当前携沙能力。Saturation 小于 1 时，水流仍有余量；接近 1 时处在平衡附近；大于 1 时，现有泥沙超过容量。这个模型很简化，但它先给后续侵蚀和沉积提供了一条能验证的分界线。
 
-CPU `TerrainHydrologyRuntime` 在 Water、Velocity、Sediment 完成固定步更新后重新计算两个数组，并将 Min/Max 与有限性纳入统计。改变 Capacity Scale 会立即重算派生场，但不会改变 Water、Sediment 或 Height。
+干格需要单独处理。Capacity 小于 `1e-6` 且格内仍有 Sediment 时，Saturation 记为 `1000`；若连 Sediment 也没有，则为 0。`1000` 只是一个有限的诊断上限，方便 Shader 着色和统计，不能拿它当侵蚀速率。
 
-GPU 使用独立 `SedimentCapacity.comp`，在 Water/Velocity/Sediment 完成 Swap 后读取最终状态，写入单缓冲 `R32F` Capacity 与 Saturation。派生结果没有下一步历史依赖，因此不使用 Ping-Pong；它们也不会写回 Height 或参与 P13B 的泥沙质量预算。四个水文 Compute Shader 均进入原有事务式热重载轮询。
+CPU `TerrainHydrologyRuntime` 会在 Water、Velocity 和 Sediment 更新后重算两个数组，并把范围与有限性写入统计。调整 Capacity Scale 会立即刷新派生场，不会推进固定步，也不会修改 Water、Sediment 或 Height。
 
-Terrain Shader 的诊断纹理槽位现为：
+GPU 侧由 `SedimentCapacity.comp` 读取完成 Swap 后的 Water、Velocity 和 Sediment，写入单缓冲 `R32F` Capacity 与 Saturation。它们没有下一步历史依赖，用 Ping-Pong 只会增加所有权负担，所以这里保留单张纹理。P13B 时这两个场只用于观察；下一章的 P13C 才开始读取 Capacity，执行 Height 与 Sediment 的质量交换。
 
-- 23：Water Depth；
-- 24：Water Velocity；
-- 25：Suspended Sediment；
-- 26：Sediment Capacity；
-- 27：Sediment Saturation。
+调试纹理槽位按一组连续编号保留：
 
-Debug → Overview → Runtime Hydrology 新增 `Capacity Scale`，Visualization 增加 `Sediment Capacity` 和 `Sediment Saturation`。容量模式使用绿青色强调高承载区域；饱和度模式以蓝色表示欠饱和、浅色表示接近平衡、红色表示过饱和。点击 `Validate / Readback` 可查看 Capacity/Saturation Min/Max，`Run GPU Contract` 同时检查其有限性和帧划分确定性。
+| Slot | 诊断场 |
+| ---: | --- |
+| 23 | Water Depth |
+| 24 | Water Velocity |
+| 25 | Suspended Sediment |
+| 26 | Sediment Capacity |
+| 27 | Sediment Saturation |
 
-验证结果：
+在 `Debug → Overview → Runtime Hydrology` 中可以调整 `Capacity Scale`，再选择 `Sediment Capacity` 或 `Sediment Saturation`。Capacity 使用绿青色显示高承载区；Saturation 用蓝色、浅色和红色区分欠饱和、接近平衡与过饱和。`Validate / Readback` 会同步读取 Min/Max，`Run GPU Contract` 还会检查有限性和帧划分一致性。
 
-- 109 项无窗口断言全部 PASS，包括 CPU 派生场有限/有界、零 Capacity Scale 和两种帧划分一致性；
-- VS2026 `Debug | x64` 编辑器增量构建成功；
-- GTX 1050 / OpenGL 4.6 上四个 Compute Shader 和 Terrain Shader 编译成功；
-- GPU Contract PASS：水量相对误差 `7.38228e-7`、泥沙质量误差 `0`、`capacityMax=0.0411786`、`saturationMax=1000`，Water、Sediment、Capacity、Saturation 的帧划分最大差值均为 `0`。
-
-P13B 至此完成。下一阶段 P13C 会把 Capacity 与 Sediment 的差异作为侵蚀/沉积源项输入，并先在 CPU 参考模型定义 Height 与 Sediment 的质量交换、单步限幅和 Reset 契约。
+这一阶段新增测试后共有 109 项无窗口断言通过。GTX 1050 / OpenGL 4.6 上，四个水文 Compute Shader 和 Terrain Shader 编译成功；受控 GPU Contract 得到水量相对误差 `7.38228e-7`、泥沙质量误差 `0`、`capacityMax=0.0411786`、`saturationMax=1000`，Water、Sediment、Capacity 和 Saturation 的两种帧划分差值均为 `0`。
 
 ## CPU 运行时侵蚀与沉积质量契约
 
-P13C 第一阶段只扩展 CPU `TerrainHydrologyRuntime`，先验证地形与悬浮泥沙之间的质量交换，不立即修改 GPU Height Texture。侵蚀/沉积源项位于水与泥沙输运完成之后：
+P13C 先在 CPU 参考模型里接通 Height 与 Sediment 的交换。我没有马上改 GPU Height Texture，因为这里最容易出错的地方是单位。Height 是长度，Sediment 是单位面积悬浮质量，直接做加减会让数值看似变化，质量预算却没有意义。
 
-```text
-Water / Sediment Transport 完成
-  → 计算 Capacity 与 Saturation
-  → 欠饱和：Height → Sediment
-  → 过饱和：Sediment → Height
-  → 重新计算 Capacity 与 Saturation
-```
-
-Height 本身是长度，Sediment 是单位地表面积上的悬浮质量，两者不能直接相加。因此新增 `TerrainDensity`，使用以下等效预算：
+为此，规格中加入 `TerrainDensity`，把地形高度换成单位面积等效质量：
 
 ```text
 TerrainMassPerArea = Height × TerrainDensity
 CombinedMass = Σ((Height × TerrainDensity + Sediment) × CellArea)
 ```
 
-欠饱和时的候选侵蚀量由 `(Capacity - Sediment) × ErosionRate × dt` 决定；过饱和时的候选沉积量由 `(Sediment - Capacity) × DepositionRate × dt` 决定。实际交换还会经过以下限制：
+每个固定步先完成水和泥沙输运，再计算 Capacity/Saturation，然后处理源项：
 
-- 每个固定步的 Height 绝对变化不超过 `MaximumHeightChangePerStep`；
-- 侵蚀后的 Height 不低于“初始 Height - MaximumErosionDepth”；
-- 沉积量不超过当前格已有 Sediment；
-- 所有参数、Height 和 Sediment 必须保持有限，Sediment 不得为负。
+```text
+欠饱和：Height → Sediment
+过饱和：Sediment → Height
+交换完成后重新计算 Capacity / Saturation
+```
 
-`ErosionRate` 和 `DepositionRate` 默认均为 0，意味着新增能力是显式启用的，不会改变旧场景和 P13B 的无源输运结果。Reset 会恢复初始化时的 Height、Water、Sediment，并清空累计 Eroded/Deposited Mass。
+欠饱和时，候选侵蚀量是 `(Capacity - Sediment) × ErosionRate × dt`；过饱和时，候选沉积量是 `(Sediment - Capacity) × DepositionRate × dt`。公式只是起点，实际交换还要经过几道硬限制：
 
-统计新增 Initial/Current Terrain Mass、Cumulative Eroded/Deposited Mass、Terrain+Sediment Mass Error、Height Min/Max 和当前固定步最大 Height 变化。原有 `SedimentMassError` 仍只描述悬浮泥沙相对初态的变化；启用侵蚀后它可以非零，应使用组合误差判断局部质量交换是否守恒。
+- 单步 Height 绝对变化不超过 `MaximumHeightChangePerStep`；
+- Height 不低于 `初始 Height - MaximumErosionDepth`；
+- 沉积不能消耗超过本格现有的 Sediment；
+- 输入参数和结果必须有限，Sediment 不能变成负数。
 
-验证结果：
+`ErosionRate` 和 `DepositionRate` 默认都是 0。旧场景不会因为代码升级就开始改地形，P13B 的无源输运也能原样复现。`Reset` 会恢复初始化时的 Height、Water 和 Sediment，并清空侵蚀、沉积统计。
 
-- 欠饱和流动会降低 Height 并增加 Sediment；
-- 过饱和静水会减少 Sediment 并抬高 Height；
-- 高侵蚀率仍受单步变化和可侵蚀层下界约束；
-- Reset 完整恢复侵蚀前状态；
-- 两种帧划分执行相同固定步数后 Height/Sediment 一致；
-- 新增 5 项后共 114 项无窗口断言全部 PASS，VS2026 `Debug | x64` 编辑器已重新链接成功，构建产物保留。
+这里保留了两套误差指标。`SedimentMassError` 只看悬浮泥沙相对初态的变化，启用侵蚀后出现非零值很正常；判断 Height 与 Sediment 的局部交换是否守恒，要看 `TerrainSedimentMassError`。统计还记录地形初始/当前质量、侵蚀与沉积量、Height 范围和本步最大高度变化，排查限幅时不用猜。
 
-CPU 契约现已迁移到 GPU；下节说明编辑器中的运行时 Height 链路和验证方式。
+CPU 回归覆盖欠饱和侵蚀、过饱和沉积、可侵蚀层下界、单步限幅、Reset 和帧划分确定性。新增 5 项后，当时共 114 项无窗口断言通过，VS2026 `Debug | x64` 编辑器重新链接成功。这套预算随后原样迁到 GPU。
 
 ## GPU 运行时侵蚀与沉积
 
-P13C 的 GPU 阶段把地形 Height 从只读生成结果改为 `TerrainHydrologyGPU` 独占的运行时 Ping-Pong。生成器 Height 仍是不可变初始快照和侵蚀下界；模拟不会把结果写回生成器，也不会污染有限次 Authoring Erosion。
+GPU 阶段给 `TerrainHydrologyGPU` 增加了独占的 Runtime Height Ping-Pong。TerrainGenerator 产出的 Height 保持为不可变初始快照，同时充当最大侵蚀深度的参照。模拟只改运行时纹理，不会回写生成器，也不会触碰有限次 Authoring Erosion。
 
-固定步执行顺序为：
+一个固定步的主体顺序是：
 
 ```text
 Flux → Water/Velocity + Sediment Transport
      → Capacity/Saturation
-     → ErosionDeposition（同时写 Next Height 与 Next Sediment）
-     → Barrier → 统一交换 Height/Sediment
+     → ErosionDeposition（写 Next Height 与 Next Sediment）
+     → Barrier → Height/Sediment Swap
      → 重算 Capacity/Saturation
 ```
 
-`ErosionDeposition.comp` 不在同一纹理上原地读写。它读取 Initial Height、Current Height、Sediment 和 Capacity，同时输出 Next Height 与 Next Sediment；全局 Barrier 完成后才交换两组状态，因此 Color/Shadow 绕过不了同一份已完成的 Runtime Height，也不会观察到只更新一半的质量交换。
+`ErosionDeposition.comp` 同时读取 Initial Height、Current Height、Sediment 和 Capacity，输出 Next Height 与 Next Sediment。它不会在同一张纹理上边读边写。Dispatch 完成后统一 Barrier，再交换两组资源，Color 和 Shadow Pass 因而只能看到一份完整的 Runtime Height。后来 P14 把气候 Water Source/Sink 接入水文前段，没有改变这条 Height/Sediment 所有权。
 
-Debug 面板新增以下纯运行时参数：
+Debug 面板提供 `Erosion Rate`、`Deposition Rate`、`Terrain Density`、`Max Erosion Depth` 和 `Max Height Step`。前两项默认关闭。需要观察时，先启用水文并设置速率，再用 `Single Step` 或 `Play` 推进；`Readback` 会显示 Height Min/Max、Net Eroded/Deposited Mass 和 Terrain+Sediment Combined Error。
 
-- `Erosion Rate`、`Deposition Rate`：控制容量缺口或超额在每秒转换的比例，默认均为 0；
-- `Terrain Density`：把 Height 长度换算为单位面积等效质量；
-- `Max Erosion Depth`：相对初始化 Height 的最大可侵蚀层；
-- `Max Height Step`：每个固定步允许的最大 Height 绝对变化。
+这里的 Eroded/Deposited 是当前 Height 相对初始快照的净变化，不是历次交换量的累计吞吐。`Reset` 会用缓存的初始数据恢复两张 Height，并清空 Water、Flux、Velocity、Sediment 和诊断场。
 
-启用水文后提高侵蚀/沉积速率，并使用 `Single Step` 或 `Play` 推进即可观察地形高度变化；`Readback` 可检查 Height Min/Max、Net Eroded/Deposited Mass 和 Terrain+Sediment Combined Error。这里的 Eroded/Deposited 是相对初始 Height 的净变化，不是跨帧累计吞吐量。`Reset` 会用初始化时缓存的数据恢复两张 Runtime Height，并清空 Water、Flux、Velocity、Sediment 与诊断场。
+持久化边界保持得很严。Runtime Height 不进入 Scene YAML，复制 Terrain 不携带 GPU 模拟纹理，生成器版本变化会重建整套水文 Runtime，也没有自动 Bake。初始化时会同步读回一次生成 Height，用来建立可恢复快照；普通帧和 Reset 不做 GPU Readback，只有用户显式点击 `Readback` 才同步取统计。
 
-当前持久化边界保持保守：Runtime Height 不进入 Scene YAML，复制 Terrain 不携带模拟纹理，也没有自动 Bake。生成器版本变化会重建整个水文状态。初始化时为建立可恢复快照会同步读回一次生成器 Height，普通帧和 Reset 不再读回；只有显式 `Readback` 才同步获取 GPU 统计。
+地形表面也要跟着 Runtime Height 更新，否则几何已经出现沟槽，法线和材质分层却还停在旧地形上。`TerrainGenerator::DeriveMapsFromHeight` 复用 `DeriveTerrainMaps.comp`，允许输入最终 Runtime Height。`TerrainRenderer` 会先跑完本帧全部固定子步，再至多刷新一次 Normal/Slope、Analysis 和 MaterialWeight。即使某帧追赶 4 个子步，也不会重复派生 4 次；没有步进或侵蚀/沉积关闭时，不增加这项开销。
 
-验证结果：
+现在 Color、Shadow、坡度、曲率/流势和 Grass/Soil/Rock/Snow 权重使用同一版本的 Height。低角度观察沟槽时，轮廓、岩石坡面和土壤/草地边界会一起变化，Reset 后也会一起恢复。`GLIMMER_TERRAIN_VALIDATE=1` 会实际调用 Runtime Height 派生入口，检查有限性、权重归一化，并比较它与同一 Height 生成路径的输出哈希。
 
-- GTX 1050 / OpenGL 4.6 上五个水文 Compute Shader 与 Terrain Shader 编译成功；
-- 受控 GPU Contract 执行 100 个固定步：组合质量误差 `2.58287e-7`、侵蚀高度 `0.02`、沉积高度 `0.1`；
-- `0.04 × 25` 与 `0.01 × 100` 两种帧划分的 Height/Sediment 最大差值均为 `0`，Reset 恢复检查通过；
-- `Verify-Windows.ps1 -SkipGenerate` 增量构建成功，114 项无窗口断言全部 PASS，构建产物保留。
+GTX 1050 / OpenGL 4.6 上，五个水文 Compute Shader 和 Terrain Shader 编译通过。受控 GPU Contract 运行 100 个固定步，组合质量误差为 `2.58287e-7`，侵蚀高度 `0.02`，沉积高度 `0.1`；`0.04 × 25` 与 `0.01 × 100` 两种帧划分的 Height/Sediment 最大差值均为 `0`，Reset 检查通过。Windows 增量验证和 114 项无窗口断言也全部通过。
 
-运行时派生图刷新现已完成。`TerrainGenerator::DeriveMapsFromHeight` 复用现有 `DeriveTerrainMaps.comp`，但允许输入 `TerrainHydrologyGPU` 的最终 Runtime Height。`TerrainRenderer` 会先完成本帧所有固定水文子步，再最多派生一次 Normal/Slope、Analysis 和 MaterialWeight；因此一个渲染帧即使追赶 4 个模拟步，也不会重复执行 4 次相同派生。Reset 会刷新一次以恢复初始表面；除此以外，未执行固定步或侵蚀/沉积源项关闭时没有额外派生开销。
-
-这意味着侵蚀后的几何轮廓、阴影法线、坡度、曲率/流势和 Grass/Soil/Rock/Snow 分层现在读取同一版本的 Height。观察时可把 TerrainMaterial Sampling 保持为 `Full 4 Layers`，提高侵蚀率后从低角度查看沟槽：除轮廓下降外，陡坡岩石权重和低坡土壤/草地边界也应随新坡度移动；Reset 后两者一起恢复。受控 `GLIMMER_TERRAIN_VALIDATE=1` 验证会实际调用 Runtime Height 派生入口，并要求其有限性、权重归一化和输出哈希与相同 Height 的生成路径一致。
-
-P13C 至此收口。运行时模拟仍是临时状态：不写入 Scene YAML，也没有隐式 Bake；若后续需要保存侵蚀结果，应单独设计显式 Terrain Asset Bake、失败回滚和 Undo/Redo，而不是改变当前 Reset/复制语义。
+这套模拟仍是临时运行时状态。若要保存侵蚀结果，需要另行设计显式 Terrain Asset Bake、写入失败回滚和 Undo/Redo，不能悄悄改变现有 Reset、复制与场景保存语义。
 
 ## CPU 简化气候与植被潜力基线
 
@@ -6630,304 +4382,3 @@ Temperature 诊断的高度梯度由 `Temperature Lapse` 控制，单位是摄�
 - 构建产物和中间文件保留，没有删除 `bin`。
 
 下一阶段不直接创建植被实体，而是先把 Humidity、Temperature 与 VegetationPotential 接入 Terrain Material Weight，定义动态生态权重与既有 Height/Slope/Curvature 权重的组合和归一化规则。
-
-## KB
-
-### 为什么不用动态库？
-
-如果用动态链接库，将会出现每次生成解决方案都要手动复制一遍dll文件的情况
-
-#### 1. 什么是 StaticLib (静态库 .lib)？
-
-**通俗比喻**：相当于你把 Glimmer 引擎所有的代码（碰撞、渲染、数学库）**打印成了一本厚厚的实体书**。
-
-- **工作原理**：当编译 Sandbox 游戏时，链接器（Linker）会把这本 Glimmer.lib 里的**所有内容**，直接“抄”一份，**死死地缝合（打包）进最终的 Sandbox.exe 文件里**。
-- **结果**：你最终只得到一个胖胖的 Sandbox.exe。你只需要把这个 .exe 发给玩家，玩家双击就能直接玩！
-- **优点**：**极度省事**：不需要管环境变量，不需要把一堆 .dll 文件和 .exe 放在同一个目录下，玩家绝不会遇到恶心的“找不到 xxxx.dll”报错。**运行极快**：因为所有的代码都在一个 .exe 的内存空间里，函数调用的速度是最快的（编译器甚至能做极致的跨文件内联优化）。
-- **为什么目前用它？**：在引擎开发的初期，代码量很少，编译速度极快。用静态库可以让你少踩无数个“DLL 导出宏（__declspec(dllexport)）”的坑。
-
-#### 2. 什么是 SharedLib (动态链接库 .dll)？
-
-**通俗比喻**：相当于你把 Glimmer 引擎做成了一个**在线的云文档**。
-
-- **工作原理**：当编译 Sandbox 游戏时，它只会生成一个极小的 Sandbox.exe 和一个小小的引导文件（通常也叫 .lib，但只是个空壳目录）。真正的核心代码全都在独立生成的 **Glimmer.dll** 里。
-
-- **结果**：你必须把 Sandbox.exe 和 Glimmer.dll 放在同一个文件夹里发给玩家。当玩家双击 .exe 时，程序会在运行时（Run-time）动态地去旁边寻找并加载这个 .dll。
-
-- **优点**：**内存共享**：如果玩家电脑上同时运行了三个用 Glimmer 引擎做的游戏，它们可以共享内存中的同一个 Glimmer.dll，极大地节省了系统内存。**热更新（极度高级）**：你可以只替换掉玩家目录下的 Glimmer.dll 来修复引擎的 Bug，而不需要重新让玩家下载整个几 GB 的 Sandbox.exe 游戏本体！
-
-- **为什么现在不用它？**：
-  要写出一个能完美跨平台（Windows 用 .dll，Mac 用 .dylib，Linux 用 .so）的动态库引擎，你需要在所有的类和函数前面加上恶心至极的导出宏：
-
-  ```
-  // 如果用 DLL，你的代码得写成这样： 
-  #ifdef GLIMMER_BUILD_DLL    
-  	#define GLIMMER_API __declspec(dllexport) 
-  #else    
-  	#define GLIMMER_API __declspec(dllimport) 
-  #endif class GLIMMER_API Application { ... };
-  ```
-
-  这对于刚起步的引擎来说，纯粹是自找麻烦。
-
-### 什么是“静态链接（Static Link）”下的入口点冲突？
-
-**如果你在引擎的头文件里定义了 int main()，而用户在两个不同的 .cpp 文件里都包含了这个头文件，会发生什么？**
-
-- **标准答案**：会触发**重定义错误（Multiple Definition Error）**。
-- **如何规避？**：**约定俗成**：明确告知开发者，EntryPoint.h 只能在一个项目中有且仅有一个 .cpp 文件包含（通常是主程序入口）。**强制唯一性**：通过条件编译或特定的架构设计，确保 main 函数所在的翻译单元是唯一的。
-
-### **为什么我们要自己定义 GL_PLATFORM_WINDOWS，而不是直接用微软自带的 _WIN32？**
-
-- **标准答案（显摆你的架构思维）**：
-
-  **命名空间保护**：\_WIN32 是编译器厂商提供的宏。如果以后我们要支持 Android、iOS，每个平台都有自己乱七八糟的内置宏。使用 GL_ 前缀的宏（如 GL_PLATFORM_WINDOWS、GL_PLATFORM_LINUX），可以统一我们引擎自己的逻辑，**代码更干净，且不依赖于特定编译器。**
-
-  **灵活控制**：有时候我们可能在 Windows 上模拟 Linux 的运行逻辑。如果使用自己的宏，我们可以通过 Premake 脚本随时开启或关闭，而内置宏是没法手动关掉的。
-
-### **为什么在开发跨平台引擎时，我们倾向于强制开启** **/utf-8** **标志？**
-
-- **标准答案**：**一致性**：不同国家的开发者、不同操作系统的默认编码（Windows 的 GBK, Linux 的 UTF-8）各不相同。如果不统一，你的代码里写了一句中文注释，发给国外的合作伙伴，他的电脑打开可能全是乱码，甚至导致编译失败。
-- **现代标准**：C++11 之后，像 spdlog、fmt、yaml-cpp 等现代库都遵循 UTF-8 标准。
-- **运行环境**：设置 /utf-8 会同时设置**源代码字符集**和**执行字符集**。这意味着你在代码里写的 "你好"，在运行时输出到控制台时，编译器会确保它以 UTF-8 的形式正确呈现，而不是变成 ?? 或 锟斤拷。
-
-### **在 C++ 中，如果你要输出一段包含大量换行、反斜杠（\）或引号的字符串，你该怎么做？**
-
-- **标准答案**：使用 **C++11 引入的原始字符串字面量 (Raw String Literals)**，语法为 R"(字符串内容)"。
-- **为什么要用它？**：**无需转义**：在普通字符串里，你需要写 \\ 来代表一个 \，这在画 ASCII 艺术字时简直是噩梦。在 R"(...)" 中，你看到什么，输出就是什么。**支持多行**：它允许直接在代码里换行，非常适合写 Shader 源码、JSON 模板或艺术字 Logo。
-
-### **为什么在事件系统中，EventCategory **要使用 **BIT(x)** **位移操作，而不是简单的 1, 2, 3 数字？**
-
-- **标准答案**：**多重归属（Multiple Categories）**：使用位掩码（Bitmask）可以允许一个事件同时属于多个分类。例如，MouseButtonPressedEvent 的分类标志可以是 EventCategoryMouse | EventCategoryInput（结果是二进制的 1010）。
-- **高效查询**：检查一个事件是否属于某个分类只需要一次位运算（&），速度极快，这在每秒产生成千上万个事件的引擎中至关重要。
-
-### **Glimmer 现在的事件系统是“阻塞式（Blocking）”的，这有什么优缺点？**
-
-- **标准答案**：
-
-  **优点**：实现简单，逻辑直观。事件一发生立即处理，不需要额外的内存缓冲区。
-
-  **缺点**：如果处理某个事件（如复杂计算）太耗时，会直接卡住主循环，导致掉帧。
-
-  **未来优化**：后续可以引入“事件队列（Event Queue）”，将不紧急的事件存起来，在下一帧统筹处理。
-
-### **为什么大型 C++ 项目一定要用 PCH？它的原理是什么？**
-
-- **标准答案**：
-
-  **原理**：C++ 的 #include 是简单的文本拷贝。如果你有 1000 个文件都包含了 <Windows.h>（约 10 万行代码），编译器就要处理 1 亿行代码。PCH 的做法是**将这些头文件预先编译成二进制格式**。
-
-  **作用**：后续编译其他源文件时，编译器直接加载二进制缓存，不再重复解析。
-
-  **结果**：可以把数分钟的编译时间缩短到几秒钟，显著提升开发效率。
-
-### **为什么在 Window::Create 中使用静态工厂方法，而不是直接 new WindowsWindow？**
-
-- **标准答案**：
-  为了实现**跨平台隐藏**。在 Application.cpp 中，我们只需要包含通用的 Window.h，而不需要知道 WindowsWindow.h 的存在。这样在编译 Linux 版时，Window::Create 会返回 LinuxWindow，而 Application 的逻辑代码一行都不用改。这符合设计模式中的**工厂模式**和**依赖倒置原则**。
-
-### **什么是 VSync（垂直同步）？它的底层原理是什么？**
-
-- **标准答案**：
-  VSync 用于将显示器的刷新率（如 60Hz）与 GPU 的渲染帧率同步。
-  **原理**：GPU 有两个缓冲区（Front Buffer 和 Back Buffer）。当开启 VSync 时，GPU 会等待显示器的 **垂直空白间隙 (Vertical Blanking Interval)** 信号，才执行 **双缓冲交换 (Buffer Swapping)**。这能有效防止画面撕裂（Screen Tearing），但可能会增加微小的输入延迟。
-
-### **在处理 GLFW 回调时，为什么不能直接在回调里写 Application::OnEvent(...)？**
-
-- **标准答案**：**语法限制**：GLFW 的回调是 C 风格的函数指针，它无法直接调用 C++ 对象的成员函数（因为没有 this 指针）。
-
-  **解耦原则**：底层的窗口模块不应该知道上层的 Application 是谁。
-
-  **解决方案**：使用 glfwSetWindowUserPointer。这是一个极其经典的 C/C++ 混编技巧。它允许我们将一个自定义对象的地址存在 C 库持有的句柄里，在回调触发时再强转回来。这本质上是在为 C 语言的回调函数提供“上下文”。
-
-### **如果我想在引擎里加一个“性能监控面板（FPS计数器）”，我该怎么做？**
-
-- **标准答案**：我会创建一个专门的 **Overlay（覆盖层）**。把它放在 LayerStack 的最顶端（最后面）。在 OnUpdate 中计算 FPS 并使用渲染指令画在屏幕顶端。因为它处于最顶层，所以无论游戏层怎么渲染，性能面板永远不会被遮挡，且它通常不拦截鼠标事件（Handled = false），保证不影响玩家玩游戏。
-
-### **为什么 OpenGL 需要 Glad 或 Glew 这样的加载库？直接调用不行吗？**
-
-- **标准答案**：
-
-  **动态寻址**：OpenGL 函数实现在 GPU 驱动里。驱动版本不同，函数的内存地址也不同。
-
-  **跨平台限制**：Windows 只默认支持 OpenGL 1.1。所有更高版本的函数（如 Shader 相关函数）必须在运行时动态获取地址。
-
-  **Glad 的工作**：它通过调用 OS 提供的接口（如 Windows 上的 wglGetProcAddress）把这些深藏在驱动里的函数地址一个一个抠出来，赋值给 C++ 指针，我们才能正常调用。
-
-### **什么是“双缓冲（Double Buffering）”？为什么要 SwapBuffers？**
-
-- **标准答案**：
-  为了防止画面闪烁。
-
-  **后缓冲区（Back Buffer）**：GPU 在后台静静地画图。
-
-  **前缓冲区（Front Buffer）**：显示器当前显示的图。
-
-  **SwapBuffers**：当后缓冲区画好了，瞬间把它和前缓冲区交换。玩家看到的就是完整的画面，而不是 GPU 正在涂色的过程。
-
-### **ImGui 层应该由客户端（Sandbox）手动挂载，还是由引擎自动集成？**
-
-“这取决于引擎的定位。
-
-**手动挂载（Hazel 早期）\**遵循了\**组合优于继承**的原则，具有极高的灵活性。如果应用是一个不需要交互的后台程序或纯性能演示，可以完全剥离 UI 模块，减少内存和渲染开销。
-
-**自动集成（我目前的做法）\**则是将 ImGui 视为\**引擎的基础设施（Infrastructure）**。
-首先，它统一了**渲染序列**。由于 ImGui 需要每帧执行 Begin/End 上下文设置，由引擎持有 m_ImGuiLayer 指针可以确保 UI 渲染逻辑始终包裹在所有图层的 OnImGuiRender 之外。
-其次，它提升了**开发效率**。开发者在创建新的 Sandbox 游戏或新的 Layer 时，无需关心 UI 环境的初始化，可以直接通过重写 OnImGuiRender 来实现调试工具的快速开发。
-这实际上是向**‘编辑器驱动’**的架构演进，因为未来的引擎编辑器本身就是建立在这个自动集成的 ImGui 层之上的。”
-
-### **你是如何处理 UI 事件与游戏场景事件冲突的？**
-
-“在 Glimmer 引擎中，我通过 **ImGuiIO 标志位** 与 **图层事件拦截机制** 的结合来解决这个问题。
-
-首先，事件在引擎中是**倒序分发**的，即位于栈顶的 ImGuiLayer 会最先收到事件。
-在 ImGuiLayer::OnEvent 函数中，我会查询 ImGui 内部的两个状态位：io.WantCaptureMouse 和 io.WantCaptureKeyboard。
-
-- 当鼠标悬浮在任何 ImGui 窗口上时，ImGui 会自动将 WantCaptureMouse 设为 true。
-- 此时，ImGuiLayer 会在处理完该事件后，将 Event::Handled 属性设为 true。
-
-由于我们在 Application::OnEvent 中实现了拦截逻辑：一旦某个 Layer 处理了事件并标记为 Handled，循环就会立即中断，事件不再传递给下层的 GameLayer。这保证了玩家在点击 UI 按钮时，场景里的角色不会同时发射子弹或移动。”
-
-### 为什么要这么费劲手动映射？
-
-你会发现 ImGui_ImplGlfw_InitForOpenGL(window, true) 的第二个参数如果传 true，ImGui 其实会自动帮你安装 GLFW 回调。
-
-**但是，为什么在写引擎时我们要手动映射（传 false 或者像我们这样自己写 OnEvent）？**
-
-1. **控制权**：作为引擎开发者，我们希望**所有的**系统事件（从 GLFW 来的）都必须先经过我们的 Application::OnEvent 统一调度。如果让 ImGui 直接去钩住 GLFW，我们的事件系统就会被架空。
-2. **平台无关性**：如果我们未来支持手机端，手机端没有 GLFW。通过手动映射，我们可以把触摸事件转化为 ImGui 的鼠标点击，而底层的 ImGui 逻辑完全不需要修改。
-
-### **为什么要把 GLFW 的键码重定义一遍？直接在游戏里用 GLFW 的宏不是更快吗？**
-
-- **标准答案**：
-
-  **屏蔽实现细节**：如果明年我想把底层库从 GLFW 换成 SDL，或者要在手机上跑（手机没键盘，只有触摸），如果我用了 GLFW_KEY_A，我得改掉成百上千个游戏逻辑文件。
-
-  **二进制兼容性**：作为引擎开发者，我希望暴露给用户的 API 是**绝对稳定**的。通过重定义，我可以保证 GL_KEY_A 永远代表 A，而不受底层第三方库版本更新（比如宏改名）的影响。
-
-### **GLM 使用的是“行优先 (Row-major)”还是“列优先 (Column-major)”存储？这有什么影响？**
-
-- **标准答案**：
-
-  **GLM 是列优先 (Column-major)**。这与 OpenGL 的标准保持一致。
-
-  **影响**：
-
-  - **内存排列**：一个 4x4 矩阵，在内存里是先存第一列，再存第二列。
-  - **乘法顺序**：在代码里我们要写 Matrix * Vector。如果你用的是行优先的库（如 DirectX 数学库），乘法顺序通常是 Vector * Matrix。
-  - **传参**：当你使用 glUniformMatrix4fv 把矩阵传给显卡时，不需要进行转置处理，因为内存结构和 OpenGL 驱动预期的完全一致。
-
-### **为什么我们要在引擎初始化阶段编译 Shader，而不是在每一帧渲染时编译？**
-
-- **标准答案**：
-
-  **开销极大**：Shader 编译涉及字符串解析、驱动程序的底层代码优化（JIT），这在 CPU 上非常耗时。
-
-  **管线停顿 (Pipeline Stall)**：如果在 Run 循环里编译，每一帧都会产生巨大的卡顿，帧率会掉到个位数。
-
-  **状态对象**：在 OpenGL 中，编译后的程序是一个数字 ID（Handle），它存在显存中。我们只需要在渲染前通过 glUseProgram(ID) 切换状态，这个动作几乎是瞬时完成的。
-
-### **为什么在类里要把程序句柄起名叫 m_RendererID 而不是 m_ShaderID？**
-
-- **标准答案**：
-  这是一种**架构习惯**。在 OpenGL 中，最终起作用的是 **Program（程序对象）**，它是由 Vertex Shader 和 Fragment Shader 链接而成的。对于渲染器来说，它只需要知道这个“渲染程序的 ID”。未来我们在封装 Texture、Buffer 时，也会用 m_RendererID 来代表 GPU 端的资源句柄，保持命名的一致性。
-
-### **glDetachShader 的作用是什么？不写会怎么样？**
-
-- **标准答案**：
-  glDetachShader 是将着色器对象从程序对象中“解绑”。
-  **原因**：一旦 glLinkProgram 成功，程序对象就已经包含了所需的二进制指令。此时如果不 Detach 就直接 glDeleteShader，着色器对象并不会被真正删除，而是被标记为“待删除”，直到程序对象被销毁。Detach 之后再 Delete，可以更早地释放显存空间，是良好的资源管理习惯。
-
-### **glGetUniformLocation 这个函数有什么性能问题吗？你会如何优化它？**
-
-- **标准答案**：
-
-  **性能损耗**：glGetUniformLocation 是一个相对“昂贵”的操作，因为它涉及到字符串匹配。如果在每一帧中对大量的 Uniform 调用这个函数，会显著降低 CPU 性能。
-
-  **优化方案（Uniform 缓存）**：在 Shader 类中建立一个 **std::unordered_map<std::string, int>**。当第一次上传某个 Uniform 时，查询 Location 并存入 Map。下次上传时，直接从内存里的 Map 读取，避免调用 OpenGL 底层查询指令。
-
-  **高级方案**：在现代 OpenGL（4.3+）中，可以使用 layout(location = x) 直接在 Shader 里给 Uniform 指定位置，彻底省去查询过程。
-
-### **为什么要把 VertexBuffer::Create 定义为静态工厂方法，而不是直接 new OpenGLVertexBuffer？**
-
-- **标准答案**：
-  这是**依赖倒置原则（DIP）**的体现。Application 属于高级逻辑层，它应该依赖于抽象接口 VertexBuffer，而不是具体的 OpenGL 实现。通过这种方式，我们可以实现“编译时隔离”：如果你正在开发手机端的 Vulkan 版本，只需让 Create 返回 VulkanVertexBuffer 即可，**业务层的代码一行都不用改**。
-
-### **为什么我们要把 View 和 Projection 矩阵乘在一起传给 Shader，而不是分开传？**
-
-- **标准答案**：
-
-  **减少计算量**：对于一个模型的所有顶点（可能有几万个），它们使用的 `VV` 和 `PP` 矩阵都是一样的。在 CPU 算好乘积 `VPVP` 只需一次 4x4 矩阵乘法；如果传给 Shader，GPU 就要对每个顶点都算一遍乘法。这极大地节省了 GPU 的计算资源。
-
-  **管线优化**：这是标准做法。`P×V×MP×V×M` 构成了物体的最终屏幕位置。将 `PVPV` 视为“场景状态”，`MM` 视为“物体状态”，符合逻辑上的分层。
-
-### **正交投影 (Orthographic) 和 透视投影 (Perspective) 的区别？**
-
-- **标准答案**：
-
-  **正交投影**：物体无论远近，大小看起来都一样。适合 2D 游戏、UI、CAD 软件。
-
-  **透视投影**：近大远小。适合 3D 游戏，因为它模拟了人眼的成像规律。
-
-### **在顶点着色器里，为什么矩阵相乘的顺序是** $P×V×M×pos$
-
-- **标准答案**：
-
-  **数学约定**：OpenGL 和 GLM 默认使用**列优先 (Column-major)** 存储，数学计算上遵循从右向左的变换顺序。
-
-  **物理含义**：
-
-  - `MM` (Model)：将顶点从**局部空间**转到**世界空间**（决定物体在哪）。
-  - `VV` (View)：将顶点从**世界空间**转到**观察空间**（决定相机在哪看）。
-  - `PP` (Projection)：将顶点从**观察空间**转到**裁剪空间**（决定哪些东西在屏幕内）。
-  - **结论**：顶点必须先被物体变换，再被相机变换，最后被投影变换。顺序反了，渲染结果就会彻底错误。
-
-### **你把 Shader 改成了虚基类，每一帧调用 Bind() 都会经过虚函数表（V-Table），这会产生严重的性能损耗吗？**
-
-- **标准答案**：
-  “虚函数确实存在一次间接寻址的开销，但在 **Shader 绑定**这种级别的操作中，这种损耗是**微不足道**的。
-
-  **调用频率**：通常我们每一帧只绑定几次或几十次 Shader（取决于材质数量）。相比于 GPU 每秒处理的数百万个顶点，CPU 端这几十次虚函数调用完全不是瓶颈。
-
-  **架构收益**：这种设计换取了极强的**跨平台能力**。在没有引入这个重构前，我们的 Application 被迫了解 OpenGL 的细节。现在，整个 Renderer 子系统完全由接口驱动，我们可以无缝接入 Vulkan 或 Metal，这种架构的健壮性远比节省那几纳秒的性能更重要。”
-
-### **在渲染器抽象中，你如何处理特定 API（如 OpenGL）才有的 Uniform 上传功能？**
-
-“起初我尝试在 Renderer 中使用 dynamic_pointer_cast 将通用的 Shader 指针转为 OpenGLShader。但我意识到这会导致 **‘编译时依赖耦合’**，使得通用的渲染层感知到了具体的图形后端，违背了开闭原则（OCP）。
-
-因此，我采用了 **接口多态化** 的方案。我将常用的 Uniform 上传操作抽象到了 Shader 基类接口中。
-对于 OpenGL 后端，它会实现这些虚函数并调用 glUniform。
-对于未来可能的其他后端（如 Vulkan），它可以通过推送常量（Push Constants）或描述符集（Descriptor Sets）来实现这些接口。
-这样 Renderer 类就实现了完全的 **后端无关性（Backend-Agnostic）**，提升了引擎的可扩展性。”
-
-### **纹理 Slot (或者叫 Texture Unit) 是干什么的？**
-
-- **你的回答**：
-  “它是 GPU 上的‘插槽’。现代显卡通常有 16 到 32 个插槽。通过这个机制，我们可以在单次绘制（Draw Call）中同时使用多张贴图（比如：一张反射贴图，一张法线贴图）。我们在 C++ 中通过 glActiveTexture 选择插槽，并在 Shader 中通过 Uniform 变量告诉采样器它该读取哪个插槽。”
-
-### **为什么在引擎里要提供 ShaderLibrary 这种管理器？**
-
-**你的回答：**
-“这主要涉及 **资源生命周期管理 (Resource Lifecycle Management)** 和 **降低运行时开销** 两个方面。
-第一，**避免重复加载**。通过 unordered_map 的映射机制，我们可以确保同一个 Shader 文件在整个应用程序生命周期内只被编译和链接一次，节省了宝贵的初始化时间和显存。
-第二，**解耦逻辑与资源引用**。在复杂的场景中，不同的图层（Layer）可能需要共享同一个 Shader。通过库，我们不再需要在图层之间互相传递脆弱的原始指针，而是通过统一的‘键值（Key）’来获取资源，这极大地增强了代码的模块化和健壮性。
-第三，**集中式优化**。有了 Library 这一层，未来我们可以轻松实现‘热重载（Hot Reloading）’。即当开发者在外部修改了 .glsl 文件后，Library 可以自动重新编译对应 Shader，而无需重启游戏，从而提升开发效率。”
-
-### **我看你在纹理上传时使用了 glTextureSubImage2D，为什么不使用传统的 glTexImage2D？**
-
-**你的回答：**
-“我选择了 **DSA (Direct State Access)** 模式。
-传统的 OpenGL API 强依赖于‘绑定-编辑（Bind-to-Edit）’模型，这在大型引擎开发中会导致两个严重问题：
-
-1. **状态污染**：频繁的 Bind/Unbind 容易导致不可预见的渲染错误。
-2. **性能开销**：为了确保操作正确，开发者往往需要不断查询或重置全局绑定状态，增加了驱动程序的开销。
-
-通过使用以 glTexture... 开头的 DSA 函数，我可以绕过上下文绑定点，直接通过 **Object Handle（资源句柄）** 操作 GPU 资源。这不仅使代码更加**线程安全**且逻辑清晰，还减少了驱动层的状态验证次数。这在我的 Glimmer 引擎中是迈向高性能、现代化渲染管线的重要一步。”
-
-### **为什么我们要通过 Framebuffer 进行间接渲染，而不是直接画在窗口上？**
-
-**你的回答：**
-“这是为了实现 **‘渲染管线的虚拟化’**。
-首先，它解决了**编辑器集成**的问题。通过将渲染结果输出为纹理，我们可以利用 ImGui 等 UI 库在同一个 OS 窗口内组织多个视口（Viewport），实现类似 Unity 的工作流。
-其次，它为 **渲染后期（Post-Processing）** 提供了底座。一旦画面存在于纹理中，我们就可以对这块显存执行模糊、调色、抗锯齿（FXAA/MSAA）等计算，而不会影响原始的几何体渲染。
-最后，它允许我们实现 **‘分辨率独立渲染’**。游戏逻辑可以运行在 4K 画布上，但最终通过缩放显示在 1080p 的窗口中，这种灵活性是现代高性能引擎的基石。”
