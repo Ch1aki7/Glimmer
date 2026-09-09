@@ -1,4 +1,13 @@
 AssetRegistry:
+  - Handle: 17101010101010101001
+    Type: Shader
+    FilePath: shaders/ToonOutline.glsl
+  - Handle: 17101010101010101002
+    Type: Shader
+    FilePath: shaders/ToonSurface.glsl
+  - Handle: 17101010101010101003
+    Type: Material
+    FilePath: materials/DefaultToonOutline.glmat
   - Handle: 760354001728689454
     Type: Texture2D
     FilePath: textures/pbr/brick/factory_brick_ao_1k.jpg

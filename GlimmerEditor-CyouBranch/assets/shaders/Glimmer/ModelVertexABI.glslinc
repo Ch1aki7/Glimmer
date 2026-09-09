@@ -1,0 +1,46 @@
+#ifndef GLIMMER_MODEL_VERTEX_ABI
+#define GLIMMER_MODEL_VERTEX_ABI
+
+layout(location = 0) in vec3 a_Position;
+layout(location = 1) in vec3 a_Normal;
+layout(location = 2) in vec3 a_Tangent;
+layout(location = 3) in vec2 a_TexCoord;
+layout(location = 4) in mat4 a_InstanceTransform;
+layout(location = 8) in ivec4 a_InstanceEntityData;
+
+uniform mat4 u_ViewProjection;
+uniform mat4 u_Transform;
+uniform int u_EntityID;
+uniform int u_UseInstancing;
+
+layout(location = 0) out vec3 v_WorldPosition;
+layout(location = 1) out vec3 v_WorldNormal;
+layout(location = 2) out vec2 v_TexCoord;
+layout(location = 3) flat out int v_EntityID;
+layout(location = 4) out vec3 v_WorldTangent;
+
+mat4 GlimmerModelTransform()
+{
+    return u_UseInstancing != 0 ? a_InstanceTransform : u_Transform;
+}
+
+int GlimmerModelEntityID()
+{
+    return u_UseInstancing != 0 ? a_InstanceEntityData.x : u_EntityID;
+}
+
+void GlimmerWriteModelVertex(
+    vec3 localPosition, vec3 localNormal, vec3 localTangent, vec2 texCoord)
+{
+    mat4 transform = GlimmerModelTransform();
+    vec4 worldPosition = transform * vec4(localPosition, 1.0);
+    mat3 normalMatrix = transpose(inverse(mat3(transform)));
+    v_WorldPosition = worldPosition.xyz;
+    v_WorldNormal = normalize(normalMatrix * localNormal);
+    v_WorldTangent = normalize(mat3(transform) * localTangent);
+    v_TexCoord = texCoord;
+    v_EntityID = GlimmerModelEntityID();
+    gl_Position = u_ViewProjection * worldPosition;
+}
+
+#endif

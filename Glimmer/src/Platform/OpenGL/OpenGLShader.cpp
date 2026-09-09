@@ -2,6 +2,8 @@
 #include "OpenGLShader.h"
 
 #include <fstream>
+#include <algorithm>
+#include <sstream>
 #include <vector>
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -79,7 +81,10 @@ namespace gl {
 
 	ShaderReloadResult OpenGLShader::ReloadIfChanged()
 	{
-		if (!m_FileWatcher || !m_FileWatcher->Poll())
+		bool changed = m_FileWatcher && m_FileWatcher->Poll();
+		for (const auto& watcher : m_DependencyWatchers)
+			changed = watcher->Poll() || changed;
+		if (!changed)
 			return {};
 		return Reload();
 	}
@@ -109,6 +114,19 @@ namespace gl {
 			m_LastReloadResult = result;
 			return result;
 		}
+		std::vector<std::filesystem::path> dependencies;
+		for (auto& [type, stageSource] : shaderSources)
+		{
+			std::string resolved;
+			std::vector<std::filesystem::path> includeStack{ m_FilePath };
+			if (!ResolveIncludes(stageSource, m_FilePath, resolved,
+				dependencies, includeStack, result.Message))
+			{
+				m_LastReloadResult = result;
+				return result;
+			}
+			stageSource = std::move(resolved);
+		}
 
 		uint32_t newProgram = 0;
 		if (!BuildProgram(shaderSources, newProgram, result.Message))
@@ -121,6 +139,13 @@ namespace gl {
 		const uint32_t oldProgram = m_RendererID;
 		m_RendererID = newProgram;
 		m_UniformCache.clear();
+		std::sort(dependencies.begin(), dependencies.end());
+		dependencies.erase(std::unique(dependencies.begin(), dependencies.end()),
+			dependencies.end());
+		m_DependencyWatchers.clear();
+		for (const auto& dependency : dependencies)
+			m_DependencyWatchers.emplace_back(
+				std::make_unique<FileWatcher>(dependency));
 		UpdateCapabilities();
 		++m_Version;
 		if (oldProgram != 0)
@@ -226,6 +251,87 @@ namespace gl {
 		}
 
 		return !shaderSources.empty();
+	}
+
+	bool OpenGLShader::ResolveIncludes(
+		const std::string& source,
+		const std::filesystem::path& includingFile,
+		std::string& resolved,
+		std::vector<std::filesystem::path>& dependencies,
+		std::vector<std::filesystem::path>& includeStack,
+		std::string& error) const
+	{
+		std::istringstream input(source);
+		std::ostringstream output;
+		std::string line;
+		while (std::getline(input, line))
+		{
+			const size_t token = line.find("#include");
+			if (token == std::string::npos
+				|| line.find_first_not_of(" \t") != token)
+			{
+				output << line << '\n';
+				continue;
+			}
+
+			const size_t open = line.find_first_of("\"<", token + 8);
+			if (open == std::string::npos)
+			{
+				error = "Malformed #include in " + includingFile.string();
+				return false;
+			}
+			const char closeCharacter = line[open] == '<' ? '>' : '\"';
+			const size_t close = line.find(closeCharacter, open + 1);
+			if (close == std::string::npos)
+			{
+				error = "Malformed #include in " + includingFile.string();
+				return false;
+			}
+			const std::filesystem::path requested =
+				line.substr(open + 1, close - open - 1);
+			const std::filesystem::path base = line[open] == '<'
+				? m_FilePath.parent_path() : includingFile.parent_path();
+			std::error_code pathError;
+			const std::filesystem::path includePath =
+				std::filesystem::weakly_canonical(base / requested, pathError);
+			if (pathError || !std::filesystem::is_regular_file(includePath))
+			{
+				error = "Shader include not found: " + requested.string()
+					+ " (from " + includingFile.string() + ")";
+				return false;
+			}
+			if (std::find(includeStack.begin(), includeStack.end(), includePath)
+				!= includeStack.end())
+			{
+				error = "Shader include cycle at: " + includePath.string();
+				return false;
+			}
+
+			std::ifstream includeStream(includePath, std::ios::binary);
+			std::string includeSource((std::istreambuf_iterator<char>(includeStream)),
+				std::istreambuf_iterator<char>());
+			if (!includeStream.good() && !includeStream.eof())
+			{
+				error = "Could not read shader include: " + includePath.string();
+				return false;
+			}
+			if (includeSource.size() >= 3
+				&& static_cast<unsigned char>(includeSource[0]) == 0xEF
+				&& static_cast<unsigned char>(includeSource[1]) == 0xBB
+				&& static_cast<unsigned char>(includeSource[2]) == 0xBF)
+				includeSource.erase(0, 3);
+
+			dependencies.push_back(includePath);
+			includeStack.push_back(includePath);
+			std::string nested;
+			if (!ResolveIncludes(includeSource, includePath, nested,
+				dependencies, includeStack, error))
+				return false;
+			includeStack.pop_back();
+			output << nested;
+		}
+		resolved = output.str();
+		return true;
 	}
 
 	bool OpenGLShader::BuildProgram(

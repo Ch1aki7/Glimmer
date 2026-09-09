@@ -2,10 +2,14 @@
 
 #include "Glimmer/Asset/Asset.h"
 #include "Glimmer/Core/Core.h"
+#include "Glimmer/Renderer/RendererAPI.h"
 
 #include <glm/glm.hpp>
 #include <filesystem>
+#include <array>
+#include <map>
 #include <string>
+#include <vector>
 
 namespace gl {
 
@@ -18,6 +22,33 @@ namespace gl {
 
 	const char* MaterialAlphaModeToString(MaterialAlphaMode mode);
 	MaterialAlphaMode MaterialAlphaModeFromString(const std::string& value);
+
+	enum class MaterialPassQueue : uint8_t
+	{
+		Material = 0,
+		Opaque
+	};
+
+	struct MaterialPass
+	{
+		std::string Name = "Forward";
+		AssetHandle ShaderHandle{ 0 };
+		int32_t Order = 100;
+		CullMode Cull = CullMode::None;
+		bool DepthWrite = true;
+		MaterialPassQueue Queue = MaterialPassQueue::Material;
+		std::map<std::string, float> FloatParameters;
+		std::map<std::string, std::array<float, 4>> Float4Parameters;
+
+		bool operator==(const MaterialPass& other) const
+		{
+			return Name == other.Name && ShaderHandle == other.ShaderHandle
+				&& Order == other.Order && Cull == other.Cull
+				&& DepthWrite == other.DepthWrite && Queue == other.Queue
+				&& FloatParameters == other.FloatParameters
+				&& Float4Parameters == other.Float4Parameters;
+		}
+	};
 
 	struct MaterialProperties
 	{
@@ -60,10 +91,12 @@ namespace gl {
 	{
 		AssetHandle ShaderHandle{ 0 };
 		MaterialProperties Properties;
+		std::vector<MaterialPass> Passes;
 
 		bool operator==(const MaterialState& other) const
 		{
-			return ShaderHandle == other.ShaderHandle && Properties == other.Properties;
+			return ShaderHandle == other.ShaderHandle
+				&& Properties == other.Properties && Passes == other.Passes;
 		}
 		bool operator!=(const MaterialState& other) const { return !(*this == other); }
 	};
@@ -79,13 +112,15 @@ namespace gl {
 		const std::filesystem::path& GetPath() const { return m_Path; }
 		AssetHandle GetShaderHandle() const { return m_ShaderHandle; }
 		void SetShaderHandle(AssetHandle handle);
-		MaterialState GetState() const { return { m_ShaderHandle, m_Properties }; }
+		MaterialState GetState() const { return { m_ShaderHandle, m_Properties, m_Passes }; }
 		void SetState(const MaterialState& state);
 		uint64_t GetVersion() const { return m_Version; }
 		void MarkDirty() { ++m_Version; }
 
 		MaterialProperties& GetProperties() { return m_Properties; }
 		const MaterialProperties& GetProperties() const { return m_Properties; }
+		std::vector<MaterialPass>& GetPasses() { return m_Passes; }
+		const std::vector<MaterialPass>& GetPasses() const { return m_Passes; }
 
 	private:
 		explicit Material(std::filesystem::path path);
@@ -94,6 +129,7 @@ namespace gl {
 		std::filesystem::path m_Path;
 		AssetHandle m_ShaderHandle{ 0 };
 		MaterialProperties m_Properties;
+		std::vector<MaterialPass> m_Passes;
 		uint64_t m_Version = 0;
 	};
 

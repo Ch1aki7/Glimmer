@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-08-19
+- 最近更新：2026-09-09
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -139,6 +139,14 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-09-09：模型 Shader ABI 与多 Pass 法线外扩
+
+- 用户明确调整优先级后，从 PBRModel 中抽出 Model Vertex、Forward Fragment、Surface 与 CSM 公共 GLSL ABI；图形 Shader 支持递归 `#include`、循环检测和 Include 依赖热重载，PBR 与 Toon 共用相机、实例、灯光、材质、阴影、IBL、Alpha 和 EntityID 契约；
+- `.glmat` 新增向后兼容的可选 Passes，每个 Pass 保存 Shader、Order、Cull、DepthWrite、Queue 以及 Float/Float4 参数；Renderer3D 将 Mesh 展开为有序 Pass RenderItem，并把 Pass 状态纳入排序、合批、实例化和状态恢复；RendererAPI/OpenGL 新增 None/Back/Front Cull；
+- 新增 `ToonSurface.glsl`、`ToonOutline.glsl` 和 `DefaultToonOutline.glmat`。Outline 以世界空间法线外扩、Front Cull 和独立不透明队列绘制，Forward 继续消费标准 Surface/Light/Shadow ABI；旧单 Shader 材质行为不变；
+- 验证：VS2026 `Debug | x64` 的 Glimmer、编辑器和回归目标均构建成功；无窗口回归全部 PASS，并新增多 Pass 顺序、状态与通用参数保存往返；GTX 1050/OpenGL 4.6 下 PBR/Toon Include 展开编译成功，Toon 自动 Lab 实际渲染 `12/12` Items、无跳过模型，Shadow `24/24`；统一脚本首次受宿主重复 `PATH/Path` 环境变量影响只返回 MSBuild 退出码，清理子进程环境后相同工程构建通过；
+- 当前主线恢复 P14 气候场驱动 Terrain Material Weight；提交：待提交。
 
 ### 2026-08-18：P13C 运行时侵蚀、沉积与派生图闭环
 
@@ -471,6 +479,7 @@
 ### 渲染
 
 - Renderer3D 已有 Opaque/Mask/Transparent Queue、状态排序、Opaque Instancing 和 MaterialInstance 缓存；Transparent 首版仍按实体原点而不是 Mesh Bounds 中心排序，且不支持透明实例化或 OIT；
+- 模型材质已支持多 Pass、通用 Float/Float4 参数和 None/Back/Front Cull；Pass 目前通过 `.glmat` YAML 编辑，Inspector 尚无 Pass/参数列表 UI，实体 Override 也不覆盖共享 Pass 参数；透明多 Pass 仍按逐项透明队列执行，法线外扩宽度使用世界单位而不是屏幕像素；
 - AlphaMode Shader 契约当前由 PBRModel 完整实现；自定义 3D Shader 若要正确支持 Mask/Blend，仍需自行声明并使用 `u_AlphaMode`、`u_AlphaCutoff`；
 - PBRModel 已支持 BaseColor、Normal、AO、Emissive 以及 FBX 导入的独立 Metallic/Roughness Texture；`.glmat` 尚未暴露 Metallic/Roughness 纹理 Handle，也未定义 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；

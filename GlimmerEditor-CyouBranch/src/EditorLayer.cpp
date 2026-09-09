@@ -33,6 +33,11 @@ namespace gl {
 			return HasEnvironmentVariable("GLIMMER_PBR_LAB_AUTORUN");
 		}
 
+		bool ShouldAutorunToonLab()
+		{
+			return HasEnvironmentVariable("GLIMMER_TOON_LAB_AUTORUN");
+		}
+
 		bool ShouldAutorunShadowBenchmark()
 		{
 			return HasEnvironmentVariable("GLIMMER_SHADOW_BENCHMARK_AUTORUN");
@@ -305,6 +310,8 @@ namespace gl {
 			AssetManager::ImportAsset("assets/models/geos/Cube.obj");
 		const AssetHandle defaultInstancingMaterialHandle =
 			AssetManager::ImportAsset("assets/materials/DefaultPBR.glmat");
+		const AssetHandle defaultToonMaterialHandle =
+			AssetManager::ImportAsset("assets/materials/DefaultToonOutline.glmat");
 		const AssetHandle defaultPbrSphereHandle =
 			AssetManager::ImportAsset("assets/models/geos/UV Sphere.obj");
 		const AssetHandle defaultNormalTextureHandle =
@@ -340,6 +347,8 @@ namespace gl {
 		m_ShaderLib.Load("assets/shaders/Overlay.glsl");
 		m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
 		m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
+		m_ShaderLib.Load("Toon Surface ABI", "assets/shaders/ToonSurface.glsl");
+		m_ShaderLib.Load("Toon Outline ABI", "assets/shaders/ToonOutline.glsl");
 		m_ShaderLib.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
 		m_ShaderLib.Load("Hologram", "assets/shaders/Hologram.glsl");
 
@@ -407,7 +416,8 @@ namespace gl {
 
 		m_DebugPanel.SetDefaultAssets(
 			defaultInstancingModelHandle,
-			defaultInstancingMaterialHandle,
+			ShouldAutorunToonLab()
+				? defaultToonMaterialHandle : defaultInstancingMaterialHandle,
 			defaultSkyboxHandle,
 			defaultPbrSphereHandle,
 			defaultNormalTextureHandle,
@@ -427,7 +437,7 @@ namespace gl {
 				float pitch, float yaw) {
 				m_EditorCamera.SetView(focalPoint, distance, pitch, yaw);
 			});
-		if (ShouldAutorunPBRLab())
+		if (ShouldAutorunPBRLab() || ShouldAutorunToonLab())
 			m_DebugPanel.GeneratePBRMaterialLabForValidation();
 		if (ShouldAutorunShadowVisualValidation())
 		{

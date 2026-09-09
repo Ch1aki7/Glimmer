@@ -279,6 +279,22 @@ namespace {
 		expected.Properties.EmissiveStrength = 4.5f;
 		expected.Properties.AlphaMode = gl::MaterialAlphaMode::Mask;
 		expected.Properties.AlphaCutoff = 0.42f;
+		gl::MaterialPass outlinePass;
+		outlinePass.Name = "Outline";
+		outlinePass.ShaderHandle = gl::AssetHandle(301);
+		outlinePass.Order = 0;
+		outlinePass.Cull = gl::CullMode::Front;
+		outlinePass.Queue = gl::MaterialPassQueue::Opaque;
+		outlinePass.FloatParameters["u_OutlineWidth"] = 0.025f;
+		outlinePass.Float4Parameters["u_OutlineColor"] =
+			{ 0.01f, 0.02f, 0.03f, 1.0f };
+		gl::MaterialPass forwardPass;
+		forwardPass.Name = "Forward";
+		forwardPass.ShaderHandle = gl::AssetHandle(302);
+		forwardPass.Order = 100;
+		forwardPass.Cull = gl::CullMode::Back;
+		forwardPass.FloatParameters["u_ToonLightThreshold"] = 0.72f;
+		expected.Passes = { outlinePass, forwardPass };
 
 		material->SetState(expected);
 		context.Check(material->Save(), "material saves atomically");
@@ -307,6 +323,8 @@ namespace {
 			&& actual.Properties.AlphaMode == gl::MaterialAlphaMode::Mask
 			&& Near(actual.Properties.AlphaCutoff, 0.42f),
 			"material emissive and alpha properties survive round trip");
+		context.Check(actual.Passes == expected.Passes,
+			"material pass order, render state, and generic parameters survive round trip");
 	}
 
 	void TestTerrainMaterialRoundTrip(TestContext& context,

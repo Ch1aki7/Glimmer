@@ -16,6 +16,7 @@ namespace gl {
 		virtual void SetBlendFunction(BlendFactor source, BlendFactor destination) override;
 		virtual void SetDepthWriteEnabled(bool enabled) override;
 		virtual void SetDepthFunction(DepthFunction function) override;
+		virtual void SetCullMode(CullMode mode) override;
 		virtual void DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount = 0) override;
 		virtual void DrawIndexedInstanced(const Ref<VertexArray>& vertexArray, uint32_t instanceCount,
 			uint32_t indexCount = 0) override;

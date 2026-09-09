@@ -46,6 +46,11 @@ namespace gl {
 			s_RendererAPI->SetDepthWriteEnabled(enabled);
 		}
 
+		inline static void SetCullMode(CullMode mode)
+		{
+			s_RendererAPI->SetCullMode(mode);
+		}
+
 		inline static void DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t count = 0)
 		{
 			s_RendererAPI->DrawIndexed(vertexArray, count);

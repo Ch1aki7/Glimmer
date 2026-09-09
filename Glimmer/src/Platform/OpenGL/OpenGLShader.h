@@ -3,6 +3,7 @@
 #include "Glimmer/Renderer/Shader.h"
 
 #include <memory>
+#include <vector>
 
 typedef unsigned int GLenum;
 typedef int GLint;
@@ -43,6 +44,13 @@ namespace gl {
 			const std::string& source,
 			std::unordered_map<GLenum, std::string>& shaderSources,
 			std::string& error) const;
+		bool ResolveIncludes(
+			const std::string& source,
+			const std::filesystem::path& includingFile,
+			std::string& resolved,
+			std::vector<std::filesystem::path>& dependencies,
+			std::vector<std::filesystem::path>& includeStack,
+			std::string& error) const;
 		bool BuildProgram(
 			const std::unordered_map<GLenum, std::string>& shaderSources,
 			uint32_t& program,
@@ -53,6 +61,7 @@ namespace gl {
 		std::string m_Name;
 		std::filesystem::path m_FilePath;
 		std::unique_ptr<FileWatcher> m_FileWatcher;
+		std::vector<std::unique_ptr<FileWatcher>> m_DependencyWatchers;
 		uint64_t m_Version = 0;
 		bool m_SupportsInstancing = false;
 		ShaderReloadResult m_LastReloadResult;

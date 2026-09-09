@@ -1,110 +1,15 @@
 #type vertex
 #version 450 core
-
-layout(location = 0) in vec3 a_Position;
-layout(location = 1) in vec3 a_Normal;
-layout(location = 2) in vec3 a_Tangent;
-layout(location = 3) in vec2 a_TexCoord;
-layout(location = 4) in mat4 a_InstanceTransform;
-layout(location = 8) in ivec4 a_InstanceEntityData;
-
-uniform mat4 u_ViewProjection;
-uniform mat4 u_Transform;
-uniform int u_EntityID;
-uniform int u_UseInstancing;
-
-layout(location = 0) out vec3 v_WorldPosition;
-layout(location = 1) out vec3 v_WorldNormal;
-layout(location = 2) out vec2 v_TexCoord;
-layout(location = 3) flat out int v_EntityID;
-layout(location = 4) out vec3 v_WorldTangent;
+#include <Glimmer/ModelVertexABI.glslinc>
 
 void main()
 {
-    mat4 transform = u_UseInstancing != 0
-        ? a_InstanceTransform : u_Transform;
-    vec4 worldPosition = transform * vec4(a_Position, 1.0);
-    mat3 normalMatrix = transpose(inverse(mat3(transform)));
-
-    v_WorldPosition = worldPosition.xyz;
-    v_WorldNormal = normalize(normalMatrix * a_Normal);
-    v_WorldTangent = normalize(mat3(transform) * a_Tangent);
-    v_TexCoord = a_TexCoord;
-    v_EntityID = u_UseInstancing != 0
-        ? a_InstanceEntityData.x : u_EntityID;
-    gl_Position = u_ViewProjection * worldPosition;
+	GlimmerWriteModelVertex(a_Position, a_Normal, a_Tangent, a_TexCoord);
 }
 
 #type fragment
 #version 450 core
-
-layout(location = 0) out vec4 o_Color;
-layout(location = 1) out int o_EntityID;
-
-layout(location = 0) in vec3 v_WorldPosition;
-layout(location = 1) in vec3 v_WorldNormal;
-layout(location = 2) in vec2 v_TexCoord;
-layout(location = 3) flat in int v_EntityID;
-layout(location = 4) in vec3 v_WorldTangent;
-
-struct PointLightData
-{
-    vec4 PositionRange;
-    vec4 ColorIntensity;
-};
-
-layout(std140, binding = 1) uniform LightEnvironment
-{
-    vec4 u_DirectionalDirectionIntensity;
-    vec4 u_DirectionalColor;
-    vec4 u_AmbientColorIntensity;
-    uvec4 u_LightCounts;
-    PointLightData u_PointLights[16];
-};
-
-uniform vec3 u_CameraPos;
-uniform vec4 u_BaseColor;
-uniform float u_Metallic;
-uniform float u_Roughness;
-uniform float u_NormalScale;
-uniform float u_AOStrength;
-uniform vec3 u_EmissiveColor;
-uniform float u_EmissiveStrength;
-uniform float u_TilingFactor;
-uniform sampler2D u_BaseColorTexture;
-uniform sampler2D u_NormalTexture;
-uniform sampler2D u_AOTexture;
-uniform sampler2D u_EmissiveTexture;
-uniform sampler2D u_MetallicTexture;
-uniform sampler2D u_RoughnessTexture;
-uniform int u_HasBaseColorTexture;
-uniform int u_HasNormalTexture;
-uniform int u_HasAOTexture;
-uniform int u_HasEmissiveTexture;
-uniform int u_HasMetallicTexture;
-uniform int u_HasRoughnessTexture;
-uniform int u_AlphaMode;
-uniform float u_AlphaCutoff;
-uniform sampler2D u_ShadowMaps[4];
-uniform mat4 u_LightViewProjections[4];
-uniform float u_ShadowCascadeSplits[4];
-uniform float u_ShadowCascadeBlendWidths[4];
-uniform mat4 u_ShadowCameraView;
-uniform int u_ShadowCascadeCount;
-uniform int u_ShadowEnabled;
-uniform int u_ShadowCascadeDebug;
-uniform float u_ShadowBias;
-uniform float u_ShadowTexelSize;
-uniform samplerCube u_DiffuseIrradianceMap;
-uniform int u_HasDiffuseIrradiance;
-uniform samplerCube u_SpecularPrefilterMap;
-uniform int u_HasSpecularPrefilter;
-uniform float u_SpecularPrefilterMaxLod;
-uniform sampler2D u_BrdfLut;
-uniform int u_HasBrdfLut;
-uniform float u_SkyLightIntensity;
-
-const float PI = 3.14159265359;
+#include <Glimmer/ForwardFragmentABI.glslinc>
 
 float DistributionGGX(vec3 normal, vec3 halfway, float roughness)
 {
@@ -161,103 +66,7 @@ vec3 EvaluateBRDF(vec3 normal, vec3 viewDirection, vec3 lightDirection,
     return (diffuseWeight * albedo / PI + specular) * radiance * normalDotLight;
 }
 
-float SampleCascadeDepth(int cascadeIndex, vec2 uv)
-{
-    if (cascadeIndex == 0) return texture(u_ShadowMaps[0], uv).r;
-    if (cascadeIndex == 1) return texture(u_ShadowMaps[1], uv).r;
-    if (cascadeIndex == 2) return texture(u_ShadowMaps[2], uv).r;
-    return texture(u_ShadowMaps[3], uv).r;
-}
-
-float SampleCascadeVisibility(int cascadeIndex,
-    vec3 worldPosition, vec3 normal, vec3 lightDirection)
-{
-    vec4 lightClip = u_LightViewProjections[cascadeIndex]
-        * vec4(worldPosition, 1.0);
-    vec3 projected = lightClip.xyz / max(lightClip.w, 0.0001);
-    projected = projected * 0.5 + 0.5;
-    if (projected.z <= 0.0 || projected.z >= 1.0
-        || any(lessThan(projected.xy, vec2(0.0)))
-        || any(greaterThan(projected.xy, vec2(1.0))))
-        return 1.0;
-    float slopeBias = max(u_ShadowBias
-        * (1.0 - max(dot(normal, lightDirection), 0.0)), u_ShadowBias * 0.25);
-    float shadow = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x)
-        {
-            float closest = SampleCascadeDepth(cascadeIndex,
-                projected.xy + vec2(x, y) * u_ShadowTexelSize);
-            shadow += projected.z - slopeBias > closest ? 1.0 : 0.0;
-        }
-    return 1.0 - shadow / 9.0;
-}
-
-float DirectionalShadowVisibility(
-    vec3 worldPosition, vec3 normal, vec3 lightDirection)
-{
-    if (u_ShadowEnabled == 0)
-        return 1.0;
-    float viewDepth = abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z);
-    int cascadeIndex = 0;
-    while (cascadeIndex < u_ShadowCascadeCount - 1
-        && viewDepth > u_ShadowCascadeSplits[cascadeIndex])
-        cascadeIndex++;
-
-    for (int boundary = 0; boundary < 3; ++boundary)
-    {
-        if (boundary >= u_ShadowCascadeCount - 1)
-            break;
-        float width = u_ShadowCascadeBlendWidths[boundary];
-        float split = u_ShadowCascadeSplits[boundary];
-        if (width > 0.0 && viewDepth >= split - width
-            && viewDepth <= split + width)
-        {
-            float nearVisibility = SampleCascadeVisibility(
-                boundary, worldPosition, normal, lightDirection);
-            float farVisibility = SampleCascadeVisibility(
-                boundary + 1, worldPosition, normal, lightDirection);
-            float blend = smoothstep(split - width, split + width, viewDepth);
-            return mix(nearVisibility, farVisibility, blend);
-        }
-    }
-
-    return SampleCascadeVisibility(
-        cascadeIndex, worldPosition, normal, lightDirection);
-}
-
-vec3 CascadeDebugColor(int cascadeIndex)
-{
-    if (cascadeIndex == 0) return vec3(1.0, 0.12, 0.08);
-    if (cascadeIndex == 1) return vec3(0.12, 1.0, 0.18);
-    if (cascadeIndex == 2) return vec3(0.12, 0.28, 1.0);
-    return vec3(1.0, 0.78, 0.08);
-}
-
-vec3 ResolveCascadeDebugColor(vec3 worldPosition)
-{
-    float viewDepth = abs((u_ShadowCameraView * vec4(worldPosition, 1.0)).z);
-    int cascadeIndex = 0;
-    while (cascadeIndex < u_ShadowCascadeCount - 1
-        && viewDepth > u_ShadowCascadeSplits[cascadeIndex])
-        cascadeIndex++;
-
-    for (int boundary = 0; boundary < 3; ++boundary)
-    {
-        if (boundary >= u_ShadowCascadeCount - 1)
-            break;
-        float width = u_ShadowCascadeBlendWidths[boundary];
-        float split = u_ShadowCascadeSplits[boundary];
-        if (width > 0.0 && viewDepth >= split - width
-            && viewDepth <= split + width)
-        {
-            float blend = smoothstep(split - width, split + width, viewDepth);
-            return mix(CascadeDebugColor(boundary),
-                CascadeDebugColor(boundary + 1), blend);
-        }
-    }
-    return CascadeDebugColor(cascadeIndex);
-}
+#include <Glimmer/ShadowCSM.glslinc>
 
 void main()
 {
@@ -340,7 +149,7 @@ void main()
         vec3 lightDirection = normalize(-u_DirectionalDirectionIntensity.xyz);
         vec3 radiance = u_DirectionalColor.rgb
             * u_DirectionalDirectionIntensity.w;
-        float visibility = DirectionalShadowVisibility(
+        float visibility = GlimmerDirectionalShadow(
             v_WorldPosition, normal, lightDirection);
         result += EvaluateBRDF(normal, viewDirection, lightDirection,
             radiance, albedo, metallic, roughness) * visibility;
@@ -377,7 +186,7 @@ void main()
 
     float outputAlpha = u_AlphaMode == 0 ? 1.0 : effectiveAlpha;
     if (u_ShadowCascadeDebug != 0 && u_ShadowEnabled != 0)
-        result = mix(result, ResolveCascadeDebugColor(v_WorldPosition), 0.65);
+        result = mix(result, GlimmerResolveCascadeDebugColor(v_WorldPosition), 0.65);
     o_Color = vec4(max(result, vec3(0.0)), outputAlpha);
     o_EntityID = v_EntityID;
 }

@@ -34,7 +34,8 @@ namespace gl
 		bool SameMaterialState(const MaterialState& left, const MaterialState& right)
 		{
 			return left.ShaderHandle == right.ShaderHandle
-				&& SameMaterialProperties(left.Properties, right.Properties);
+				&& SameMaterialProperties(left.Properties, right.Properties)
+				&& left.Passes == right.Passes;
 		}
 	}
 

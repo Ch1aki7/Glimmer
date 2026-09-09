@@ -160,7 +160,7 @@ flowchart TD
 
 Renderer2D 在 CPU 侧聚合 Quad 顶点，管理最多 32 个纹理槽，在容量耗尽时 Flush；每个 Batch 显式启用标准 Alpha 混合，EndScene 后恢复禁用，避免依赖 OpenGL 全局状态。零索引 Batch 会在 `Renderer2D::Flush` 内直接结束，不能把 `DrawIndexed` 的零值“使用完整索引缓冲”语义误用于空 Sprite 帧。完整编辑器调用 Scene Update 时传入 `deferSpritePass=true`，Scene 只保存 ViewProjection 和待执行标记，不开始 Renderer2D Batch，也不遍历 Sprite；EditorLayer 绘制 Skybox 后调用 `Scene::FlushSpritePass`，此时才完成 Sprite 遍历、Begin/Submit/End 和所有实际 Draw。这样即使纹理槽或索引容量在提交中耗尽，自动 Flush 也只能发生在 Skybox 之后。默认参数为 false，因此不拥有 Skybox 编排的旧宿主仍在 Scene Update 内立即完成 Sprite Pass。Entity ID 写入独立整数附件以支持编辑器拾取。Sprite 可以使用自身纹理，也可以附带 Material/MaterialOverrides。
 
-Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通过 `(EntityID, MaterialHandle)` 缓存最终 MaterialProperties。缓存保存基础 MaterialState、MaterialOverrides、版本与最后使用帧；完整状态未变化时复用结果，变化时重新构造 MaterialInstance，长期未使用项会被回收。每个有效 Mesh 再展开为一个 RenderItem；BaseColor 纹理优先级为 Material、Mesh 自带纹理、白纹理回退，Normal/AO/Emissive 只使用 Material Handle，缺失时绑定白纹理但通过独立存在标记禁止采样。
+Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通过 `(EntityID, MaterialHandle)` 缓存最终 MaterialProperties 与材质 Pass 列表。缓存保存基础 MaterialState、MaterialOverrides、版本与最后使用帧；完整状态未变化时复用结果，变化时重新构造 MaterialInstance，长期未使用项会被回收。每个有效 Mesh 按 Pass 展开 RenderItem；未声明 Passes 的旧材质合成一个 Legacy Forward Pass。Opaque 队列先按 Pass Order、再按 Shader/Material/Texture/Mesh 排序，同一 Pass 状态、Mesh、Shader、纹理和最终材质完全一致时仍可实例化。Pass 在 Draw 前显式设置 None/Back/Front Cull 与 DepthWrite，队列结束恢复默认状态；`Queue: Opaque` 可让 Outline 不跟随基础材质的 Blend 队列。BaseColor 纹理优先级为 Material、Mesh 自带纹理、白纹理回退，Normal/AO/Emissive 只使用 Material Handle，缺失时绑定白纹理但通过独立存在标记禁止采样。
 
 提交时，Opaque 和 Mask 进入 OpaqueQueue，Blend 进入 TransparentQueue。`FlushOpaqueAndMask` 按 ShaderHandle、MaterialHandle、四组 Texture GPU ID、Mesh、完整最终材质位模式和 EntityID 排序；Mesh、Shader、全部纹理、最终 MaterialProperties 和纹理存在状态完全相同的连续项形成兼容 Batch。BaseColor、Normal、AO、Emissive 固定使用纹理单元 0～3，切换状态按 slot 独立缓存。支持实例化契约且 Batch 大于一项时上传最多 1024 项的动态 Instance Buffer 并调用 `DrawIndexedInstanced`；不同 Override 结果会拆批，不支持实例属性的 Shader 自动执行普通 Draw。
 
@@ -208,7 +208,7 @@ PBRModel 与 Terrain 共用四组 Light VP、Cascade Split/Blend Width、Camera 
 
 `GPUTimer` 是 Renderer 层的可选计时资源；OpenGL 后端以四个 `GL_TIME_ELAPSED` Query 轮转，Begin/End 只提交时间范围，`TryGetElapsedMilliseconds` 仅在 `GL_QUERY_RESULT_AVAILABLE` 为真时读取，禁止为调试 UI 强制等待 GPU。ShadowRenderer 在第一条 Cascade GPU 命令前开始、最后一个 Cascade 结束后停止；TerrainRenderer 以 BeginScene/EndScene 包围 Terrain Color Pass。两者都只在 Statistics 中保存最近可用耗时和单调递增样本号，不序列化。Vulkan 当前返回空 Timer，调用方必须允许计时不可用。
 
-当前 3D Material 参数包括 BaseColor/BaseColorTexture、NormalTexture/NormalScale、AOTexture/AOStrength、EmissiveTexture/EmissiveColor/EmissiveStrength、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。PBRModel 使用基础 Cook–Torrance PBR：切线空间 Normal 修改 BRDF 法线，AO 只调制环境光项，Emissive 在线性 HDR 结果中累加；BaseColor Alpha 与纹理 Alpha 的乘积继续驱动 Mask/Blend。模型加载阶段按 UV 梯度生成 Tangent，退化 UV 或无有效累积切线时建立稳定正交基，避免 Normal Mapping 产生 NaN。
+当前 3D Material 表面参数包括 BaseColor/BaseColorTexture、NormalTexture/NormalScale、AOTexture/AOStrength、EmissiveTexture/EmissiveColor/EmissiveStrength、TilingFactor、Metallic、Roughness、AlphaMode 和 AlphaCutoff。可选 MaterialPass 保存 ShaderHandle、Order、Cull、DepthWrite、Material/Opaque Queue 及名称到 Float/Float4 的通用 Uniform 参数；Pass 属于共享 Material，不被实体 Surface Overrides 覆盖。PBRModel 使用基础 Cook–Torrance PBR：切线空间 Normal 修改 BRDF 法线，AO 只调制环境光项，Emissive 在线性 HDR 结果中累加；BaseColor Alpha 与纹理 Alpha 的乘积继续驱动 Mask/Blend。模型加载阶段按 UV 梯度生成 Tangent，退化 UV 或无有效累积切线时建立稳定正交基，避免 Normal Mapping 产生 NaN。
 
 `SkyLightComponent` 引用 Cubemap 资产。Cubemap 可以是保存六面 LDR 图片路径的 `.glsky`，也可以是直接导入的 Radiance `.hdr`；`.glsky` 还可通过 `Source` 引用相对路径的等距柱状 HDR，并用 `Resolution` 指定目标面尺寸。AssetManager 缓存 `Cubemap` Runtime；后者记录实际环境源路径、HDR 标记和成功 Reload 后递增的资源版本。SkyboxRenderer 使用去除平移的视图方向绘制同一 Runtime 的可见背景。
 
@@ -253,7 +253,7 @@ GPU 路径由同一 `TerrainRuntime` 独占一个 `TerrainHydrologyGPU`。Water�
 
 ### 5.5 Shader、Compute 与数据读回
 
-图形 Shader 支持单文件 `#type` 分段格式，`ShaderLibrary` 按名称管理并支持轮询热重载。OpenGL Shader 采用事务式 Program 替换：新源码完整编译/链接成功后才替换旧 Program，失败时保留上一有效版本并返回 `ShaderReloadResult`。
+图形 Shader 支持单文件 `#type` 分段格式。阶段源码可递归使用引号形式的相对 `#include`，或以顶层 Shader 目录为根的尖括号 `#include`；解析器拒绝缺失文件和 Include Cycle，成功链接后为全部依赖建立 FileWatcher，因此修改 `.glslinc` 会触发消费它的 Program 事务式热重载。`ShaderLibrary` 按名称管理并支持轮询热重载；新源码完整编译/链接成功后才替换旧 Program，失败时保留上一有效版本并返回 `ShaderReloadResult`。模型公共 ABI 位于 `assets/shaders/Glimmer`：ModelVertexABI 固定 Attribute/实例/Transform/EntityID，ForwardFragmentABI 固定 Light UBO、材质、CSM、IBL 与 MRT 输出，Surface 提供材质采样与 Alpha 契约，ShadowCSM 提供方向光级联采样；PBRModel 和 Toon 不再复制这些环境声明。
 
 Compute Shader 提供 Dispatch、MemoryBarrier 和同样的文件轮询重载能力。图形/计算 Shader 读取源码时都会剥离 UTF-8 BOM，避免严格 OpenGL 驱动把 `EF BB BF` 识别为非法 GLSL 字符。
 
@@ -322,7 +322,7 @@ flowchart LR
 
 ### 7.3 Material 与 MaterialInstance
 
-`.glmat` 是共享 Material Asset，保存 ShaderHandle 与 `MaterialProperties`。`MaterialState` 可以一次捕获或恢复两者，供共享资产编辑事务使用。保存时先写临时文件，再通过备份和替换更新目标；替换失败会恢复原文件并向调用方返回失败。
+`.glmat` 是共享 Material Asset，保存兼容用 ShaderHandle、`MaterialProperties` 与可选 `MaterialPass` 列表。`MaterialState` 可以一次捕获或恢复三者，供共享资产编辑事务使用；旧文件没有 Passes 时继续使用 ShaderHandle 单 Pass。保存时先写临时文件，再通过备份和替换更新目标；替换失败会恢复原文件并向调用方返回失败。
 
 实体不复制整份材质，而由 `MaterialComponent` 保存 MaterialHandle 和 `MaterialOverrides` 位掩码。
 

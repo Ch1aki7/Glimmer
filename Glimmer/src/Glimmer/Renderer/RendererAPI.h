@@ -15,6 +15,12 @@ namespace gl {
 		SourceAlpha,
 		OneMinusSourceAlpha
 	};
+	enum class CullMode
+	{
+		None = 0,
+		Back,
+		Front
+	};
 
     class RendererAPI {
     public:
@@ -28,6 +34,7 @@ namespace gl {
 		virtual void SetBlendFunction(BlendFactor source, BlendFactor destination) = 0;
 		virtual void SetDepthWriteEnabled(bool enabled) = 0;
 		virtual void SetDepthFunction(DepthFunction function) = 0;
+		virtual void SetCullMode(CullMode mode) = 0;
 		virtual void DrawIndexed(const Ref<VertexArray>& vertexArray, uint32_t indexCount = 0) = 0;
 		virtual void DrawIndexedInstanced(const Ref<VertexArray>& vertexArray, uint32_t instanceCount,
 			uint32_t indexCount = 0) = 0;

@@ -4263,102 +4263,98 @@ GTX 1050 / OpenGL 4.6 上，五个水文 Compute Shader 和 Terrain Shader 编�
 
 ## CPU 简化气候与植被潜力基线
 
-P14 第一阶段新增核心侧 `TerrainClimateRuntime`，先用纯 CPU 小网格固定气候场的单位、更新顺序和预算，再迁移 Compute Shader。该类位于 `Glimmer/Simulation`，不依赖编辑器、OpenGL 或具体植被模型，也不进入 Scene YAML。
+P14 要做的是一个能和地形、水文继续衔接的简化气候层。我没有直接从 Compute Shader 开始，因为气候场一多，单位和水量来源很容易混乱。第一步先在 `Glimmer/Simulation` 中实现纯 CPU 的 `TerrainClimateRuntime`，用小网格把更新顺序和预算跑通。
 
-场定义如下：
+首版只保留六个场：
 
-- `TerrainHeight`：米；
-- `Temperature`：摄氏度；
-- `AtmosphericMoisture`：每个二维空气柱包含的米水当量；
-- `SurfaceWater` 与 `Rainfall`：米水深；
-- `VegetationPotential`：`[0, 1]` 的环境适生度，不代表树木数量或实体实例。
+| 场 | 单位与含义 |
+| --- | --- |
+| `TerrainHeight` | 米，气候步内只读 |
+| `Temperature` | 摄氏度 |
+| `AtmosphericMoisture` | 二维空气柱中的米水当量 |
+| `SurfaceWater` | 地表米水深 |
+| `Rainfall` | 当前固定步凝结出的米水深 |
+| `VegetationPotential` | `[0, 1]` 环境适生度 |
 
-使用统一水当量后，蒸发和降雨都是封闭系统内的显式转移：
+`VegetationPotential` 只是环境条件的响应值。它不等于树木数量，也不会创建实体或引用具体植被模型。先把这层语义留干净，后面做材质反馈和实例分布时才有调整空间。
+
+每个固定步按下面的顺序执行：
 
 ```text
 Temperature Relaxation
-  → SurfaceWater --Evaporation--> AtmosphericMoisture
+  → SurfaceWater 经 Evaporation 转入 AtmosphericMoisture
   → Conservative Upwind Moisture Advection
-  → AtmosphericMoisture --Condensation/Orographic Rain--> SurfaceWater
+  → AtmosphericMoisture 经 Condensation / Orographic Rain 转回 SurfaceWater
   → Vegetation Potential Response
 ```
 
-湿度输运按水平风向执行显式迎风通量，并按 CFL 比例限幅；封闭边界会保留原本越界的水汽，而不是悄悄丢失质量。饱和水汽随温度指数变化，超过饱和值的部分按凝结率降雨；同时使用 `dot(WindVelocity, TerrainGradient)` 估算迎风坡抬升，只在风沿坡向上时增加降雨。植被潜力由地表水适宜度和温度适宜度相乘，再按响应速率平滑靠近目标。
+温度会向 `SeaLevelTemperature - LapseRate × TerrainHeight` 缓慢靠近。湿度沿二维风向做显式迎风输运，`abs(WindVelocity) × dt / CellSize` 超过稳定范围时按 CFL 比例统一缩放。封闭边界会把原本要离开网格的水汽留在当前格，不会偷偷损失质量。
 
-`Play/Pause/SingleStep/Reset`、固定时间步、最大追赶子步和 Dropped Time 与 P13 水文调度保持同类语义。统计同时给出大气水量、地表水量、累计蒸发/降雨、总水量误差以及各场范围；蒸发和降雨累计值用于解释内部通量，不能作为系统质量增减重复计入预算。
+饱和水汽量随温度指数变化，超过饱和值的部分按凝结率形成降雨。迎风坡降雨使用 `dot(WindVelocity, TerrainGradient)`，只接受风沿坡面上升时的正值。植被潜力则由地表水适宜度和温度适宜度相乘，再按响应速率逐步靠近目标，不会一帧跳到最终结果。
 
-验证结果：
+这套 CPU Runtime 沿用固定时间步、最大追赶子步和 Dropped Time。`Play`、`Pause`、`SingleStep`、`Reset` 的行为与 P13 水文一致。统计把大气水量与地表水量放在同一预算里；累计 Evaporation 和 Rainfall 只用于解释内部转移，不能再次当作系统增减量相加。
 
-- 新增 9 项无窗口断言，覆盖暂停与单步、风向输运、封闭水量守恒、蒸发转移、迎风坡降雨、植被响应、Reset 和帧划分确定性；
-- 重新运行 VS2026 Premake 生成，新增源文件已进入工程；
-- `Verify-Windows.ps1 -SkipGenerate` 完成 `Debug | x64` 全解决方案增量构建，123 项无窗口断言全部 PASS；
-- 构建产物和中间文件保留，没有删除 `bin`。
-
-这些场现已迁移到 GPU；下一节说明运行方式与诊断入口。
+无窗口回归新增 9 项，覆盖暂停/单步、风向输运、封闭水量守恒、蒸发、迎风坡降雨、植被响应、Reset 和帧划分确定性。重新生成 VS2026 工程后，`Debug | x64` 全解决方案增量构建通过，当时共 123 项断言全部通过。
 
 ## GPU 气候场与地形诊断
 
-`TerrainClimateGPU` 由每个 `TerrainRuntime` 独立拥有，不进入 TerrainComponent 和 Scene YAML。它使用以下资源：
+CPU 数值稳定后，同一套规则被迁入 `TerrainClimateGPU`。每个 `TerrainRuntime` 独占一份气候状态；TerrainComponent 只保存可持久化的地形规格，不持有这些纹理，Scene YAML 也不会记录它们。
 
-- Temperature：`R32F` Ping-Pong；
-- AtmosphericMoisture：`R32F` Ping-Pong；
-- VegetationPotential：`R32F` Ping-Pong；
-- Rainfall：单张 `R32F` 派生纹理；
-- SurfaceWater：只读引用 P13 Hydrology Water；没有水文 Runtime 时读取气候内部零纹理。
+GPU 资源按是否需要历史状态拆开：
 
-固定步拆成三个全局 Compute Pass：
+| 场 | GPU 资源 |
+| --- | --- |
+| Temperature | `R32F` Ping-Pong |
+| AtmosphericMoisture | `R32F` Ping-Pong |
+| VegetationPotential | `R32F` Ping-Pong |
+| Rainfall | 单张 `R32F` 派生纹理 |
+| SurfaceWater | 只读 Hydrology Water；无水文 Runtime 时使用零纹理 |
+
+Temperature、Moisture 和 Vegetation 会参与下一步计算，所以必须保留 Current/Next。Rainfall 只描述最近一个固定步的输出，没有历史反馈，单张纹理已经够用。这样拆资源比把所有值塞进一张 RGBA 纹理更啰嗦一点，却能把读写关系看得很清楚。
+
+一个气候固定步最初由三段 Compute 组成：
 
 ```text
 ClimateSource
   Temperature Relaxation + Evaporation
-  → Barrier → swap Temperature/Moisture
+  → Barrier → Temperature/Moisture Swap
 
 ClimateAdvection
   Conservative Upwind Moisture Transport
-  → Barrier → swap Moisture
+  → Barrier → Moisture Swap
 
 ClimateResponse
   Condensation + Orographic Rain + Vegetation Response
-  → Barrier → swap Moisture/Vegetation
+  → Barrier → Moisture/Vegetation Swap
 ```
 
-三个 Pass 都只读 Current、只写 Next。湿度输运会根据 `abs(WindVelocity) × dt / CellSize` 计算 CFL 比例，总比例超过 1 时统一缩放；边界没有下风格时保留本格水汽，因此不会因 Clamp 采样隐式丢失。Response 通过世界高度梯度和 `dot(Wind, Gradient)` 判断迎风坡，只让正向抬升增加降雨。
+三个 Pass 都只读 Current、只写 Next。湿度输运沿风向计算出流，CFL 总比例大于 1 时统一缩放；网格边缘没有下风邻格，就把那部分水汽留在本格。Response 使用世界高度梯度判断迎风坡，负向或平坦地形不会得到额外抬升降雨。
 
-TerrainRenderer 使用 GenerationVersion 管理气候资源重建，并以 ClimateFrameSerial 保证 Shadow Pass 和九个 Chunk 的重复 Prepare 不会让模拟在同一帧推进多次。三个 Compute Shader 都参与事务式热重载。
+`TerrainRenderer` 按 GenerationVersion 创建或重建气候资源，并用 FrameSerial 挡住同一渲染帧内的重复推进。Shadow Pass 和九个 Terrain Chunk 都会触发 Prepare，但气候固定步只执行一次。三个 Compute Shader 也接入事务式热重载，编译失败时继续使用上一份有效程序。
 
-在 Debug → Overview → Runtime Climate 中可以：
+调试入口在 `Debug → Overview → Runtime Climate`。这里可以控制 Play、Single Step 和 Reset，修改二维 Wind Velocity，设置下一次 Reset 使用的 Initial Moisture，并在 Temperature、Atmospheric Moisture、Rainfall、Vegetation Potential 四种视图间切换。`Readback` 显示各场范围，`Run GPU Contract` 会执行受控 `3×1` 小网格。
 
-- Play、Single Step、Reset；
-- 修改二维 Wind Velocity；
-- 修改 Initial Moisture，修改后需 Reset 才会作为新初值应用；
-- 选择 Temperature、Atmospheric Moisture、Rainfall 或 Vegetation Potential 诊断；
-- 点击 Readback 查看温度、湿度、降雨和植被范围；
-- 点击 Run GPU Contract 执行受控 `3×1` 数值验证。
+Terrain Shader 使用 slot 28 到 31 读取四个诊断场。水文和气候诊断同时开启时，水文优先；两者关闭后仍走正常 Terrain PBR。颜色只用于辨认数值分布：Temperature 从蓝、绿过渡到红，Moisture 从褐色过渡到青色，Rainfall 使用暗紫到亮青，VegetationPotential 使用褐色到绿色。
 
-Terrain Shader 使用 slot 28～31 读取四个气候场。若水文与气候诊断同时启用，水文诊断优先；诊断关闭时不改变正常 Terrain PBR 颜色。当前 Temperature 用蓝—绿—红表示，Moisture 用褐—青表示，Rainfall 用暗紫—亮青表示，VegetationPotential 用褐—绿表示。
+GTX 1050 / OpenGL 4.6 上，`ClimateSource`、`ClimateAdvection`、`ClimateResponse` 和 Terrain Shader 编译成功。`GLIMMER_CLIMATE_VALIDATE=1` 的 GPU Contract 得到 Downwind Moisture `1`、Rising/Flat Rain `0.2/0`、Frame Partition Delta `0`。同轮 `Debug | x64` 构建和当时的 123 项无窗口断言全部通过。
 
-验证结果：
+项目里已经导入 Quaternius Ultimate Nature Pack，包含 OBJ、FBX 和作为源文件保留的 Blend。气候 Runtime 没有硬编码引用这些模型，整包也不会自动写入 AssetRegistry。树木、灌木和草地仍要等适生度接入材质权重后，再设计物种参数、LOD 与实例批次。
 
-- VS2026 `Debug | x64` 全解决方案增量构建成功，123 项无窗口断言全部 PASS；
-- GTX 1050 / OpenGL 4.6 上 `ClimateSource`、`ClimateAdvection`、`ClimateResponse` 和修改后的 Terrain Shader 编译成功；
-- `GLIMMER_CLIMATE_VALIDATE=1` 实际执行 GPU Contract 并 PASS：Downwind Moisture `1`，Rising/Flat Rain `0.2/0`，Frame Partition Delta `0`；
-- 构建产物和中间文件保留，没有删除 `bin`。
+## GPU 气候与水文守恒耦合
 
-气候与水文的双向守恒耦合已经落地，具体执行顺序、所有权和验证方式见下一节。
+气候场能产生 Rainfall，也能从 SurfaceWater 蒸发水分。真正接入水文时，最先要解决的是写入权：如果 Climate 和 Hydrology 各自修改 Water，两个 Ping-Pong 状态很快就会失去一致性。
 
-已导入的 Quaternius Ultimate Nature Pack 同时包含 OBJ、FBX 和 Blend。当前引擎可使用 OBJ/FBX；Blend 作为源文件保留。整包尚未自动写入 AssetRegistry，也没有被气候 Runtime 硬编码引用。植被实例化阶段应先从 CommonTree/Birch/Willow、Bush 和 Grass 中各选少量代表模型，再建立物种参数、LOD 和实例批次。
-
-## GPU 气候—水文守恒耦合
-
-本阶段没有让 Climate 和 Hydrology 同时修改 Water。`TerrainClimateGPU` 新增 Evaporation 与有符号 WaterSource 两张 `R32F` 输出，最后一个独立 Compute Pass 执行：
+最终约定是 Hydrology 继续独占 Water 写入。`TerrainClimateGPU` 新增 Evaporation 与有符号 WaterSource 两张 `R32F` 输出，最后一个气候 Pass 只计算请求量：
 
 ```text
 WaterSource = Rainfall - Evaporation
 ```
 
-Climate 只描述本步每个格点应增加或移除的水深。Hydrology 的 Flux、Water Update 和 Sediment Transport 读取同一 Source/Sink；负值最多移除当前可用水深，最终只有 HydrologyUpdate 写 Water。Update 同时把实际应用值累加到独立 WaterSourceBudget Ping-Pong，显式 Readback 因而能从 GPU 的真实限幅结果重建 Expected Water，而不是在 CPU 上假设请求量全部成功。
+正值表示向地表补水，负值表示移除水深。Climate 不直接写 Water；Hydrology 的 Flux、Water Update 和 Sediment Transport 都读取同一份 Source/Sink。负值会按当前可用水深限幅，避免蒸发把 Water 拉成负数。
 
-`TerrainEnvironmentGPU` 负责统一调度。原 Hydrology 和 Climate 的 Play/Single Step 按钮仍保留，但都会进入同一个固定步累加器：
+为了让统计反映 GPU 真正执行的结果，`HydrologyUpdate` 会把经过限幅的实际应用量累加到 WaterSourceBudget Ping-Pong。显式 Readback 再从这张预算纹理重建 Expected Water。CPU 端不假设所有请求都已成功，因此极端蒸发条件下的质量误差仍有可信含义。
+
+调度统一交给 `TerrainEnvironmentGPU`。原来的 Hydrology 和 Climate Play/Single Step 入口仍然保留，但它们进入同一个固定步累加器：
 
 ```text
 ClimateSource → ClimateAdvection → ClimateResponse
@@ -4366,19 +4362,95 @@ ClimateSource → ClimateAdvection → ClimateResponse
   → HydrologyFlux → HydrologyUpdate → Sediment/Erosion
 ```
 
-这保证当前水面先参与蒸发和降雨计算，完整 WaterSource 对后续水流可见，并避免两个 Runtime 使用不同 Accumulator 时出现重复推进或少推进。任一 Reset 会共同恢复气候、水文和预算；Runtime 仍不序列化，也不会污染 TerrainComponent 或 Scene YAML。
+这个顺序让当前水面先参与蒸发与降雨计算，随后把完整 WaterSource 交给水流。两套 Runtime 不再各用一个 Accumulator，自然也不会在同一帧多跑或漏跑一步。任一 Reset 都会共同恢复气候、水文和预算状态；这些数据依旧不写 TerrainComponent 或 Scene YAML。
 
-Temperature 诊断的高度梯度由 `Temperature Lapse` 控制，单位是摄氏度/世界单位，温差近似为 `Lapse × HeightScale`。默认 `0.0065` 接近常见大气递减率，但当 Terrain 的 HeightScale 只有几十时色差会很弱；可在 Debug → Runtime Climate 中先设为 `0.05～0.10`。该值实时影响后续温度松弛，不改变地形几何；若要立即观察完整梯度，可修改后执行 Reset 再 Play 若干步。
+Temperature 诊断后来增加了 `Temperature Lapse`，单位是摄氏度/世界单位，近似温差为 `Lapse × HeightScale`。默认 `0.0065` 接近常用大气递减率，但几十单位高的测试地形色差很弱。调试时可以先设为 `0.05` 到 `0.10`，再 Reset 并推进几步。这个参数只改变温度目标，不会缩放地形几何。
 
-在 Debug → Overview 中点击 Hydrology 的 `Validate / Readback` 或 Climate 的 `Readback`，会同步更新两侧统计。Climate 区域额外显示 Atmospheric + Surface 的 Total Water、Expected Total 和 Coupled Water Error。Hydrology 的标量 Rainfall 仍作为明确的外部水源保留并计入 Expected Total；若只观察封闭自然水循环，可把它设为 `0`。
+Hydrology 的 `Validate / Readback` 与 Climate 的 `Readback` 都会刷新耦合统计。Climate 面板会显示 Atmospheric + Surface Total Water、Expected Total 和 Coupled Water Error。Hydrology 的标量 Rainfall 仍被视为外部水源并计入预算；想观察封闭自然循环时，需要把它设为 `0`。
 
-验证结果：
+验证时，新增 `ClimateWaterSource` 与修改后的水文 Shader 在 GTX 1050 / OpenGL 4.6 上编译通过。原水文 Contract 保持通过，相对水量误差为 `9.83321e-7`；空间 Source/Sink Contract 先施加 `+0.10`，再施加 `-0.04`，最终水深 `0.06`，预算误差 `0`。气候 Contract 仍得到 Downwind Moisture `1`、Rising/Flat Rain `0.2/0` 和 Frame Partition Delta `0`。当次 Windows 增量构建及 114 项无窗口回归全部通过。
 
-- VS2026 `Debug | x64` 全解决方案增量构建成功，114 项无窗口回归全部 PASS；
-- GTX 1050 / OpenGL 4.6 上新增 `ClimateWaterSource` 与修改后的三个水文 Shader 全部编译成功；
-- 原 GPU 水文 Contract 保持 PASS，相对水量误差 `9.83321e-7`；
-- 新增空间 Source/Sink Contract 先施加 `+0.10`、再施加 `-0.04`，最终水深 `0.06`，预算误差 `0`；
-- GPU 气候 Contract 保持 PASS：Downwind Moisture `1`、Rising/Flat Rain `0.2/0`、Frame Partition Delta `0`；
-- 构建产物和中间文件保留，没有删除 `bin`。
+耦合完成后，开发顺序先转向材质反馈，暂不生成植被实体。当前主线会把 Humidity、Temperature 和 VegetationPotential 接入 Terrain Material Weight，定义动态生态权重如何与已有 Height、Slope、Curvature 权重组合并保持归一化。
 
-下一阶段不直接创建植被实体，而是先把 Humidity、Temperature 与 VegetationPotential 接入 Terrain Material Weight，定义动态生态权重与既有 Height/Slope/Curvature 权重的组合和归一化规则。
+## 模型 Shader ABI 与多 Pass 法线外扩
+
+自定义 3D Shader 以前能通过 `.glmat` 接入 Renderer3D，但代价是复制 `PBRModel.glsl` 里的整套声明：相机、实例数据、灯光、材质纹理、CSM、IBL、Alpha 和 EntityID 都要自己维护。Renderer 增加字段后，旧 Shader 可能继续编译，读到的内容却已经错位。这个问题比直接报错更麻烦，因为画面坏了，日志仍然安静。
+
+这轮开发做了两件事。第一件是把模型 Shader 的公共输入和输出整理成 ABI；第二件是让需要重复绘制几何的效果进入 Material Pass。Toon Outline 也因此改成真正的法线外扩壳层，不再依赖片元 Fresnel 模拟轮廓。
+
+### 公共 GLSL ABI
+
+公共文件放在 `assets/shaders/Glimmer`，后缀使用 `.glslinc`。AssetRegistry 不会把它们当成可独立链接的 Shader：
+
+| 文件 | 负责内容 |
+| --- | --- |
+| `ModelVertexABI.glslinc` | location 0 到 8 的模型/实例输入、Transform、EntityID 和标准顶点输出 |
+| `ForwardFragmentABI.glslinc` | LightEnvironment binding 1、材质纹理、CSM、IBL、相机和 Scene MRT |
+| `Surface.glslinc` | BaseColor、Normal、AO、AlphaMode 解析，以及 Color/EntityID 输出 |
+| `ShadowCSM.glslinc` | 四级联选择、级联过渡和 `3×3 PCF` |
+
+图形 Shader 预处理器现在支持递归 `#include`：
+
+```glsl
+#include "LocalFunctions.glslinc"               // 相对当前文件
+#include <Glimmer/ModelVertexABI.glslinc>       // 相对顶层 Shader 目录
+```
+
+Include 文件缺失、语法不完整或形成循环时，编译会带着来源路径失败。成功链接后，主文件与每个递归依赖都会创建 FileWatcher。修改一份公共 ABI，所有使用它的 Shader 都会进入原有热重载流程；新 Program 编译失败时，运行中仍保留上一份有效版本。
+
+`PBRModel.glsl` 也已经改为消费这套 ABI。这样公共契约有了独立来源，不需要再从某个具体 PBR Shader 中复制。自定义 Shader 的顶点阶段可以缩到：
+
+```glsl
+#type vertex
+#version 450 core
+#include <Glimmer/ModelVertexABI.glslinc>
+
+void main()
+{
+    GlimmerWriteModelVertex(a_Position, a_Normal, a_Tangent, a_TexCoord);
+}
+```
+
+片元阶段包含 `Surface.glslinc` 后，调用 `GlimmerResolveSurface()` 得到统一材质表面，再实现自己的光照，最后通过 `GlimmerWriteColor()` 同步写出 Color 和 EntityID。`ToonSurface.glsl` 就沿用这条路径，只额外定义色阶阈值、Rim 及 Toon 光照。
+
+### `.glmat` 多 Pass 契约
+
+旧材质仍读取顶层 `Shader`，没有 `Passes` 时，Renderer3D 会生成一个兼容 Pass，原来的单 Pass 行为不变。材质显式声明 `Passes` 后，每个 Mesh 会展开为多条 RenderItem。例如 Toon 材质包含 Outline 和 Forward：
+
+```yaml
+Passes:
+  - Name: Outline
+    Shader: 17101010101010101001
+    Order: 0
+    Cull: Front
+    DepthWrite: true
+    Queue: Opaque
+    Parameters:
+      u_OutlineWidth: 0.025
+      u_OutlineColor: [0.025, 0.02, 0.04, 1]
+
+  - Name: Forward
+    Shader: 17101010101010101002
+    Order: 100
+    Cull: Back
+    DepthWrite: true
+    Queue: Material
+    Parameters:
+      u_ToonShadowThreshold: 0.2
+      u_ToonLightThreshold: 0.72
+      u_ToonRimStrength: 0.18
+```
+
+`Order` 先划分 Opaque 队列中的 Pass 阶段，同 Order 内再按 Shader、Material、Texture 和 Mesh 排序。`Cull` 支持 `None`、`Back`、`Front`。`Queue: Material` 跟随基础 AlphaMode；`Queue: Opaque` 会把壳层留在不透明阶段，适合先于表面完成的 Outline。
+
+`DepthWrite` 对不透明 Pass 生效，透明队列仍会强制关闭深度写入。`Parameters` 当前只支持 Float 和 Float4，上传顺序位于标准 Material Uniform 之后，所以 Pass 可以覆盖同名参数。Pass 的 Shader、状态和参数都参与合批兼容判断；两个内容相同的 Outline 仍可走实例化，状态不同的 Pass 则会拆开。队列结束后，Cull、DepthWrite、Blend 和 DepthFunc 都会恢复默认状态，避免影响后面的 Renderer。
+
+实体 `MaterialOverrides` 仍只修改表面属性，不会替换共享材质的 Pass 结构或参数。`MaterialState` 已经包含完整 Pass 列表，因此保存、重载和材质 Undo 能够往返这些数据。Inspector 目前没有 Pass 列表编辑器，新增或调整 Pass 仍需复制示例 `.glmat` 并编辑 YAML。
+
+### 法线外扩 Toon
+
+`DefaultToonOutline.glmat` 可以直接拖给带 ModelRenderer 的实体。第一个 Pass 使用 `ToonOutline.glsl`，沿世界空间法线外扩顶点并启用 Front Cull，只绘制模型背面的壳层；第二个 Pass 使用 Back Cull 的 `ToonSurface.glsl` 绘制原表面。
+
+两个 Pass 都写入同一个 EntityID，所以点击外扩轮廓仍会选中原实体。ShadowRenderer 不展开材质 Pass，它继续按基础 Material 的 Opaque、Mask、Blend 契约提交一次原模型。Outline 壳层不会被重复写进四张级联阴影图，这也避免轮廓宽度改变阴影体积。
+
+验证同时覆盖无窗口数据回归和真实 GPU 路径。回归测试确认旧材质默认值保持一致，并往返保存 Pass 顺序、Cull、Queue、DepthWrite、Float 和 Float4 参数；VS2026 `Debug | x64` 的 Glimmer、编辑器与回归目标构建通过。设置 `GLIMMER_TOON_LAB_AUTORUN=1` 后，GTX 1050 / OpenGL 4.6 成功编译 PBR 与 Toon 的递归 Include，隔离场景中的 6 个球各提交 2 个 Pass，最终渲染 `12/12` RenderItem，没有跳过模型；四级联 Shadow 候选保持 `24/24`。

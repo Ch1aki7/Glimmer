@@ -77,6 +77,8 @@ namespace gl {
 
 		struct RenderKey
 		{
+			int32_t PassOrder = 100;
+			uint32_t PassSequence = 0;
 			uint64_t Shader = 0;
 			uint64_t Material = 0;
 			std::array<uint32_t, MaterialTextureCount> Textures{};
@@ -87,9 +89,11 @@ namespace gl {
 
 			bool operator<(const RenderKey& other) const
 			{
-				return std::tie(Shader, Material, Textures, Mesh, MaterialState,
+				return std::tie(PassOrder, PassSequence, Shader, Material,
+					Textures, Mesh, MaterialState,
 					HasTextures, Entity)
-					< std::tie(other.Shader, other.Material, other.Textures,
+					< std::tie(other.PassOrder, other.PassSequence,
+						other.Shader, other.Material, other.Textures,
 						other.Mesh, other.MaterialState,
 						other.HasTextures, other.Entity);
 			}
@@ -105,6 +109,7 @@ namespace gl {
 			glm::mat4 Transform{ 1.0f };
 			int EntityID = -1;
 			std::array<bool, MaterialTextureCount> HasTextures{};
+			MaterialPass Pass;
 			float CameraDistanceSquared = 0.0f;
 		};
 
@@ -147,6 +152,7 @@ namespace gl {
 			MaterialState BaseState;
 			MaterialOverrides Overrides;
 			AssetHandle ShaderHandle{ 0 };
+			std::vector<MaterialPass> Passes;
 			MaterialProperties Properties;
 			uint64_t LastUsedFrame = 0;
 		};
@@ -175,7 +181,8 @@ namespace gl {
 				&& left.TextureResources == right.TextureResources
 				&& left.MeshResource == right.MeshResource
 				&& left.Material == right.Material
-				&& left.HasTextures == right.HasTextures;
+				&& left.HasTextures == right.HasTextures
+				&& left.Pass == right.Pass;
 		}
 
 		Ref<Texture2D> ResolveMaterialTexture(AssetHandle handle,
@@ -229,6 +236,22 @@ namespace gl {
 				"u_AlphaMode", static_cast<int>(item.Material.AlphaMode));
 			item.ShaderResource->UploadUniformFloat(
 				"u_AlphaCutoff", item.Material.AlphaCutoff);
+		}
+
+		void UploadPassParameters(const RenderItem& item)
+		{
+			for (const auto& [name, value] : item.Pass.FloatParameters)
+				item.ShaderResource->UploadUniformFloat(name, value);
+			for (const auto& [name, value] : item.Pass.Float4Parameters)
+				item.ShaderResource->UploadUniformFloat4(
+					name, glm::vec4(value[0], value[1], value[2], value[3]));
+		}
+
+		void ApplyPassState(const RenderItem& item, bool transparent)
+		{
+			RenderCommand::SetCullMode(item.Pass.Cull);
+			RenderCommand::SetDepthWriteEnabled(
+				transparent ? false : item.Pass.DepthWrite);
 		}
 
 	}
@@ -300,6 +323,7 @@ namespace gl {
 		{
 			const MaterialInstance instance(material, resolvedOverrides);
 			cached.ShaderHandle = instance.GetShaderHandle();
+			cached.Passes = material->GetPasses();
 			cached.Properties = instance.GetProperties();
 			cached.BaseState = baseState;
 			cached.Overrides = resolvedOverrides;
@@ -315,9 +339,21 @@ namespace gl {
 		}
 		cached.LastUsedFrame = s_Data.FrameIndex;
 
-		const AssetHandle shaderHandle = cached.ShaderHandle;
-		const Ref<Shader> shader = AssetManager::GetShader(shaderHandle);
-		if (!shader)
+		std::vector<MaterialPass> passes = cached.Passes;
+		if (passes.empty() && static_cast<uint64_t>(cached.ShaderHandle) != 0)
+		{
+			MaterialPass legacyPass;
+			legacyPass.ShaderHandle = cached.ShaderHandle;
+			passes.emplace_back(std::move(legacyPass));
+		}
+		std::vector<std::pair<MaterialPass, Ref<Shader>>> resolvedPasses;
+		for (const MaterialPass& pass : passes)
+		{
+			const Ref<Shader> shader = AssetManager::GetShader(pass.ShaderHandle);
+			if (shader)
+				resolvedPasses.emplace_back(pass, shader);
+		}
+		if (resolvedPasses.empty())
 		{
 			s_Data.Stats.SkippedModels++;
 			return;
@@ -337,7 +373,6 @@ namespace gl {
 			nullptr
 		};
 		s_Data.Stats.SubmittedModels++;
-		s_Data.Stats.ImmediateModeShaderBinds++;
 
 		for (const Ref<Mesh>& mesh : model->GetMeshes())
 		{
@@ -360,40 +395,52 @@ namespace gl {
 					textures[slot] = s_Data.WhiteTexture;
 			}
 
-			RenderItem item;
-			item.Key.Shader = static_cast<uint64_t>(shaderHandle);
-			item.Key.Material = static_cast<uint64_t>(materialHandle);
-			for (uint32_t slot = 0; slot < MaterialTextureCount; ++slot)
-				item.Key.Textures[slot] = textures[slot]->GetRendererID();
-			item.Key.Mesh = reinterpret_cast<uintptr_t>(mesh.get());
-			item.Key.MaterialState = MakeMaterialSortKey(properties);
-			item.Key.HasTextures = hasTextures;
-			item.Key.Entity = static_cast<uint32_t>(entityID);
-			item.MeshResource = mesh;
-			item.ShaderResource = shader;
-			item.TextureResources = textures;
-			item.Material = properties;
-			item.Transform = transform;
-			item.EntityID = entityID;
-			item.HasTextures = hasTextures;
-			const glm::vec3 itemPosition = glm::vec3(transform[3]);
-			const glm::vec3 cameraOffset = itemPosition - s_Data.CameraPosition;
-			item.CameraDistanceSquared = glm::dot(cameraOffset, cameraOffset);
-			if (properties.AlphaMode == MaterialAlphaMode::Blend)
+			for (size_t passSequence = 0;
+				passSequence < resolvedPasses.size(); ++passSequence)
 			{
-				s_Data.TransparentQueue.emplace_back(std::move(item));
-				s_Data.Stats.TransparentItems++;
-			}
-			else
-			{
-				s_Data.OpaqueQueue.emplace_back(std::move(item));
-				if (properties.AlphaMode == MaterialAlphaMode::Mask)
-					s_Data.Stats.MaskItems++;
+				const auto& [pass, shader] = resolvedPasses[passSequence];
+				RenderItem item;
+				item.Key.PassOrder = pass.Order;
+				item.Key.PassSequence = static_cast<uint32_t>(passSequence);
+				item.Key.Shader = static_cast<uint64_t>(pass.ShaderHandle);
+				item.Key.Material = static_cast<uint64_t>(materialHandle);
+				for (uint32_t slot = 0; slot < MaterialTextureCount; ++slot)
+					item.Key.Textures[slot] = textures[slot]->GetRendererID();
+				item.Key.Mesh = reinterpret_cast<uintptr_t>(mesh.get());
+				item.Key.MaterialState = MakeMaterialSortKey(properties);
+				item.Key.HasTextures = hasTextures;
+				item.Key.Entity = static_cast<uint32_t>(entityID);
+				item.MeshResource = mesh;
+				item.ShaderResource = shader;
+				item.TextureResources = textures;
+				item.Material = properties;
+				item.Pass = pass;
+				item.Transform = transform;
+				item.EntityID = entityID;
+				item.HasTextures = hasTextures;
+				const glm::vec3 itemPosition = glm::vec3(transform[3]);
+				const glm::vec3 cameraOffset = itemPosition - s_Data.CameraPosition;
+				item.CameraDistanceSquared = glm::dot(cameraOffset, cameraOffset);
+				const bool transparent = pass.Queue == MaterialPassQueue::Material
+					&& properties.AlphaMode == MaterialAlphaMode::Blend;
+				if (transparent)
+				{
+					s_Data.TransparentQueue.emplace_back(std::move(item));
+					s_Data.Stats.TransparentItems++;
+				}
 				else
-					s_Data.Stats.OpaqueItems++;
+				{
+					s_Data.OpaqueQueue.emplace_back(std::move(item));
+					if (properties.AlphaMode == MaterialAlphaMode::Mask
+						&& pass.Queue == MaterialPassQueue::Material)
+						s_Data.Stats.MaskItems++;
+					else
+						s_Data.Stats.OpaqueItems++;
+				}
+				s_Data.Stats.SubmittedItems++;
+				s_Data.Stats.ImmediateModeShaderBinds++;
+				s_Data.Stats.ImmediateModeTextureBinds += MaterialTextureCount;
 			}
-			s_Data.Stats.SubmittedItems++;
-			s_Data.Stats.ImmediateModeTextureBinds += MaterialTextureCount;
 		}
 	}
 
@@ -421,6 +468,7 @@ namespace gl {
 		for (size_t itemIndex = 0; itemIndex < s_Data.OpaqueQueue.size();)
 		{
 			const RenderItem& item = s_Data.OpaqueQueue[itemIndex];
+			ApplyPassState(item, false);
 			if (item.ShaderResource != boundShader)
 			{
 				item.ShaderResource->ReloadIfChanged();
@@ -459,6 +507,7 @@ namespace gl {
 				batchEnd++;
 
 			UploadMaterialState(item);
+			UploadPassParameters(item);
 			const size_t batchSize = batchEnd - itemIndex;
 			s_Data.Stats.BatchCount++;
 			if (batchSize > 1 && item.ShaderResource->SupportsInstancing())
@@ -514,6 +563,8 @@ namespace gl {
 			itemIndex = batchEnd;
 		}
 		s_Data.OpaqueQueue.clear();
+		RenderCommand::SetCullMode(CullMode::None);
+		RenderCommand::SetDepthWriteEnabled(true);
 	}
 
 	void Renderer3D::EndScene()
@@ -544,6 +595,7 @@ namespace gl {
 		boundTextures.fill(std::numeric_limits<uint32_t>::max());
 		for (const RenderItem& item : s_Data.TransparentQueue)
 		{
+			ApplyPassState(item, true);
 			if (item.ShaderResource != boundShader)
 			{
 				item.ShaderResource->ReloadIfChanged();
@@ -577,6 +629,7 @@ namespace gl {
 			}
 
 			UploadMaterialState(item);
+			UploadPassParameters(item);
 			if (item.ShaderResource->SupportsInstancing())
 				item.ShaderResource->UploadUniformInt("u_UseInstancing", 0);
 			item.ShaderResource->UploadUniformMat4("u_Transform", item.Transform);
@@ -591,6 +644,7 @@ namespace gl {
 		}
 
 		RenderCommand::SetBlendEnabled(false);
+		RenderCommand::SetCullMode(CullMode::None);
 		RenderCommand::SetBlendFunction(
 			BlendFactor::SourceAlpha, BlendFactor::OneMinusSourceAlpha);
 		RenderCommand::SetDepthWriteEnabled(true);

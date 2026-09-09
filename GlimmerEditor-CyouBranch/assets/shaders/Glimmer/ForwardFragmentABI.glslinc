@@ -1,0 +1,74 @@
+#ifndef GLIMMER_FORWARD_FRAGMENT_ABI
+#define GLIMMER_FORWARD_FRAGMENT_ABI
+
+layout(location = 0) out vec4 o_Color;
+layout(location = 1) out int o_EntityID;
+
+layout(location = 0) in vec3 v_WorldPosition;
+layout(location = 1) in vec3 v_WorldNormal;
+layout(location = 2) in vec2 v_TexCoord;
+layout(location = 3) flat in int v_EntityID;
+layout(location = 4) in vec3 v_WorldTangent;
+
+struct PointLightData
+{
+    vec4 PositionRange;
+    vec4 ColorIntensity;
+};
+
+layout(std140, binding = 1) uniform LightEnvironment
+{
+    vec4 u_DirectionalDirectionIntensity;
+    vec4 u_DirectionalColor;
+    vec4 u_AmbientColorIntensity;
+    uvec4 u_LightCounts;
+    PointLightData u_PointLights[16];
+};
+
+uniform vec3 u_CameraPos;
+uniform vec4 u_BaseColor;
+uniform float u_Metallic;
+uniform float u_Roughness;
+uniform float u_NormalScale;
+uniform float u_AOStrength;
+uniform vec3 u_EmissiveColor;
+uniform float u_EmissiveStrength;
+uniform float u_TilingFactor;
+uniform sampler2D u_BaseColorTexture;
+uniform sampler2D u_NormalTexture;
+uniform sampler2D u_AOTexture;
+uniform sampler2D u_EmissiveTexture;
+uniform sampler2D u_MetallicTexture;
+uniform sampler2D u_RoughnessTexture;
+uniform int u_HasBaseColorTexture;
+uniform int u_HasNormalTexture;
+uniform int u_HasAOTexture;
+uniform int u_HasEmissiveTexture;
+uniform int u_HasMetallicTexture;
+uniform int u_HasRoughnessTexture;
+uniform int u_AlphaMode;
+uniform float u_AlphaCutoff;
+
+uniform sampler2D u_ShadowMaps[4];
+uniform mat4 u_LightViewProjections[4];
+uniform float u_ShadowCascadeSplits[4];
+uniform float u_ShadowCascadeBlendWidths[4];
+uniform mat4 u_ShadowCameraView;
+uniform int u_ShadowCascadeCount;
+uniform int u_ShadowEnabled;
+uniform int u_ShadowCascadeDebug;
+uniform float u_ShadowBias;
+uniform float u_ShadowTexelSize;
+
+uniform samplerCube u_DiffuseIrradianceMap;
+uniform int u_HasDiffuseIrradiance;
+uniform samplerCube u_SpecularPrefilterMap;
+uniform int u_HasSpecularPrefilter;
+uniform float u_SpecularPrefilterMaxLod;
+uniform sampler2D u_BrdfLut;
+uniform int u_HasBrdfLut;
+uniform float u_SkyLightIntensity;
+
+const float PI = 3.14159265359;
+
+#endif

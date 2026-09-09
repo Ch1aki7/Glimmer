@@ -1,0 +1,36 @@
+Material:
+  Shader: 17101010101010101002
+  BaseColor: [1, 1, 1, 1]
+  BaseColorTexture: 0
+  NormalTexture: 0
+  AOTexture: 0
+  EmissiveTexture: 0
+  TilingFactor: 1
+  Metallic: 0
+  Roughness: 0.5
+  NormalScale: 1
+  AOStrength: 1
+  EmissiveColor: [1, 1, 1]
+  EmissiveStrength: 0
+  AlphaMode: Opaque
+  AlphaCutoff: 0.5
+  Passes:
+    - Name: Outline
+      Shader: 17101010101010101001
+      Order: 0
+      Cull: Front
+      DepthWrite: true
+      Queue: Opaque
+      Parameters:
+        u_OutlineWidth: 0.025
+        u_OutlineColor: [0.025, 0.02, 0.04, 1]
+    - Name: Forward
+      Shader: 17101010101010101002
+      Order: 100
+      Cull: Back
+      DepthWrite: true
+      Queue: Material
+      Parameters:
+        u_ToonShadowThreshold: 0.2
+        u_ToonLightThreshold: 0.72
+        u_ToonRimStrength: 0.18

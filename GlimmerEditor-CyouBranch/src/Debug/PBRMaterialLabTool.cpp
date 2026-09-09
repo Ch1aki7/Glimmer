@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <imgui.h>
 #include <utility>
 
@@ -61,8 +62,9 @@ namespace gl {
 	bool PBRMaterialLabTool::Generate()
 	{
 		const Ref<Model> sphereModel = AssetManager::GetModel(m_SphereModel);
+		const Ref<Material> material = AssetManager::GetMaterial(m_Material);
 		if (!m_ActivateScene || !sphereModel || sphereModel->GetMeshes().empty()
-			|| !AssetManager::GetMaterial(m_Material))
+			|| !material)
 		{
 			m_Status = "Select a valid sphere model and material.";
 			m_Succeeded = false;
@@ -138,7 +140,10 @@ namespace gl {
 			return false;
 		}
 		m_Scene = std::move(scene);
-		m_ExpectedItems = 6u * static_cast<uint32_t>(sphereModel->GetMeshes().size());
+		const uint32_t passCount = static_cast<uint32_t>(
+			std::max<size_t>(material->GetPasses().size(), 1));
+		m_ExpectedItems = 6u * static_cast<uint32_t>(sphereModel->GetMeshes().size())
+			* passCount;
 		m_ValidationLogged = false;
 		m_Active = true;
 		m_Succeeded = true;

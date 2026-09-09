@@ -12,6 +12,7 @@ namespace gl {
 
 		glEnable(GL_DEPTH_TEST);
 		glDepthMask(GL_TRUE);
+		glDisable(GL_CULL_FACE);
 	}
 
 	void OpenGLRendererAPI::SetClearColor(const glm::vec4& color)
@@ -69,6 +70,17 @@ namespace gl {
 			glDepthFunc(GL_LESS);
 			break;
 		}
+	}
+
+	void OpenGLRendererAPI::SetCullMode(CullMode mode)
+	{
+		if (mode == CullMode::None)
+		{
+			glDisable(GL_CULL_FACE);
+			return;
+		}
+		glEnable(GL_CULL_FACE);
+		glCullFace(mode == CullMode::Front ? GL_FRONT : GL_BACK);
 	}
 
 	void OpenGLRendererAPI::DrawIndexed(
