@@ -140,6 +140,14 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-09-09：启动恢复上次场景与默认演示场景解耦
+
+- 用户明确插入编辑器工作流任务后，EditorLayer 统一 New/Open/Save/Save As、内容浏览器双击和 Viewport 场景拖放入口，并持有当前 `.glimmer` 路径；Ctrl+S 直接保存已有路径，Ctrl+Shift+S 执行 Save As；
+- 新增项目隔离的用户级场景偏好，成功打开/保存后立即记录，启动时尝试恢复；首次启动、New、文件丢失或反序列化失败使用空场景，不隐式保存未保存内容；
+- 普通启动移除硬编码的 Sun、Point Light、Sky Light 和 Alpine Terrain；Terrain Sampling/LOD 自动验证改用独立 Fixture，不再依赖正常启动场景；SceneSerializer 现返回写入成功/失败；
+- 验证：VS2026 `Debug | x64` 完整解决方案构建成功；无窗口回归全部 PASS，新增写入失败反馈、带空格路径、项目隔离和清除恢复目标断言；统一脚本仍受宿主重复 `PATH/Path` 影响，使用规范化子进程环境后同一解决方案构建通过；
+- 当前主线恢复 P14 气候场驱动 Terrain Material Weight；提交：待提交。
+
 ### 2026-09-09：模型 Shader ABI 与多 Pass 法线外扩
 
 - 用户明确调整优先级后，从 PBRModel 中抽出 Model Vertex、Forward Fragment、Surface 与 CSM 公共 GLSL ABI；图形 Shader 支持递归 `#include`、循环检测和 Include 依赖热重载，PBR 与 Toon 共用相机、实例、灯光、材质、阴影、IBL、Alpha 和 EntityID 契约；
@@ -473,6 +481,7 @@
 ### 编辑器
 
 - Undo/Redo 已覆盖实体生命周期、组件增删重置、Transform、Material、Terrain、Light 与 Camera；Tag、SpriteRenderer、ModelRenderer 等部分属性仍有直接修改路径；
+- 编辑器已持有并恢复最后成功打开/保存的 Scene 路径，但尚无 Scene Dirty 标记、未保存修改提示、退出保存确认或事务式场景文件替换；
 - Material Asset 已具备保存、撤销和失败反馈；TerrainMaterial 可显式保存/重载但尚未接入 Asset Command/Undo 和统一退出 Dirty 提示；其它共享 Asset 仍缺少统一保存协议；
 - 通用组件值事务目前位于 InspectorPanel；后续新增连续控件应复用激活快照/释放提交边界，避免逐帧命令。
 

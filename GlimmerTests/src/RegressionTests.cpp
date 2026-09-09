@@ -17,6 +17,7 @@
 #include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
 #include "Glimmer/Simulation/TerrainClimateRuntime.h"
 #include "Editor/EditorCommand.h"
+#include "Editor/EditorScenePreferences.h"
 
 #include <cmath>
 #include <filesystem>
@@ -510,8 +511,12 @@ namespace {
 		directionalLight.ShadowSplitLambda = 0.72f;
 		directionalLight.ShadowCascadeBlend = 0.18f;
 
-		gl::SceneSerializer(source).Serialize(path.string());
-		context.Check(std::filesystem::is_regular_file(path), "minimal scene is written");
+		context.Check(gl::SceneSerializer(source).Serialize(path.string())
+			&& std::filesystem::is_regular_file(path),
+			"minimal scene is written and reports success");
+		context.Check(!gl::SceneSerializer(source).Serialize(
+			(directory / "missing" / "cannot-write.glimmer").string()),
+			"scene serialization reports an unavailable output path");
 
 		gl::Ref<gl::Scene> restoredScene = gl::CreateRef<gl::Scene>();
 		context.Check(gl::SceneSerializer(restoredScene).Deserialize(path.string()),
@@ -1003,6 +1008,48 @@ namespace {
 			&& basinStats.MinimumWaterDepth >= 0.0f
 			&& std::abs(basinStats.MassError) < 1.0e-4,
 			"rainfall volume is included in hydrology mass accounting");
+	}
+
+	void TestEditorScenePreferences(
+		TestContext& context, const std::filesystem::path& directory)
+	{
+		const std::filesystem::path preferencesPath =
+			directory / "EditorScenePreferences.txt";
+#ifdef GL_PLATFORM_WINDOWS
+		_putenv_s("GLIMMER_EDITOR_PREFERENCES_PATH",
+			preferencesPath.string().c_str());
+#else
+		setenv("GLIMMER_EDITOR_PREFERENCES_PATH",
+			preferencesPath.string().c_str(), 1);
+#endif
+		const std::filesystem::path projectRoot = directory / "ProjectA";
+		const std::filesystem::path scenePath =
+			projectRoot / "assets" / "Scenes" / "Last Scene.glimmer";
+		std::filesystem::create_directories(scenePath.parent_path());
+		{
+			std::ofstream scene(scenePath);
+			scene << "Scene: Test\nEntities: []\n";
+		}
+
+		context.Check(gl::EditorScenePreferences::StoreLastScene(
+			projectRoot, scenePath),
+			"editor preferences persist the current scene path");
+		const auto restored = gl::EditorScenePreferences::LoadLastScene(projectRoot);
+		context.Check(restored && std::filesystem::equivalent(*restored, scenePath),
+			"editor preferences restore a path containing spaces");
+		context.Check(!gl::EditorScenePreferences::LoadLastScene(
+			directory / "ProjectB"),
+			"editor preferences do not leak scenes across projects");
+		context.Check(gl::EditorScenePreferences::StoreLastScene(
+			projectRoot, std::nullopt)
+			&& !gl::EditorScenePreferences::LoadLastScene(projectRoot),
+			"new scene clears the persisted restore target");
+
+#ifdef GL_PLATFORM_WINDOWS
+		_putenv_s("GLIMMER_EDITOR_PREFERENCES_PATH", "");
+#else
+		unsetenv("GLIMMER_EDITOR_PREFERENCES_PATH");
+#endif
 	}
 
 	void TestTerrainClimateRuntime(TestContext& context)
@@ -1505,6 +1552,8 @@ int main(int argc, char** argv)
 	TestMaterialOverrideMerge(context, temporaryDirectory.Path());
 	std::cout << "[RUN] Scene round trip\n";
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Editor scene preferences\n";
+	TestEditorScenePreferences(context, temporaryDirectory.Path());
 	std::cout << "[RUN] Terrain copy and transactions\n";
 	TestTerrainCopyAndTransactions(context);
 	std::cout << "[RUN] Terrain presets\n";

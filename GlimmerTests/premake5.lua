@@ -12,7 +12,8 @@ project "GlimmerRegressionTests"
     files {
         "src/**.h",
         "src/**.cpp",
-        "../GlimmerEditor-CyouBranch/src/Editor/EditorCommand.cpp"
+		"../GlimmerEditor-CyouBranch/src/Editor/EditorCommand.cpp",
+		"../GlimmerEditor-CyouBranch/src/Editor/EditorScenePreferences.cpp"
     }
 
     includedirs {

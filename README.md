@@ -1936,9 +1936,11 @@ Terrain 只写 `TerrainSpecification`，包括生成参数、Authoring Erosion�
 
 反序列化在新 Scene 中进行，成功后 EditorLayer 才替换当前编辑场景，解析失败不会先清空原场景。Version 1 文件没有稳定实体 ID，加载时会生成新 UUID；Version 2 及以后恢复文件中的 UUID。后续字段主要靠 "存在则读取、缺失则保留结构默认值" 兼容，当前还没有独立的逐版本迁移器。
 
-New、Save As 和 Open 同时出现在 File 菜单与 Ctrl+N/Ctrl+S/Ctrl+O 快捷键中。保存临时 Debug Scene 会被阻止；Play 期间保存的仍是 `m_EditorScene`，不会把 Runtime Scene 改动写回磁盘。打开成功后，Hierarchy、Inspector 和选择上下文都会切到新 Scene。
+New、Save、Save As 和 Open 同时出现在 File 菜单中，快捷键分别是 Ctrl+N、Ctrl+S、Ctrl+Shift+S 和 Ctrl+O。EditorLayer 记录当前 `.glimmer` 路径，因此 Ctrl+S 会直接保存已命名场景，只有新建场景才转入 Save As。保存临时 Debug Scene 会被阻止；Play 期间保存的仍是 `m_EditorScene`，不会把 Runtime Scene 改动写回磁盘。菜单、快捷键、内容浏览器双击和 Viewport 拖放都复用同一组 New/Open/Save 入口，打开成功后 Hierarchy、Inspector 和选择上下文一起切换。
 
-无窗口回归会把场景写入临时目录，再检查固定 UUID、资产 Handle、Material Overrides 和 Terrain Specification 是否完整恢复，同时确认 Terrain Runtime 没有被持久化。这里还有两个明确缺口：`Serialize()` 返回 `void`，没有把文件打开或写入失败反馈给编辑器；保存也直接覆盖目标文件，尚未采用临时文件替换。场景根节点仍固定写 `Untitled`，编辑器也没有记录当前文件路径和 Dirty 状态，所以 Ctrl+S 实际上每次都是 Save As。
+成功打开或保存后，编辑器会在用户配置目录的 `Glimmer/EditorScenePreferences.txt` 中记录项目根和规范化场景绝对路径。下次启动仅在项目根匹配时恢复它；文件丢失、格式损坏或首次启动时进入空场景，并清除失效记录。New 也会清除恢复目标，避免下次启动重新打开更早的文件。该机制只恢复最后一个磁盘文件，不会隐式保存未保存修改。普通启动不再硬编码创建 Sun、Point Light、Sky Light 和 Alpine Terrain；Terrain Benchmark/LOD 环境验证会单独创建自己的 Fixture。
+
+无窗口回归会把场景写入临时目录，再检查固定 UUID、资产 Handle、Material Overrides 和 Terrain Specification 是否完整恢复，同时确认 Terrain Runtime 没有被持久化。它还验证 `Serialize()` 能报告目标不可写、偏好路径可往返、不同项目不会串用记录，以及 New 的清除语义。保存目前仍直接覆盖目标文件，尚未采用临时文件替换；场景根节点也仍固定写 `Untitled`。编辑器尚无 Scene Dirty 状态和退出保存提示，因此自动恢复代表最后一次成功保存/打开的磁盘版本，而不是退出瞬间的未保存内存内容。
 
 ## 原生文件对话框 (Windows File Dialog)
 

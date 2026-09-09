@@ -8,7 +8,7 @@ namespace gl {
 	public:
 		SceneSerializer(const Ref<Scene>& scene) : m_Scene(scene) {}
 
-		void Serialize(const std::string& filepath);
+		bool Serialize(const std::string& filepath);
 		bool Deserialize(const std::string& filepath);
 
 	private:

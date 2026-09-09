@@ -345,11 +345,14 @@ flowchart LR
 - Terrain 只保存 Specification，包括 Preset、Noise、Authoring Erosion、Compute Shader Handle 与 TerrainMaterialHandle；Height 和三张派生纹理加载后按需重建，不写入 YAML；
 - NativeScript 包含函数指针，当前不参与场景序列化；
 - 反序列化使用 `CreateEntityWithUUID` 恢复稳定身份；
-- Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例。
+- Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例；
+- `SceneSerializer::Serialize` 返回文件打开与写入结果，EditorLayer 只在成功保存后更新当前场景路径。
+
+编辑器将当前 `.glimmer` 路径作为 Scene YAML 之外的会话状态持有。`EditorScenePreferences` 把项目根和最后场景的规范化绝对路径写入用户配置目录；启动时只有项目根匹配才尝试反序列化，失败后清除失效记录并保留空 Scene。New、Open、Save、Save As、内容浏览器双击和 Viewport 拖放统一进入 EditorLayer 的场景入口。普通启动不再创建 Sun、Point Light、Sky Light 和 Terrain 演示实体；Terrain 性能/LOD 环境变量需要的同类内容由独立验证 Fixture 创建，不参与上次场景记录。
 
 ### 8.1 无窗口回归边界
 
-`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 以复用真实命令栈实现，但不引入 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 测试会向上查找仓库根并使用版本化 `assets/models/Cerberus` 样本，缺失时明确失败，不再依赖或静默跳过本机 `tmp`。测试 Debug 配置关闭增量链接，避免静态依赖更新后复用损坏的 `.ilk`。
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 与 `EditorScenePreferences.cpp`，复用真实命令栈并验证场景写入失败、会话路径往返、项目隔离和清除语义，但不引入 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 测试会向上查找仓库根并使用版本化 `assets/models/Cerberus` 样本，缺失时明确失败，不再依赖或静默跳过本机 `tmp`。测试 Debug 配置关闭增量链接，避免静态依赖更新后复用损坏的 `.ilk`。
 
 根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 

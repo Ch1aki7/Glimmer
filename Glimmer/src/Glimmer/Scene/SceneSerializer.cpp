@@ -415,7 +415,7 @@ namespace gl {
 	// 场景整体序列化 / 反序列化
 	// ============================================================
 
-	void SceneSerializer::Serialize(const std::string& filepath)
+	bool SceneSerializer::Serialize(const std::string& filepath)
 	{
 		YAML::Emitter out;
 		out << YAML::BeginMap;
@@ -460,8 +460,20 @@ namespace gl {
 		out << YAML::EndSeq; // Entities
 		out << YAML::EndMap; // Root
 
-		std::ofstream fout(filepath);
+		std::ofstream fout(filepath, std::ios::binary | std::ios::trunc);
+		if (!fout)
+		{
+			GL_CORE_ERROR("Could not open scene for writing: {0}", filepath);
+			return false;
+		}
 		fout << out.c_str();
+		fout.flush();
+		if (!fout.good())
+		{
+			GL_CORE_ERROR("Could not write scene: {0}", filepath);
+			return false;
+		}
+		return true;
 	}
 
 	bool SceneSerializer::Deserialize(const std::string& filepath)

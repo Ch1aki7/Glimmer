@@ -7,6 +7,7 @@
 #include "Panels/DebugPanel.h"
 #include "Glimmer/Renderer/EditorCamera.h"
 #include "Editor/EditorCommand.h"
+#include <filesystem>
 
 namespace gl {
 
@@ -25,6 +26,12 @@ namespace gl {
 
 	private:
 		void SetEditorScene(const Ref<Scene>& scene);
+		void NewScene();
+		bool OpenScene(const std::filesystem::path& path);
+		bool SaveScene();
+		bool SaveSceneAs();
+		bool RestoreLastScene();
+		void RememberCurrentScene() const;
 		bool ActivateTemporaryDebugScene(const Ref<Scene>& scene);
 		void ExitTemporaryDebugScene();
 		void OnScenePlay();
@@ -46,6 +53,7 @@ namespace gl {
 		Ref<Scene> m_EditorScene;
 		Ref<Scene> m_RuntimeScene;
 		Ref<Scene> m_ActiveScene;
+		std::filesystem::path m_EditorScenePath;
 		SceneHierarchyPanel m_HierarchyPanel;
 		InspectorPanel m_InspectorPanel;
 		EditorCommandHistory m_CommandHistory;

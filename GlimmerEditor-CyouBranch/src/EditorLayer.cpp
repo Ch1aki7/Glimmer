@@ -1,4 +1,6 @@
 #include "EditorLayer.h"
+#include "Debug/TerrainValidationScene.h"
+#include "Editor/EditorScenePreferences.h"
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Utils/FileDialog.h"
 #include "Glimmer/Core/Input.h"
@@ -143,6 +145,105 @@ namespace gl {
 		m_InspectorPanel.SetSelectionContext(&m_SelectionContext);
 		m_InspectorPanel.SetCommandHistory(&m_CommandHistory);
 		m_HierarchyPanel.SetSelectedEntity({});
+	}
+
+	void EditorLayer::RememberCurrentScene() const
+	{
+		if (!EditorScenePreferences::StoreLastScene(
+			std::filesystem::absolute("assets").lexically_normal(),
+			m_EditorScenePath.empty()
+				? std::optional<std::filesystem::path>{}
+				: std::optional<std::filesystem::path>{ m_EditorScenePath }))
+			GL_CORE_WARN("Could not persist the current editor scene path.");
+	}
+
+	void EditorLayer::NewScene()
+	{
+		SetEditorScene(CreateRef<Scene>());
+		m_EditorScenePath.clear();
+		RememberCurrentScene();
+		GL_CORE_INFO("Created an empty editor scene.");
+	}
+
+	bool EditorLayer::OpenScene(const std::filesystem::path& path)
+	{
+		if (path.empty() || path.extension() != ".glimmer")
+			return false;
+
+		auto newScene = CreateRef<Scene>();
+		SceneSerializer serializer(newScene);
+		if (!serializer.Deserialize(path.string()))
+		{
+			GL_CORE_WARN("Could not open scene: {0}", path.string());
+			return false;
+		}
+
+		std::error_code error;
+		m_EditorScenePath = std::filesystem::weakly_canonical(path, error);
+		if (error)
+			m_EditorScenePath = std::filesystem::absolute(path).lexically_normal();
+		SetEditorScene(newScene);
+		RememberCurrentScene();
+		GL_CORE_INFO("Loaded scene: {0}", m_EditorScenePath.string());
+		return true;
+	}
+
+	bool EditorLayer::SaveScene()
+	{
+		if (m_DebugPanel.IsTemporarySceneActive())
+		{
+			GL_CORE_WARN("Exit the temporary Debug Lab before saving the editor scene.");
+			return false;
+		}
+		if (m_EditorScenePath.empty())
+			return SaveSceneAs();
+
+		if (!SceneSerializer(m_EditorScene).Serialize(m_EditorScenePath.string()))
+			return false;
+		RememberCurrentScene();
+		GL_CORE_INFO("Saved scene: {0}", m_EditorScenePath.string());
+		return true;
+	}
+
+	bool EditorLayer::SaveSceneAs()
+	{
+		if (m_DebugPanel.IsTemporarySceneActive())
+		{
+			GL_CORE_WARN("Exit the temporary Debug Lab before saving the editor scene.");
+			return false;
+		}
+		const std::string path = FileDialog::SaveFile(
+			"Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
+		if (path.empty())
+			return false;
+		if (!SceneSerializer(m_EditorScene).Serialize(path))
+			return false;
+
+		std::error_code error;
+		m_EditorScenePath = std::filesystem::weakly_canonical(path, error);
+		if (error)
+			m_EditorScenePath = std::filesystem::absolute(path).lexically_normal();
+		RememberCurrentScene();
+		GL_CORE_INFO("Saved scene: {0}", m_EditorScenePath.string());
+		return true;
+	}
+
+	bool EditorLayer::RestoreLastScene()
+	{
+		const auto lastScene = EditorScenePreferences::LoadLastScene(
+			std::filesystem::absolute("assets").lexically_normal());
+		if (!lastScene)
+			return false;
+		if (OpenScene(*lastScene))
+		{
+			GL_CORE_INFO("Restored last editor scene: {0}", lastScene->string());
+			return true;
+		}
+
+		m_EditorScenePath.clear();
+		RememberCurrentScene();
+		GL_CORE_WARN("Last editor scene is unavailable; using an empty scene.");
+		return false;
 	}
 
 	bool EditorLayer::ActivateTemporaryDebugScene(const Ref<Scene>& scene)
@@ -352,37 +453,28 @@ namespace gl {
 		m_ShaderLib.Load("Blinn-Phong", "assets/shaders/BlinnPhong.glsl");
 		m_ShaderLib.Load("Hologram", "assets/shaders/Hologram.glsl");
 
-		// --- 场景 ---
+		// Normal startup restores a persisted scene or remains empty. Terrain
+		// validation modes own their fixture instead of relying on a demo scene.
 		SetEditorScene(CreateRef<Scene>());
-
-		auto sunEntity = m_ActiveScene->CreateEntity("Sun");
-		sunEntity.AddComponent<DirectionalLightComponent>();
-		sunEntity.GetComponent<TransformComponent>().Rotation = { -50.0f, 30.0f, 0.0f };
-
-		auto pointLightEntity = m_ActiveScene->CreateEntity("Point Light");
-		auto& pointLight = pointLightEntity.AddComponent<PointLightComponent>();
-		pointLight.Intensity = 80.0f;
-		pointLight.Range = 40.0f;
-		pointLightEntity.GetComponent<TransformComponent>().Translation = { 0.0f, 12.0f, 0.0f };
-
-		auto skyLightEntity = m_ActiveScene->CreateEntity("Sky Light");
-		skyLightEntity.AddComponent<SkyLightComponent>(defaultSkyboxHandle);
-
-		auto terrainEntity = m_ActiveScene->CreateEntity("Terrain");
-		auto& terrain = terrainEntity.AddComponent<TerrainComponent>();
-		ApplyTerrainPreset(terrain.Specification, TerrainPreset::Alpine);
-		terrain.Specification.RenderShaderHandle = terrainShaderHandle;
-		terrain.Specification.GenerationShaderHandle = terrainGenerationShaderHandle;
-		terrain.Specification.ErosionShaderHandle = terrainErosionShaderHandle;
-		terrain.Specification.DerivationShaderHandle = terrainDerivationShaderHandle;
-		// Keep the startup terrain texture-free. Assigning a TerrainMaterial later
-		// opts into the full four-layer Triplanar texture path.
-		terrain.Specification.TerrainMaterialHandle =
-			(ShouldAutorunTerrainSamplingBenchmark()
-				|| terrainSamplingVisualMode >= 0)
-			? AssetManager::ImportAsset(
-				"assets/materials/DefaultTerrain.glterrainmat")
-			: AssetHandle(0);
+		const bool useTerrainValidationScene =
+			ShouldAutorunTerrainSamplingBenchmark()
+			|| terrainSamplingVisualMode >= 0
+			|| ShouldVisualizeTerrainLODs();
+		if (useTerrainValidationScene)
+		{
+			SetEditorScene(CreateTerrainValidationScene(
+				defaultSkyboxHandle,
+				terrainShaderHandle,
+				terrainGenerationShaderHandle,
+				terrainErosionShaderHandle,
+				terrainDerivationShaderHandle));
+			m_EditorScenePath.clear();
+			GL_CORE_INFO("Terrain validation fixture scene activated.");
+		}
+		else
+		{
+			RestoreLastScene();
+		}
 
 
 		// --- 层级面板 ---
@@ -397,16 +489,10 @@ namespace gl {
 			};
 
 		// --- 内容浏览器 ---
-		m_ContentBrowser.OnFileDoubleClicked = [&](const std::string& path) {
+		m_ContentBrowser.OnFileDoubleClicked = [this](const std::string& path) {
 			auto ext = std::filesystem::path(path).extension().string();
-			if (ext == ".glimmer") {
-				auto newScene = CreateRef<Scene>();
-				SceneSerializer serializer(newScene);
-				if (serializer.Deserialize(path)) {
-					SetEditorScene(newScene);
-					GL_CORE_INFO("Loaded scene: {0}", path);
-				}
-			}
+			if (ext == ".glimmer")
+				OpenScene(path);
 			};
 		m_ContentBrowser.OnAssetSelected = [this](AssetHandle handle) {
 			m_SelectionContext.SelectAsset(handle);
@@ -672,29 +758,19 @@ namespace gl {
 				OnScenePlay();
 		}
 		if (ImGui::IsKeyChordPressed(ImGuiKey_N | ImGuiMod_Ctrl)) {
-			SetEditorScene(CreateRef<Scene>());
+			NewScene();
 		}
-		if (ImGui::IsKeyChordPressed(ImGuiKey_S | ImGuiMod_Ctrl)) {
-			if (m_DebugPanel.IsTemporarySceneActive())
-				GL_CORE_WARN("Exit the temporary Debug Lab before saving the editor scene.");
-			else
-			{
-				std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-				if (!path.empty()) {
-					SceneSerializer serializer(m_EditorScene);
-					serializer.Serialize(path);
-				}
-			}
+		if (ImGui::IsKeyChordPressed(
+			ImGuiKey_S | ImGuiMod_Ctrl | ImGuiMod_Shift)) {
+			SaveSceneAs();
+		}
+		else if (ImGui::IsKeyChordPressed(ImGuiKey_S | ImGuiMod_Ctrl)) {
+			SaveScene();
 		}
 		if (ImGui::IsKeyChordPressed(ImGuiKey_O | ImGuiMod_Ctrl)) {
 			std::string path = FileDialog::OpenFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-			if (!path.empty()) {
-				auto newScene = CreateRef<Scene>();
-				SceneSerializer serializer(newScene);
-				if (serializer.Deserialize(path)) {
-					SetEditorScene(newScene);
-				}
-			}
+			if (!path.empty())
+				OpenScene(path);
 		}
 		if (m_ViewportHovered) {
 			if (ImGui::IsKeyPressed(ImGuiKey_1)) m_GizmoType = 0;
@@ -744,28 +820,19 @@ namespace gl {
 			{
 				if (ImGui::MenuItem("New", "Ctrl+N"))
 				{
-					SetEditorScene(CreateRef<Scene>());
+					NewScene();
 				}
 				ImGui::BeginDisabled(m_DebugPanel.IsTemporarySceneActive());
-				if (ImGui::MenuItem("Save As...", "Ctrl+S"))
-				{
-					std::string path = FileDialog::SaveFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-					if (!path.empty()) {
-						SceneSerializer serializer(m_EditorScene);
-						serializer.Serialize(path);
-					}
-				}
+				if (ImGui::MenuItem("Save", "Ctrl+S"))
+					SaveScene();
+				if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S"))
+					SaveSceneAs();
 				ImGui::EndDisabled();
 				if (ImGui::MenuItem("Open...", "Ctrl+O"))
 				{
 					std::string path = FileDialog::OpenFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-					if (!path.empty()) {
-						auto newScene = CreateRef<Scene>();
-						SceneSerializer serializer(newScene);
-						if (serializer.Deserialize(path)) {
-							SetEditorScene(newScene);
-						}
-					}
+					if (!path.empty())
+						OpenScene(path);
 				}
 				ImGui::Separator();
 				if (ImGui::MenuItem("Exit")) Application::Get().Close();
@@ -948,13 +1015,7 @@ namespace gl {
 				auto ext = std::filesystem::path(path).extension().string();
 				if (ext == ".glimmer")
 				{
-					auto newScene = CreateRef<Scene>();
-					SceneSerializer serializer(newScene);
-					if (serializer.Deserialize(path))
-					{
-						SetEditorScene(newScene);
-						GL_CORE_INFO("Dropped scene: {0}", path);
-					}
+					OpenScene(path);
 				}				else if (ext == ".glterrainmat")
 				{
 					const AssetHandle handle = AssetManager::ImportAsset(path);
