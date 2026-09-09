@@ -11,12 +11,14 @@ namespace gl {
     }
 
     void LayerStack::PushLayer(Layer* layer) {
+		GL_CORE_ASSERT(!m_Detached, "Cannot push a layer after teardown.");
         // 普通图层插入到 Index 位置，Index 后移
         m_Layers.emplace(m_Layers.begin() + m_LayerInsertIndex, layer);
         m_LayerInsertIndex++;
     }
 
     void LayerStack::PushOverlay(Layer* overlay) {
+		GL_CORE_ASSERT(!m_Detached, "Cannot push an overlay after teardown.");
         // 覆盖层直接插在末尾
         m_Layers.emplace_back(overlay);
     }
@@ -34,4 +36,17 @@ namespace gl {
         if (it != m_Layers.end())
             m_Layers.erase(it);
     }
+
+	void LayerStack::DetachAll() {
+		if (m_Detached)
+			return;
+		for (auto it = m_Layers.rbegin(); it != m_Layers.rend(); ++it)
+		{
+			(*it)->OnDetach();
+			delete *it;
+		}
+		m_Layers.clear();
+		m_LayerInsertIndex = 0;
+		m_Detached = true;
+	}
 }

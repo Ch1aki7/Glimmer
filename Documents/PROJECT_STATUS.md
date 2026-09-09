@@ -140,6 +140,15 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-09-09：逐场景编辑器观察相机恢复与可靠卸载
+
+- EditorCamera 新增有限值校验的 GetState/SetState，以 FocalPoint、Distance、Pitch、Yaw 作为唯一持久化状态，位置、矩阵和视口投影仍在运行时派生；
+- 用户偏好升级为向后兼容的 Version 2，按规范化场景路径保存最多 64 组观察状态；场景切换、Save/Save As 和正常退出保存视角，加载场景后恢复，New 使用默认视角但不删除历史；
+- Debug 临时场景进入时快照正式观察相机，退出时恢复，激活期间不写偏好；Terrain 自动验证继续使用独立 Fixture，不污染用户记录；
+- 修复 Layer 生命周期：Application 在 Renderer Shutdown 前逆序、幂等调用全部 OnDetach，使编辑器会话与 GPU 资源清理拥有可靠退出点；
+- 验证：VS2026 `Debug | x64` 完整解决方案构建成功；无窗口回归全部 PASS，新增逐场景隔离、非法值、范围约束、Version 1 兼容和 Layer 卸载顺序断言；同步修正架构文档中遗留的默认演示场景描述；提交：待提交。
+- 当前主线恢复 P14 气候场驱动 Terrain Material Weight。
+
 ### 2026-09-09：启动恢复上次场景与默认演示场景解耦
 
 - 用户明确插入编辑器工作流任务后，EditorLayer 统一 New/Open/Save/Save As、内容浏览器双击和 Viewport 场景拖放入口，并持有当前 `.glimmer` 路径；Ctrl+S 直接保存已有路径，Ctrl+Shift+S 执行 Save As；

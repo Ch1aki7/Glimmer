@@ -1,4 +1,5 @@
 #include "Glimmer/Core/Log.h"
+#include "Glimmer/Core/LayerStack.h"
 #include "Glimmer/Asset/AssetManager.h"
 #include "Glimmer/Asset/Importers/ModelImporter.h"
 #include "Glimmer/Renderer/Material.h"
@@ -22,8 +23,11 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <limits>
 #include <string>
+#include <vector>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace {
@@ -1025,6 +1029,8 @@ namespace {
 		const std::filesystem::path projectRoot = directory / "ProjectA";
 		const std::filesystem::path scenePath =
 			projectRoot / "assets" / "Scenes" / "Last Scene.glimmer";
+		const std::filesystem::path secondScenePath =
+			projectRoot / "assets" / "Scenes" / "Second.glimmer";
 		std::filesystem::create_directories(scenePath.parent_path());
 		{
 			std::ofstream scene(scenePath);
@@ -1040,16 +1046,105 @@ namespace {
 		context.Check(!gl::EditorScenePreferences::LoadLastScene(
 			directory / "ProjectB"),
 			"editor preferences do not leak scenes across projects");
+
+		const gl::EditorCameraState firstCamera{
+			{ 12.5f, -3.0f, 8.25f }, 42.0f, -31.0f, 127.0f };
+		const gl::EditorCameraState secondCamera{
+			{ -8.0f, 4.5f, 1.0f }, 7.5f, 18.0f, -62.0f };
+		context.Check(gl::EditorScenePreferences::StoreCameraState(
+			projectRoot, scenePath, firstCamera)
+			&& gl::EditorScenePreferences::StoreCameraState(
+				projectRoot, secondScenePath, secondCamera),
+			"editor preferences persist per-scene camera states");
+		const auto restoredFirstCamera =
+			gl::EditorScenePreferences::LoadCameraState(projectRoot, scenePath);
+		const auto restoredSecondCamera =
+			gl::EditorScenePreferences::LoadCameraState(
+				projectRoot, secondScenePath);
+		context.Check(restoredFirstCamera
+			&& Near(restoredFirstCamera->FocalPoint, firstCamera.FocalPoint)
+			&& Near(restoredFirstCamera->Distance, firstCamera.Distance)
+			&& Near(restoredFirstCamera->Pitch, firstCamera.Pitch)
+			&& Near(restoredFirstCamera->Yaw, firstCamera.Yaw)
+			&& restoredSecondCamera
+			&& Near(restoredSecondCamera->FocalPoint, secondCamera.FocalPoint),
+			"each scene restores its own editor camera state");
+		gl::EditorCameraState invalidCamera = firstCamera;
+		invalidCamera.Distance = std::numeric_limits<float>::quiet_NaN();
+		context.Check(!gl::EditorScenePreferences::StoreCameraState(
+			projectRoot, scenePath, invalidCamera),
+			"non-finite editor camera state is rejected");
 		context.Check(gl::EditorScenePreferences::StoreLastScene(
 			projectRoot, std::nullopt)
 			&& !gl::EditorScenePreferences::LoadLastScene(projectRoot),
 			"new scene clears the persisted restore target");
+		context.Check(gl::EditorScenePreferences::LoadCameraState(
+			projectRoot, scenePath).has_value(),
+			"new scene retains per-scene camera history");
+
+		{
+			std::ofstream legacy(preferencesPath,
+				std::ios::binary | std::ios::trunc);
+			legacy << "GLIMMER_EDITOR_SCENE_PREFERENCES 1\n"
+				<< std::quoted(std::filesystem::weakly_canonical(
+					projectRoot).generic_string()) << '\n'
+				<< std::quoted(std::filesystem::weakly_canonical(
+					scenePath).generic_string()) << '\n';
+		}
+		context.Check(gl::EditorScenePreferences::LoadLastScene(projectRoot)
+			== std::filesystem::weakly_canonical(scenePath),
+			"version 1 scene preferences remain readable");
 
 #ifdef GL_PLATFORM_WINDOWS
 		_putenv_s("GLIMMER_EDITOR_PREFERENCES_PATH", "");
 #else
 		unsetenv("GLIMMER_EDITOR_PREFERENCES_PATH");
 #endif
+	}
+
+	void TestEditorCameraState(TestContext& context)
+	{
+		gl::EditorCamera camera;
+		const gl::EditorCameraState requested{
+			{ 3.0f, 5.0f, -7.0f }, 900.0f, -120.0f, 725.0f };
+		context.Check(camera.SetState(requested),
+			"finite editor camera state is accepted");
+		const auto restored = camera.GetState();
+		context.Check(Near(restored.FocalPoint, requested.FocalPoint)
+			&& Near(restored.Distance, 500.0f)
+			&& Near(restored.Pitch, -89.0f)
+			&& Near(restored.Yaw, requested.Yaw),
+			"editor camera state restoration applies runtime bounds");
+		gl::EditorCameraState invalid = requested;
+		invalid.Yaw = std::numeric_limits<float>::infinity();
+		context.Check(!camera.SetState(invalid)
+			&& Near(camera.GetState().Yaw, requested.Yaw),
+			"invalid editor camera state leaves the current view unchanged");
+	}
+
+	class TeardownProbeLayer : public gl::Layer
+	{
+	public:
+		TeardownProbeLayer(int identifier, std::vector<int>& detachOrder)
+			: m_Identifier(identifier), m_DetachOrder(detachOrder) {}
+		void OnDetach() override { m_DetachOrder.push_back(m_Identifier); }
+	private:
+		int m_Identifier;
+		std::vector<int>& m_DetachOrder;
+	};
+
+	void TestLayerTeardown(TestContext& context)
+	{
+		std::vector<int> detachOrder;
+		{
+			gl::LayerStack stack;
+			stack.PushLayer(new TeardownProbeLayer(1, detachOrder));
+			stack.PushOverlay(new TeardownProbeLayer(2, detachOrder));
+			stack.DetachAll();
+			stack.DetachAll();
+		}
+		context.Check(detachOrder == std::vector<int>({ 2, 1 }),
+			"layer teardown is reverse-order and idempotent");
 	}
 
 	void TestTerrainClimateRuntime(TestContext& context)
@@ -1554,6 +1649,10 @@ int main(int argc, char** argv)
 	TestSceneRoundTrip(context, temporaryDirectory.Path());
 	std::cout << "[RUN] Editor scene preferences\n";
 	TestEditorScenePreferences(context, temporaryDirectory.Path());
+	std::cout << "[RUN] Editor camera state\n";
+	TestEditorCameraState(context);
+	std::cout << "[RUN] Layer teardown\n";
+	TestLayerTeardown(context);
 	std::cout << "[RUN] Terrain copy and transactions\n";
 	TestTerrainCopyAndTransactions(context);
 	std::cout << "[RUN] Terrain presets\n";

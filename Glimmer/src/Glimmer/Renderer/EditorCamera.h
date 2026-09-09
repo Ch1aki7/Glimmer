@@ -6,6 +6,13 @@
 #include "Glimmer/Core/Timestep.h"
 
 namespace gl {
+	struct EditorCameraState
+	{
+		glm::vec3 FocalPoint{ 0.0f };
+		float Distance = 10.0f;
+		float Pitch = 0.0f;
+		float Yaw = 0.0f;
+	};
 
 	// 编辑器自由相机 —— 非 ECS 实体，独立驱动
 		// 控制: 右键拖拽=旋转, 右键+WASD/QE=平移/升降,
@@ -25,6 +32,8 @@ namespace gl {
 		float GetDistance()                    const { return m_Distance; }
 		float GetNearClip()                    const { return m_NearClip; }
 		float GetFarClip()                     const { return m_FarClip; }
+		EditorCameraState GetState() const;
+		bool SetState(const EditorCameraState& state);
 
 		void SetInputEnabled(bool enabled) { m_InputEnabled = enabled; }
 		void SetViewportSize(float width, float height);

@@ -34,7 +34,9 @@ namespace gl {
 	Application::~Application() {
 		GL_PROFILE_FUNCTION();
 
+		m_LayerStack.DetachAll();
 		Renderer::Shutdown();
+		s_Instance = nullptr;
 	}
 
 	void Application::PushLayer(Layer* layer) {

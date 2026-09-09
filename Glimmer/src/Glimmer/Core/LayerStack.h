@@ -14,6 +14,7 @@ namespace gl {
         void PushOverlay(Layer* overlay);
         void PopLayer(Layer* layer);
         void PopOverlay(Layer* overlay);
+		void DetachAll();
 
         // 为了方便循环遍历
         std::vector<Layer*>::iterator begin() { return m_Layers.begin(); }
@@ -21,6 +22,7 @@ namespace gl {
     private:
         std::vector<Layer*> m_Layers;
         unsigned int m_LayerInsertIndex = 0; // 用于追踪普通图层应该插在哪里
+		bool m_Detached = false;
     };
 
 }

@@ -5,6 +5,7 @@
 #include "Glimmer/Core/MouseButtonCodes.h"
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 
 namespace gl {
 
@@ -110,6 +111,25 @@ namespace gl {
 		m_Pitch = glm::clamp(pitchDegrees, -89.0f, 89.0f);
 		m_Yaw = yawDegrees;
 		UpdateView();
+	}
+
+	EditorCameraState EditorCamera::GetState() const
+	{
+		return { m_FocalPoint, m_Distance, m_Pitch, m_Yaw };
+	}
+
+	bool EditorCamera::SetState(const EditorCameraState& state)
+	{
+		if (!std::isfinite(state.FocalPoint.x)
+			|| !std::isfinite(state.FocalPoint.y)
+			|| !std::isfinite(state.FocalPoint.z)
+			|| !std::isfinite(state.Distance)
+			|| !std::isfinite(state.Pitch)
+			|| !std::isfinite(state.Yaw))
+			return false;
+
+		SetView(state.FocalPoint, state.Distance, state.Pitch, state.Yaw);
+		return true;
 	}
 
 	void EditorCamera::Focus(const glm::vec3& focalPoint, float distance)

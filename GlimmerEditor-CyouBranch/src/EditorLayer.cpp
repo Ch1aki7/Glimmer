@@ -157,10 +157,40 @@ namespace gl {
 			GL_CORE_WARN("Could not persist the current editor scene path.");
 	}
 
+	void EditorLayer::PersistEditorCameraState() const
+	{
+		if (m_EditorScenePath.empty()
+			|| m_DebugPanel.IsTemporarySceneActive())
+			return;
+		if (!EditorScenePreferences::StoreCameraState(
+			std::filesystem::absolute("assets").lexically_normal(),
+			m_EditorScenePath, m_EditorCamera.GetState()))
+			GL_CORE_WARN("Could not persist the editor camera state.");
+	}
+
+	void EditorLayer::RestoreEditorCameraState()
+	{
+		if (!m_EditorScenePath.empty())
+		{
+			const auto state = EditorScenePreferences::LoadCameraState(
+				std::filesystem::absolute("assets").lexically_normal(),
+				m_EditorScenePath);
+			if (state && m_EditorCamera.SetState(*state))
+			{
+				GL_CORE_INFO("Restored editor camera for scene: {0}",
+					m_EditorScenePath.string());
+				return;
+			}
+		}
+		m_EditorCamera.SetState(EditorCameraState{});
+	}
+
 	void EditorLayer::NewScene()
 	{
+		PersistEditorCameraState();
 		SetEditorScene(CreateRef<Scene>());
 		m_EditorScenePath.clear();
+		m_EditorCamera.SetState(EditorCameraState{});
 		RememberCurrentScene();
 		GL_CORE_INFO("Created an empty editor scene.");
 	}
@@ -179,10 +209,14 @@ namespace gl {
 		}
 
 		std::error_code error;
-		m_EditorScenePath = std::filesystem::weakly_canonical(path, error);
+		std::filesystem::path openedPath =
+			std::filesystem::weakly_canonical(path, error);
 		if (error)
-			m_EditorScenePath = std::filesystem::absolute(path).lexically_normal();
+			openedPath = std::filesystem::absolute(path).lexically_normal();
+		PersistEditorCameraState();
 		SetEditorScene(newScene);
+		m_EditorScenePath = std::move(openedPath);
+		RestoreEditorCameraState();
 		RememberCurrentScene();
 		GL_CORE_INFO("Loaded scene: {0}", m_EditorScenePath.string());
 		return true;
@@ -200,6 +234,7 @@ namespace gl {
 
 		if (!SceneSerializer(m_EditorScene).Serialize(m_EditorScenePath.string()))
 			return false;
+		PersistEditorCameraState();
 		RememberCurrentScene();
 		GL_CORE_INFO("Saved scene: {0}", m_EditorScenePath.string());
 		return true;
@@ -219,10 +254,12 @@ namespace gl {
 		if (!SceneSerializer(m_EditorScene).Serialize(path))
 			return false;
 
+		PersistEditorCameraState();
 		std::error_code error;
 		m_EditorScenePath = std::filesystem::weakly_canonical(path, error);
 		if (error)
 			m_EditorScenePath = std::filesystem::absolute(path).lexically_normal();
+		PersistEditorCameraState();
 		RememberCurrentScene();
 		GL_CORE_INFO("Saved scene: {0}", m_EditorScenePath.string());
 		return true;
@@ -251,6 +288,8 @@ namespace gl {
 		if (!scene || m_SceneState != SceneState::Edit || !m_EditorScene)
 			return false;
 
+		PersistEditorCameraState();
+		m_TemporaryDebugCameraState = m_EditorCamera.GetState();
 		m_ActiveScene = scene;
 		m_HierarchyPanel.SetContext(m_ActiveScene);
 		m_InspectorPanel.SetContext(m_ActiveScene);
@@ -272,6 +311,11 @@ namespace gl {
 		m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
 		m_InspectorPanel.SetCommandHistory(&m_CommandHistory);
 		m_HierarchyPanel.SetSelectedEntity({});
+		if (m_TemporaryDebugCameraState)
+		{
+			m_EditorCamera.SetState(*m_TemporaryDebugCameraState);
+			m_TemporaryDebugCameraState.reset();
+		}
 		GL_CORE_INFO("Temporary debug scene exited; editor scene restored.");
 	}
 
@@ -586,6 +630,8 @@ namespace gl {
 			m_DebugPanel.ExitTemporaryTools();
 		if (m_SceneState == SceneState::Play)
 			OnSceneStop();
+		PersistEditorCameraState();
+		RememberCurrentScene();
 		m_PostProcessRenderer.Shutdown();
 		AssetManager::Shutdown();
 	}

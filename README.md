@@ -1938,9 +1938,9 @@ Terrain 只写 `TerrainSpecification`，包括生成参数、Authoring Erosion�
 
 New、Save、Save As 和 Open 同时出现在 File 菜单中，快捷键分别是 Ctrl+N、Ctrl+S、Ctrl+Shift+S 和 Ctrl+O。EditorLayer 记录当前 `.glimmer` 路径，因此 Ctrl+S 会直接保存已命名场景，只有新建场景才转入 Save As。保存临时 Debug Scene 会被阻止；Play 期间保存的仍是 `m_EditorScene`，不会把 Runtime Scene 改动写回磁盘。菜单、快捷键、内容浏览器双击和 Viewport 拖放都复用同一组 New/Open/Save 入口，打开成功后 Hierarchy、Inspector 和选择上下文一起切换。
 
-成功打开或保存后，编辑器会在用户配置目录的 `Glimmer/EditorScenePreferences.txt` 中记录项目根和规范化场景绝对路径。下次启动仅在项目根匹配时恢复它；文件丢失、格式损坏或首次启动时进入空场景，并清除失效记录。New 也会清除恢复目标，避免下次启动重新打开更早的文件。该机制只恢复最后一个磁盘文件，不会隐式保存未保存修改。普通启动不再硬编码创建 Sun、Point Light、Sky Light 和 Alpine Terrain；Terrain Benchmark/LOD 环境验证会单独创建自己的 Fixture。
+成功打开或保存后，编辑器会在用户配置目录的 `Glimmer/EditorScenePreferences.txt` 中记录项目根和规范化场景绝对路径。偏好 Version 2 还按场景保存最多 64 组 EditorCamera 的 FocalPoint、Distance、Pitch、Yaw，并兼容上一版只有场景路径的文件。下次启动仅在项目根匹配时恢复场景及其观察视角；文件丢失、格式损坏或首次启动时进入空场景，并清除失效记录。New 也会清除启动恢复目标，但保留已命名场景的视角历史。该机制不会隐式保存场景修改。普通启动不再硬编码创建 Sun、Point Light、Sky Light 和 Alpine Terrain；Terrain Benchmark/LOD 环境验证会单独创建自己的 Fixture，且不写入用户相机记录。
 
-无窗口回归会把场景写入临时目录，再检查固定 UUID、资产 Handle、Material Overrides 和 Terrain Specification 是否完整恢复，同时确认 Terrain Runtime 没有被持久化。它还验证 `Serialize()` 能报告目标不可写、偏好路径可往返、不同项目不会串用记录，以及 New 的清除语义。保存目前仍直接覆盖目标文件，尚未采用临时文件替换；场景根节点也仍固定写 `Untitled`。编辑器尚无 Scene Dirty 状态和退出保存提示，因此自动恢复代表最后一次成功保存/打开的磁盘版本，而不是退出瞬间的未保存内存内容。
+无窗口回归会把场景写入临时目录，再检查固定 UUID、资产 Handle、Material Overrides 和 Terrain Specification 是否完整恢复，同时确认 Terrain Runtime 没有被持久化。它还验证 `Serialize()` 写入失败、Version 1 偏好兼容、项目与逐场景相机隔离、非法相机值拒绝、运行时范围约束、New 清除启动目标但保留相机历史，以及 Layer 卸载逆序幂等。保存目前仍直接覆盖目标文件，尚未采用临时文件替换；场景根节点也仍固定写 `Untitled`。编辑器尚无 Scene Dirty 状态和退出保存提示，因此自动恢复的场景内容代表最后一次成功保存/打开的磁盘版本，而相机视角代表上次切换或正常退出时的编辑器状态。
 
 ## 原生文件对话框 (Windows File Dialog)
 
@@ -2024,7 +2024,7 @@ Transform 在生成矩阵时会用四元数组合 X、Y、Z 旋转，这让矩�
 
 ## EditorCamera 编辑器自由相机
 
-把 Gizmo 放进视口后，很快就遇到另一个问题：如果编辑场景也依赖场景里的主相机，移动观察位置就会同时改动游戏镜头。编辑器需要一台只服务于创作过程的相机，`EditorCamera` 因此单独放在渲染模块中，不作为 ECS 组件保存。
+把 Gizmo 放进视口后，很快就遇到另一个问题：如果编辑场景也依赖场景里的主相机，移动观察位置就会同时改动游戏镜头。编辑器需要一台只服务于创作过程的相机，`EditorCamera` 因此单独放在渲染模块中，不作为 ECS 组件写入 `.glimmer`；它的观察状态由用户级编辑器偏好按场景保存。
 
 ### 相机状态怎么组织
 
@@ -2038,6 +2038,8 @@ glm::vec3 EditorCamera::CalculatePosition() const
 ```
 
 这种组织方式很适合编辑器视角。旋转时镜头绕焦点运动，平移时移动焦点，滚轮则改变镜头与焦点之间的距离。默认投影参数为 `45°` 视野角、`0.1` 近裁剪面和 `1000.0` 远裁剪面；有效视口尺寸变化后会重新计算宽高比和投影矩阵。
+
+`GetState()` 和 `SetState()` 只往返这四项可重建数据。SetState 会拒绝 NaN/Infinity，并复用 SetView 对 Distance 和 Pitch 的限制；Position、View/Projection Matrix、视口宽高比、鼠标增量和输入速度不持久化。切换场景前保存旧视角，加载成功后恢复目标场景视角，Save/Save As 和正常退出也会刷新记录。没有历史的新场景使用默认状态。
 
 ### 当前操作
 
@@ -2057,7 +2059,7 @@ glm::vec3 EditorCamera::CalculatePosition() const
 
 编辑器每帧先根据视口悬停状态决定是否启用输入，再更新 `EditorCamera`。渲染 Edit 场景时，View、Projection、相机位置和裁剪面都会传给 `Scene::OnUpdateEditor()`，天空盒和后处理也沿用同一组参数。
 
-进入 Play 模式后，渲染路径改用场景中的 Primary Camera。编辑器相机仍保留原来的观察状态，停止运行便能回到刚才的工作位置。这条分界避免了编辑视角对运行时镜头产生副作用。
+进入 Play 模式后，渲染路径改用场景中的 Primary Camera。编辑器相机仍保留原来的观察状态，停止运行便能回到刚才的工作位置。Debug 临时场景也会在进入时快照正式观察相机、退出时恢复，并在激活期间禁止写入相机偏好。这两条分界避免了运行时或验证构图污染正式场景视角。
 
 ```text
 Edit  -> EditorCamera   -> Scene::OnUpdateEditor()
@@ -3663,7 +3665,7 @@ GTX 1050/OpenGL 4.6 的固定 Alpine 场景得到以下结果：
 | Top 2 Layers | 6.026 ms | 5.790 ms | 6.661 ms | 降低 43.6% |
 | Top 2 + Dominant Normal/AO | 4.226 ms | 4.006 ms | 5.122 ms | 降低 60.4% |
 
-自动验证入口 `GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN=1` 会临时给默认 Terrain 分配 DefaultTerrain、固定相机，完成三档测试后正常退出，不保存场景。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 用于逐档截图。固定视口检查没有发现新的轮廓变化、Triplanar 方向错误或条带接缝；默认档调整也有回归断言锁定为 Full-4。
+自动验证入口 `GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN=1` 会创建带 DefaultTerrain 的独立验证 Fixture、固定相机，完成三档测试后正常退出，不加载或保存用户场景及相机状态。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 用于逐档截图。固定视口检查没有发现新的轮廓变化、Triplanar 方向错误或条带接缝；默认档调整也有回归断言锁定为 Full-4。
 
 ## HDR 环境 Cubemap 与 Mip Chain 基础
 

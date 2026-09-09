@@ -348,11 +348,11 @@ flowchart LR
 - Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例；
 - `SceneSerializer::Serialize` 返回文件打开与写入结果，EditorLayer 只在成功保存后更新当前场景路径。
 
-编辑器将当前 `.glimmer` 路径作为 Scene YAML 之外的会话状态持有。`EditorScenePreferences` 把项目根和最后场景的规范化绝对路径写入用户配置目录；启动时只有项目根匹配才尝试反序列化，失败后清除失效记录并保留空 Scene。New、Open、Save、Save As、内容浏览器双击和 Viewport 拖放统一进入 EditorLayer 的场景入口。普通启动不再创建 Sun、Point Light、Sky Light 和 Terrain 演示实体；Terrain 性能/LOD 环境变量需要的同类内容由独立验证 Fixture 创建，不参与上次场景记录。
+编辑器将当前 `.glimmer` 路径与每个场景的 `EditorCameraState` 作为 Scene YAML 之外的用户会话状态持有。`EditorScenePreferences` 把项目根、最后场景和最多 64 组按规范化绝对路径索引的 FocalPoint/Distance/Pitch/Yaw 写入用户配置目录；Version 2 仍能读取只有最后场景路径的 Version 1。启动时只有项目根匹配才尝试反序列化，成功后恢复该场景的观察视角；失败后清除失效的最后场景记录并保留空 Scene。New、Open、Save、Save As、内容浏览器双击和 Viewport 拖放统一进入 EditorLayer 的场景入口。普通启动不再创建 Sun、Point Light、Sky Light 和 Terrain 演示实体；Terrain 性能/LOD 环境变量需要的同类内容由独立验证 Fixture 创建，不参与场景或相机记录。
 
 ### 8.1 无窗口回归边界
 
-`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 与 `EditorScenePreferences.cpp`，复用真实命令栈并验证场景写入失败、会话路径往返、项目隔离和清除语义，但不引入 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 测试会向上查找仓库根并使用版本化 `assets/models/Cerberus` 样本，缺失时明确失败，不再依赖或静默跳过本机 `tmp`。测试 Debug 配置关闭增量链接，避免静态依赖更新后复用损坏的 `.ilk`。
+`GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 与 `EditorScenePreferences.cpp`，复用真实命令栈并验证场景写入失败、会话路径、Version 1 兼容、项目/逐场景相机隔离、非法相机状态与清除语义；引擎侧回归还验证 EditorCamera 状态范围及 Layer 逆序幂等卸载，但不创建 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 测试会向上查找仓库根并使用版本化 `assets/models/Cerberus` 样本，缺失时明确失败，不再依赖或静默跳过本机 `tmp`。测试 Debug 配置关闭增量链接，避免静态依赖更新后复用损坏的 `.ilk`。
 
 根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 
@@ -371,17 +371,17 @@ flowchart LR
 - `SelectionContext`、`EditorCommandHistory`；
 - Hierarchy、Inspector、ContentBrowser、ShaderPanel、DebugPanel。
 
-新建编辑器会话的默认内存 Scene 创建 Sun、Point Light、Sky Light 和一个 Alpine 程序化 Terrain。默认 Terrain 持有图形/Compute Shader Handle，但 `TerrainMaterialHandle` 为 0，因此会生成高度及派生 Runtime，而不解析 `.glterrainmat` 或加载四层具体材质纹理。Add Component、高度图拖入与 TerrainMaterial 拖入仍可创建其它 Terrain。
+新建编辑器会话先尝试恢复最后成功打开或保存的场景及其观察相机；没有有效记录时使用空 Scene。普通启动不创建演示实体。Add Component、高度图拖入与 TerrainMaterial 拖入仍可创建 Terrain。
 
-进入 Play 时，EditorLayer 清理选择，复制 EditorScene 为 RuntimeScene，切换所有面板上下文并禁用编辑命令历史；停止时销毁运行时脚本，丢弃 RuntimeScene，再切回 EditorScene。运行时修改不会写回编辑场景。
+进入 Play 时，EditorLayer 清理选择，复制 EditorScene 为 RuntimeScene，切换所有面板上下文并禁用编辑命令历史；停止时销毁运行时脚本，丢弃 RuntimeScene，再切回 EditorScene。运行时修改不会写回编辑场景。Application 析构会在 Renderer Shutdown 前调用 `LayerStack::DetachAll()`，Layer 按栈逆序且只卸载一次，因此 EditorLayer 能在图形资源仍有效时保存会话状态并执行资源清理。
 
-DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D/Terrain Overview、`InstancingLabTool`、`PBRMaterialLabTool` 与 `TerrainSamplingBenchmarkTool`。Terrain Overview 还提供 LOD0/1/2 统计、距离阈值和运行时调试着色。前两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景。Lab 激活期间 CommandHistory 和场景保存被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。Terrain Sampling Benchmark 不创建或持有 Scene，只读取 TerrainRenderer Statistics 并切换纯运行时采样档位；手动入口要求当前 Terrain 已绑定具体纹理。
+DebugPanel 是编辑器诊断工具的长期宿主，目前包含 Renderer3D/Terrain Overview、`InstancingLabTool`、`PBRMaterialLabTool` 与 `TerrainSamplingBenchmarkTool`。Terrain Overview 还提供 LOD0/1/2 统计、距离阈值和运行时调试着色。前两类 Lab 创建真实 ECS 临时内存 Scene，EditorLayer 只通过受控回调切换 `m_ActiveScene`，不替换 `m_EditorScene`，并保证同一时刻只有一个临时工具占用场景；进入 Lab 时同时快照正式 EditorCamera，退出 Lab、切换场景、进入 Play 或关闭编辑器时恢复原场景和观察视角。Lab 激活期间 CommandHistory、场景保存和相机偏好写入被禁用，Hierarchy 不枚举临时实体。PBR Lab 生成六个材质球验证纹理通道和 Metallic/Roughness 标量组合，并可通过环境变量自动运行临时 `.glmat`/Scene YAML 往返；测试场景和临时文件不持久化为项目内容。Terrain Sampling Benchmark 不创建或持有 Scene，只读取 TerrainRenderer Statistics 并切换纯运行时采样档位；手动入口要求当前 Terrain 已绑定具体纹理。
 
 Instancing Lab 同时托管 Shadow Benchmark 状态机和 Shadow Visual Validation 预设。Benchmark 只修改 Lab 自己的 DirectionalLight，在固定的 9 组 Cascade/Resolution 配置间轮换，并在每次切换后先预热再采样。`ShadowRenderer::Statistics::GpuTimingSample` 是跨帧单调递增的 Query 结果序号；状态机仅在序号变化时接收耗时，因而不会把非阻塞计时器保留的上一结果重复计入平均值。DebugPanel 在窗口可见性判断之前推进状态机，使页签切换或关闭面板不会暂停测试；结果只保存在工具运行时内存中。Visual Validation 复用相同临时 Scene 边界，生成 Opaque、Mask、Blend 三种投影策略对照和四级深度标记，通过 EditorLayer 提供的受控相机框选回调调用 `EditorCamera::SetView`，提供级联全景与投影物近景两种构图；它只调整临时方向光和纯运行时级联调试开关，不污染正式 Scene。
 
 EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel 的受控接口生成固定 2500 实体的 Maximum Instancing Lab 并启动相同状态机。完成时 InstancingLabTool 将 9 组统计写入日志，EditorLayer 再请求 Application 正常关闭；`GLIMMER_SHADOW_VISUAL_AUTORUN` 使用同一边界生成视觉场景，`GLIMMER_SHADOW_VISUALIZE_CASCADES` 与 `GLIMMER_SHADOW_VISUAL_CLOSEUP` 分别选择级联着色和投影物近景。自动入口不绕过临时 Scene 隔离，也不另建第二套阴影逻辑。
 
-`GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN` 仅在诊断运行中为默认 Terrain 分配 DefaultTerrain 资产、固定 EditorCamera，并启动与手动入口相同的 TerrainSamplingBenchmarkTool；三档完成后由 EditorLayer 请求正常退出。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 使用同一固定场景边界选择单档供截图检查。这些入口不改变默认内存 Scene 仍保持 TerrainMaterialHandle=0 的启动契约，也不保存任何场景或采样设置。
+`GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN` 仅在诊断运行中创建带 DefaultTerrain 资产的独立 Terrain Validation Scene、固定 EditorCamera，并启动与手动入口相同的 TerrainSamplingBenchmarkTool；三档完成后由 EditorLayer 请求正常退出。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 使用同一验证 Fixture 选择单档供截图检查。这些入口不加载或覆盖用户最后场景，也不保存场景、相机或采样设置。
 
 ### 9.2 选择与面板职责
 

@@ -8,6 +8,7 @@
 #include "Glimmer/Renderer/EditorCamera.h"
 #include "Editor/EditorCommand.h"
 #include <filesystem>
+#include <optional>
 
 namespace gl {
 
@@ -32,6 +33,8 @@ namespace gl {
 		bool SaveSceneAs();
 		bool RestoreLastScene();
 		void RememberCurrentScene() const;
+		void PersistEditorCameraState() const;
+		void RestoreEditorCameraState();
 		bool ActivateTemporaryDebugScene(const Ref<Scene>& scene);
 		void ExitTemporaryDebugScene();
 		void OnScenePlay();
@@ -54,6 +57,7 @@ namespace gl {
 		Ref<Scene> m_RuntimeScene;
 		Ref<Scene> m_ActiveScene;
 		std::filesystem::path m_EditorScenePath;
+		std::optional<EditorCameraState> m_TemporaryDebugCameraState;
 		SceneHierarchyPanel m_HierarchyPanel;
 		InspectorPanel m_InspectorPanel;
 		EditorCommandHistory m_CommandHistory;
