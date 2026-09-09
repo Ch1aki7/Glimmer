@@ -22,6 +22,7 @@ namespace gl {
 		std::filesystem::path m_CurrentDir;
 		std::string m_SelectedFile;
 		float m_SplitPos = 200.0f;  // 左侧树宽度
+		float m_ItemScale = 0.25f;
 	};
 
 }

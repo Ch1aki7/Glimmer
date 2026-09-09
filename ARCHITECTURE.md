@@ -391,7 +391,7 @@ EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel �
 | --- | --- |
 | `SceneHierarchyPanel` | 枚举 Scene 实体、选择、创建/复制/删除入口 |
 | `InspectorPanel` | 根据 SelectionType 绘制 Entity Components 或 Asset 属性；TerrainMaterial 提供四层贴图/PBR/混合参数及显式保存/重载 |
-| `ContentBrowserPanel` | 目录树、文件网格、资产选择、拖放和双击打开 |
+| `ContentBrowserPanel` | 目录树、单一文件区滚动容器、可缩放紧凑列表/方形网格、矢量文件类型图标、稳定排序、资产选择、拖放和双击打开；显示缩放只属于面板运行时状态 |
 | `ShaderPanel` | ShaderLibrary 自动/手动重载与结果显示 |
 | `DebugPanel` | 通用诊断入口；展示 Renderer3D 概览并托管可扩展的临时测试工具 |
 | `InstancingLabTool` | 生成隔离 ECS 压力/阴影视觉场景，对照 Renderer3D 统计；自动轮换 CSM 配置并汇总唯一 GPU Timer 样本；管理相机框选、代表实体选择和清理 |

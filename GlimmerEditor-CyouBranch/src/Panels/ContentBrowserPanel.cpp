@@ -2,14 +2,213 @@
 #include "../Utils/EditorAssetFactory.h"
 #include <imgui.h>
 
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <vector>
+
 #define ICON_FA_FOLDER  "\xef\x81\xbb"
-#define ICON_FA_CODE    "\xef\x87\x89"
-#define ICON_FA_CUBE    "\xef\x86\xb2"
-#define ICON_FA_IMAGE   "\xef\x80\xbe"
 #define ICON_FA_GLOBE   "\xef\x82\xac"
-#define ICON_FA_FILE    "\xef\x85\x9b"
 
 namespace gl {
+	namespace {
+		constexpr float kScaleMinimum = 0.0f;
+		constexpr float kScaleMaximum = 1.0f;
+		constexpr float kScaleWheelStep = 0.08f;
+		constexpr float kGridItemMinimum = 72.0f;
+		constexpr float kGridItemMaximum = 160.0f;
+
+		enum class ContentIconKind
+		{
+			Folder,
+			Shader,
+			Model,
+			Image,
+			Scene,
+			Material,
+			TerrainMaterial,
+			Skybox,
+			File
+		};
+
+		struct ContentIconStyle
+		{
+			ContentIconKind Kind = ContentIconKind::File;
+			ImU32 Color = 0;
+		};
+
+		std::string Lowercase(std::string value)
+		{
+			std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+				return static_cast<char>(std::tolower(character));
+				});
+			return value;
+		}
+
+		ContentIconStyle GetIconStyle(const std::filesystem::path& path, bool isDirectory)
+		{
+			if (isDirectory)
+				return { ContentIconKind::Folder, IM_COL32(224, 174, 65, 255) };
+
+			const std::string extension = Lowercase(path.extension().string());
+			if (extension == ".glsl" || extension == ".glslinc" || extension == ".comp")
+				return { ContentIconKind::Shader, IM_COL32(94, 178, 255, 255) };
+			if (extension == ".obj" || extension == ".fbx")
+				return { ContentIconKind::Model, IM_COL32(186, 126, 255, 255) };
+			if (extension == ".png" || extension == ".jpg" || extension == ".jpeg"
+				|| extension == ".tga" || extension == ".bmp")
+				return { ContentIconKind::Image, IM_COL32(91, 201, 132, 255) };
+			if (extension == ".glimmer")
+				return { ContentIconKind::Scene, IM_COL32(88, 190, 216, 255) };
+			if (extension == ".glmat")
+				return { ContentIconKind::Material, IM_COL32(235, 132, 91, 255) };
+			if (extension == ".glterrainmat")
+				return { ContentIconKind::TerrainMaterial, IM_COL32(117, 177, 91, 255) };
+			if (extension == ".glsky" || extension == ".hdr")
+				return { ContentIconKind::Skybox, IM_COL32(92, 157, 224, 255) };
+			return { ContentIconKind::File, IM_COL32(166, 174, 188, 255) };
+		}
+
+		void DrawContentIcon(
+			ImDrawList* drawList,
+			const ImVec2& minimum,
+			const ImVec2& maximum,
+			const ContentIconStyle& style)
+		{
+			const float width = maximum.x - minimum.x;
+			const float height = maximum.y - minimum.y;
+			const float lineWidth = std::max(1.0f, width * 0.045f);
+			const ImU32 outline = IM_COL32(35, 39, 47, 210);
+			const ImU32 detail = IM_COL32(245, 247, 250, 225);
+
+			if (style.Kind == ContentIconKind::Folder)
+			{
+				const ImVec2 bodyMin(minimum.x, minimum.y + height * 0.25f);
+				drawList->AddRectFilled(
+					ImVec2(minimum.x + width * 0.08f, minimum.y + height * 0.10f),
+					ImVec2(minimum.x + width * 0.50f, minimum.y + height * 0.38f),
+					style.Color,
+					width * 0.08f);
+				drawList->AddRectFilled(bodyMin, maximum, style.Color, width * 0.09f);
+				drawList->AddRect(bodyMin, maximum, outline, width * 0.09f, 0, lineWidth);
+				return;
+			}
+
+			const float fold = width * 0.22f;
+			const std::array<ImVec2, 6> fileShape = {
+				ImVec2(minimum.x, minimum.y),
+				ImVec2(maximum.x - fold, minimum.y),
+				ImVec2(maximum.x, minimum.y + fold),
+				maximum,
+				ImVec2(minimum.x, maximum.y),
+				ImVec2(minimum.x, minimum.y)
+			};
+			drawList->AddConvexPolyFilled(fileShape.data(), 5, style.Color);
+			drawList->AddPolyline(fileShape.data(), 6, outline, 0, lineWidth);
+			drawList->AddTriangleFilled(
+				ImVec2(maximum.x - fold, minimum.y),
+				ImVec2(maximum.x - fold, minimum.y + fold),
+				ImVec2(maximum.x, minimum.y + fold),
+				IM_COL32(255, 255, 255, 105));
+
+			const ImVec2 center(
+				(minimum.x + maximum.x) * 0.5f,
+				minimum.y + height * 0.60f);
+			const float symbolWidth = width * 0.44f;
+			const float symbolHeight = height * 0.26f;
+
+			switch (style.Kind)
+			{
+			case ContentIconKind::Shader:
+				drawList->AddPolyline(std::array<ImVec2, 3>{
+					ImVec2(center.x - symbolWidth * 0.10f, center.y - symbolHeight * 0.50f),
+						ImVec2(center.x - symbolWidth * 0.42f, center.y),
+						ImVec2(center.x - symbolWidth * 0.10f, center.y + symbolHeight * 0.50f)
+				}.data(), 3, detail, 0, lineWidth);
+				drawList->AddPolyline(std::array<ImVec2, 3>{
+					ImVec2(center.x + symbolWidth * 0.10f, center.y - symbolHeight * 0.50f),
+						ImVec2(center.x + symbolWidth * 0.42f, center.y),
+						ImVec2(center.x + symbolWidth * 0.10f, center.y + symbolHeight * 0.50f)
+				}.data(), 3, detail, 0, lineWidth);
+				break;
+			case ContentIconKind::Model:
+			{
+				const ImVec2 top(center.x, center.y - symbolHeight * 0.58f);
+				const ImVec2 left(center.x - symbolWidth * 0.44f, center.y - symbolHeight * 0.12f);
+				const ImVec2 right(center.x + symbolWidth * 0.44f, center.y - symbolHeight * 0.12f);
+				const ImVec2 bottom(center.x, center.y + symbolHeight * 0.58f);
+				drawList->AddLine(top, left, detail, lineWidth);
+				drawList->AddLine(top, right, detail, lineWidth);
+				drawList->AddLine(left, bottom, detail, lineWidth);
+				drawList->AddLine(right, bottom, detail, lineWidth);
+				drawList->AddLine(top, center, detail, lineWidth);
+				drawList->AddLine(center, bottom, detail, lineWidth);
+				break;
+			}
+			case ContentIconKind::Image:
+				drawList->AddCircleFilled(
+					ImVec2(center.x + symbolWidth * 0.24f, center.y - symbolHeight * 0.35f),
+					std::max(1.5f, width * 0.045f), detail);
+				drawList->AddPolyline(std::array<ImVec2, 4>{
+					ImVec2(center.x - symbolWidth * 0.46f, center.y + symbolHeight * 0.48f),
+						ImVec2(center.x - symbolWidth * 0.13f, center.y - symbolHeight * 0.12f),
+						ImVec2(center.x + symbolWidth * 0.08f, center.y + symbolHeight * 0.18f),
+						ImVec2(center.x + symbolWidth * 0.46f, center.y - symbolHeight * 0.30f)
+				}.data(), 4, detail, 0, lineWidth);
+				break;
+			case ContentIconKind::Scene:
+			case ContentIconKind::Skybox:
+			{
+				const float radius = std::min(symbolWidth, symbolHeight) * 0.48f;
+				drawList->AddCircle(center, radius, detail, 16, lineWidth);
+				drawList->AddLine(
+					ImVec2(center.x - radius, center.y),
+					ImVec2(center.x + radius, center.y), detail, lineWidth);
+				drawList->AddEllipse(center, ImVec2(radius * 0.42f, radius), detail, 0.0f, 16, lineWidth);
+				break;
+			}
+			case ContentIconKind::Material:
+				drawList->AddCircleFilled(center, std::min(symbolWidth, symbolHeight) * 0.50f, detail, 20);
+				drawList->AddCircleFilled(
+					ImVec2(center.x - symbolWidth * 0.10f, center.y - symbolHeight * 0.12f),
+					std::min(symbolWidth, symbolHeight) * 0.16f,
+					IM_COL32(255, 255, 255, 130), 12);
+				break;
+			case ContentIconKind::TerrainMaterial:
+				drawList->AddPolyline(std::array<ImVec2, 4>{
+					ImVec2(center.x - symbolWidth * 0.48f, center.y + symbolHeight * 0.42f),
+						ImVec2(center.x - symbolWidth * 0.18f, center.y - symbolHeight * 0.34f),
+						ImVec2(center.x + symbolWidth * 0.03f, center.y + symbolHeight * 0.04f),
+						ImVec2(center.x + symbolWidth * 0.48f, center.y - symbolHeight * 0.50f)
+				}.data(), 4, detail, 0, lineWidth);
+				break;
+			default:
+				for (int line = -1; line <= 1; ++line)
+					drawList->AddLine(
+						ImVec2(center.x - symbolWidth * 0.38f, center.y + line * symbolHeight * 0.34f),
+						ImVec2(center.x + symbolWidth * 0.38f, center.y + line * symbolHeight * 0.34f),
+						detail, lineWidth);
+				break;
+			}
+		}
+
+		std::string EllipsizeFilename(const std::string& name, float maximumWidth)
+		{
+			if (ImGui::CalcTextSize(name.c_str()).x <= maximumWidth)
+				return name;
+
+			constexpr const char* ellipsis = "...";
+			const float remainingWidth = maximumWidth - ImGui::CalcTextSize(ellipsis).x;
+			if (remainingWidth <= 0.0f)
+				return ellipsis;
+
+			const char* remaining = name.c_str();
+			ImGui::GetFont()->CalcTextSizeA(
+				ImGui::GetFontSize(), remainingWidth, 0.0f,
+				name.c_str(), nullptr, &remaining);
+			return std::string(name.c_str(), remaining) + ellipsis;
+		}
+	}
 
 	ContentBrowserPanel::ContentBrowserPanel() = default;
 
@@ -18,21 +217,8 @@ namespace gl {
 		if (base.empty())
 		{
 			base = std::filesystem::absolute("assets");
-			cur  = base;
+			cur = base;
 		}
-	}
-
-	static const char* GetIcon(const std::filesystem::path& path)
-	{
-		if (std::filesystem::is_directory(path)) return ICON_FA_FOLDER;
-		auto ext = path.extension().string();
-		if (ext == ".glsl")      return ICON_FA_CODE;
-		if (ext == ".glimmer" || ext == ".glsky" || ext == ".hdr")
-			return ICON_FA_GLOBE;
-		if (ext == ".obj" || ext == ".fbx") return ICON_FA_CUBE;
-		if (ext == ".png" || ext == ".jpg" || ext == ".hdr")
-			return ICON_FA_IMAGE;
-		return ICON_FA_FILE;
 	}
 
 	// ============================================================
@@ -50,7 +236,7 @@ namespace gl {
 			bool isCurrent = (m_CurrentDir == path);
 
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
-			                         | ImGuiTreeNodeFlags_SpanAvailWidth;
+				| ImGuiTreeNodeFlags_SpanAvailWidth;
 			if (isCurrent) flags |= ImGuiTreeNodeFlags_Selected;
 
 			// 检查是否有子目录（决定是否可展开）
@@ -87,7 +273,7 @@ namespace gl {
 		if (!ImGui::BeginPopupContextWindow(
 			"ContentBrowserCreate",
 			ImGuiPopupFlags_MouseButtonRight
-				| ImGuiPopupFlags_NoOpenOverItems))
+			| ImGuiPopupFlags_NoOpenOverItems))
 			return;
 
 		std::filesystem::path createdPath;
@@ -153,8 +339,8 @@ namespace gl {
 		{
 			// assets 根节点
 			ImGuiTreeNodeFlags rootFlags = ImGuiTreeNodeFlags_OpenOnArrow
-			                             | ImGuiTreeNodeFlags_SpanAvailWidth
-			                             | ImGuiTreeNodeFlags_DefaultOpen;
+				| ImGuiTreeNodeFlags_SpanAvailWidth
+				| ImGuiTreeNodeFlags_DefaultOpen;
 			if (m_CurrentDir == m_BaseDir)
 				rootFlags |= ImGuiTreeNodeFlags_Selected;
 
@@ -186,50 +372,124 @@ namespace gl {
 
 		m_SplitPos = glm::clamp(m_SplitPos, 120.0f, 500.0f);
 
-		// --- 右栏：文件网格 ---
+		// --- 右栏：可缩放文件列表/网格 ---
 		ImGui::SameLine();
-		ImGui::BeginChild("FilePanel", ImVec2(0, 0), true);
+		ImGui::BeginChild(
+			"FilePanel", ImVec2(0, 0), ImGuiChildFlags_Borders,
+			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 		{
-			float cellSize = 80.0f;
-			float panelWidth = ImGui::GetContentRegionAvail().x;
-			int columns = std::max(1, (int)(panelWidth / cellSize));
-			ImGui::Columns(columns, nullptr, false);
+			constexpr ImVec2 sliderFramePadding(4.0f, 0.0f);
+			constexpr float sliderBottomInset = 2.0f;
+			constexpr float fileItemsBottomGap = 0.0f;
+			const float sliderHeight = ImGui::GetFontSize()
+				+ sliderFramePadding.y * 2.0f;
+			const float sliderTop = ImGui::GetWindowHeight()
+				- sliderHeight - sliderBottomInset;
+			const float fileItemsTop = ImGui::GetCursorPosY();
+			const float fileItemsHeight = std::max(
+				1.0f, sliderTop - fileItemsTop - fileItemsBottomGap);
+			ImGui::BeginChild(
+				"FileItems", ImVec2(0.0f, fileItemsHeight), ImGuiChildFlags_None);
 
-			for (auto& entry : std::filesystem::directory_iterator(m_CurrentDir))
+			ImGuiIO& io = ImGui::GetIO();
+			if (ImGui::IsWindowHovered() && io.KeyCtrl && io.MouseWheel != 0.0f)
+				m_ItemScale = glm::clamp(
+					m_ItemScale + io.MouseWheel * kScaleWheelStep,
+					kScaleMinimum, kScaleMaximum);
+
+			std::vector<std::filesystem::directory_entry> entries;
+			for (const auto& entry : std::filesystem::directory_iterator(m_CurrentDir))
+				entries.push_back(entry);
+			std::sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) {
+				if (left.is_directory() != right.is_directory())
+					return left.is_directory();
+				return Lowercase(left.path().filename().string())
+					< Lowercase(right.path().filename().string());
+				});
+
+			const bool compact = m_ItemScale <= kScaleMinimum;
+			const float itemSize = glm::mix(kGridItemMinimum, kGridItemMaximum, m_ItemScale);
+			const float panelWidth = ImGui::GetContentRegionAvail().x;
+			const float spacing = ImGui::GetStyle().ItemSpacing.x;
+			const int columns = compact
+				? 1
+				: std::max(1, static_cast<int>((panelWidth + spacing) / (itemSize + spacing)));
+			std::filesystem::path requestedDirectory;
+
+			for (size_t index = 0; index < entries.size(); ++index)
 			{
+				const auto& entry = entries[index];
 				const auto& path = entry.path();
 				std::string name = path.filename().string();
 				bool isDir = entry.is_directory();
-
-				std::string label = name;
-				if (label.size() > 10) label = label.substr(0, 9) + "...";
-
-				const char* icon = GetIcon(path);
-				std::string display = std::string(icon) + " " + label;
-
 				bool isSelected = (m_SelectedFile == path.string());
-				ImGui::PushID(name.c_str());
+				ImGui::PushID(static_cast<int>(index));
 
-				if (ImGui::Selectable(display.c_str(), &isSelected, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(cellSize, cellSize)))
+				if (!compact && index % columns != 0)
+					ImGui::SameLine();
+
+				const ImVec2 itemPosition = ImGui::GetCursorScreenPos();
+				const ImVec2 selectableSize(
+					compact ? ImGui::GetContentRegionAvail().x : itemSize,
+					compact ? ImGui::GetFrameHeight() : itemSize);
+				const bool pressed = ImGui::Selectable(
+					"##ContentEntry", isSelected,
+					ImGuiSelectableFlags_AllowDoubleClick,
+					selectableSize);
+				const bool hovered = ImGui::IsItemHovered();
+				const bool doubleClicked = hovered
+					&& ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+
+				ImDrawList* drawList = ImGui::GetWindowDrawList();
+				const ContentIconStyle iconStyle = GetIconStyle(path, isDir);
+				if (compact)
+				{
+					const float iconSize = ImGui::GetFontSize();
+					const ImVec2 iconMin(
+						itemPosition.x + ImGui::GetStyle().FramePadding.x,
+						itemPosition.y + (selectableSize.y - iconSize) * 0.5f);
+					DrawContentIcon(drawList, iconMin,
+						ImVec2(iconMin.x + iconSize, iconMin.y + iconSize), iconStyle);
+					drawList->AddText(
+						ImVec2(iconMin.x + iconSize + ImGui::GetStyle().ItemInnerSpacing.x,
+							itemPosition.y + ImGui::GetStyle().FramePadding.y),
+						ImGui::GetColorU32(ImGuiCol_Text),
+						EllipsizeFilename(name,
+							selectableSize.x - iconSize - ImGui::GetStyle().ItemInnerSpacing.x
+							- ImGui::GetStyle().FramePadding.x * 2.0f).c_str());
+				}
+				else
+				{
+					const float labelHeight = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 2.0f;
+					const float iconExtent = std::min(itemSize * 0.62f, itemSize - labelHeight - 10.0f);
+					const ImVec2 iconMin(
+						itemPosition.x + (itemSize - iconExtent) * 0.5f,
+						itemPosition.y + std::max(5.0f, (itemSize - labelHeight - iconExtent) * 0.5f));
+					DrawContentIcon(drawList, iconMin,
+						ImVec2(iconMin.x + iconExtent, iconMin.y + iconExtent), iconStyle);
+
+					const std::string label = EllipsizeFilename(name, itemSize - 10.0f);
+					const float labelWidth = ImGui::CalcTextSize(label.c_str()).x;
+					drawList->AddText(
+						ImVec2(itemPosition.x + std::max(5.0f, (itemSize - labelWidth) * 0.5f),
+							itemPosition.y + itemSize - labelHeight + ImGui::GetStyle().FramePadding.y),
+						ImGui::GetColorU32(ImGuiCol_Text), label.c_str());
+				}
+
+				if (hovered)
+					ImGui::SetTooltip("%s", name.c_str());
+
+				if (pressed)
 				{
 					m_SelectedFile = path.string();
 					if (!isDir && OnAssetSelected)
 						OnAssetSelected(AssetManager::ImportAsset(path));
-					if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					if (doubleClicked)
 					{
 						if (isDir)
-						{
-							m_CurrentDir = path;
-							ImGui::PopID();
-							ImGui::Columns(1);
-							ImGui::EndChild();
-							ImGui::End();
-							return;
-						}
+							requestedDirectory = path;
 						else if (OnFileDoubleClicked)
-						{
 							OnFileDoubleClicked(path.string());
-						}
 					}
 				}
 
@@ -242,11 +502,26 @@ namespace gl {
 				}
 
 				ImGui::PopID();
-				ImGui::NextColumn();
 			}
-			ImGui::Columns(1);
+
+			if (!requestedDirectory.empty())
+				m_CurrentDir = requestedDirectory;
+			DrawCreateContextMenu();
+			ImGui::EndChild();
+
+			constexpr float sliderWidth = 112.0f;
+			const float footerWidth = ImGui::GetContentRegionAvail().x;
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, footerWidth - sliderWidth));
+			ImGui::SetCursorPosY(sliderTop);
+			ImGui::SetNextItemWidth(sliderWidth);
+
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, sliderFramePadding);
+			ImGui::SliderFloat("##ContentBrowserScale", &m_ItemScale, kScaleMinimum, kScaleMaximum, "", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::PopStyleVar();
+
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Item size (Ctrl + mouse wheel)");
 		}
-		DrawCreateContextMenu();
 		ImGui::EndChild();
 
 		ImGui::End();
