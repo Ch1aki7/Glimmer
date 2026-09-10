@@ -33,6 +33,9 @@ AssetRegistry:
   - Handle: 3179645585411309739
     Type: Model
     FilePath: models/New Folder/Cube.obj
+  - Handle: 3229483665213786188
+    Type: Shader
+    FilePath: shaders/PostProcess/New Post Process.glsl
   - Handle: 3528201362395488632
     Type: Shader
     FilePath: shaders/Hologram.glsl

@@ -6,7 +6,10 @@
 #include "Glimmer/Renderer/TextureCube.h"
 
 #include <array>
+#include <filesystem>
 #include <glm/glm.hpp>
+#include <string>
+#include <vector>
 
 namespace gl {
 
@@ -59,6 +62,13 @@ namespace gl {
 		const char* BloomBlur = "assets/shaders/BloomBlur.glsl";
 	};
 
+	struct CustomPostProcessPass
+	{
+		std::string Name;
+		std::filesystem::path ShaderPath;
+		bool Enabled = true;
+	};
+
 	class PostProcessRenderer
 	{
 	public:
@@ -67,6 +77,14 @@ namespace gl {
 		void Shutdown();
 		void Resize(uint32_t width, uint32_t height);
 		void Execute(const PostProcessInput& input);
+		bool AddCustomPass(const std::filesystem::path& shaderPath);
+		bool RemoveCustomPass(size_t index);
+		bool MoveCustomPass(size_t fromIndex, size_t toIndex);
+		bool SetCustomPassEnabled(size_t index, bool enabled);
+		const std::vector<CustomPostProcessPass>& GetCustomPasses() const
+		{
+			return m_CustomPasses;
+		}
 
 		PostProcessSettings& GetSettings() { return m_Settings; }
 		const PostProcessSettings& GetSettings() const { return m_Settings; }
@@ -74,12 +92,19 @@ namespace gl {
 		bool IsInitialized() const { return m_DisplayFramebuffer != nullptr; }
 
 	private:
+		void EnsureCustomPassFramebuffers(uint32_t width, uint32_t height);
+
 		PostProcessSettings m_Settings;
 		Ref<Framebuffer> m_DisplayFramebuffer;
 		std::array<Ref<Framebuffer>, 2> m_BloomFramebuffers;
+		std::array<Ref<Framebuffer>, 2> m_CustomPassFramebuffers;
 		Ref<Shader> m_ToneMappingShader;
 		Ref<Shader> m_BloomExtractShader;
 		Ref<Shader> m_BloomBlurShader;
+		ShaderLibrary* m_ShaderLibrary = nullptr;
+		std::vector<CustomPostProcessPass> m_CustomPasses;
+		std::vector<Ref<Shader>> m_CustomPassShaders;
+		std::vector<std::string> m_CustomPassLibraryKeys;
 	};
 
 }

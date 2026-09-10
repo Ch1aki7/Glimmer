@@ -5,6 +5,7 @@
 #include "Glimmer/Renderer/Renderer2D.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace gl {
 
@@ -12,6 +13,7 @@ namespace gl {
 		const PostProcessShaderPaths& shaderPaths)
 	{
 		Shutdown();
+		m_ShaderLibrary = &shaderLibrary;
 
 		FramebufferSpecification displaySpecification;
 		displaySpecification.Attachments = { { FramebufferTextureFormat::RGBA8 } };
@@ -31,11 +33,22 @@ namespace gl {
 
 	void PostProcessRenderer::Shutdown()
 	{
+		if (m_ShaderLibrary)
+		{
+			for (const std::string& key : m_CustomPassLibraryKeys)
+				if (m_ShaderLibrary->Exists(key))
+					m_ShaderLibrary->Remove(key);
+		}
+		m_CustomPasses.clear();
+		m_CustomPassShaders.clear();
+		m_CustomPassLibraryKeys.clear();
+		m_ShaderLibrary = nullptr;
 		m_ToneMappingShader.reset();
 		m_BloomExtractShader.reset();
 		m_BloomBlurShader.reset();
 		m_DisplayFramebuffer.reset();
 		m_BloomFramebuffers = {};
+		m_CustomPassFramebuffers = {};
 	}
 
 	void PostProcessRenderer::Resize(uint32_t width, uint32_t height)
@@ -52,11 +65,149 @@ namespace gl {
 		const uint32_t bloomHeight = std::max(height / 2u, 1u);
 		m_BloomFramebuffers[0]->Resize(bloomWidth, bloomHeight);
 		m_BloomFramebuffers[1]->Resize(bloomWidth, bloomHeight);
+		if (m_CustomPassFramebuffers[0])
+		{
+			m_CustomPassFramebuffers[0]->Resize(width, height);
+			m_CustomPassFramebuffers[1]->Resize(width, height);
+		}
+	}
+
+	void PostProcessRenderer::EnsureCustomPassFramebuffers(
+		uint32_t width, uint32_t height)
+	{
+		if (m_CustomPassFramebuffers[0])
+			return;
+
+		FramebufferSpecification specification;
+		specification.Width = std::max(width, 1u);
+		specification.Height = std::max(height, 1u);
+		specification.Attachments = { { FramebufferTextureFormat::RGBA16F } };
+		m_CustomPassFramebuffers[0] = Framebuffer::Create(specification);
+		m_CustomPassFramebuffers[1] = Framebuffer::Create(specification);
+	}
+
+	bool PostProcessRenderer::AddCustomPass(
+		const std::filesystem::path& shaderPath)
+	{
+		std::string extension = shaderPath.extension().string();
+		std::transform(extension.begin(), extension.end(), extension.begin(),
+			[](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+		if (!m_ShaderLibrary || extension != ".glsl")
+			return false;
+
+		std::error_code error;
+		std::filesystem::path normalized =
+			std::filesystem::weakly_canonical(shaderPath, error);
+		if (error || !std::filesystem::is_regular_file(normalized, error))
+			return false;
+		for (const auto& pass : m_CustomPasses)
+			if (pass.ShaderPath == normalized)
+				return false;
+
+		const std::string libraryKey =
+			"Post Process / " + normalized.generic_string();
+		if (m_ShaderLibrary->Exists(libraryKey))
+			return false;
+
+		Ref<Shader> shader = m_ShaderLibrary->Load(
+			libraryKey, normalized.string());
+		if (!shader)
+			return false;
+
+		m_CustomPasses.push_back({
+			normalized.stem().string(), normalized, true
+		});
+		m_CustomPassShaders.push_back(std::move(shader));
+		m_CustomPassLibraryKeys.push_back(libraryKey);
+		const auto& displaySpecification =
+			m_DisplayFramebuffer->GetSpecification();
+		EnsureCustomPassFramebuffers(
+			displaySpecification.Width, displaySpecification.Height);
+		return true;
+	}
+
+	bool PostProcessRenderer::RemoveCustomPass(size_t index)
+	{
+		if (index >= m_CustomPasses.size())
+			return false;
+		if (m_ShaderLibrary
+			&& m_ShaderLibrary->Exists(m_CustomPassLibraryKeys[index]))
+			m_ShaderLibrary->Remove(m_CustomPassLibraryKeys[index]);
+		m_CustomPasses.erase(m_CustomPasses.begin() + index);
+		m_CustomPassShaders.erase(m_CustomPassShaders.begin() + index);
+		m_CustomPassLibraryKeys.erase(m_CustomPassLibraryKeys.begin() + index);
+		if (m_CustomPasses.empty())
+			m_CustomPassFramebuffers = {};
+		return true;
+	}
+
+	bool PostProcessRenderer::MoveCustomPass(size_t fromIndex, size_t toIndex)
+	{
+		if (fromIndex >= m_CustomPasses.size()
+			|| toIndex >= m_CustomPasses.size())
+			return false;
+		if (fromIndex == toIndex)
+			return true;
+		std::swap(m_CustomPasses[fromIndex], m_CustomPasses[toIndex]);
+		std::swap(m_CustomPassShaders[fromIndex], m_CustomPassShaders[toIndex]);
+		std::swap(m_CustomPassLibraryKeys[fromIndex],
+			m_CustomPassLibraryKeys[toIndex]);
+		return true;
+	}
+
+	bool PostProcessRenderer::SetCustomPassEnabled(size_t index, bool enabled)
+	{
+		if (index >= m_CustomPasses.size())
+			return false;
+		m_CustomPasses[index].Enabled = enabled;
+		return true;
 	}
 
 	void PostProcessRenderer::Execute(const PostProcessInput& input)
 	{
 		GL_CORE_ASSERT(IsInitialized(), "PostProcessRenderer is not initialized.");
+		const auto& displaySpecification =
+			m_DisplayFramebuffer->GetSpecification();
+		const glm::vec2 displayResolution{
+			static_cast<float>(displaySpecification.Width),
+			static_cast<float>(displaySpecification.Height)
+		};
+		if (!m_CustomPasses.empty())
+			EnsureCustomPassFramebuffers(
+				displaySpecification.Width, displaySpecification.Height);
+
+		uint32_t resolvedSceneColor = input.SceneColorTexture;
+		uint32_t executedCustomPasses = 0;
+		for (size_t index = 0; index < m_CustomPasses.size(); ++index)
+		{
+			if (!m_CustomPasses[index].Enabled || !m_CustomPassShaders[index])
+				continue;
+
+			const uint32_t targetIndex = executedCustomPasses % 2u;
+			RenderPassSpecification customPass;
+			customPass.Target = m_CustomPassFramebuffers[targetIndex];
+			customPass.ClearColorValue = { 0.0f, 0.0f, 0.0f, 1.0f };
+			RenderPass::Begin(customPass);
+
+			const Ref<Shader>& shader = m_CustomPassShaders[index];
+			shader->Bind();
+			shader->UploadUniformInt("u_SceneDepth", 1);
+			shader->UploadUniformInt("u_HasCamera", input.HasCamera ? 1 : 0);
+			shader->UploadUniformFloat3(
+				"u_CameraPosition", input.CameraPosition);
+			shader->UploadUniformMat4(
+				"u_InverseViewProjection", input.InverseViewProjection);
+			if (input.SceneDepthTexture != 0)
+				shader->BindTexture(
+					"u_SceneDepth", 1, input.SceneDepthTexture);
+			Renderer2D::DrawPostProcess(
+				shader, resolvedSceneColor, displayResolution);
+			RenderPass::End();
+
+			resolvedSceneColor = m_CustomPassFramebuffers[targetIndex]
+				->GetColorAttachmentRendererID();
+			++executedCustomPasses;
+		}
 
 		uint32_t bloomTexture = 0;
 		if (m_Settings.BloomEnabled)
@@ -73,7 +224,12 @@ namespace gl {
 			m_BloomExtractShader->UploadUniformFloat(
 				"u_ExposureEV", m_Settings.ExposureEV);
 			Renderer2D::DrawPostProcess(
-				m_BloomExtractShader, input.SceneColorTexture);
+				m_BloomExtractShader, resolvedSceneColor, {
+					static_cast<float>(m_BloomFramebuffers[0]
+						->GetSpecification().Width),
+					static_cast<float>(m_BloomFramebuffers[0]
+						->GetSpecification().Height)
+				});
 			RenderPass::End();
 
 			bool horizontal = true;
@@ -95,7 +251,10 @@ namespace gl {
 				});
 				Renderer2D::DrawPostProcess(m_BloomBlurShader,
 					m_BloomFramebuffers[sourceIndex]
-						->GetColorAttachmentRendererID());
+						->GetColorAttachmentRendererID(), {
+							static_cast<float>(bloomSpecification.Width),
+							static_cast<float>(bloomSpecification.Height)
+						});
 				RenderPass::End();
 				horizontal = !horizontal;
 			}
@@ -169,7 +328,7 @@ namespace gl {
 		m_ToneMappingShader->BindTexture(
 			"u_SceneDepth", 1, input.SceneDepthTexture);
 		Renderer2D::DrawPostProcess(
-			m_ToneMappingShader, input.SceneColorTexture);
+			m_ToneMappingShader, resolvedSceneColor, displayResolution);
 		RenderPass::End();
 	}
 

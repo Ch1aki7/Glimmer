@@ -1,0 +1,64 @@
+layout(location = 0) out vec4 o_Color;
+layout(location = 0) in vec2 v_TexCoord;
+
+uniform sampler2D u_SceneTexture;
+uniform sampler2D u_SceneDepth;
+uniform vec2 u_Resolution;
+uniform float u_Time;
+uniform int u_HasCamera;
+uniform vec3 u_CameraPosition;
+uniform mat4 u_InverseViewProjection;
+
+struct GlimmerPostProcessInput
+{
+    vec2 UV;
+    vec2 Resolution;
+    vec2 TexelSize;
+    float Time;
+    vec4 SceneColor;
+    float SceneDepth;
+    bool HasCamera;
+    vec3 CameraPosition;
+    mat4 InverseViewProjection;
+};
+
+vec4 GlimmerSampleScene(vec2 uv)
+{
+    return texture(u_SceneTexture, uv);
+}
+
+float GlimmerSampleDepth(vec2 uv)
+{
+    return texture(u_SceneDepth, uv).r;
+}
+
+vec3 GlimmerReconstructWorldPosition(vec2 uv, float depth)
+{
+    vec4 clipPosition = vec4(
+        uv * 2.0 - 1.0,
+        depth * 2.0 - 1.0,
+        1.0);
+    vec4 worldPosition = u_InverseViewProjection * clipPosition;
+    float safeW = abs(worldPosition.w) > 0.000001
+        ? worldPosition.w
+        : (worldPosition.w < 0.0 ? -0.000001 : 0.000001);
+    return worldPosition.xyz / safeW;
+}
+
+vec4 GlimmerPostProcess(GlimmerPostProcessInput inputData);
+
+void main()
+{
+    vec2 safeResolution = max(u_Resolution, vec2(1.0));
+    GlimmerPostProcessInput inputData;
+    inputData.UV = v_TexCoord;
+    inputData.Resolution = safeResolution;
+    inputData.TexelSize = 1.0 / safeResolution;
+    inputData.Time = u_Time;
+    inputData.SceneColor = GlimmerSampleScene(v_TexCoord);
+    inputData.SceneDepth = GlimmerSampleDepth(v_TexCoord);
+    inputData.HasCamera = u_HasCamera != 0;
+    inputData.CameraPosition = u_CameraPosition;
+    inputData.InverseViewProjection = u_InverseViewProjection;
+    o_Color = GlimmerPostProcess(inputData);
+}

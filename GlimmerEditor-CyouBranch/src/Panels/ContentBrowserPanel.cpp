@@ -292,6 +292,8 @@ namespace gl {
 				createdPath = EditorAssetFactory::CreateScene(m_CurrentDir);
 			if (ImGui::MenuItem("Shader (.glsl)"))
 				createdPath = EditorAssetFactory::CreateShader(m_CurrentDir);
+			if (ImGui::MenuItem("Post Process Shader (.glsl)"))
+				createdPath = EditorAssetFactory::CreatePostProcessShader(m_CurrentDir);
 			ImGui::EndMenu();
 		}
 

@@ -2586,7 +2586,7 @@ Tone Mapping: Fog -> EV -> ACES -> Gamma
                   ImGui Viewport
 ```
 
-Scene Pass 结束后，`EditorLayer` 只整理 Scene Color、Depth、相机逆 ViewProjection、相机位置和光照输入，再调用引擎侧 `PostProcessRenderer::Execute()`。Bloom 使用两张半分辨率 `RGBA16F` Framebuffer 做软阈值提取与横纵 Ping-Pong 模糊；Tone Mapping 输出到独立的 `RGBA8` Display Framebuffer，视口最终显示这张纹理。
+Scene Pass 结束后，`EditorLayer` 只整理 Scene Color、Depth、相机逆 ViewProjection、相机位置和光照输入，再调用引擎侧 `PostProcessRenderer::Execute()`。自定义 Shader 先通过按需创建的两张全分辨率 `RGBA16F` Framebuffer Ping-Pong；Bloom 再使用两张半分辨率 `RGBA16F` Framebuffer 做软阈值提取与横纵 Ping-Pong 模糊；Tone Mapping 输出到独立的 `RGBA8` Display Framebuffer，视口最终显示这张纹理。
 
 ![早期纯色 Pass 验证](README.assets/Pasted%20image%2020260722160621.png)
 
@@ -2944,10 +2944,11 @@ EntityID 不经过后处理，鼠标仍直接读取 Scene Framebuffer 的整数�
 
 ### PostProcessRenderer 的执行顺序
 
-后处理资源已经从 `EditorLayer` 收进引擎侧 `PostProcessRenderer`。它持有一个全分辨率 RGBA8 Display Framebuffer、两张半分辨率 RGBA16F Bloom Ping-Pong，以及 Tone Mapping、Bloom Extract 和 Blur Shader。
+后处理资源已经从 `EditorLayer` 收进引擎侧 `PostProcessRenderer`。它持有一个全分辨率 RGBA8 Display Framebuffer、两张半分辨率 RGBA16F Bloom Ping-Pong、按需创建的两张全分辨率 RGBA16F Custom Ping-Pong，以及 Tone Mapping、Bloom Extract、Blur 和有序自定义 Shader 列表。
 
 ```text
 RGBA16F Scene Color
+    -> 可选自定义全分辨率 Pass 列表
     -> 可选 Bloom 亮部提取与半分辨率双向模糊
     -> 合并 Bloom
     -> 用 Scene Depth 重建世界位置并计算距离/高度雾
@@ -2962,7 +2963,7 @@ Bloom 阈值会考虑当前 Exposure EV，提取出的颜色仍保持线性；�
 
 ### Sampler 和尺寸管理
 
-Display Framebuffer 跟随 Viewport 尺寸，Bloom 纹理保持一半宽高，最小为 `1×1`。`PostProcessRenderer::Resize()` 只在尺寸变化时重建附件。
+Display Framebuffer 跟随 Viewport 尺寸，Bloom 纹理保持一半宽高，最小为 `1×1`；Custom Ping-Pong 保持完整 Viewport 尺寸，并且只在存在自定义 Pass 时分配。`PostProcessRenderer::Resize()` 只在尺寸变化时重建已有附件。
 
 Tone Mapping Shader 同时声明 `sampler2D` 和 `samplerCube`。OpenGL 会检查整个 Program 的 Sampler 类型，即便当前雾分支没有执行，所以 Cube Sampler 固定使用纹理单元 2，Bloom 使用单元 3，不能依赖默认值都落在 0。这个问题在部分驱动上会直接让 Draw 失败，属于看起来像 Shader 逻辑、实际是绑定契约的典型坑。
 
@@ -4462,3 +4463,64 @@ Passes:
 两个 Pass 都写入同一个 EntityID，所以点击外扩轮廓仍会选中原实体。ShadowRenderer 不展开材质 Pass，它继续按基础 Material 的 Opaque、Mask、Blend 契约提交一次原模型。Outline 壳层不会被重复写进四张级联阴影图，这也避免轮廓宽度改变阴影体积。
 
 验证同时覆盖无窗口数据回归和真实 GPU 路径。回归测试确认旧材质默认值保持一致，并往返保存 Pass 顺序、Cull、Queue、DepthWrite、Float 和 Float4 参数；VS2026 `Debug | x64` 的 Glimmer、编辑器与回归目标构建通过。设置 `GLIMMER_TOON_LAB_AUTORUN=1` 后，GTX 1050 / OpenGL 4.6 成功编译 PBR 与 Toon 的递归 Include，隔离场景中的 6 个球各提交 2 个 Pass，最终渲染 `12/12` RenderItem，没有跳过模型；四级联 Shadow 候选保持 `24/24`。
+
+## 自定义后处理 Shader ABI 与实时 Pass 栈
+
+后处理现在也有独立的稳定 ABI，不需要复制 `ToneMapping.glsl`。在 Content Browser 的空白处右键，选择 `Create Asset -> Post Process Shader (.glsl)`，生成的模板只留下一个效果入口：
+
+```glsl
+#type vertex
+#version 450 core
+#include <Glimmer/PostProcessVertexABI.glslinc>
+
+#type fragment
+#version 450 core
+#include <Glimmer/PostProcessABI.glslinc>
+
+vec4 GlimmerPostProcess(GlimmerPostProcessInput inputData)
+{
+    return inputData.SceneColor;
+}
+```
+
+把 `.glsl` 从 Content Browser 拖进 `Settings -> Custom Post Process`，效果会立即出现在 Viewport。列表中的复选框控制启用，`Up`、`Down` 改变执行顺序，`Remove` 只从当前运行栈移除，不删除磁盘文件。Shader 主文件或 ABI Include 保存后继续走共享 `ShaderLibrary` 的热重载；编译失败时保留上一个有效 Program。
+
+`GlimmerPostProcessInput` 当前提供以下稳定数据：
+
+| 字段 | 含义 |
+| --- | --- |
+| `UV` | 当前屏幕 UV |
+| `Resolution` / `TexelSize` | 实际 Viewport 后处理尺寸与单像素尺寸 |
+| `Time` | 引擎运行时间 |
+| `SceneColor` | 当前 Pass 输入的线性 HDR 颜色 |
+| `SceneDepth` | 原始 Scene Depth |
+| `HasCamera` / `CameraPosition` | 相机是否有效与世界位置 |
+| `InverseViewProjection` | 当前相机逆 ViewProjection |
+
+辅助函数 `GlimmerSampleScene(uv)`、`GlimmerSampleDepth(uv)` 和 `GlimmerReconstructWorldPosition(uv, depth)` 分别用于邻域采样、深度读取和世界位置重建。`assets/shaders/PostProcess` 提供以下可直接拖入的示例；每份文件均独立工作，也可以按列表顺序组合：
+
+| Shader | 效果与主要 ABI 用法 |
+| --- | --- |
+| `Pixelate.glsl` | 按实际 Resolution 对屏幕 UV 量化，形成像素块 |
+| `Vignette.glsl` | 按宽高比计算径向暗角，保留中心亮度 |
+| `ChromaticAberration.glsl` | 使用 TexelSize 沿中心径向错开红蓝通道 |
+| `WaveDistortion.glsl` | 使用 Time 与 TexelSize 产生连续二维波纹扭曲 |
+| `DepthOutline.glsl` | 对原始 Scene Depth 做四邻域差分并压暗物体轮廓 |
+| `FilmGrain.glsl` | 根据像素坐标和离散时间生成随亮度变化的动态颗粒 |
+
+尖括号 Include 会从所属 `assets/shaders` 根目录解析，因此 Shader 放在任意子目录仍可使用 `<Glimmer/...>`；双引号 Include 仍相对当前文件。
+
+执行位置固定在 Scene HDR Color 之后、Bloom Extract 和 Tone Mapping 之前：
+
+```text
+Scene RGBA16F
+  -> Custom Pass 0
+  -> Custom Pass 1 ...（两张全分辨率 RGBA16F Ping-Pong）
+  -> Bloom Extract / Blur
+  -> Fog + Exposure + ACES + Gamma
+  -> Viewport RGBA8
+```
+
+因此自定义效果能处理 HDR 高光，并自然影响后续 Bloom。两张 Custom FBO 只在首个 Pass 加入时创建，最后一个 Pass 移除后释放；全屏绘制上传的是目标 FBO 的真实分辨率，不再误用窗口尺寸。当前列表和启用状态属于编辑器会话，不写入 `.glimmer`；也还没有材质式参数反射、Normal/Velocity/History 输入、前后阶段选择或 Render Graph。颜色分级、像素化、描边、溶解式屏幕遮罩和深度雾变体已经可写；TAA、运动模糊、SSR 等仍需先补齐跨帧资源与 GBuffer 契约。
+
+设置 `GLIMMER_POST_PROCESS_VALIDATE=1` 可在启动时依次挂入全部六个示例，真实渲染 5 帧后退出。GTX 1050 / OpenGL 4.6 验证中，六个 Shader、顶点 ABI 与片元 ABI 均成功递归编译，六级 Pass 链正常执行；VS2026 `Debug | x64` 编辑器工程构建通过。

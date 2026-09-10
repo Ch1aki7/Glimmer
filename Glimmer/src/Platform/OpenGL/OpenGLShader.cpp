@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <vector>
 #include <glad/glad.h>
@@ -34,6 +35,29 @@ namespace gl {
 		std::string ProgramNameFromPath(const std::filesystem::path& path)
 		{
 			return path.stem().string();
+		}
+
+		std::filesystem::path ShaderIncludeRoot(
+			const std::filesystem::path& shaderPath)
+		{
+			std::error_code error;
+			std::filesystem::path current =
+				std::filesystem::absolute(shaderPath, error).parent_path();
+			while (!current.empty())
+			{
+				std::string directoryName = current.filename().string();
+				std::transform(directoryName.begin(), directoryName.end(),
+					directoryName.begin(), [](unsigned char value) {
+						return static_cast<char>(std::tolower(value));
+					});
+				if (directoryName == "shaders")
+					return current;
+				const std::filesystem::path parent = current.parent_path();
+				if (parent == current)
+					break;
+				current = parent;
+			}
+			return shaderPath.parent_path();
 		}
 
 	}
@@ -290,7 +314,7 @@ namespace gl {
 			const std::filesystem::path requested =
 				line.substr(open + 1, close - open - 1);
 			const std::filesystem::path base = line[open] == '<'
-				? m_FilePath.parent_path() : includingFile.parent_path();
+				? ShaderIncludeRoot(m_FilePath) : includingFile.parent_path();
 			std::error_code pathError;
 			const std::filesystem::path includePath =
 				std::filesystem::weakly_canonical(base / requested, pathError);

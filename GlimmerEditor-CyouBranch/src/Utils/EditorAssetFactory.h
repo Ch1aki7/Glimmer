@@ -26,6 +26,8 @@ namespace gl {
 			const std::filesystem::path& directory);
 		static std::filesystem::path CreateShader(
 			const std::filesystem::path& directory);
+		static std::filesystem::path CreatePostProcessShader(
+			const std::filesystem::path& directory);
 		static std::filesystem::path CreateGeometry(
 			const std::filesystem::path& directory,
 			PrimitiveGeometry geometry);

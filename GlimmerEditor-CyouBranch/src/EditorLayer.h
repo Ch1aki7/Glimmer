@@ -9,6 +9,7 @@
 #include "Editor/EditorCommand.h"
 #include <filesystem>
 #include <optional>
+#include <string>
 
 namespace gl {
 
@@ -51,6 +52,7 @@ namespace gl {
 		// 3D 模型
 		Ref<Framebuffer> m_Framebuffer;
 		PostProcessRenderer m_PostProcessRenderer;
+		std::string m_PostProcessPassMessage;
 
 		// 场景 & 层级面板
 		Ref<Scene> m_EditorScene;
@@ -77,6 +79,8 @@ namespace gl {
 		SceneState m_SceneState = SceneState::Edit;
 		bool m_ShadowBenchmarkAutorun = false;
 		bool m_TerrainSamplingBenchmarkAutorun = false;
+		bool m_PostProcessValidationAutorun = false;
+		uint32_t m_PostProcessValidationFrames = 0;
 
 
 		// 设置灯光参数

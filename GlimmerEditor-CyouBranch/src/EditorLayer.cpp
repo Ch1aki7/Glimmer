@@ -40,6 +40,11 @@ namespace gl {
 			return HasEnvironmentVariable("GLIMMER_TOON_LAB_AUTORUN");
 		}
 
+		bool ShouldValidatePostProcess()
+		{
+			return HasEnvironmentVariable("GLIMMER_POST_PROCESS_VALIDATE");
+		}
+
 		bool ShouldAutorunShadowBenchmark()
 		{
 			return HasEnvironmentVariable("GLIMMER_SHADOW_BENCHMARK_AUTORUN");
@@ -489,6 +494,38 @@ namespace gl {
 		m_Framebuffer = Framebuffer::Create(sceneFramebufferSpec);
 
 		m_PostProcessRenderer.Initialize(m_ShaderLib);
+		m_PostProcessValidationAutorun = ShouldValidatePostProcess();
+		if (m_PostProcessValidationAutorun)
+		{
+			constexpr std::array<const char*, 6> validationPasses = {
+				"assets/shaders/PostProcess/Pixelate.glsl",
+				"assets/shaders/PostProcess/Vignette.glsl",
+				"assets/shaders/PostProcess/ChromaticAberration.glsl",
+				"assets/shaders/PostProcess/WaveDistortion.glsl",
+				"assets/shaders/PostProcess/DepthOutline.glsl",
+				"assets/shaders/PostProcess/FilmGrain.glsl"
+			};
+			bool allPassesAdded = true;
+			for (const char* shaderPath : validationPasses)
+			{
+				if (!m_PostProcessRenderer.AddCustomPass(shaderPath))
+				{
+					GL_CORE_ERROR(
+						"Post-process validation could not add: {0}",
+						shaderPath);
+					allPassesAdded = false;
+					break;
+				}
+			}
+			if (!allPassesAdded)
+				Application::Get().Close();
+			else
+			{
+				GL_CORE_INFO(
+					"Post-process validation started with {0} sample passes.",
+					validationPasses.size());
+			}
+		}
 		m_ShaderLib.Load("assets/shaders/Overlay.glsl");
 		m_ShaderLib.Load("Phong", "assets/shaders/Phong.glsl");
 		m_ShaderLib.Load("Toon", "assets/shaders/Toon.glsl");
@@ -780,6 +817,14 @@ namespace gl {
 			}
 		}
 		m_PostProcessRenderer.Execute(postProcessInput);
+		if (m_PostProcessValidationAutorun
+			&& ++m_PostProcessValidationFrames >= 5)
+		{
+			m_PostProcessValidationAutorun = false;
+			GL_CORE_INFO(
+				"Post-process validation rendered 5 frames; closing the editor.");
+			Application::Get().Close();
+		}
 	}
 
 	void EditorLayer::OnImGuiRender() {
@@ -995,6 +1040,72 @@ namespace gl {
 				&postProcessSettings.BloomBlurPasses, 1, 12);
 		}
 		ImGui::Checkbox("Grayscale", &postProcessSettings.GrayscaleEnabled);
+		ImGui::SeparatorText("Custom Post Process");
+		ImGui::Button("Drop Post Process Shader Here", ImVec2(-1.0f, 0.0f));
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload =
+				ImGui::AcceptDragDropPayload("SCENE_FILE"))
+			{
+				const std::string path(
+					static_cast<const char*>(payload->Data),
+					payload->DataSize - 1);
+				if (m_PostProcessRenderer.AddCustomPass(path))
+					m_PostProcessPassMessage =
+						"Added post-process pass: "
+						+ std::filesystem::path(path).stem().string();
+				else
+					m_PostProcessPassMessage =
+						"Could not add pass. Use a valid, non-duplicate .glsl file.";
+			}
+			ImGui::EndDragDropTarget();
+		}
+
+		int removeCustomPass = -1;
+		int moveCustomPassFrom = -1;
+		int moveCustomPassTo = -1;
+		const auto& customPasses = m_PostProcessRenderer.GetCustomPasses();
+		for (size_t index = 0; index < customPasses.size(); ++index)
+		{
+			const auto& pass = customPasses[index];
+			ImGui::PushID(static_cast<int>(index));
+			bool enabled = pass.Enabled;
+			if (ImGui::Checkbox("##Enabled", &enabled))
+				m_PostProcessRenderer.SetCustomPassEnabled(index, enabled);
+			ImGui::SameLine();
+			ImGui::TextUnformatted(pass.Name.c_str());
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", pass.ShaderPath.string().c_str());
+			ImGui::SameLine();
+			ImGui::BeginDisabled(index == 0);
+			if (ImGui::SmallButton("Up"))
+			{
+				moveCustomPassFrom = static_cast<int>(index);
+				moveCustomPassTo = static_cast<int>(index - 1);
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			ImGui::BeginDisabled(index + 1 >= customPasses.size());
+			if (ImGui::SmallButton("Down"))
+			{
+				moveCustomPassFrom = static_cast<int>(index);
+				moveCustomPassTo = static_cast<int>(index + 1);
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Remove"))
+				removeCustomPass = static_cast<int>(index);
+			ImGui::PopID();
+		}
+		if (moveCustomPassFrom >= 0)
+			m_PostProcessRenderer.MoveCustomPass(
+				static_cast<size_t>(moveCustomPassFrom),
+				static_cast<size_t>(moveCustomPassTo));
+		if (removeCustomPass >= 0)
+			m_PostProcessRenderer.RemoveCustomPass(
+				static_cast<size_t>(removeCustomPass));
+		if (!m_PostProcessPassMessage.empty())
+			ImGui::TextWrapped("%s", m_PostProcessPassMessage.c_str());
 		ImGui::SeparatorText("Distance Fog");
 		ImGui::Checkbox("Enabled##DistanceFog",
 			&postProcessSettings.DistanceFogEnabled);

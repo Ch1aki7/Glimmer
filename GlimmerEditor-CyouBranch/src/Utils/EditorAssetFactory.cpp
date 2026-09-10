@@ -293,6 +293,30 @@ void main()
 )") ? path : std::filesystem::path{};
 	}
 
+	std::filesystem::path EditorAssetFactory::CreatePostProcessShader(
+		const std::filesystem::path& directory)
+	{
+		const auto path = GetUniquePath(
+			directory, "New Post Process", ".glsl");
+		return WriteTextFile(path, R"(#type vertex
+#version 450 core
+
+#include <Glimmer/PostProcessVertexABI.glslinc>
+
+#type fragment
+#version 450 core
+
+#include <Glimmer/PostProcessABI.glslinc>
+
+vec4 GlimmerPostProcess(GlimmerPostProcessInput inputData)
+{
+    // Implement only the effect. The engine supplies HDR color, depth,
+    // viewport size, time and camera reconstruction data through inputData.
+    return inputData.SceneColor;
+}
+)") ? path : std::filesystem::path{};
+	}
+
 	std::filesystem::path EditorAssetFactory::CreateGeometry(
 		const std::filesystem::path& directory,
 		PrimitiveGeometry geometry)

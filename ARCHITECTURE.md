@@ -194,9 +194,9 @@ flowchart LR
 
 Scene Pass 开始时把 EntityID 附件清为 `-1`。模型、地形和 Sprite 写入自身 EnTT entity 整数 ID；视口将鼠标坐标转换到 Framebuffer 坐标后读取该附件，再由 Scene 反查实体。Mask 被 `discard` 的像素不写颜色、深度或 EntityID；Blend 的有效 Alpha 小于等于 `1/255` 时同样丢弃，其余透明片元按远到近顺序写入 EntityID。Skybox 使用只读深度和 LessEqual 在场景 Pass 内绘制，Tone Mapping 输出到单独 Display FBO。Overlay Pass 已留出结构但当前被注释，不属于已启用链路。
 
-Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。引擎侧 `PostProcessRenderer` 持有 Display FBO、两张随视口缩放的半分辨率 `RGBA16F` Bloom FBO、ToneMapping/Bloom Shader 引用、`PostProcessSettings` 和完整后处理执行顺序；Shader 仍注册在编辑器共享的 `ShaderLibrary`，因此沿用现有热重载入口。EditorLayer 只提交 Scene Color/Depth、Camera Position、Inverse ViewProjection、SkyLight Texture/Intensity 和 DirectionalLight Color，不直接实现提取、模糊或显示映射算法。
+Scene Framebuffer 的第三个附件是可采样 `Depth24Stencil8`。引擎侧 `PostProcessRenderer` 持有 Display FBO、两张随视口缩放的半分辨率 `RGBA16F` Bloom FBO、按需创建的两张全分辨率 `RGBA16F` Custom Pass Ping-Pong FBO、固定 ToneMapping/Bloom Shader、按顺序执行的自定义 Shader 列表、`PostProcessSettings` 和完整后处理执行顺序。固定与自定义 Shader 都注册在编辑器共享的 `ShaderLibrary`，因此沿用现有热重载入口；最后一个自定义 Pass 被移除时释放全分辨率 Ping-Pong。EditorLayer 只提交 Scene Color/Depth、Camera Position、Inverse ViewProjection、SkyLight Texture/Intensity 和 DirectionalLight Color，并管理 Pass 列表 UI，不直接实现画面算法。
 
-Scene Color 先进行 Bloom 软阈值提取：根据 EV 后亮度决定贡献但保留未曝光 Radiance，5 权重高斯模糊以水平/垂直 Ping-Pong 迭代。ToneMapping Pass 同时读取 HDR Color、Bloom 与 Scene Depth；合成顺序固定为 Scene+Bloom、Distance/Height Fog、EV、ACES White Point、Gamma，因此 Bloom 不重复曝光且远处光晕受雾衰减。其采样器槽位由 PostProcessRenderer 每帧完整声明为 Scene Color=0、Scene Depth=1、Fog Cubemap=2、Bloom=3；即使某个效果关闭也不让不同 GLSL sampler 类型依赖默认 slot 0，避免跨驱动的 Program Texture Usage 非法状态。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。天空深度被显式跳过。全部 Bloom/Fog/EV/White Point 参数只存在于 `PostProcessSettings` 运行时实例，并由 Editor Settings UI 编辑，不属于 Scene、Camera 或 Environment 序列化状态。
+Scene HDR Color 先按列表顺序通过自定义全分辨率 Pass，再进入 Bloom 软阈值提取；每个自定义 Pass 读取前一张 Color 与原始 Scene Depth，公共 `PostProcessABI.glslinc` 提供 Resolution、Time、Camera Position、Inverse ViewProjection 和采样/世界位置重建函数，用户入口固定为 `GlimmerPostProcess()`。Bloom 根据 EV 后亮度决定贡献但保留未曝光 Radiance，5 权重高斯模糊以水平/垂直 Ping-Pong 迭代。ToneMapping Pass 同时读取 Custom-resolved HDR Color、Bloom 与 Scene Depth；合成顺序固定为 Scene/Custom+Bloom、Distance/Height Fog、EV、ACES White Point、Gamma，因此 Bloom 不重复曝光且远处光晕受雾衰减。其采样器槽位由 PostProcessRenderer 每帧完整声明为 Scene Color=0、Scene Depth=1、Fog Cubemap=2、Bloom=3；即使某个效果关闭也不让不同 GLSL sampler 类型依赖默认 slot 0，避免跨驱动的 Program Texture Usage 非法状态。高度项沿 Camera→Fragment 射线解析积分指数密度，而非只采样终点高度。雾色可使用手动线性色、当前 SkyLight Cubemap 的方向性低 Mip 或首个启用 DirectionalLight 的 Color×Intensity；缺失来源回退手动色。天空深度被显式跳过。全部内置参数与自定义 Pass 列表只存在于编辑器会话运行时，并由 Editor Settings UI 编辑，不属于 Scene、Camera 或 Environment 序列化状态。
 
 ### 5.4 光照、PBR、天空盒与地形
 
@@ -391,7 +391,7 @@ EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel �
 | --- | --- |
 | `SceneHierarchyPanel` | 枚举 Scene 实体、选择、创建/复制/删除入口 |
 | `InspectorPanel` | 根据 SelectionType 绘制 Entity Components 或 Asset 属性；TerrainMaterial 提供四层贴图/PBR/混合参数及显式保存/重载 |
-| `ContentBrowserPanel` | 目录树、单一文件区滚动容器、可缩放紧凑列表/方形网格、矢量文件类型图标、稳定排序、资产选择、拖放和双击打开；显示缩放只属于面板运行时状态 |
+| `ContentBrowserPanel` | 目录树、单一文件区滚动容器、可缩放紧凑列表/方形网格、矢量文件类型图标、稳定排序、资产选择、Post Process Shader 模板创建、拖放和双击打开；显示缩放只属于面板运行时状态 |
 | `ShaderPanel` | ShaderLibrary 自动/手动重载与结果显示 |
 | `DebugPanel` | 通用诊断入口；展示 Renderer3D 概览并托管可扩展的临时测试工具 |
 | `InstancingLabTool` | 生成隔离 ECS 压力/阴影视觉场景，对照 Renderer3D 统计；自动轮换 CSM 配置并汇总唯一 GPU Timer 样本；管理相机框选、代表实体选择和清理 |
@@ -443,7 +443,7 @@ sequenceDiagram
     Editor->>FBO: End Scene Pass
     Editor->>Assets: 解析 SkyLight Cubemap
     Editor->>Post: HDR Color/Depth + Camera + Light Inputs
-    Post->>Post: Bloom + Fog + EV + ACES + Gamma
+    Post->>Post: Custom HDR Passes + Bloom + Fog + EV + ACES + Gamma
     Post-->>Editor: Display Texture
 ```
 
@@ -469,6 +469,7 @@ flowchart LR
 - 持久资源使用 AssetHandle，实体长期身份使用 UUID，临时 EnTT ID 只用于当前 Scene 与拾取；
 - 正式场景参数应组件化或资源化；编辑器面板通过上下文和命令接口修改数据，不拥有 Application/Scene 生命周期，独立测试 Panel 仅用于诊断；
 - `EditorLayer` 只负责 Scene、Scene Framebuffer、Camera、后处理输入和面板的生命周期编排，不承载 Bloom/Tone Mapping、Terrain、IBL 或环境模拟算法及其正式业务状态；
+- 自定义后处理 Shader 必须消费 `PostProcessABI.glslinc`，由 `PostProcessRenderer` 在 HDR Scene Color 与 Bloom/Tone Mapping 之间按列表顺序执行；Pass 不得原地读写同一颜色纹理，当前列表是会话状态而非 Scene 资产；
 - 新的编辑器属性修改应同时考虑 Undo/Redo、Edit/Play 隔离、序列化和保存失败路径；
 - 新增 3D Shader 必须遵守 `Opaque / Mask / Blend` 契约；若声明支持 AlphaMode，需要消费 `u_AlphaMode`、`u_AlphaCutoff` 并保持 Mask/Blend 的深度和 EntityID 语义。透明对象仍不得进入现有 Opaque Instancing；
 - 已实现的有限次 Authoring Erosion 只由 Terrain Dirty/Regenerate 触发；P13A～P13C CPU/GPU Hydrology 使用独立状态集、固定步长调度器、GPU Height/Water/Sediment Ping-Pong、只读 Capacity/Saturation 派生场和局部质量交换。Runtime Height 不序列化、不隐式 Bake，也不能复用或隐式推进 Authoring 管线；
@@ -476,7 +477,7 @@ flowchart LR
 - GPU 环境模拟应使用固定时间步和明确的 Ping-Pong 资源所有权，禁止无保护地读写同一纹理，也不得依赖每帧 GPU Readback 驱动主流程；
 - README 记录功能建设过程，ARCHITECTURE 记录当前事实，PROJECT_STATUS 记录下一步执行顺序，三者不要互相替代。
 
-近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已完成 P11；Depth 重建的距离/高度雾、环境关联雾色、EV/ACES White Point 与半分辨率 Bloom 已完成 P12，并由 P12.1 收拢到引擎侧 `PostProcessRenderer`。P13A～P13C 已完成 CPU/GPU Water、Flux、Velocity、Sediment、Capacity/Saturation、Runtime Erosion/Deposition、Height/Sediment Ping-Pong、运行时派生图刷新、组合质量统计、Reset 和受控 GPU Contract；显式 Terrain Bake 仍未实现，运行时模拟结果保持非持久化。Metallic/Roughness Texture/ORM、局部场景反射、连续几何 Morph、动态 Chunk 层级和气候环境模拟目前同样是未实现或未完整实现的后续能力。TAA 尚未实现：当前没有投影 Jitter、Previous ViewProjection、Velocity Attachment、Previous Transform、HDR History、Disocclusion/Clamp 或 Reactive Mask；不得把单纯历史颜色混合描述为已支持。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
+近期架构演进顺序以 `Documents/PROJECT_STATUS.md` 为唯一来源。3D Instancing、MaterialInstance 缓存、Transparent RenderQueue、AlphaMode、PBR Normal/AO/Emissive 通道、无窗口回归入口、Terrain 生命周期/Inspector 事务、山脉生成/派生图/有限次 Authoring Erosion、TerrainMaterial 四层 Triplanar PBR、Terrain Top-2/距离质量采样，带平滑过渡、保守剔除、运行时调试着色、Alpha Mask、Model Instancing、GPU 计时和明确 Blend 跳过策略的 1～4 级方向光 CSM，以及 HDR 环境 Cubemap、完整普通 Mip Chain、Diffuse Irradiance、Specular Prefilter 和 BRDF LUT 已经落地；Terrain 固定 `3×3` Chunk、Color/Shadow Chunk 剔除、三档距离 LOD、迟滞、相邻级差约束和 Skirt 遮缝已完成 P11；Depth 重建的距离/高度雾、环境关联雾色、EV/ACES White Point 与半分辨率 Bloom 已完成 P12，并由 P12.1 收拢到引擎侧 `PostProcessRenderer`。后处理已进一步具备公共 GLSL ABI、全分辨率 HDR Ping-Pong 和编辑器有序 Pass 栈，但 Pass 配置仍为会话状态。P13A～P13C 已完成 CPU/GPU Water、Flux、Velocity、Sediment、Capacity/Saturation、Runtime Erosion/Deposition、Height/Sediment Ping-Pong、运行时派生图刷新、组合质量统计、Reset 和受控 GPU Contract；显式 Terrain Bake 仍未实现，运行时模拟结果保持非持久化。Metallic/Roughness Texture/ORM、局部场景反射、连续几何 Morph、动态 Chunk 层级和气候环境模拟目前同样是未实现或未完整实现的后续能力。TAA 尚未实现：当前没有投影 Jitter、Previous ViewProjection、Velocity Attachment、Previous Transform、HDR History、Disocclusion/Clamp 或 Reactive Mask；不得把单纯历史颜色混合描述为已支持。Vulkan 后端继续保持接口预埋状态，不阻塞当前 OpenGL 主线。
 
 ## 12. 文档同步边界
 

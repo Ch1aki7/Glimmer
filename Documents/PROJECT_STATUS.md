@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-09-09
+- 最近更新：2026-09-10
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -139,6 +139,15 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-09-10：自定义后处理 Shader ABI 与实时 Pass 栈
+
+- 按用户显式调整的优先级，在 P14 中途插入并完成自定义后处理基础能力；新增 `PostProcessVertexABI.glslinc` 与 `PostProcessABI.glslinc`，统一全屏顶点、HDR Scene Color、Scene Depth、Viewport Resolution、Time、Camera Position 与 Inverse ViewProjection，并提供场景采样、深度采样和世界位置重建辅助函数；用户 Shader 只需实现 `GlimmerPostProcess()`；
+- `PostProcessRenderer` 新增可启用、排序、移除的自定义 Pass 列表，在 Scene HDR Color 之后、Bloom/Tone Mapping 之前用两张全分辨率 `RGBA16F` Framebuffer Ping-Pong；资源按首个 Pass 按需创建，在最后一个 Pass 移除时释放，内置 Bloom/Tone Mapping 也改用实际目标分辨率而非窗口尺寸；
+- Settings 新增自定义后处理列表和 `.glsl` 拖放入口，Content Browser 新增 Post Process Shader 创建模板；自定义 Shader 注册进共享 `ShaderLibrary`，继续支持主文件和递归 Include 热重载；`PostProcess` 示例集现包含 Pixelate、Vignette、Chromatic Aberration、Wave Distortion、Depth Outline 与 Film Grain；
+- 修正尖括号 Shader Include 根目录：位于任意 `assets/shaders` 子目录的 Shader 均能通过 `<Glimmer/...>` 引用稳定 ABI；新增 `GLIMMER_POST_PROCESS_VALIDATE=1` 自动验证入口；
+- 当前 Pass 栈属于编辑器会话运行时状态，不写入 Scene YAML，也尚无参数反射、History/Velocity/Normal 输入、阶段选择或 Render Graph；P14 当前主线保持不变；
+- 验证：VS2026 `Debug | x64` 编辑器与回归工程构建成功，无窗口回归全部 PASS；GTX 1050 / OpenGL 4.6 下六个示例与递归 ABI Include 均编译成功，六级自定义 Pass 链连续渲染 5 帧后正常自动退出；`git diff --check` 通过；提交：待提交。
 
 ### 2026-09-09：Content Browser 连续缩放与紧凑列表
 

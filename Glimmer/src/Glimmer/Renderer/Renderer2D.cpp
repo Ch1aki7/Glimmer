@@ -485,6 +485,16 @@ namespace gl {
 	}
 	void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader, float depth)
 	{
+		auto& window = gl::Application::Get().GetWindow();
+		DrawFullscreenQuad(shader, {
+			static_cast<float>(window.GetWidth()),
+			static_cast<float>(window.GetHeight())
+		}, depth);
+	}
+
+	void Renderer2D::DrawFullscreenQuad(const Ref<Shader>& shader,
+		const glm::vec2& resolution, float depth)
+	{
 		GL_PROFILE_FUNCTION();
 
 		if (s_Data.QuadIndexCount >= Renderer2DData::MaxIndices)
@@ -501,10 +511,9 @@ namespace gl {
 
 		shader->UploadUniformMat4("u_Transform", transform);
 
-		// 自动上传时间、分辨率等基础参数 (保持不变)
+		// Fullscreen Shader ABI shared by post-process and procedural passes.
 		shader->UploadUniformFloat("u_Time", s_Data.CameraBuffer.Time);
-		auto& window = gl::Application::Get().GetWindow();
-		shader->UploadUniformFloat2("u_Resolution", { (float)window.GetWidth(), (float)window.GetHeight() });
+		shader->UploadUniformFloat2("u_Resolution", resolution);
 
 		s_Data.FullscreenVertexArray->Bind();
 		RenderCommand::DrawIndexed(s_Data.FullscreenVertexArray, 6);
@@ -514,12 +523,21 @@ namespace gl {
 
 	void Renderer2D::DrawPostProcess(const Ref<Shader>& shader, uint32_t inputTextureID)
 	{
+		auto& window = gl::Application::Get().GetWindow();
+		DrawPostProcess(shader, inputTextureID, {
+			static_cast<float>(window.GetWidth()),
+			static_cast<float>(window.GetHeight())
+		});
+	}
+
+	void Renderer2D::DrawPostProcess(const Ref<Shader>& shader,
+		uint32_t inputTextureID, const glm::vec2& resolution)
+	{
 		shader->Bind();
-		// 假设后期 Shader 里的采样器变量名统一叫 "u_SceneTexture"
+		// Stable input name for fullscreen post-process shaders.
 		shader->BindTexture("u_SceneTexture", 0, inputTextureID);
 
-		// 调用之前写好的全屏绘制逻辑
-		DrawFullscreenQuad(shader, 0.0f);
+		DrawFullscreenQuad(shader, resolution, 0.0f);
 	}
 
 	void Renderer2D::ResetStats()
