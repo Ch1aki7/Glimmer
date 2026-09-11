@@ -1,6 +1,6 @@
 # Glimmer 项目架构说明
 
-> 本文最近于 2026-08-19 对照当前源码同步，只描述已经落地的结构与数据流。
+> 本文最近于 2026-09-11 对照当前源码同步，只描述已经落地的结构与数据流。
 > 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
 ## 1. 项目定位与当前边界
@@ -12,7 +12,7 @@ Glimmer 是一个面向 Windows 的 C++17 图形/游戏引擎实验项目。核�
 - 唯一可运行的图形后端是 OpenGL；Vulkan、SPIR-V 只完成枚举、接口和依赖预埋；
 - 当前主要开发宿主是 `GlimmerEditor-CyouBranch`，它包含完整场景编辑、资产浏览、材质、地形和多 Pass 视口链路；
 - `GlimmerEditor` 保留较早的编辑器/渲染演示实现，不代表当前完整编辑器架构；
-- `Sandbox` 用于基础引擎与 Renderer2D 示例验证，也是 Premake 默认启动项目；
+- `Sandbox` 用于基础引擎与 Renderer2D 示例验证；Premake 默认启动项目是主要开发宿主 `GlimmerEditor-CyouBranch`；
 - 场景和资产以 YAML 描述文件持久化，实体与资产分别使用稳定 UUID/AssetHandle；
 - 3D 模型按 Opaque/Mask/Blend 分类；Opaque/Mask 使用状态排序与 Instancing，Blend 在 Skybox 后按距离反向排序并普通绘制。
 
@@ -52,18 +52,20 @@ Glimmer 是一个面向 Windows 的 C++17 图形/游戏引擎实验项目。核�
 
 ## 3. 构建系统与项目图
 
-构建系统采用 Premake5，工作区为 `GlimmerEngine`，架构为 `x64`，配置包括 `Debug`、`Release`、`Dist`。当前跨设备验证基线是 Visual Studio 2026、MSVC `v145`、`Debug | x64`；仓库仍保留 VS2022 生成脚本用于兼容性尝试，但不是当前验证基线。
+构建系统采用 Premake5，工作区为 `GlimmerEngine`，架构为 `x64`，配置包括 `Debug`、`Release`、`Dist`，默认启动项目为主要开发宿主 `GlimmerEditor-CyouBranch`。当前跨设备验证基线是 Visual Studio 2026、MSVC `v145`、`Debug | x64`；仓库仍保留 VS2022 生成脚本用于兼容性尝试，但不是当前验证基线。根 `premake5.lua` 是唯一工作区入口，`scripts/premake/Dependencies.lua` 是主仓库拥有的第三方构建适配层；Git 子模块只提供固定版本源码，不拥有 Glimmer 构建定义。
 
 ```mermaid
 flowchart LR
-    Premake["premake5.lua"] --> Engine["Glimmer (StaticLib)"]
+    Premake["premake5.lua"] --> Adapters["scripts/premake/Dependencies.lua"]
+    Adapters --> Deps["GLFW / Glad / ImGui / yaml-cpp / ImGuizmo / SPIRV-Cross"]
+    Premake --> Engine["Glimmer (StaticLib)"]
     Premake --> Sandbox["Sandbox"]
     Premake --> Legacy["GlimmerEditor"]
     Premake --> Editor["GlimmerEditor-CyouBranch"]
     Sandbox --> Engine
     Legacy --> Engine
     Editor --> Engine
-    Engine --> Deps["GLFW / Glad / ImGui / yaml-cpp / ImGuizmo"]
+    Engine --> Deps
     Engine --> HeaderDeps["GLM / EnTT / spdlog / stb_image / tinyobjloader"]
 ```
 
@@ -72,11 +74,11 @@ flowchart LR
 - `scripts/Win-GenerateProject-vs2026.bat`：当前使用的 VS2026 工程；
 - `scripts/Win-GenerateProject-vs2022.bat`：生成 VS2022 工程；
 - 生成产物位于 `bin/<配置>-windows-x86_64/<项目名>/`；
-- 中间产物位于 `bin-int/<配置>-windows-x86_64/<项目名>/`。
+- 中间产物位于 `bin-int/<配置>-windows-x86_64/<项目名>/`；生成的依赖工程位于 `bin-int/projects/Dependencies/<项目名>/`。
 
 所有三个可执行宿主都编译共享的 `resources/windows/Glimmer.rc`，从 `resources/branding/Glimmer.ico` 获取 Windows 应用图标。
 
-第三方项目由根 Premake 纳入 `Dependencies` 分组。SPIRV-Cross 的上游 Premake 会递归加入 samples/tests，根配置使用 `removefiles` 排除这些非引擎目标。
+第三方项目由 `scripts/premake/Dependencies.lua` 纳入根工作区的 `Dependencies` 分组。适配层使用主仓库绝对根解析子模块源码，并显式排除 SPIRV-Cross 的 CLI、samples 与 tests；它不依赖或修改子模块内的未跟踪 `premake5.lua`。`Verify-Windows` 在生成前校验子模块 Git 标记、代表性源码、适配层和内置 Premake，再由 Assimp Ensure 处理必须通过上游 CMake 生成的 `config.h` 与静态库。完整验证默认单节点调用 MSBuild，并在子进程环境中折叠大小写重复的 `PATH`；并行度是显式覆盖项，不属于项目图语义。
 
 ## 4. 应用生命周期、平台与事件
 
@@ -354,7 +356,7 @@ flowchart LR
 
 `GlimmerRegressionTests` 是独立 ConsoleApp，链接 Glimmer 静态库但不创建 Application、Window、Renderer 或 OpenGL Context。它直接覆盖纯数据和持久化边界：Material/TerrainMaterial YAML、MaterialInstance Override 合并、OBJ/FBX 到 MeshSource 的 CPU 导入、固定 UUID Scene YAML 与 `FindEntityByUUID` 索引恢复，以及 Terrain Specification（含 TerrainMaterialHandle）往返、Runtime 非持久化、实体/Scene 复制隔离、CommandHistory Undo/Redo 和五类 Terrain Preset 的确定性/参数边界。测试目标直接编译编辑器的 `EditorCommand.cpp` 与 `EditorScenePreferences.cpp`，复用真实命令栈并验证场景写入失败、会话路径、Version 1 兼容、项目/逐场景相机隔离、非法相机状态与清除语义；引擎侧回归还验证 EditorCamera 状态范围及 Layer 逆序幂等卸载，但不创建 EditorLayer 或面板运行时。通常测试文件只创建在系统临时目录并由进程生命周期清理；Cerberus FBX 测试会向上查找仓库根并使用版本化 `assets/models/Cerberus` 样本，缺失时明确失败，不再依赖或静默跳过本机 `tmp`。测试 Debug 配置关闭增量链接，避免静态依赖更新后复用损坏的 `.ilk`。
 
-根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，使用显式 ExecutionPolicy 调用 `Verify-Windows.ps1`；PowerShell 实现负责检查已初始化的递归子模块、重新生成工程、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
+根 Premake 将该目标与编辑器、Sandbox 一同写入 VS2026 `GlimmerEngine.slnx`。`scripts/Verify-Windows.bat` 是无暂停入口，优先调用 PowerShell 7 并回退 Windows PowerShell；PowerShell 实现负责检查已初始化且内容完整的递归子模块、检查主仓库构建适配输入、重新生成工程、确保 Assimp 产物、构建完整 `Debug | x64` 解决方案并执行测试二进制。测试执行器聚合断言并以进程退出码表达结果，因此调用脚本和后续 CI 不需要解析编辑器日志即可判断成功或失败；`--force-failure` 只用于验证非零退出传播。
 
 该目标不替代需要 GPU/窗口的 DebugPanel Lab。Instancing/PBR 等 Lab 继续验证真实渲染统计和 Shader 行为，并保持临时 Scene 不写入 `m_EditorScene`；无窗口目标只承担可确定、无需图形上下文的状态与序列化回归。
 

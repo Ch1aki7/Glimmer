@@ -1,6 +1,6 @@
 workspace "GlimmerEngine"
     architecture "x64"
-    startproject "Sandbox"
+    startproject "GlimmerEditor-CyouBranch"
 
     configurations {
         "Debug",
@@ -52,21 +52,7 @@ else
 end
 
 group "Dependencies"
-include "Glimmer/vendor/GLFW"
-include "Glimmer/vendor/Glad"
-include "Glimmer/vendor/imgui"
-include "Glimmer/vendor/yaml-cpp"
-include "Glimmer/vendor/ImGuizmo"
-include "Glimmer/vendor/SPIRV-Cross"
-
--- The upstream SPIRV-Cross Premake script recursively includes standalone
--- samples and tests. They are not part of the engine's static library.
-project "SPIRV-Cross"
-    removefiles {
-        "Glimmer/vendor/SPIRV-Cross/samples/**",
-        "Glimmer/vendor/SPIRV-Cross/tests/**",
-        "Glimmer/vendor/SPIRV-Cross/tests-other/**"
-    }
+dofile "scripts/premake/Dependencies.lua"
 group ""
 
 include "Glimmer"

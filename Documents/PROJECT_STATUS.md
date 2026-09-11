@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-09-10
+- 最近更新：2026-09-11
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -139,6 +139,15 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-09-11：纯净 Clone 的 Windows 构建自举
+
+- 定位新目录构建失败的根因：GLFW、ImGui、yaml-cpp、ImGuizmo 与 SPIRV-Cross 的 Glimmer 专用 `premake5.lua` 只存在于旧工作树的子模块未跟踪文件中，上游固定提交并不包含它们；纯净 clone 即使完成 `git submodule update --init --recursive`，根 Premake 仍无法包含这些本机文件；
+- 新增主仓库受控的 `scripts/premake/Dependencies.lua`，集中定义 GLFW、Glad、ImGui、yaml-cpp、ImGuizmo 与 SPIRV-Cross 静态库项目；子模块仅提供源码，生成的依赖 `.vcxproj` 统一进入被忽略的 `bin-int/projects/Dependencies`，不再把构建适配层或工程文件写入第三方工作树；删除 Glad 目录中的旧适配脚本，根 Premake 只保留一个依赖适配入口；
+- `Verify-Windows` 在生成前检查十个递归子模块的 `.git` 与代表性源码，并检查根 Premake、主仓库依赖适配层、Glad 源码和内置 Premake；缺失时给出“初始化子模块”或“恢复主仓库文件”的区分诊断；BAT 优先使用 PowerShell 7、回退 Windows PowerShell；MSBuild 子进程只保留一个规范化 `PATH`；
+- README 开头新增新设备构建与启动项目指引；根工作区默认启动项目由示例 `Sandbox` 调整为主要开发宿主 `GlimmerEditor-CyouBranch`，并说明 Sandbox、旧编辑器和无窗口回归目标的用途；旧 `tmp` 第三方 Premake 备份已移除，不影响仍保留作算法参考的 `tmp/tmpTerrain`；
+- 新设备验证默认使用单节点 MSBuild，避开 VS2026 多节点重新传播 `PATH/Path` 时的 MSB6001；可通过 `-BuildJobs <1..32>` 显式提高并行度；P14 当前主线保持不变；
+- 验证：从根适配层重新生成 `GlimmerEngine.slnx`，解决方案引用 `bin-int/projects/Dependencies` 下六个依赖工程且不引用子模块内工程，并将 `GlimmerEditor-CyouBranch` 标记为 `DefaultStartup`；PowerShell 7 的完整 `scripts\Verify-Windows.bat` 与规范化环境下的 Windows PowerShell 5.1 回退路径均返回 0，`Debug | x64` 完整解决方案成功构建；删除备份并调整默认项目后再次执行生成与全部无窗口回归，结果 PASS；提交：待提交。
 
 ### 2026-09-10：自定义后处理 Shader ABI 与实时 Pass 栈
 

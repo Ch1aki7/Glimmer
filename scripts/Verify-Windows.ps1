@@ -1,5 +1,7 @@
 param(
     [string]$MSBuildPath = "",
+    [ValidateRange(1, 32)]
+    [int]$BuildJobs = 1,
     [switch]$SkipGenerate,
     [switch]$SkipBuild,
     [switch]$ForceTestFailure
@@ -47,33 +49,92 @@ function Find-MSBuild {
     throw 'MSBuild.exe was not found. Install Visual Studio 2026 Desktop development with C++, or pass -MSBuildPath.'
 }
 
-function Assert-BuildSubmodulesInitialized {
-    $requiredSubmodules = @(
-        'Glimmer\vendor\spdlog',
-        'Glimmer\vendor\GLFW',
-        'Glimmer\vendor\imgui',
-        'Glimmer\vendor\glm',
-        'Glimmer\vendor\assimp',
-        'Glimmer\vendor\entt',
-        'Glimmer\vendor\yaml-cpp',
-        'Glimmer\vendor\ImGuizmo',
-        'Glimmer\vendor\Vulkan-Headers',
-        'Glimmer\vendor\SPIRV-Cross'
+function Invoke-MSBuildWithNormalizedEnvironment {
+    param(
+        [string]$Executable,
+        [string[]]$Arguments
     )
 
-    foreach ($relativePath in $requiredSubmodules) {
-        $submodulePath = Join-Path $repoRoot $relativePath
+    # Some launchers expose both PATH and Path. MSBuild treats that raw process
+    # environment block as invalid (MSB6001), even though PowerShell normally
+    # hides the duplicate. Build a child environment with one canonical PATH.
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $Executable
+    $startInfo.WorkingDirectory = $repoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.Environment.Clear()
+    foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+        if ($entry.Key -ine 'Path') {
+            $startInfo.Environment[$entry.Key] = [string]$entry.Value
+        }
+    }
+    $startInfo.Environment['PATH'] = $env:PATH
+
+    if ($startInfo.PSObject.Properties.Name -contains 'ArgumentList') {
+        foreach ($argument in $Arguments) {
+            [void]$startInfo.ArgumentList.Add($argument)
+        }
+    } else {
+        $escapedArguments = foreach ($argument in $Arguments) {
+            if ($argument -match '[\s"]') {
+                '"' + $argument.Replace('"', '\"') + '"'
+            } else {
+                $argument
+            }
+        }
+        $startInfo.Arguments = $escapedArguments -join ' '
+    }
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) {
+        throw "MSBuild failed with exit code $($process.ExitCode)."
+    }
+}
+
+function Assert-BuildInputsAvailable {
+    $requiredSubmodules = @(
+        @{ Path = 'Glimmer\vendor\spdlog'; Sentinel = 'include\spdlog\spdlog.h' },
+        @{ Path = 'Glimmer\vendor\GLFW'; Sentinel = 'include\GLFW\glfw3.h' },
+        @{ Path = 'Glimmer\vendor\imgui'; Sentinel = 'imgui.cpp' },
+        @{ Path = 'Glimmer\vendor\glm'; Sentinel = 'glm\glm.hpp' },
+        @{ Path = 'Glimmer\vendor\assimp'; Sentinel = 'CMakeLists.txt' },
+        @{ Path = 'Glimmer\vendor\entt'; Sentinel = 'src\entt\entt.hpp' },
+        @{ Path = 'Glimmer\vendor\yaml-cpp'; Sentinel = 'src\node.cpp' },
+        @{ Path = 'Glimmer\vendor\ImGuizmo'; Sentinel = 'src\ImGuizmo.cpp' },
+        @{ Path = 'Glimmer\vendor\Vulkan-Headers'; Sentinel = 'include\vulkan\vulkan.h' },
+        @{ Path = 'Glimmer\vendor\SPIRV-Cross'; Sentinel = 'spirv_cross.cpp' }
+    )
+
+    foreach ($dependency in $requiredSubmodules) {
+        $submodulePath = Join-Path $repoRoot $dependency.Path
         $submoduleGitMarker = Join-Path $submodulePath '.git'
         if (-not (Test-Path -LiteralPath $submodulePath -PathType Container) -or
             -not (Test-Path -LiteralPath $submoduleGitMarker)) {
-            throw "Uninitialized build submodule: $relativePath. Run: git submodule update --init --recursive"
+            throw "Uninitialized build submodule: $($dependency.Path). Run: git submodule update --init --recursive"
+        }
+        $sentinelPath = Join-Path $submodulePath $dependency.Sentinel
+        if (-not (Test-Path -LiteralPath $sentinelPath -PathType Leaf)) {
+            throw "Incomplete build submodule: $($dependency.Path) is missing $($dependency.Sentinel). Run: git submodule update --init --recursive --force"
+        }
+    }
+
+    $repositoryOwnedInputs = @(
+        'premake5.lua',
+        'scripts\premake\Dependencies.lua',
+        'Glimmer\vendor\Glad\src\glad.c',
+        'vendor\bin\premake\premake5.exe'
+    )
+    foreach ($relativePath in $repositoryOwnedInputs) {
+        $inputPath = Join-Path $repoRoot $relativePath
+        if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) {
+            throw "Missing repository build input: $relativePath. Restore tracked files before generating projects."
         }
     }
 }
 
 Push-Location $repoRoot
 try {
-    Assert-BuildSubmodulesInitialized
+    Assert-BuildInputsAvailable
 
     if (-not $SkipGenerate) {
         $premake = Join-Path $repoRoot 'vendor\bin\premake\premake5.exe'
@@ -95,10 +156,15 @@ try {
         } else {
             'GlimmerEngine.sln'
         }
-        Invoke-Checked "Build $solution (Debug | x64)" {
-            & $resolvedMSBuild $solution '/t:Build' `
-                '/p:Configuration=Debug' '/p:Platform=x64' '/m:4' '/v:minimal'
-        }
+        Write-Host "==> Build $solution (Debug | x64)"
+        Invoke-MSBuildWithNormalizedEnvironment $resolvedMSBuild @(
+            $solution,
+            '/t:Build',
+            '/p:Configuration=Debug',
+            '/p:Platform=x64',
+            "/m:$BuildJobs",
+            '/v:minimal'
+        )
     }
 
     $testExecutable = Join-Path $repoRoot `

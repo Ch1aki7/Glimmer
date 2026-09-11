@@ -1,5 +1,24 @@
 # Glimmer
 
+## 构建与启动
+
+Windows 新设备需要安装 Visual Studio 2026，并勾选“使用 C++ 的桌面开发”。Clone 仓库后，在仓库根目录依次运行：
+
+```powershell
+git submodule update --init --recursive
+.\scripts\Verify-Windows.bat
+```
+
+验证脚本会检查递归子模块，按需构建 Assimp，生成 `GlimmerEngine.slnx`，构建 `Debug | x64` 并运行无窗口回归测试。首次构建默认使用单个 MSBuild 节点以兼容可能同时存在 `PATH` 与 `Path` 的 Windows 启动环境；确认本机环境正常后，可以用 `.\scripts\Verify-Windows.bat -BuildJobs 4` 提高并行度。
+
+生成后的默认启动项目是 `GlimmerEditor-CyouBranch`，它也是当前完整功能的主要开发入口。在 Visual Studio 中打开 `GlimmerEngine.slnx` 后可直接按 F5。其他可执行项目按用途选择：
+
+- `Sandbox`：较小的引擎示例与 Renderer2D 测试；
+- `GlimmerEditor`：保留的另一套编辑器宿主；
+- `GlimmerRegressionTests`：不创建窗口或 OpenGL Context 的 CPU 回归程序。
+
+若希望生成解决方案时默认选择其他宿主，修改根目录 `premake5.lua` 中的 `startproject`，再运行 `scripts\Win-GenerateProject-vs2026.bat` 重新生成。`Glimmer` 和第三方依赖是静态库，不应设置为启动项目。
+
 ## 项目概览
 
 Glimmer 是我用 C++17 一点点搭出来的图形与游戏引擎。刚开始时，我只是想弄清楚一个引擎怎样接管程序入口、维持主循环，再把第一个三角形送上屏幕。写到现在，项目里已经有了 Scene/ECS、资产与材质系统、2D/3D 渲染、编辑器，还有程序化地形、水文和简化气候模拟。回头看，这些东西几乎都不是事先规划好的，多半是旧代码真的撑不住下一个功能时，才被迫补上的。
@@ -1620,7 +1639,7 @@ project "MyApp"
     links { "Glimmer" }
 ```
 
-项目脚本完成后，还要在根 `premake5.lua` 中加入 `include "MyApp"`。根工作区当前的 `startproject` 仍是 Sandbox；如果希望生成解决方案后直接启动新程序，需要同步修改它，或者在 Visual Studio 中手动设置启动项目。
+项目脚本完成后，还要在根 `premake5.lua` 中加入 `include "MyApp"`。根工作区当前的 `startproject` 是 `GlimmerEditor-CyouBranch`；如果希望生成解决方案后直接启动新程序，需要同步修改它，或者在 Visual Studio 中手动设置启动项目。
 
 客户端入口很薄。它继承 `Application`，压入自己的 Layer，并实现引擎约定的 `CreateApplication()`。`EntryPoint.h` 会提供真正的 `main`，所以它只能出现在这个入口翻译单元中。
 
@@ -3434,6 +3453,18 @@ git submodule update --init --recursive
 ```
 
 脚本会检查子模块和 Assimp Debug 产物，缺失时补建依赖；随后运行 Premake VS2026、构建 `GlimmerEngine.slnx` 的 `Debug | x64`，最后执行测试程序。`.bat` 没有 `pause`，并原样传播 PowerShell、MSBuild 或测试进程的退出码，终端和后续 CI 都能直接判断结果。
+
+第三方库的 Premake 项目定义不再放在子模块目录。GLFW、ImGui、yaml-cpp、ImGuizmo 和 SPIRV-Cross 的上游提交没有 Glimmer 使用的 `premake5.lua`；旧设备之所以能生成，是因为这些脚本只是子模块工作树中的未跟踪文件，纯净 clone 不会得到它们。现在六个编译型依赖统一由主仓库的 `scripts/premake/Dependencies.lua` 描述，子模块只负责源码版本。生成的依赖工程位于 `bin-int/projects/Dependencies`，不会让第三方工作树因 Glimmer 的工程文件而变脏。
+
+生成前的预检会分别报告两类问题：子模块未初始化或内容不完整时提示重新执行 `git submodule update --init --recursive`；根 Premake、依赖适配层、Glad 源码或内置 Premake 缺失时提示恢复主仓库文件。Assimp 仍是例外：它需要上游 CMake 生成 `config.h` 和静态库，因此继续由独立 Ensure 脚本按配置自修复，不进入 Premake 源码项目。
+
+验证构建默认使用单节点 MSBuild，并为子进程重建只有一个 `PATH` 的环境。原因是部分启动器会同时注入 `PATH` 与 `Path`，VS2026 的 C++ ToolTask 会因此抛出 MSB6001；多节点还可能重新传播这组冲突变量。首次初始化优先保证可复现性，确认本机环境正常后可显式提高并行度：
+
+```powershell
+.\scripts\Verify-Windows.bat -BuildJobs 4
+```
+
+BAT 优先使用 PowerShell 7，未安装时回退系统 Windows PowerShell；两种入口使用相同验证逻辑。
 
 已经生成并构建过工程时，可以只跑测试：
 
