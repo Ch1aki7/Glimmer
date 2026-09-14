@@ -342,21 +342,24 @@ private:
 };
 ```
 
-`Application::OnEvent()` 会先处理窗口关闭。随后事件从 LayerStack 顶部向下传递，让 UI 和其他 Overlay 比场景层更早收到输入。某一层把 `Handled` 设为 `true` 后，循环立即停止。
+`Application::OnEvent()` 先把事件从 LayerStack 顶部向下传递，让 UI 和其他 Overlay 比场景层更早收到输入。某一层把 `Handled` 设为 `true` 后，循环立即停止；未被消费的窗口关闭事件最后才交给 Application。这使编辑器可以先弹出未保存确认，而普通应用仍使用默认关闭行为。
 
 ```cpp
-EventDispatcher dispatcher(e);
-dispatcher.Dispatch<WindowCloseEvent>(
-    [this](WindowCloseEvent& event)
-    {
-        return OnWindowClose(event);
-    });
-
 for (auto it = m_LayerStack.end(); it != m_LayerStack.begin(); )
 {
     (*--it)->OnEvent(e);
     if (e.Handled)
         break;
+}
+
+if (!e.Handled)
+{
+    EventDispatcher dispatcher(e);
+    dispatcher.Dispatch<WindowCloseEvent>(
+        [this](WindowCloseEvent& event)
+        {
+            return OnWindowClose(event);
+        });
 }
 ```
 
@@ -504,7 +507,7 @@ gl::Window* gl::Window::Create(const WindowProps& props)
 
 ### WindowsWindow 做了什么
 
-`WindowsWindow` 保存 `GLFWwindow*`、窗口属性和一个 `GraphicsContext`。初始化时，它只调用一次 `glfwInit()`，创建窗口，然后建立 `OpenGLContext`。OpenGL 上下文负责把窗口设为当前上下文、通过 Glad 加载函数地址，并输出显卡信息。VSync 默认开启。
+`WindowsWindow` 保存 `GLFWwindow*`、窗口属性和一个 `GraphicsContext`。初始化时，它只调用一次 `glfwInit()`，创建窗口，然后建立 `OpenGLContext`。OpenGL 上下文负责把窗口设为当前上下文、通过 Glad 加载函数地址，并输出显卡信息。VSync 默认开启。公共 `Window::SetTitle()` 允许编辑器更新原生标题；Windows 实现缓存当前文本，内容实际变化时才调用 GLFW。
 
 每帧末尾，窗口只做两件事：处理系统消息，再交换缓冲区。
 
@@ -587,19 +590,13 @@ m_Window->SetEventCallback(
 
 这里的 Lambda 没有复杂技巧。它只是把 C++ 成员函数和 `Window` 保存的通用回调类型接在一起，比单独维护静态转发函数更容易读。
 
-`OnEvent()` 首先尝试分发窗口关闭事件。匹配成功后，`OnWindowClose()` 把 `m_Running` 设为 `false`，主循环会在当前帧结束后退出。
+`OnEvent()` 先逆序询问 Layer 是否处理事件。编辑器可消费窗口关闭并把它延期到未保存确认；没有 Layer 消费时，`OnWindowClose()` 才把 `m_Running` 设为 `false`，主循环会在当前帧结束后退出。
 
 ```cpp
 void Application::OnEvent(Event& event)
 {
-    EventDispatcher dispatcher(event);
-    dispatcher.Dispatch<WindowCloseEvent>(
-        [this](WindowCloseEvent& closeEvent)
-        {
-            return OnWindowClose(closeEvent);
-        });
-
-    // 随后按逆序交给 LayerStack，Handled 后停止传播
+    // 先按逆序交给 LayerStack，Handled 后停止传播
+    // 未处理的 WindowClose 最后交给 OnWindowClose
 }
 
 bool Application::OnWindowClose(WindowCloseEvent& event)
@@ -1955,11 +1952,15 @@ Terrain 只写 `TerrainSpecification`，包括生成参数、Authoring Erosion�
 
 反序列化在新 Scene 中进行，成功后 EditorLayer 才替换当前编辑场景，解析失败不会先清空原场景。Version 1 文件没有稳定实体 ID，加载时会生成新 UUID；Version 2 及以后恢复文件中的 UUID。后续字段主要靠 "存在则读取、缺失则保留结构默认值" 兼容，当前还没有独立的逐版本迁移器。
 
-New、Save、Save As 和 Open 同时出现在 File 菜单中，快捷键分别是 Ctrl+N、Ctrl+S、Ctrl+Shift+S 和 Ctrl+O。EditorLayer 记录当前 `.glimmer` 路径，因此 Ctrl+S 会直接保存已命名场景，只有新建场景才转入 Save As。保存临时 Debug Scene 会被阻止；Play 期间保存的仍是 `m_EditorScene`，不会把 Runtime Scene 改动写回磁盘。菜单、快捷键、内容浏览器双击和 Viewport 拖放都复用同一组 New/Open/Save 入口，打开成功后 Hierarchy、Inspector 和选择上下文一起切换。
+New、Save、Save As 和 Open 同时出现在 File 菜单中，快捷键分别是 Ctrl+N、Ctrl+S、Ctrl+Shift+S 和 Ctrl+O。EditorLayer 记录当前 `.glimmer` 路径，因此 Ctrl+S 会直接保存已命名场景，只有新建场景才转入 Save As；缺少扩展名时会自动补上 `.glimmer`。保存临时 Debug Scene 会被阻止；Play 期间保存的仍是 `m_EditorScene`，不会把 Runtime Scene 改动写回磁盘。菜单、快捷键、内容浏览器双击和 Viewport 拖放都复用同一组入口，打开成功后 Hierarchy、Inspector 和选择上下文一起切换。
+
+EditorLayer 保存一份最后成功写盘时的内存 YAML，并与当前 Scene 的真实可序列化内容比较。它不只看 Undo 栈，所以尚未进入 CommandHistory 的直接组件修改也能触发 Dirty。原生窗口标题采用 `场景名* - Glimmer Editor - Cyou Branch`：星号代表存在未保存内容，保存或撤销回最后保存状态后消失；未命名场景显示 `Untitled`，File 菜单仍显示普通 `Save`。执行 New、Open、双击/拖放另一场景、File Exit 或关闭原生窗口时都会在决策前强制复查，并提供 Save、Discard、Cancel。Save 失败时旧场景继续留在内存，待执行动作不会发生，界面会显示错误。
+
+磁盘写入不再直接截断目标文件。Serializer 先在同目录写 `.tmp` 并检查完整流状态；已有文件先转为 `.bak`，临时文件替换成功后才清理备份，替换失败则恢复旧文件。如果进程恰好在替换间隙中断，下一次加载或保存发现目标缺失时会用 `.bak` 自动恢复上一份有效场景，并清理未完成的 `.tmp`。只有整个过程成功，编辑器才清除 Dirty、更新当前路径与下次启动恢复记录。
 
 成功打开或保存后，编辑器会在用户配置目录的 `Glimmer/EditorScenePreferences.txt` 中记录项目根和规范化场景绝对路径。偏好 Version 2 还按场景保存最多 64 组 EditorCamera 的 FocalPoint、Distance、Pitch、Yaw，并兼容上一版只有场景路径的文件。下次启动仅在项目根匹配时恢复场景及其观察视角；文件丢失、格式损坏或首次启动时进入空场景，并清除失效记录。New 也会清除启动恢复目标，但保留已命名场景的视角历史。该机制不会隐式保存场景修改。普通启动不再硬编码创建 Sun、Point Light、Sky Light 和 Alpine Terrain；Terrain Benchmark/LOD 环境验证会单独创建自己的 Fixture，且不写入用户相机记录。
 
-无窗口回归会把场景写入临时目录，再检查固定 UUID、资产 Handle、Material Overrides 和 Terrain Specification 是否完整恢复，同时确认 Terrain Runtime 没有被持久化。它还验证 `Serialize()` 写入失败、Version 1 偏好兼容、项目与逐场景相机隔离、非法相机值拒绝、运行时范围约束、New 清除启动目标但保留相机历史，以及 Layer 卸载逆序幂等。保存目前仍直接覆盖目标文件，尚未采用临时文件替换；场景根节点也仍固定写 `Untitled`。编辑器尚无 Scene Dirty 状态和退出保存提示，因此自动恢复的场景内容代表最后一次成功保存/打开的磁盘版本，而相机视角代表上次切换或正常退出时的编辑器状态。
+无窗口回归会把场景写入临时目录，再检查固定 UUID、资产 Handle、Material Overrides 和 Terrain Specification 是否完整恢复，同时确认 Terrain Runtime 没有被持久化。它还验证内存快照能发现直接组件变更、已有文件安全替换后没有遗留 `.tmp/.bak`、替换中断能从备份恢复、不可写目标返回失败、Version 1 偏好兼容、项目与逐场景相机隔离、非法相机值拒绝、运行时范围约束、New 清除启动目标但保留相机历史，以及 Layer 卸载逆序幂等。当前尚未处理磁盘文件被外部程序同时修改时的冲突，场景根节点也仍固定写 `Untitled`；共享 Asset 的 Dirty 与退出提示仍属于另一条保存协议。
 
 ## 原生文件对话框 (Windows File Dialog)
 
@@ -2039,7 +2040,7 @@ ImGuizmo 返回的是完整变换矩阵，编辑器通过 `DecomposeMatrixToComp
 
 Transform 在生成矩阵时会用四元数组合 X、Y、Z 旋转，这让矩阵构造顺序更清楚，但组件里保存的仍是欧拉角，Gizmo 分解也会回到欧拉角。因此跨越角度边界时仍可能出现数值跳变，不能把这段处理理解成已经消除了万向节锁。
 
-还有一处更实际的缺口：Inspector 的连续拖动已经接入 `CommandHistory`，Gizmo 拖拽目前仍然直接修改 Transform。也就是说，用手柄完成的变换还不能通过 `Ctrl+Z` 还原。后续应在 `ImGuizmo::IsUsing()` 的开始和结束阶段保存前后快照，把一次连续拖拽合并成一条命令。
+Gizmo 与 Inspector 现在使用相同的事务边界：`ImGuizmo::IsUsing()` 第一次变为真时记录选中实体的 UUID、Scene 与完整 Transform，拖动期间继续直接写回以保持实时预览，释放后把最终 Transform 作为一条已经执行的 `ValueEditorCommand` 压入历史。移动、旋转和缩放都能通过 `Ctrl+Z`/`Ctrl+Y` 撤销与重做；没有产生数值变化的点击不会创建空命令，一次连续拖拽也不会按帧拆成多条命令。
 
 ## EditorCamera 编辑器自由相机
 

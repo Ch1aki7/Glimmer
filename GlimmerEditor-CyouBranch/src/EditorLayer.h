@@ -32,6 +32,15 @@ namespace gl {
 		bool OpenScene(const std::filesystem::path& path);
 		bool SaveScene();
 		bool SaveSceneAs();
+		void RequestNewScene();
+		void RequestOpenScene(const std::filesystem::path& path);
+		void RequestExit();
+		void ExecutePendingSceneAction();
+		void RenderUnsavedChangesModal();
+		void RenderSceneSaveError();
+		bool RefreshSceneDirtyState();
+		void CaptureSavedSceneState();
+		void UpdateWindowTitle();
 		bool RestoreLastScene();
 		void RememberCurrentScene() const;
 		void PersistEditorCameraState() const;
@@ -41,6 +50,7 @@ namespace gl {
 		void OnScenePlay();
 		void OnSceneStop();
 		void FocusSelectedEntity();
+		void FinishGizmoTransformEdit();
 
 	private:
 		ShaderLibrary m_ShaderLib;
@@ -65,6 +75,16 @@ namespace gl {
 		EditorCommandHistory m_CommandHistory;
 		SelectionContext m_SelectionContext;
 		ContentBrowserPanel m_ContentBrowser;
+		std::string m_SavedSceneSnapshot;
+		bool m_SceneDirty = false;
+		float m_NextDirtyCheckTime = 0.0f;
+
+		enum class PendingSceneAction { None = 0, New, Open, Exit };
+		PendingSceneAction m_PendingSceneAction = PendingSceneAction::None;
+		std::filesystem::path m_PendingScenePath;
+		bool m_OpenUnsavedChangesPopup = false;
+		std::string m_SceneSaveError;
+		std::string m_LastWindowTitle;
 
 		// 视口
 		glm::vec2 m_ViewportSize = { 0.0f, 0.0f };
@@ -73,6 +93,10 @@ namespace gl {
 
 		// Gizmos
 		int m_GizmoType = 0; // 0=Translate, 1=Rotate, 2=Scale
+		EditorValueTransaction<TransformComponent> m_GizmoTransformEdit;
+		Ref<Scene> m_GizmoEditScene;
+		UUID m_GizmoEditEntity{ 0 };
+		int m_GizmoEditType = 0;
 
 		// 场景状态
 		enum class SceneState { Edit = 0, Play = 1 };
@@ -81,6 +105,7 @@ namespace gl {
 		bool m_TerrainSamplingBenchmarkAutorun = false;
 		bool m_PostProcessValidationAutorun = false;
 		uint32_t m_PostProcessValidationFrames = 0;
+		bool m_UsesTerrainValidationScene = false;
 
 
 		// 设置灯光参数

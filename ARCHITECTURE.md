@@ -107,8 +107,8 @@ sequenceDiagram
 
 - `Application`：窗口、主循环、LayerStack、Renderer 和 ImGuiLayer 的生命周期协调；
 - `LayerStack`：普通 Layer 正序更新，Overlay 位于栈顶并优先接收逆序事件；
-- `Window`：平台无关接口，当前工厂创建 `WindowsWindow`；
-- `WindowsWindow`：创建 GLFW 窗口和 `OpenGLContext`，把 GLFW 回调转换为 Glimmer 事件；
+- `Window`：平台无关接口，当前工厂创建 `WindowsWindow`，并提供运行时标题更新；
+- `WindowsWindow`：创建 GLFW 窗口和 `OpenGLContext`，把 GLFW 回调转换为 Glimmer 事件，并通过 GLFW 应用新的原生窗口标题；
 - `EventDispatcher`：按事件类型分派并用 `Handled` 控制传播终止；
 - `ImGuiLayer`：启用 Docking/多视口，并根据 ImGui 捕获状态拦截鼠标和键盘事件；
 - `WindowsInput`：实现轮询式键盘、鼠标输入；
@@ -339,7 +339,7 @@ flowchart LR
 
 ## 8. 场景序列化
 
-`SceneSerializer` 使用 yaml-cpp 读写 `.glimmer` 文件。实体记录稳定 UUID，并序列化当前支持的 Tag、Transform、SpriteRenderer、ModelRenderer、Material、Terrain、DirectionalLight、PointLight、SkyLight 和 Camera 组件。
+`SceneSerializer` 使用 yaml-cpp 读写 `.glimmer` 文件。实体记录稳定 UUID，并序列化当前支持的 Tag、Transform、SpriteRenderer、ModelRenderer、Material、Terrain、DirectionalLight、PointLight、SkyLight 和 Camera 组件。`SerializeToString` 生成与磁盘完全相同的内存 YAML，供 Dirty 比较与文件写入共用；磁盘保存先写同目录 `.tmp` 并检查流状态，再以 `.bak` 暂存已有目标并替换，失败时恢复原文件，成功后删除中间文件。若进程中断后目标缺失而 `.bak` 仍在，下一次加载或保存会先恢复上一份有效文件并丢弃未完成的 `.tmp`。
 
 持久化规则：
 
@@ -349,9 +349,9 @@ flowchart LR
 - NativeScript 包含函数指针，当前不参与场景序列化；
 - 反序列化使用 `CreateEntityWithUUID` 恢复稳定身份；
 - Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例；
-- `SceneSerializer::Serialize` 返回文件打开与写入结果，EditorLayer 只在成功保存后更新当前场景路径。
+- `SceneSerializer::Serialize` 返回生成、文件打开、写入与替换结果，EditorLayer 只在成功保存后更新当前场景路径和保存快照。
 
-编辑器将当前 `.glimmer` 路径与每个场景的 `EditorCameraState` 作为 Scene YAML 之外的用户会话状态持有。`EditorScenePreferences` 把项目根、最后场景和最多 64 组按规范化绝对路径索引的 FocalPoint/Distance/Pitch/Yaw 写入用户配置目录；Version 2 仍能读取只有最后场景路径的 Version 1。启动时只有项目根匹配才尝试反序列化，成功后恢复该场景的观察视角；失败后清除失效的最后场景记录并保留空 Scene。New、Open、Save、Save As、内容浏览器双击和 Viewport 拖放统一进入 EditorLayer 的场景入口。普通启动不再创建 Sun、Point Light、Sky Light 和 Terrain 演示实体；Terrain 性能/LOD 环境变量需要的同类内容由独立验证 Fixture 创建，不参与场景或相机记录。
+编辑器将当前 `.glimmer` 路径、最后成功保存的 Scene YAML 快照与每个场景的 `EditorCameraState` 作为 Scene YAML 之外的会话状态持有。EditorLayer 周期刷新 Dirty，并以 `场景文件名[*] - Glimmer Editor - Cyou Branch` 更新原生窗口标题；只在标题内容变化时调用 Window 接口。New/Open/Exit 的决策边界会强制重新序列化比较，因此不依赖所有修改都经过 CommandHistory。Dirty 场景切换或退出进入 Save/Discard/Cancel 待定动作；Save 失败不执行动作。Application 的 WindowClose 先逆序交给 Layer，编辑器可消费事件并延迟关闭，未消费时才由 Application 停止循环。`EditorScenePreferences` 把项目根、最后场景和最多 64 组按规范化绝对路径索引的 FocalPoint/Distance/Pitch/Yaw 写入用户配置目录；Version 2 仍能读取只有最后场景路径的 Version 1。启动时只有项目根匹配才尝试反序列化，成功后恢复该场景的观察视角；失败后清除失效的最后场景记录并保留空 Scene。普通启动不再创建演示实体；Terrain 性能/LOD 验证 Fixture 不参与场景、Dirty 或相机记录。
 
 ### 8.1 无窗口回归边界
 
@@ -384,7 +384,7 @@ Instancing Lab 同时托管 Shadow Benchmark 状态机和 Shadow Visual Validati
 
 EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel 的受控接口生成固定 2500 实体的 Maximum Instancing Lab 并启动相同状态机。完成时 InstancingLabTool 将 9 组统计写入日志，EditorLayer 再请求 Application 正常关闭；`GLIMMER_SHADOW_VISUAL_AUTORUN` 使用同一边界生成视觉场景，`GLIMMER_SHADOW_VISUALIZE_CASCADES` 与 `GLIMMER_SHADOW_VISUAL_CLOSEUP` 分别选择级联着色和投影物近景。自动入口不绕过临时 Scene 隔离，也不另建第二套阴影逻辑。
 
-`GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN` 仅在诊断运行中创建带 DefaultTerrain 资产的独立 Terrain Validation Scene、固定 EditorCamera，并启动与手动入口相同的 TerrainSamplingBenchmarkTool；三档完成后由 EditorLayer 请求正常退出。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 使用同一验证 Fixture 选择单档供截图检查。这些入口不加载或覆盖用户最后场景，也不保存场景、相机或采样设置。
+`GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN` 仅在诊断运行中创建带 DefaultTerrain 资产的独立 Terrain Validation Scene、固定 EditorCamera，并启动与手动入口相同的 TerrainSamplingBenchmarkTool；三档完成后由 EditorLayer 请求正常退出。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 使用同一验证 Fixture 选择单档供截图检查。EditorLayer 显式标记这类 Fixture，并在卸载时跳过最后场景偏好写入；这些入口不加载、覆盖或清空用户最后场景，也不保存场景、相机或采样设置。
 
 ### 9.2 选择与面板职责
 
@@ -410,7 +410,7 @@ Hierarchy 和 Inspector 通过 Scene、SelectionContext、CommandHistory 接入�
 
 - 实体创建、删除、复制；
 - 组件添加、移除、重置；
-- Transform 连续拖动压缩为单次 Undo；
+- Inspector Transform 控件与 Viewport Gizmo 的移动、旋转、缩放都按激活/释放保存完整 Transform 快照，并将一次连续拖动压缩为单次 Undo；Gizmo 命令以 Scene + UUID 定位实体，不依赖释放时仍保持相同选择；
 - Terrain、Directional/Point/Sky Light 与 Camera 连续属性按控件激活/释放压缩为单次 Undo；
 - Terrain HeightMap 与 SkyLight Cubemap 的离散替换；
 - TerrainMaterial 的组件拖入/清除；

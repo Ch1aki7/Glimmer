@@ -520,13 +520,30 @@ namespace {
 		context.Check(gl::SceneSerializer(source).Serialize(path.string())
 			&& std::filesystem::is_regular_file(path),
 			"minimal scene is written and reports success");
+		std::string savedSnapshot;
+		std::string editedSnapshot;
+		context.Check(gl::SceneSerializer(source).SerializeToString(savedSnapshot),
+			"scene can produce an in-memory save snapshot");
+		transform.Translation.x += 1.0f;
+		context.Check(gl::SceneSerializer(source).SerializeToString(editedSnapshot)
+			&& editedSnapshot != savedSnapshot,
+			"scene save snapshot detects direct component edits");
+		transform.Translation.x -= 1.0f;
+		context.Check(gl::SceneSerializer(source).Serialize(path.string())
+			&& !std::filesystem::exists(path.string() + ".tmp")
+			&& !std::filesystem::exists(path.string() + ".bak"),
+			"scene replacement is atomic and removes staging files");
 		context.Check(!gl::SceneSerializer(source).Serialize(
 			(directory / "missing" / "cannot-write.glimmer").string()),
 			"scene serialization reports an unavailable output path");
 
+		const std::filesystem::path interruptedBackup = path.string() + ".bak";
+		std::filesystem::rename(path, interruptedBackup);
 		gl::Ref<gl::Scene> restoredScene = gl::CreateRef<gl::Scene>();
-		context.Check(gl::SceneSerializer(restoredScene).Deserialize(path.string()),
-			"minimal scene reloads without a window or renderer");
+		context.Check(gl::SceneSerializer(restoredScene).Deserialize(path.string())
+			&& std::filesystem::is_regular_file(path)
+			&& !std::filesystem::exists(interruptedBackup),
+			"interrupted scene replacement recovers its last valid backup");
 		gl::Entity restored = restoredScene->FindEntityByUUID(entityUUID);
 		context.Check(static_cast<bool>(restored), "stable UUID is restored into the scene index");
 		if (!restored)

@@ -4,9 +4,43 @@
 #include "Entity.h"
 
 #include <yaml-cpp/yaml.h>
+#include <filesystem>
 #include <fstream>
 
 namespace gl {
+	namespace {
+		bool RecoverInterruptedSceneSave(
+			const std::filesystem::path& destination)
+		{
+			std::error_code error;
+			if (std::filesystem::exists(destination, error))
+				return !error;
+			if (error)
+				return false;
+
+			std::filesystem::path backup = destination;
+			backup += ".bak";
+			const bool backupExists = std::filesystem::exists(backup, error);
+			if (error || !backupExists)
+				return !error;
+			if (!std::filesystem::is_regular_file(backup, error) || error)
+				return false;
+
+			std::filesystem::rename(backup, destination, error);
+			if (error)
+			{
+				GL_CORE_ERROR("Could not recover interrupted scene save {0}: {1}",
+					destination.string(), error.message());
+				return false;
+			}
+			std::filesystem::path temporary = destination;
+			temporary += ".tmp";
+			std::filesystem::remove(temporary, error);
+			GL_CORE_WARN("Recovered scene from backup after an interrupted save: {0}",
+				destination.string());
+			return true;
+		}
+	}
 
 	// ============================================================
 	// YAML 辅助函数 —— glm 类型序列化
@@ -421,8 +455,11 @@ namespace gl {
 	// 场景整体序列化 / 反序列化
 	// ============================================================
 
-	bool SceneSerializer::Serialize(const std::string& filepath)
+	bool SceneSerializer::SerializeToString(std::string& contents) const
 	{
+		if (!m_Scene)
+			return false;
+
 		YAML::Emitter out;
 		out << YAML::BeginMap;
 		out << YAML::Key << "Scene" << YAML::Value << "Untitled";
@@ -465,19 +502,104 @@ namespace gl {
 
 		out << YAML::EndSeq; // Entities
 		out << YAML::EndMap; // Root
+		if (!out.good())
+		{
+			GL_CORE_ERROR("Could not serialize scene YAML: {0}", out.GetLastError());
+			return false;
+		}
 
-		std::ofstream fout(filepath, std::ios::binary | std::ios::trunc);
+		contents = out.c_str();
+		return true;
+	}
+
+	bool SceneSerializer::Serialize(const std::string& filepath)
+	{
+		std::string contents;
+		if (!SerializeToString(contents))
+			return false;
+
+		const std::filesystem::path destination(filepath);
+		std::filesystem::path temporary = destination;
+		temporary += ".tmp";
+		std::filesystem::path backup = destination;
+		backup += ".bak";
+		if (!RecoverInterruptedSceneSave(destination))
+			return false;
+		std::error_code error;
+		std::filesystem::remove(temporary, error);
+		error.clear();
+
+		std::ofstream fout(temporary, std::ios::binary | std::ios::trunc);
 		if (!fout)
 		{
 			GL_CORE_ERROR("Could not open scene for writing: {0}", filepath);
 			return false;
 		}
-		fout << out.c_str();
+		fout << contents;
 		fout.flush();
 		if (!fout.good())
 		{
 			GL_CORE_ERROR("Could not write scene: {0}", filepath);
+			fout.close();
+			std::filesystem::remove(temporary, error);
 			return false;
+		}
+		fout.close();
+
+		error.clear();
+		const bool destinationExists = std::filesystem::exists(destination, error);
+		if (error)
+		{
+			std::filesystem::remove(temporary, error);
+			GL_CORE_ERROR("Could not inspect scene destination: {0}", filepath);
+			return false;
+		}
+		const bool hadOriginal = destinationExists
+			&& std::filesystem::is_regular_file(destination, error);
+		if (error || (destinationExists && !hadOriginal))
+		{
+			std::filesystem::remove(temporary, error);
+			GL_CORE_ERROR("Scene destination is not a replaceable file: {0}",
+				filepath);
+			return false;
+		}
+		if (hadOriginal)
+		{
+			std::filesystem::remove(backup, error);
+			error.clear();
+			std::filesystem::rename(destination, backup, error);
+			if (error)
+			{
+				std::filesystem::remove(temporary, error);
+				GL_CORE_ERROR("Could not stage existing scene backup: {0}", filepath);
+				return false;
+			}
+		}
+
+		std::filesystem::rename(temporary, destination, error);
+		if (error)
+		{
+			const std::error_code replaceError = error;
+			if (hadOriginal)
+			{
+				std::error_code restoreError;
+				std::filesystem::rename(backup, destination, restoreError);
+				if (restoreError)
+					GL_CORE_ERROR("Could not restore scene backup {0}: {1}",
+						backup.string(), restoreError.message());
+			}
+			std::filesystem::remove(temporary, error);
+			GL_CORE_ERROR("Could not replace scene file {0}: {1}",
+				filepath, replaceError.message());
+			return false;
+		}
+
+		if (hadOriginal)
+		{
+			std::filesystem::remove(backup, error);
+			if (error)
+				GL_CORE_WARN("Could not remove scene backup {0}: {1}",
+					backup.string(), error.message());
 		}
 		return true;
 	}
@@ -486,6 +608,8 @@ namespace gl {
 	{
 		try
 		{
+			if (!RecoverInterruptedSceneSave(filepath))
+				return false;
 			YAML::Node data = YAML::LoadFile(filepath);
 			if (!data["Entities"] ) return false;
 

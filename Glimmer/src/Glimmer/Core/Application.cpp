@@ -61,17 +61,22 @@ namespace gl {
 	void Application::OnEvent(Event& e) {
 		GL_PROFILE_FUNCTION();
 
-		EventDispatcher dispatcher(e);
-		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent& event) {
-			return this->OnWindowClose(event);
-			});
-
 		// 核心逻辑：事件倒序分发
 		// 为什么要倒序？因为最上层（UI）在 vector 的末尾，它们应该先处理事件
 		for (auto it = m_LayerStack.end(); it != m_LayerStack.begin(); ) {
 			(*--it)->OnEvent(e);
 			if (e.Handled) // 如果事件被某一层拦截了，直接停止传递
 				break;
+		}
+
+		// Layers may defer a close request to present an unsaved-changes
+		// confirmation. Only close the application when nobody consumed it.
+		if (!e.Handled)
+		{
+			EventDispatcher dispatcher(e);
+			dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent& event) {
+				return this->OnWindowClose(event);
+				});
 		}
 	}
 	void Application::Run() {

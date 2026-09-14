@@ -28,6 +28,7 @@ namespace gl {
 
         virtual unsigned int GetWidth() const = 0;
         virtual unsigned int GetHeight() const = 0;
+		virtual void SetTitle(const std::string& title) = 0;
 
         // 设置事件回调函数（非常关键：用于把 GLFW 事件传回 Application）
         virtual void SetEventCallback(const EventCallbackFn& callback) = 0;

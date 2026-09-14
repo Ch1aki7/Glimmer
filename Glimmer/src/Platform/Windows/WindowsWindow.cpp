@@ -154,6 +154,14 @@ namespace gl {
 		m_Context->SwapBuffers();
 	}
 
+	void WindowsWindow::SetTitle(const std::string& title)
+	{
+		if (title == m_Data.Title)
+			return;
+		m_Data.Title = title;
+		glfwSetWindowTitle(m_Window, m_Data.Title.c_str());
+	}
+
 	void WindowsWindow::SetVSync(bool enabled) {
 		GL_PROFILE_FUNCTION();
 

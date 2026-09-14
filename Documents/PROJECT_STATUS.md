@@ -141,6 +141,20 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-09-14：Viewport Gizmo 变换撤销
+
+- Viewport Gizmo 的移动、旋转和缩放已接入 `EditorCommandHistory`：开始拖动时保存 Scene、实体 UUID 和完整 Transform，拖动期间实时预览，释放时只提交一条已执行命令；无实际变化时不产生空命令；
+- `Ctrl+Z` 可恢复 Gizmo 拖动前的位移、旋转和缩放，`Ctrl+Y`/`Ctrl+Shift+Z` 可重做；场景切换会清理未完成的 Gizmo 事务，命令通过 UUID 查找目标而不依赖临时 EnTT Handle；
+- 验证：`scripts\Verify-Windows.bat` 通过 VS2026 `Debug | x64` 完整解决方案构建和全部无窗口回归；提交：待提交。
+
+### 2026-09-14：编辑器场景保存可靠性
+
+- `SceneSerializer` 新增内存快照输出；EditorLayer 以实际可序列化内容而非 CommandHistory 推断 Dirty，因此 Tag、Sprite、Model 等尚未完全进入命令栈的直接组件修改同样不会漏报；原生窗口标题显示 `场景名* - Glimmer Editor - Cyou Branch`，保存或恢复干净状态后立即移除星号，File 菜单保持普通 `Save`；
+- New、Open、内容浏览器双击、Viewport 场景拖放、File/快捷键退出及原生窗口关闭统一经过未保存确认，可选择 Save、Discard 或 Cancel；保存失败时继续保留确认框并显示可见错误，不执行待定的场景切换或退出；
+- 场景保存改为同目录 `.tmp` 写入与校验，再以 `.bak` 保护原文件并替换目标；失败会尝试恢复旧文件，加载时若发现替换中断造成目标缺失，也会自动恢复最后有效备份；Save As 自动补齐 `.glimmer` 扩展名，只有成功写入后才清除 Dirty、更新当前路径与启动恢复偏好；
+- Application 将 WindowClose 先交给 Layer，未被编辑器延期时才停止主循环；自动验证与明确的内部关闭仍可直接结束，不受用户场景弹窗影响；
+- 验证：`scripts\Verify-Windows.bat` 通过 VS2026 `Debug | x64` 完整解决方案构建和全部无窗口回归；新增内存快照直接组件变更检测、已有文件替换、中断备份恢复与 `.tmp/.bak` 清理断言；GTX 1050/OpenGL 4.6 上独立 Terrain Fixture 完成真实首帧、Shader/Compute 加载和三档基准后正常退出；Fixture 退出明确跳过“上次场景”偏好写入，不污染用户恢复目标；提交：待提交。
+
 ### 2026-09-14：Terrain 世界长宽与网格精度解耦
 
 - `TerrainSpecification` 新增独立、可序列化的 `WorldSize`，Inspector 以 `World Size (X/Z)` 暴露正方形地形的水平长宽；范围从 16 到 8192，默认 256；
@@ -530,9 +544,9 @@
 ### 编辑器
 
 - Undo/Redo 已覆盖实体生命周期、组件增删重置、Transform、Material、Terrain、Light 与 Camera；Tag、SpriteRenderer、ModelRenderer 等部分属性仍有直接修改路径；
-- 编辑器已持有并恢复最后成功打开/保存的 Scene 路径，但尚无 Scene Dirty 标记、未保存修改提示、退出保存确认或事务式场景文件替换；
+- 编辑器已具备 Scene 内容级 Dirty、未保存确认和事务式文件替换；尚未检测场景文件被外部程序修改后的保存冲突，Scene 根名称仍固定为 `Untitled`；
 - Material Asset 已具备保存、撤销和失败反馈；TerrainMaterial 可显式保存/重载但尚未接入 Asset Command/Undo 和统一退出 Dirty 提示；其它共享 Asset 仍缺少统一保存协议；
-- 通用组件值事务目前位于 InspectorPanel；后续新增连续控件应复用激活快照/释放提交边界，避免逐帧命令。
+- 连续组件编辑统一采用激活快照/释放提交边界；Inspector 控件和 Viewport Gizmo 均不会逐帧创建命令，后续连续控件也应复用该约定。
 
 ### 渲染
 

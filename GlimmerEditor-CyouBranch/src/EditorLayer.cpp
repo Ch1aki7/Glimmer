@@ -141,6 +141,9 @@ namespace gl {
 			OnSceneStop();
 
 		m_CommandHistory.Clear();
+		m_GizmoTransformEdit.Reset();
+		m_GizmoEditScene.reset();
+		m_GizmoEditEntity = UUID(0);
 		m_EditorScene = scene;
 		m_ActiveScene = m_EditorScene;
 		m_HierarchyPanel.SetContext(m_ActiveScene);
@@ -150,10 +153,97 @@ namespace gl {
 		m_InspectorPanel.SetSelectionContext(&m_SelectionContext);
 		m_InspectorPanel.SetCommandHistory(&m_CommandHistory);
 		m_HierarchyPanel.SetSelectedEntity({});
+		CaptureSavedSceneState();
+	}
+
+	void EditorLayer::CaptureSavedSceneState()
+	{
+		m_SavedSceneSnapshot.clear();
+		if (!m_EditorScene
+			|| !SceneSerializer(m_EditorScene).SerializeToString(
+				m_SavedSceneSnapshot))
+		{
+			m_SceneDirty = true;
+			UpdateWindowTitle();
+			return;
+		}
+		m_SceneDirty = false;
+		m_NextDirtyCheckTime = Application::GetTime() + 0.5f;
+		UpdateWindowTitle();
+	}
+
+	bool EditorLayer::RefreshSceneDirtyState()
+	{
+		std::string currentSnapshot;
+		if (!m_EditorScene
+			|| !SceneSerializer(m_EditorScene).SerializeToString(currentSnapshot))
+		{
+			m_SceneDirty = true;
+			UpdateWindowTitle();
+			return true;
+		}
+		m_SceneDirty = currentSnapshot != m_SavedSceneSnapshot;
+		UpdateWindowTitle();
+		return m_SceneDirty;
+	}
+
+	void EditorLayer::UpdateWindowTitle()
+	{
+		const std::string sceneName = m_EditorScenePath.empty()
+			? "Untitled" : m_EditorScenePath.filename().string();
+		const std::string title = sceneName + (m_SceneDirty ? "*" : "")
+			+ " - Glimmer Editor - Cyou Branch";
+		if (title == m_LastWindowTitle)
+			return;
+		Application::Get().GetWindow().SetTitle(title);
+		m_LastWindowTitle = title;
+	}
+
+	void EditorLayer::FinishGizmoTransformEdit()
+	{
+		if (!m_GizmoTransformEdit.IsActive())
+			return;
+
+		const TransformComponent before = m_GizmoTransformEdit.GetBefore();
+		const Ref<Scene> scene = m_GizmoEditScene;
+		const UUID uuid = m_GizmoEditEntity;
+		const int gizmoType = m_GizmoEditType;
+		m_GizmoTransformEdit.Reset();
+		m_GizmoEditScene.reset();
+		m_GizmoEditEntity = UUID(0);
+
+		Entity target = scene ? scene->FindEntityByUUID(uuid) : Entity{};
+		if (scene != m_EditorScene
+			|| !target || !target.HasComponent<TransformComponent>())
+			return;
+
+		const TransformComponent after =
+			target.GetComponent<TransformComponent>();
+		const bool unchanged = glm::all(glm::equal(
+			before.Translation, after.Translation))
+			&& glm::all(glm::equal(before.Rotation, after.Rotation))
+			&& glm::all(glm::equal(before.Scale, after.Scale));
+		if (unchanged)
+			return;
+
+		auto apply = [scene, uuid](const TransformComponent& value) {
+			Entity entity = scene ? scene->FindEntityByUUID(uuid) : Entity{};
+			if (!entity || !entity.HasComponent<TransformComponent>())
+				return false;
+			entity.GetComponent<TransformComponent>() = value;
+			return true;
+		};
+		const char* commandName = gizmoType == 1 ? "Rotate Entity"
+			: gizmoType == 2 ? "Scale Entity" : "Move Entity";
+		m_CommandHistory.PushExecuted(
+			std::make_unique<ValueEditorCommand<TransformComponent>>(
+				commandName, before, after, std::move(apply)));
 	}
 
 	void EditorLayer::RememberCurrentScene() const
 	{
+		if (m_UsesTerrainValidationScene)
+			return;
 		if (!EditorScenePreferences::StoreLastScene(
 			std::filesystem::absolute("assets").lexically_normal(),
 			m_EditorScenePath.empty()
@@ -196,6 +286,7 @@ namespace gl {
 		SetEditorScene(CreateRef<Scene>());
 		m_EditorScenePath.clear();
 		m_EditorCamera.SetState(EditorCameraState{});
+		UpdateWindowTitle();
 		RememberCurrentScene();
 		GL_CORE_INFO("Created an empty editor scene.");
 	}
@@ -221,6 +312,7 @@ namespace gl {
 		PersistEditorCameraState();
 		SetEditorScene(newScene);
 		m_EditorScenePath = std::move(openedPath);
+		UpdateWindowTitle();
 		RestoreEditorCameraState();
 		RememberCurrentScene();
 		GL_CORE_INFO("Loaded scene: {0}", m_EditorScenePath.string());
@@ -229,16 +321,24 @@ namespace gl {
 
 	bool EditorLayer::SaveScene()
 	{
+		m_SceneSaveError.clear();
 		if (m_DebugPanel.IsTemporarySceneActive())
 		{
 			GL_CORE_WARN("Exit the temporary Debug Lab before saving the editor scene.");
+			m_SceneSaveError =
+				"Exit the temporary Debug Lab before saving the editor scene.";
 			return false;
 		}
 		if (m_EditorScenePath.empty())
 			return SaveSceneAs();
 
 		if (!SceneSerializer(m_EditorScene).Serialize(m_EditorScenePath.string()))
+		{
+			m_SceneSaveError = "Could not save the scene. The previous file was left unchanged.";
 			return false;
+		}
+		m_SceneSaveError.clear();
+		CaptureSavedSceneState();
 		PersistEditorCameraState();
 		RememberCurrentScene();
 		GL_CORE_INFO("Saved scene: {0}", m_EditorScenePath.string());
@@ -247,27 +347,154 @@ namespace gl {
 
 	bool EditorLayer::SaveSceneAs()
 	{
+		m_SceneSaveError.clear();
 		if (m_DebugPanel.IsTemporarySceneActive())
 		{
 			GL_CORE_WARN("Exit the temporary Debug Lab before saving the editor scene.");
+			m_SceneSaveError =
+				"Exit the temporary Debug Lab before saving the editor scene.";
 			return false;
 		}
-		const std::string path = FileDialog::SaveFile(
+		const std::string selectedPath = FileDialog::SaveFile(
 			"Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
-		if (path.empty())
+		if (selectedPath.empty())
 			return false;
-		if (!SceneSerializer(m_EditorScene).Serialize(path))
+		std::filesystem::path path(selectedPath);
+		if (path.extension() != ".glimmer")
+			path += ".glimmer";
+		if (!SceneSerializer(m_EditorScene).Serialize(path.string()))
+		{
+			m_SceneSaveError = "Could not save the scene. The previous file was left unchanged.";
 			return false;
+		}
+		m_SceneSaveError.clear();
 
 		PersistEditorCameraState();
 		std::error_code error;
 		m_EditorScenePath = std::filesystem::weakly_canonical(path, error);
 		if (error)
 			m_EditorScenePath = std::filesystem::absolute(path).lexically_normal();
+		CaptureSavedSceneState();
 		PersistEditorCameraState();
 		RememberCurrentScene();
 		GL_CORE_INFO("Saved scene: {0}", m_EditorScenePath.string());
 		return true;
+	}
+
+	void EditorLayer::RequestNewScene()
+	{
+		if (!RefreshSceneDirtyState())
+		{
+			NewScene();
+			return;
+		}
+		m_PendingSceneAction = PendingSceneAction::New;
+		m_PendingScenePath.clear();
+		m_OpenUnsavedChangesPopup = true;
+	}
+
+	void EditorLayer::RequestOpenScene(const std::filesystem::path& path)
+	{
+		if (path.empty())
+			return;
+		if (!RefreshSceneDirtyState())
+		{
+			OpenScene(path);
+			return;
+		}
+		m_PendingSceneAction = PendingSceneAction::Open;
+		m_PendingScenePath = path;
+		m_OpenUnsavedChangesPopup = true;
+	}
+
+	void EditorLayer::RequestExit()
+	{
+		if (!RefreshSceneDirtyState())
+		{
+			Application::Get().Close();
+			return;
+		}
+		m_PendingSceneAction = PendingSceneAction::Exit;
+		m_PendingScenePath.clear();
+		m_OpenUnsavedChangesPopup = true;
+	}
+
+	void EditorLayer::ExecutePendingSceneAction()
+	{
+		const PendingSceneAction action = m_PendingSceneAction;
+		const std::filesystem::path path = m_PendingScenePath;
+		m_PendingSceneAction = PendingSceneAction::None;
+		m_PendingScenePath.clear();
+		switch (action)
+		{
+			case PendingSceneAction::New: NewScene(); break;
+			case PendingSceneAction::Open: OpenScene(path); break;
+			case PendingSceneAction::Exit: Application::Get().Close(); break;
+			case PendingSceneAction::None: break;
+		}
+	}
+
+	void EditorLayer::RenderUnsavedChangesModal()
+	{
+		if (m_OpenUnsavedChangesPopup)
+		{
+			ImGui::OpenPopup("Unsaved Scene Changes");
+			m_OpenUnsavedChangesPopup = false;
+		}
+		if (!ImGui::BeginPopupModal("Unsaved Scene Changes", nullptr,
+			ImGuiWindowFlags_AlwaysAutoResize))
+			return;
+
+		const std::string sceneName = m_EditorScenePath.empty()
+			? "Untitled" : m_EditorScenePath.filename().string();
+		ImGui::Text("Save changes to %s?", sceneName.c_str());
+		ImGui::TextUnformatted(
+			"Unsaved scene changes will be lost if you continue.");
+		if (!m_SceneSaveError.empty())
+			ImGui::TextColored(ImVec4(0.85f, 0.20f, 0.15f, 1.0f), "%s",
+				m_SceneSaveError.c_str());
+		ImGui::Separator();
+		if (ImGui::Button("Save", ImVec2(90.0f, 0.0f)))
+		{
+			if (SaveScene())
+			{
+				ImGui::CloseCurrentPopup();
+				ExecutePendingSceneAction();
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Discard", ImVec2(90.0f, 0.0f)))
+		{
+			ImGui::CloseCurrentPopup();
+			ExecutePendingSceneAction();
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel", ImVec2(90.0f, 0.0f)))
+		{
+			m_PendingSceneAction = PendingSceneAction::None;
+			m_PendingScenePath.clear();
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
+	}
+
+	void EditorLayer::RenderSceneSaveError()
+	{
+		if (m_SceneSaveError.empty()
+			|| m_PendingSceneAction != PendingSceneAction::None)
+			return;
+		ImGuiViewport* viewport = ImGui::GetMainViewport();
+		ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing,
+			ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_Appearing);
+		if (ImGui::Begin("Scene Save Failed", nullptr,
+			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse))
+		{
+			ImGui::TextWrapped("%s", m_SceneSaveError.c_str());
+			if (ImGui::Button("Dismiss", ImVec2(-1.0f, 0.0f)))
+				m_SceneSaveError.clear();
+		}
+		ImGui::End();
 	}
 
 	bool EditorLayer::RestoreLastScene()
@@ -536,11 +763,11 @@ namespace gl {
 		// Normal startup restores a persisted scene or remains empty. Terrain
 		// validation modes own their fixture instead of relying on a demo scene.
 		SetEditorScene(CreateRef<Scene>());
-		const bool useTerrainValidationScene =
+		m_UsesTerrainValidationScene =
 			ShouldAutorunTerrainSamplingBenchmark()
 			|| terrainSamplingVisualMode >= 0
 			|| ShouldVisualizeTerrainLODs();
-		if (useTerrainValidationScene)
+		if (m_UsesTerrainValidationScene)
 		{
 			SetEditorScene(CreateTerrainValidationScene(
 				defaultSkyboxHandle,
@@ -572,7 +799,7 @@ namespace gl {
 		m_ContentBrowser.OnFileDoubleClicked = [this](const std::string& path) {
 			auto ext = std::filesystem::path(path).extension().string();
 			if (ext == ".glimmer")
-				OpenScene(path);
+				RequestOpenScene(path);
 			};
 		m_ContentBrowser.OnAssetSelected = [this](AssetHandle handle) {
 			m_SelectionContext.SelectAsset(handle);
@@ -828,6 +1055,11 @@ namespace gl {
 
 	void EditorLayer::OnImGuiRender() {
 		GL_PROFILE_FUNCTION();
+		if (Application::GetTime() >= m_NextDirtyCheckTime)
+		{
+			RefreshSceneDirtyState();
+			m_NextDirtyCheckTime = Application::GetTime() + 0.5f;
+		}
 
 		// --- 全局快捷键 ---
 		auto& io = ImGui::GetIO();
@@ -848,7 +1080,7 @@ namespace gl {
 				OnScenePlay();
 		}
 		if (ImGui::IsKeyChordPressed(ImGuiKey_N | ImGuiMod_Ctrl)) {
-			NewScene();
+			RequestNewScene();
 		}
 		if (ImGui::IsKeyChordPressed(
 			ImGuiKey_S | ImGuiMod_Ctrl | ImGuiMod_Shift)) {
@@ -860,7 +1092,7 @@ namespace gl {
 		if (ImGui::IsKeyChordPressed(ImGuiKey_O | ImGuiMod_Ctrl)) {
 			std::string path = FileDialog::OpenFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
 			if (!path.empty())
-				OpenScene(path);
+				RequestOpenScene(path);
 		}
 		if (m_ViewportHovered) {
 			if (ImGui::IsKeyPressed(ImGuiKey_1)) m_GizmoType = 0;
@@ -910,7 +1142,7 @@ namespace gl {
 			{
 				if (ImGui::MenuItem("New", "Ctrl+N"))
 				{
-					NewScene();
+					RequestNewScene();
 				}
 				ImGui::BeginDisabled(m_DebugPanel.IsTemporarySceneActive());
 				if (ImGui::MenuItem("Save", "Ctrl+S"))
@@ -922,10 +1154,10 @@ namespace gl {
 				{
 					std::string path = FileDialog::OpenFile("Glimmer Scene (*.glimmer)\0*.glimmer\0All Files (*.*)\0*.*\0");
 					if (!path.empty())
-						OpenScene(path);
+						RequestOpenScene(path);
 				}
 				ImGui::Separator();
-				if (ImGui::MenuItem("Exit")) Application::Get().Close();
+				if (ImGui::MenuItem("Exit")) RequestExit();
 				ImGui::EndMenu();
 			}
 			if (ImGui::BeginMenu("Window"))
@@ -1059,6 +1291,8 @@ namespace gl {
 			}
 			ImGui::EndDragDropTarget();
 		}
+		RenderUnsavedChangesModal();
+		RenderSceneSaveError();
 
 		int removeCustomPass = -1;
 		int moveCustomPassFrom = -1;
@@ -1171,7 +1405,7 @@ namespace gl {
 				auto ext = std::filesystem::path(path).extension().string();
 				if (ext == ".glimmer")
 				{
-					OpenScene(path);
+					RequestOpenScene(path);
 				}				else if (ext == ".glterrainmat")
 				{
 					const AssetHandle handle = AssetManager::ImportAsset(path);
@@ -1308,6 +1542,13 @@ namespace gl {
 
 			if (ImGuizmo::IsUsing())
 			{
+				if (!m_GizmoTransformEdit.IsActive())
+				{
+					m_GizmoTransformEdit.Begin(tc);
+					m_GizmoEditScene = m_ActiveScene;
+					m_GizmoEditEntity = selectedEntity.GetUUID();
+					m_GizmoEditType = m_GizmoType;
+				}
 				float t[3], r[3], s[3];
 				ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(transform), t, r, s);
 				tc.Translation = { t[0], t[1], t[2] };
@@ -1315,6 +1556,8 @@ namespace gl {
 				tc.Scale = { s[0], s[1], s[2] };
 			}
 		}
+		if (!ImGuizmo::IsUsing())
+			FinishGizmoTransformEdit();
 
 			// --- 鼠标拾取（左键点击实体选择） ---
 			static constexpr uint32_t kPickAttachment = 1;
@@ -1345,6 +1588,17 @@ namespace gl {
 
 	void EditorLayer::OnEvent(Event& event) {
 		GL_TRACE("{0}", event.ToString());
+		if (event.GetEventType() == EventType::WindowClose)
+		{
+			if (RefreshSceneDirtyState())
+			{
+				m_PendingSceneAction = PendingSceneAction::Exit;
+				m_PendingScenePath.clear();
+				m_OpenUnsavedChangesPopup = true;
+				event.Handled = true;
+			}
+			return;
+		}
 
 		if (event.IsInCategory(EventCategoryKeyboard)) {
 			if (ImGui::GetIO().WantCaptureKeyboard) return;
