@@ -187,6 +187,7 @@ namespace {
 			&& left.Preset == right.Preset
 			&& left.HeightMapResolution == right.HeightMapResolution
 			&& left.MeshResolution == right.MeshResolution
+			&& Near(left.WorldSize, right.WorldSize)
 			&& Near(left.HeightScale, right.HeightScale)
 			&& left.HeightMapHandle == right.HeightMapHandle
 			&& left.RenderShaderHandle == right.RenderShaderHandle
@@ -475,6 +476,7 @@ namespace {
 		terrain.Specification.Procedural = true;
 		terrain.Specification.HeightMapResolution = 1024;
 		terrain.Specification.MeshResolution = 192;
+		terrain.Specification.WorldSize = 4096.0f;
 		terrain.Specification.HeightScale = 37.5f;
 		terrain.Specification.HeightMapHandle = gl::AssetHandle(6001);
 		terrain.Specification.RenderShaderHandle = gl::AssetHandle(6002);
@@ -706,6 +708,12 @@ namespace {
 		context.Check(gl::TerrainPresetFromString("unknown")
 			== gl::TerrainPreset::Custom,
 			"unknown terrain preset falls back to Custom");
+		context.Check(Near(gl::ClampTerrainWorldSize(16384.0f),
+				gl::TerrainWorldSizeMaximum)
+			&& Near(gl::ClampTerrainWorldSize(
+				std::numeric_limits<float>::quiet_NaN()),
+				gl::TerrainWorldSizeDefault),
+			"terrain world size applies finite runtime bounds");
 	}
 
 	void TestTerrainChunkLayout(TestContext& context)

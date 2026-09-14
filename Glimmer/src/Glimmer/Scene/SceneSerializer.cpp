@@ -199,6 +199,8 @@ namespace gl {
 		out << YAML::Key << "Preset" << YAML::Value << TerrainPresetToString(spec.Preset);
 		out << YAML::Key << "HeightMapResolution" << YAML::Value << spec.HeightMapResolution;
 		out << YAML::Key << "MeshResolution" << YAML::Value << spec.MeshResolution;
+		out << YAML::Key << "WorldSize" << YAML::Value
+			<< ClampTerrainWorldSize(spec.WorldSize);
 		out << YAML::Key << "HeightScale" << YAML::Value << spec.HeightScale;
 		out << YAML::Key << "HeightMap" << YAML::Value << static_cast<uint64_t>(spec.HeightMapHandle);
 		out << YAML::Key << "RenderShader" << YAML::Value << static_cast<uint64_t>(spec.RenderShaderHandle);
@@ -247,6 +249,10 @@ namespace gl {
 			: TerrainPreset::Custom;
 		if (node["HeightMapResolution"]) spec.HeightMapResolution = node["HeightMapResolution"].as<uint32_t>();
 		if (node["MeshResolution"]) spec.MeshResolution = node["MeshResolution"].as<uint32_t>();
+		spec.WorldSize = node["WorldSize"]
+			? ClampTerrainWorldSize(node["WorldSize"].as<float>())
+			: ClampTerrainWorldSize(static_cast<float>(
+				std::max(spec.MeshResolution, 1u)));
 		if (node["HeightScale"]) spec.HeightScale = node["HeightScale"].as<float>();
 		if (node["HeightMap"]) spec.HeightMapHandle = AssetHandle(node["HeightMap"].as<uint64_t>());
 		if (node["RenderShader"]) spec.RenderShaderHandle = AssetHandle(node["RenderShader"].as<uint64_t>());

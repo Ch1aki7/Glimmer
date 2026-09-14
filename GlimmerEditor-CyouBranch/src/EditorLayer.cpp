@@ -416,8 +416,7 @@ namespace gl {
 			const auto& terrain =
 				selectedEntity.GetComponent<TerrainComponent>();
 			const float halfSize =
-				static_cast<float>(std::max(terrain.Specification.MeshResolution, 1u))
-				* 0.5f;
+				ClampTerrainWorldSize(terrain.Specification.WorldSize) * 0.5f;
 			const float minimumHeight =
 				std::min(0.0f, terrain.Specification.HeightScale);
 			const float maximumHeight =

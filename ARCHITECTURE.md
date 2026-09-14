@@ -227,6 +227,7 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 - 派生阶段从最终 Height 生成三张 RGBA16F Runtime 纹理：Normal/Slope、Curvature/Flow Potential、Grass/Soil/Rock/Snow Material Weights；
 - Custom、Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 预设属于可序列化规格，手动修改预设参数后转为 Custom；
 - 也可引用导入的高度图 Texture Asset；
+- `TerrainSpecification::WorldSize` 独立定义正方形地形的 X/Z 世界尺寸，有限范围为 16～8192；它驱动生成与派生图的物理采样间距、水文/气候 CellSize、Chunk 局部范围、Color/Shadow Bounds 和编辑器聚焦边界。`MeshResolution` 只负责几何细分，因此扩大占地不会同步扩大共享网格的顶点与三角形数量；旧 Scene YAML 缺少该字段时按原 `MeshResolution` 恢复旧水平尺寸；
 - `TerrainMesh` 生成规则表面与四条重复边界 Skirt；`TerrainChunkLayout` 以纯 CPU 数据固定描述 `3×3` Chunk 的全局 UV、局部 XZ、世界尺寸、三档 LOD 分辨率及相邻级差约束；
 - `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；Runtime 持有按 `ceil(MeshResolution / 3)`、约二分之一和约四分之一建立的 LOD0/1/2 三份共享 Chunk Mesh，九块区域共用 Height/派生纹理和材质绑定，并通过逐块 Uniform 恢复完整覆盖；Color Pass 先执行 Camera Frustum 剔除，再按 Chunk 世界中心距离选择 LOD，复用上帧级别施加 5 单位迟滞，并把四方向相邻级差限制为 1；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
 - `TerrainSpecification::TerrainMaterialHandle` 引用独立 `.glterrainmat`；Handle 为 0 时 TerrainRenderer 使用内建四层颜色/PBR 参数且不加载具体层纹理，有效 Handle 才从 AssetManager 缓存解析四层参数，并使用纹理单元 4～15 绑定每层 Albedo/Normal/AO；
@@ -237,7 +238,7 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 
 Color Pass 和 ShadowRenderer 都使用同一个 `TerrainChunkLayout`，按每个 Chunk 的局部 XZ 范围与 Terrain HeightScale 构造独立 AABB，再通过共用的 `FrustumCulling` 八角点算法连同实体 Transform 投入 Camera 或 Light Clip Space。只有八个角点全部位于同一平面外才剔除，因此跨越视锥边界的 Chunk 保守保留；通过测试后才上传 Chunk Uniform 并提交 Draw。Color Pass 使用距离 LOD，Shadow Pass 固定使用 `TerrainRuntime::Mesh` 指向的 LOD0；两条路径都在顶点阶段把 Skirt 标记顶点下移，遮盖不同分辨率的接缝。Chunk 布局、LOD 历史、统计和共享 Mesh 都是运行时状态，不进入 Scene YAML。
 
-`tmp/tmpTerrain` 的水流、泥沙、蒸发和气象 HLSL 仅作为后续算法参考，不属于当前运行链路。运行时水文仍必须遵守 SimulationGrid 的 Ping-Pong 所有权和跨 Dispatch 全局 Barrier；禁止在单个 Workgroup Barrier 后读取其它 Workgroup 尚未完成的输出。
+`tmp/tmpTerrain` 的 16 个 HLSL 文件是不完整的外部原型片段，缺少 Common、ShadingModels、Random、Meteorograph、WorldDefinitions 和 MeshGeneration 等依赖，并固定假设 4096² 数据场与 256² 相机跟随网格，因此不属于当前运行链路，也不是可替换的后端。原型在同一 Dispatch 写入 WaterFlow 后只用 Workgroup Barrier 读取邻组结果，不具备跨 Workgroup 可见性；半拉格朗日泥沙回溯也不满足当前质量守恒契约。可迁移范围只限于视觉思想：后续可在现有 OpenGL Pass 中读取 P13/P14 纹理，重写独立水面、深度吸收/折射、速度泡沫、泥沙染色和岸线/积雪响应，但不得改写现有模拟所有权。运行时水文仍必须遵守 SimulationGrid 的 Ping-Pong 所有权和跨 Dispatch 全局 Barrier。
 
 P13A～P13C 的纯 CPU `TerrainHydrologyRuntime` 是 GPU 数值基线。它持有独立的 Height 初始快照，以及 Water、四方向 Flux、二维 Velocity 和 Sediment；Sediment 表示单位地表面积上的悬浮质量。该运行时由 `TerrainRuntime::Hydrology` 独立拥有，默认可为空，不随 TerrainComponent 复制或序列化，也不复用 `TerrainGenerator` 的 Height Ping-Pong。每个固定步先从同一旧状态计算四邻域水出流并按可用水量缩放；再以旧 Sediment 质量除以当前可用水体积得到浓度，用同一四向 Water Flux 计算泥沙质量流率，并按可用泥沙质量二次限幅；最后统一汇总邻格入流和自身出流。完成输运状态更新后，CPU 由 `CapacityScale × WaterDepth × Speed` 派生 Capacity，并由 `Sediment / Capacity` 派生 Saturation。
 

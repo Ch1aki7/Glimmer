@@ -569,8 +569,8 @@ namespace gl {
 		s_Data.DepthShader->UploadUniformFloat("u_SkirtDepth", std::max(
 			2.0f, std::abs(terrain.Specification.HeightScale) * 0.08f));
 		terrain.Runtime->HeightMap->Bind(0);
-		const float terrainWorldSize = static_cast<float>(
-			std::max(terrain.Specification.MeshResolution, 1u));
+		const float terrainWorldSize = ClampTerrainWorldSize(
+			terrain.Specification.WorldSize);
 		const auto chunks = TerrainChunkLayout::Build(
 			terrainWorldSize, terrain.Runtime->Mesh->GetGridSize());
 		for (const TerrainChunkRegion& chunk : chunks)

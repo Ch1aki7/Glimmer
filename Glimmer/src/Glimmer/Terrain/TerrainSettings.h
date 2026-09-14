@@ -2,10 +2,16 @@
 
 #include "Glimmer/Asset/Asset.h"
 #include <glm/glm.hpp>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 
 namespace gl {
+	inline constexpr float TerrainWorldSizeMinimum = 16.0f;
+	inline constexpr float TerrainWorldSizeMaximum = 8192.0f;
+	inline constexpr float TerrainWorldSizeDefault = 256.0f;
+
 	enum class TerrainPreset
 	{
 		Custom = 0,
@@ -52,6 +58,7 @@ namespace gl {
 		TerrainPreset Preset = TerrainPreset::Custom;
 		uint32_t HeightMapResolution = 512;
 		uint32_t MeshResolution = 256;
+		float WorldSize = TerrainWorldSizeDefault;
 		float HeightScale = 24.0f;
 		AssetHandle HeightMapHandle{ 0 };
 		AssetHandle RenderShaderHandle{ 0 };
@@ -62,6 +69,14 @@ namespace gl {
 		TerrainNoiseSettings Noise;
 		TerrainAuthoringSettings Authoring;
 	};
+
+	inline float ClampTerrainWorldSize(float worldSize)
+	{
+		return std::isfinite(worldSize)
+			? std::clamp(worldSize, TerrainWorldSizeMinimum,
+				TerrainWorldSizeMaximum)
+			: TerrainWorldSizeDefault;
+	}
 
 	const char* TerrainPresetToString(TerrainPreset preset);
 	TerrainPreset TerrainPresetFromString(const std::string& value);

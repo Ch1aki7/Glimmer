@@ -3670,6 +3670,23 @@ Inspector 的 `Geological Features` 区域提供四个参数：
 
 这部分在 GTX 1050/OpenGL 4.6 上完成真实 Shader 验证。默认 Alpine 一次生成包含 30 次 Dispatch，两轮输出的有限值、范围和四层权重归一化均通过，确定性 Hash 为 `16881604791310884879`；当时的 VS2026 `Debug | x64` 构建和 64 项无窗口回归也全部通过。
 
+### 2026-09-14 方案复核：不整套替换，迁移视觉层
+
+后来重新审视原型，是因为当前 Terrain 虽然已经具备比较完整的工程能力，默认画面却还没有充分展示水文和气候结果。现有 Height 生成、四层 Triplanar PBR、CSM、IBL、Chunk LOD、运行时侵蚀和气候纹理都在工作，但 Water、Velocity、Sediment、Temperature、Rainfall 和 Vegetation Potential 主要通过互斥的 Debug 颜色覆盖显示。它们提供了可验证的数据，还没有组成最终可玩的地表视觉。
+
+`tmp/tmpTerrain` 在表现层上更接近一个完整场景。它让固定网格跟随相机，在顶点阶段分别从 Terrain/Water Height 取样；水面 Shader 使用场景颜色和深度做折射、深浅水吸收，以流速推动噪声泡沫，并让泥沙改变水色；地表把坡地、岸滩、湿度、粗糙度和气温积雪放进同一组响应。这些思路能直接弥补当前“模拟有数据、正常画面看不出来”的缺口。
+
+但原型不能原样成为正式 Terrain 后端：
+
+- 16 个 HLSL 文件依赖当前 `tmp` 中不存在的 Common、ShadingModels、Random、Meteorograph、WorldDefinitions、MeshGeneration 等文件，无法独立编译；
+- 地形与水文数据固定为 `4096×4096`，单张 `R32F` 就是 64 MiB，原型同时需要多张 Height/Normal/Surface/Flow/Velocity/Sediment Ping-Pong，显存和每步 1677 万格 Dispatch 不适合当前 GTX 1050 验证基线；
+- `TerrainData_CS.hlsl` 在同一个 Dispatch 里写 `WaterFlowOut`，只执行 `GroupMemoryBarrierWithGroupSync()` 就读取四邻域输出。该 Barrier 不能同步其他 Workgroup，结果依赖调度顺序；
+- 泥沙采用半拉格朗日回溯采样，视觉上平滑，但不保证当前 P13 已建立的有限体积质量守恒；热侵蚀、蒸发、水流和表面派生也挤在一个 Pass，无法分别验证预算和所有权；
+- 网格、数据分辨率、世界大小和材质参数大量硬编码，没有当前 TerrainSpecification、Scene YAML、AssetHandle、Undo/Redo、热重载和 Runtime 重建契约；
+- 原型的 Terrain Normal 初始化还把 Top 邻居误写成 Right 邻居，并把边界 clamp 上限写成元素数量而不是最后一个有效索引，不能把原型输出当成已验证基准。
+
+因此后续采用混合路线：保留 Glimmer 当前 Terrain Runtime 和分 Pass 守恒模拟，在现有 OpenGL 渲染链上新增正式 Water Surface Pass；再把水深吸收、屏幕空间折射、速度驱动泡沫、泥沙染色、岸线湿润和温度积雪逐项重写。每项效果读取现有 P13/P14 纹理，不回写模拟状态，也不复制原型的 4096² 固定规格。待正常画面能稳定表达这些数据后，再继续用 Humidity、Temperature 和 Vegetation Potential 调制四层 Material Weight，并进入 GPU 植被实例化。
+
 ## TerrainMaterial Top-2 采样与 GPU 基准
 
 四层 Triplanar PBR 的画质不错，代价也很实在。Grass、Soil、Rock、Snow 都读取 Albedo、Normal 和 AO，每张贴图又要做三个方向的投影，最重路径接近每像素 40 次纹理采样。这个阶段的工作是给它增加可控的质量档位，并用真实 GPU 数据判断省下来的采样是否值得。
@@ -3829,6 +3846,12 @@ LUT 与具体 HDR 无关，所以 `EnvironmentLighting::Init()` 只生成一次�
 ## Terrain 固定 3×3 Chunk、LOD 与剔除
 
 Terrain 最初始终以整张网格提交。只要山地有一小角进入视野，全部三角形都会参与 Color 和 Shadow Pass；想加 LOD 时，也找不到比整块地形更细的切换单位。P11 先把地形固定拆成 `3x3` 九块。这个规模谈不上动态地形系统，但足够把共享网格、剔除、LOD 稳定性和接缝处理验证清楚。
+
+### 世界长宽不再等于网格分辨率
+
+Terrain Inspector 现在用两个独立参数控制规模与精度：`World Size (X/Z)` 是正方形地形的实际水平长宽，允许 16～8192，默认 256；`Mesh Resolution` 只控制几何网格细分，仍限制在 16～512。要扩大地图时只调前者，不会因为长宽扩大而按平方增加三角形数量。需要近景轮廓更细时，再单独提高后者。
+
+世界尺寸同时用于地形生成、法线等派生图的采样间距、水文与气候格点的物理尺度、Chunk 布局、颜色/阴影剔除边界和编辑器选中聚焦，因此不会出现画面放大而模拟或阴影仍停留在旧范围的问题。字段写入 Scene YAML；旧场景没有 `WorldSize` 时会用原来的 `MeshResolution` 还原水平尺寸，不改变已有场景外观。
 
 ### 九个区域，共用三份网格
 

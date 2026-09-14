@@ -232,6 +232,8 @@ namespace gl {
 	bool TerrainRenderer::Prepare(TerrainComponent& component)
 	{
 		auto& specification = component.Specification;
+		const float terrainWorldSize = ClampTerrainWorldSize(
+			specification.WorldSize);
 		if (!component.Runtime)
 			component.Runtime = CreateRef<TerrainRuntime>();
 		auto& runtime = *component.Runtime;
@@ -280,9 +282,7 @@ namespace gl {
 				runtime.Dirty = true;
 			if (runtime.Dirty)
 			{
-				runtime.Generator->Generate(specification,
-					static_cast<float>(
-						std::max(specification.MeshResolution, 1u)));
+				runtime.Generator->Generate(specification, terrainWorldSize);
 				runtime.LastGenerationDispatchCount =
 					runtime.Generator->GetLastDispatchCount();
 				++runtime.GenerationVersion;
@@ -297,15 +297,12 @@ namespace gl {
 			{
 				const TerrainValidationResult first =
 					runtime.Generator->ValidateOutputs();
-				runtime.Generator->Generate(specification,
-					static_cast<float>(
-						std::max(specification.MeshResolution, 1u)));
+				runtime.Generator->Generate(specification, terrainWorldSize);
 				const TerrainValidationResult second =
 					runtime.Generator->ValidateOutputs();
 				runtime.Generator->DeriveMapsFromHeight(
 					runtime.Generator->GetHeightMap(), specification.HeightScale,
-					static_cast<float>(
-						std::max(specification.MeshResolution, 1u)));
+					terrainWorldSize);
 				const TerrainValidationResult runtimeDerived =
 					runtime.Generator->ValidateOutputs();
 				runtime.HeightMap = runtime.Generator->GetHeightMap();
@@ -380,8 +377,7 @@ namespace gl {
 					capacityPath, erosionPath);
 				runtime.GPUHydrology->SetInitialHeightMap(
 					runtime.HeightMap, specification.HeightScale,
-					static_cast<float>(
-						std::max(specification.MeshResolution, 1u)));
+					terrainWorldSize);
 				runtime.HydrologyGenerationVersion = runtime.GenerationVersion;
 			}
 			auto& hydrology = *runtime.GPUHydrology;
@@ -443,8 +439,7 @@ namespace gl {
 				s_Data.ClimateInitialMoisture;
 			climate.GetSettings().TemperatureLapseRate =
 				s_Data.ClimateTemperatureLapseRate;
-			const float worldSize = static_cast<float>(
-				std::max(specification.MeshResolution, 1u));
+			const float worldSize = terrainWorldSize;
 			if (!runtime.GPUEnvironment)
 			{
 				runtime.GPUEnvironment = CreateScope<TerrainEnvironmentGPU>(
@@ -552,8 +547,8 @@ namespace gl {
 			1.0f / static_cast<float>(runtime.HeightMap->GetHeight()) });
 		const uint32_t sampleCount = runtime.HeightMap->GetWidth() > 1
 			? runtime.HeightMap->GetWidth() - 1 : 1;
-		const float terrainWorldSize = static_cast<float>(
-			std::max(specification.MeshResolution, 1u));
+		const float terrainWorldSize = ClampTerrainWorldSize(
+			specification.WorldSize);
 		const float sampleSpacing = terrainWorldSize
 			/ static_cast<float>(sampleCount);
 		shader->UploadUniformFloat("u_SampleSpacing", sampleSpacing);

@@ -418,6 +418,16 @@ namespace gl {
 				commit("Edit Terrain Mesh Resolution", before);
 
 				before = terrain;
+				if (ImGui::DragFloat("World Size (X/Z)", &spec.WorldSize, 1.0f,
+					TerrainWorldSizeMinimum, TerrainWorldSizeMaximum, "%.0f",
+					ImGuiSliderFlags_AlwaysClamp))
+				{
+					spec.WorldSize = ClampTerrainWorldSize(spec.WorldSize);
+					TerrainRenderer::Invalidate(terrain);
+				}
+				commit("Edit Terrain World Size", before);
+
+				before = terrain;
 				if (ImGui::DragFloat("Height Scale", &spec.HeightScale, 0.1f, 0.0f, 500.0f))
 				{
 					spec.Preset = TerrainPreset::Custom;

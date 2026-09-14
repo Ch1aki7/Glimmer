@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-09-11
+- 最近更新：2026-09-14
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -98,6 +98,7 @@
 
 **下一步**
 
+- 保留现有 Terrain Entity、`3×3` Chunk/LOD、四层 Triplanar PBR、SimulationGrid Ping-Pong、固定步气候/水文和序列化边界，不整体替换为 `tmp/tmpTerrain`；先建立可重复截图的视觉基线，再以现有 OpenGL Pass 重写原型中可取的独立水面、深度吸收/折射、速度泡沫、泥沙染色、岸线湿润与温度积雪反馈；
 - 将 Humidity、Temperature 和 VegetationPotential 作为 Terrain Material Weight 的附加输入，先定义原地貌权重与动态生态权重的组合契约；
 - 为动态材质权重补充确定性与归一化验证，避免气候步直接重复执行完整地形派生；
 - 完成材质反馈后再建设物种资产、分布规则和 GPU 植被实例化，不把单株测试实体永久写入默认场景。
@@ -140,6 +141,21 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-09-14：Terrain 世界长宽与网格精度解耦
+
+- `TerrainSpecification` 新增独立、可序列化的 `WorldSize`，Inspector 以 `World Size (X/Z)` 暴露正方形地形的水平长宽；范围从 16 到 8192，默认 256；
+- `WorldSize` 统一驱动程序化生成的物理尺度、派生图采样间距、水文/气候格点尺度、`3×3` Chunk 布局、Color/Shadow Bounds 和编辑器聚焦范围；`MeshResolution` 继续只决定共享网格细分，最大值仍为 512，放大地形不再隐式平方增加三角形数量；
+- 旧场景没有 `WorldSize` 时从原 `MeshResolution` 推导，保持其既有水平尺寸；新场景保存时写入经过有限值与范围约束的字段；
+- 验证：`scripts\Verify-Windows.bat` 完整通过 VS2026 `Debug | x64` 解决方案构建与全部无窗口回归；新增世界尺寸序列化往返、上限和非有限值回退断言；`git diff --check` 通过；提交：待提交。
+
+### 2026-09-14：第三方生成残留清理与 tmpTerrain 方案复核
+
+- 删除 GLFW、ImGui、yaml-cpp、ImGuizmo 和 SPIRV-Cross 子模块内遗留的未跟踪 `premake5.lua`、Visual Studio 工程及局部 `bin/bin-int`；未重置或修改第三方源码，根工作树恢复干净；
+- 复核 `tmp/tmpTerrain` 全部 16 个 HLSL 文件：原型缺少 Common、ShadingModels、Random、Meteorograph、WorldDefinitions、MeshGeneration 等外部依赖，固定使用 4096² 数据场与 256² 相机跟随网格，不能作为当前 OpenGL 引擎的可直接替换模块；其 `TerrainData_CS` 在同一 Dispatch 中写 Flux 后仅用 Workgroup Barrier 读取跨组邻格，无法保证全局可见性，泥沙半拉格朗日输运也不满足当前守恒契约；
+- 决策：不整体采用原型运行时；保留现有可序列化 Terrain、Chunk/LOD、Triplanar PBR、CSM、确定性派生和分 Pass 守恒模拟，选择性重写原型更有表现力的独立水面、折射/深度吸收、流速泡沫、泥沙染色以及海岸/湿润/积雪生态反馈；本次只完成分析和路线校准，尚未实现视觉 Pass；
+- 验证：清理后五个子模块及根工作树均无残留变化；重新执行 `scripts\Verify-Windows.bat -SkipBuild`，中央适配层成功生成 VS2026 工程且没有重新污染子模块，全部无窗口回归 PASS；`git diff --check` 通过；
+- 文档修正：移除已经由中央依赖适配层解决的子模块 Premake 技术债，修正 P14 气候—水文耦合状态，并为可核验里程碑回填真实提交；提交：待提交。
+
 ### 2026-09-11：纯净 Clone 的 Windows 构建自举
 
 - 定位新目录构建失败的根因：GLFW、ImGui、yaml-cpp、ImGuizmo 与 SPIRV-Cross 的 Glimmer 专用 `premake5.lua` 只存在于旧工作树的子模块未跟踪文件中，上游固定提交并不包含它们；纯净 clone 即使完成 `git submodule update --init --recursive`，根 Premake 仍无法包含这些本机文件；
@@ -147,7 +163,7 @@
 - `Verify-Windows` 在生成前检查十个递归子模块的 `.git` 与代表性源码，并检查根 Premake、主仓库依赖适配层、Glad 源码和内置 Premake；缺失时给出“初始化子模块”或“恢复主仓库文件”的区分诊断；BAT 优先使用 PowerShell 7、回退 Windows PowerShell；MSBuild 子进程只保留一个规范化 `PATH`；
 - README 开头新增新设备构建与启动项目指引；根工作区默认启动项目由示例 `Sandbox` 调整为主要开发宿主 `GlimmerEditor-CyouBranch`，并说明 Sandbox、旧编辑器和无窗口回归目标的用途；旧 `tmp` 第三方 Premake 备份已移除，不影响仍保留作算法参考的 `tmp/tmpTerrain`；
 - 新设备验证默认使用单节点 MSBuild，避开 VS2026 多节点重新传播 `PATH/Path` 时的 MSB6001；可通过 `-BuildJobs <1..32>` 显式提高并行度；P14 当前主线保持不变；
-- 验证：从根适配层重新生成 `GlimmerEngine.slnx`，解决方案引用 `bin-int/projects/Dependencies` 下六个依赖工程且不引用子模块内工程，并将 `GlimmerEditor-CyouBranch` 标记为 `DefaultStartup`；PowerShell 7 的完整 `scripts\Verify-Windows.bat` 与规范化环境下的 Windows PowerShell 5.1 回退路径均返回 0，`Debug | x64` 完整解决方案成功构建；删除备份并调整默认项目后再次执行生成与全部无窗口回归，结果 PASS；提交：待提交。
+- 验证：从根适配层重新生成 `GlimmerEngine.slnx`，解决方案引用 `bin-int/projects/Dependencies` 下六个依赖工程且不引用子模块内工程，并将 `GlimmerEditor-CyouBranch` 标记为 `DefaultStartup`；PowerShell 7 的完整 `scripts\Verify-Windows.bat` 与规范化环境下的 Windows PowerShell 5.1 回退路径均返回 0，`Debug | x64` 完整解决方案成功构建；删除备份并调整默认项目后再次执行生成与全部无窗口回归，结果 PASS；提交：`21d8c34`。
 
 ### 2026-09-10：自定义后处理 Shader ABI 与实时 Pass 栈
 
@@ -156,14 +172,14 @@
 - Settings 新增自定义后处理列表和 `.glsl` 拖放入口，Content Browser 新增 Post Process Shader 创建模板；自定义 Shader 注册进共享 `ShaderLibrary`，继续支持主文件和递归 Include 热重载；`PostProcess` 示例集现包含 Pixelate、Vignette、Chromatic Aberration、Wave Distortion、Depth Outline 与 Film Grain；
 - 修正尖括号 Shader Include 根目录：位于任意 `assets/shaders` 子目录的 Shader 均能通过 `<Glimmer/...>` 引用稳定 ABI；新增 `GLIMMER_POST_PROCESS_VALIDATE=1` 自动验证入口；
 - 当前 Pass 栈属于编辑器会话运行时状态，不写入 Scene YAML，也尚无参数反射、History/Velocity/Normal 输入、阶段选择或 Render Graph；P14 当前主线保持不变；
-- 验证：VS2026 `Debug | x64` 编辑器与回归工程构建成功，无窗口回归全部 PASS；GTX 1050 / OpenGL 4.6 下六个示例与递归 ABI Include 均编译成功，六级自定义 Pass 链连续渲染 5 帧后正常自动退出；`git diff --check` 通过；提交：待提交。
+- 验证：VS2026 `Debug | x64` 编辑器与回归工程构建成功，无窗口回归全部 PASS；GTX 1050 / OpenGL 4.6 下六个示例与递归 ABI Include 均编译成功，六级自定义 Pass 链连续渲染 5 帧后正常自动退出；`git diff --check` 通过；提交：`d3c7abf`。
 
 ### 2026-09-09：Content Browser 连续缩放与紧凑列表
 
 - Content Browser 右栏新增贴近下边框的紧凑缩放滑块，并支持文件区域内 `Ctrl + 鼠标滚轮` 调整；外层 FilePanel 禁止滚动，只保留文件区自身的滚动条；文件区高度由滑块顶部直接计算，滚动条下端与滑块相接，滑块只保留 2 像素底部间距；缩放最小端切换为与内容区同宽的单行紧凑列表，其余区间映射为 `72～160` 像素自适应方形网格；
 - 网格条目改为上方大图标、底部单行文件名，名称按实际像素宽度省略且悬停显示全文；原有选择、双击、拖放和空白右键创建行为保持不变；
 - 文件夹与 Shader、Model、Image、Scene、Material、TerrainMaterial、Skybox、普通文件图标改由 ImGui DrawList 以几何图元绘制，不依赖字符字号或新增位图资源；当前目录按文件夹优先、名称不区分大小写稳定排列；
-- 验证：VS2026 `Debug | x64` 完整解决方案构建成功，全部无窗口回归 PASS；源码兼容当前 ImGui 1.92.7，只有既有 `Instrumentor.h` C4267 警告；提交：待提交。
+- 验证：VS2026 `Debug | x64` 完整解决方案构建成功，全部无窗口回归 PASS；源码兼容当前 ImGui 1.92.7，只有既有 `Instrumentor.h` C4267 警告；提交：`35235cf`。
 - 当前主线保持 P14 气候场驱动 Terrain Material Weight。
 
 ### 2026-09-09：逐场景编辑器观察相机恢复与可靠卸载
@@ -172,7 +188,7 @@
 - 用户偏好升级为向后兼容的 Version 2，按规范化场景路径保存最多 64 组观察状态；场景切换、Save/Save As 和正常退出保存视角，加载场景后恢复，New 使用默认视角但不删除历史；
 - Debug 临时场景进入时快照正式观察相机，退出时恢复，激活期间不写偏好；Terrain 自动验证继续使用独立 Fixture，不污染用户记录；
 - 修复 Layer 生命周期：Application 在 Renderer Shutdown 前逆序、幂等调用全部 OnDetach，使编辑器会话与 GPU 资源清理拥有可靠退出点；
-- 验证：VS2026 `Debug | x64` 完整解决方案构建成功；无窗口回归全部 PASS，新增逐场景隔离、非法值、范围约束、Version 1 兼容和 Layer 卸载顺序断言；同步修正架构文档中遗留的默认演示场景描述；提交：待提交。
+- 验证：VS2026 `Debug | x64` 完整解决方案构建成功；无窗口回归全部 PASS，新增逐场景隔离、非法值、范围约束、Version 1 兼容和 Layer 卸载顺序断言；同步修正架构文档中遗留的默认演示场景描述；提交：`ef6bde2`。
 - 当前主线恢复 P14 气候场驱动 Terrain Material Weight。
 
 ### 2026-09-09：启动恢复上次场景与默认演示场景解耦
@@ -181,7 +197,7 @@
 - 新增项目隔离的用户级场景偏好，成功打开/保存后立即记录，启动时尝试恢复；首次启动、New、文件丢失或反序列化失败使用空场景，不隐式保存未保存内容；
 - 普通启动移除硬编码的 Sun、Point Light、Sky Light 和 Alpine Terrain；Terrain Sampling/LOD 自动验证改用独立 Fixture，不再依赖正常启动场景；SceneSerializer 现返回写入成功/失败；
 - 验证：VS2026 `Debug | x64` 完整解决方案构建成功；无窗口回归全部 PASS，新增写入失败反馈、带空格路径、项目隔离和清除恢复目标断言；统一脚本仍受宿主重复 `PATH/Path` 影响，使用规范化子进程环境后同一解决方案构建通过；
-- 当前主线恢复 P14 气候场驱动 Terrain Material Weight；提交：待提交。
+- 当前主线恢复 P14 气候场驱动 Terrain Material Weight；提交：`0c81e69`。
 
 ### 2026-09-09：模型 Shader ABI 与多 Pass 法线外扩
 
@@ -189,7 +205,7 @@
 - `.glmat` 新增向后兼容的可选 Passes，每个 Pass 保存 Shader、Order、Cull、DepthWrite、Queue 以及 Float/Float4 参数；Renderer3D 将 Mesh 展开为有序 Pass RenderItem，并把 Pass 状态纳入排序、合批、实例化和状态恢复；RendererAPI/OpenGL 新增 None/Back/Front Cull；
 - 新增 `ToonSurface.glsl`、`ToonOutline.glsl` 和 `DefaultToonOutline.glmat`。Outline 以世界空间法线外扩、Front Cull 和独立不透明队列绘制，Forward 继续消费标准 Surface/Light/Shadow ABI；旧单 Shader 材质行为不变；
 - 验证：VS2026 `Debug | x64` 的 Glimmer、编辑器和回归目标均构建成功；无窗口回归全部 PASS，并新增多 Pass 顺序、状态与通用参数保存往返；GTX 1050/OpenGL 4.6 下 PBR/Toon Include 展开编译成功，Toon 自动 Lab 实际渲染 `12/12` Items、无跳过模型，Shadow `24/24`；统一脚本首次受宿主重复 `PATH/Path` 环境变量影响只返回 MSBuild 退出码，清理子进程环境后相同工程构建通过；
-- 当前主线恢复 P14 气候场驱动 Terrain Material Weight；提交：待提交。
+- 当前主线恢复 P14 气候场驱动 Terrain Material Weight；提交：`c80489f`。
 
 ### 2026-08-18：P13C 运行时侵蚀、沉积与派生图闭环
 
@@ -197,7 +213,7 @@
 - GPU 新增独立 Runtime Height Ping-Pong 与 `ErosionDeposition.comp`；生成 Height 保持不可变初态，Reset 恢复全部模拟状态，Runtime 不进入 Scene YAML 且没有隐式 Bake；
 - Terrain Color/Shadow 统一读取 Runtime Height；每帧全部固定子步结束后最多复用一次 `DeriveTerrainMaps.comp`，同步刷新 Normal/Slope、Analysis 和 MaterialWeight，零步进或源项关闭时不增加派生 Dispatch；
 - 验证：114 项无窗口断言全部 PASS；GTX 1050 / OpenGL 4.6 水文 Contract 的组合质量误差 `2.58287e-7`、Height/Sediment 帧划分差值为 `0`、Reset PASS；Terrain GPU 验证通过并实际调用 Runtime Height 派生入口，哈希与生成路径一致；VS2026 `Debug | x64` 增量构建成功；
-- P13C 验收完成，当前主线提升为 P14 简化气候与植被闭环；提交：待提交。
+- P13C 验收完成，当前主线提升为 P14 简化气候与植被闭环；提交：`9294359`、`8b70a29`。
 
 ### 2026-08-18：P13B 泥沙输运与携沙能力契约
 
@@ -205,7 +221,7 @@
 - 新增只读 Capacity/Saturation 派生场：`Capacity = CapacityScale × WaterDepth × Speed`，`Saturation = Sediment / Capacity`，零容量但存在泥沙时以 `1000` 有界表示过饱和；
 - GPU 使用单缓冲 `R32F` Capacity/Saturation 与独立 `SedimentCapacity.comp`，不增加派生场 Ping-Pong；Terrain slot 23～27 和 Debug 五态可视化提供 Water、Velocity、Sediment、Capacity、Saturation 诊断；
 - 验证：109 项无窗口断言全部 PASS；GTX 1050 / OpenGL 4.6 GPU Contract PASS，水量相对误差 `7.38228e-7`、泥沙质量误差 `0`、`capacityMax=0.0411786`、`saturationMax=1000`，Water/Sediment/Capacity/Saturation 两种帧划分差值均为 `0`；VS2026 `Debug | x64` 编辑器增量构建成功；
-- P13B 验收完成，当前主线提升为 P13C 运行时侵蚀与沉积；提交：待提交。
+- P13B 验收完成，当前主线提升为 P13C 运行时侵蚀与沉积；提交：`0f667af`、`8e8a091`。
 
 ### 2026-08-18：P13A 固定步长水流核心
 
@@ -213,21 +229,21 @@
 - GPU 每步由 HydrologyFlux 与 HydrologyUpdate 两次 Dispatch、全局 Barrier 和 Ping-Pong Swap 组成；TerrainRenderer 仅在 Color 帧首次 Prepare 推进，Debug 提供 Play/Pause、Single Step、Reset、Rainfall、Readback 与水深诊断覆盖；
 - 新增受控 GPU 合约验证：在 `3×1` 盆地中分别以 `0.04×25` 和 `0.01×100` 运行相同 100 步，自动检查有限性、`2e-3` 相对质量误差上限、低地汇聚与帧划分确定性；可从 Debug 按钮或 `GLIMMER_HYDROLOGY_VALIDATE=1` 启动；
 - 验证：GTX 1050 / OpenGL 4.6 实测 PASS，相对质量误差 `7.38228e-7`，盆地水深 `0.599998`、两侧最大水深 `6.28643e-7`，帧划分最大差值 `0`；VS2026 `Debug | x64` 编辑器增量构建成功，104 项无窗口回归全部 PASS；
-- P13A 验收完成，当前主线提升为 P13B 泥沙输运；提交：待提交。
+- P13A 验收完成，当前主线提升为 P13B 泥沙输运；提交：`3cffa91`、`91b6662`、`de662cd`。
 
 ### 2026-08-17：Assimp 跨设备导入收口
 
 - Ensure 从“只看三个文件”升级为校验产物、Schema、配置、Assimp 子模块提交和 `ccache=OFF` 的构建指纹；Build 限定 VS 18.x/v145，PreBuild 改用 `$(ProjectDir)`，完整解决方案与单项目构建均能定位脚本；
 - Cerberus 回归改用版本化 assets，明确验证静态网格、切线和 A/N/M/R，不再依赖本机 `tmp` 或声称存在未提交的 AO；IBL Gun 移除错误 AO 覆盖和失效 Raw Normal 句柄，Albedo 注册恢复 sRGB/Color；
 - 定位回归 EXE 的 `0xC0000005` 为损坏 Debug 增量链接产物：旧 EXE 的 PE 系统导入表为空。测试目标关闭增量链接并使用 Program Database，定向 Rebuild 后系统导入恢复；
-- 验证：旧 `ccache=ON` Cache 被自动重配，首次 Ensure 约 5.95 秒、后续命中约 118 ms；测试工程可独立构建，Cerberus 正式样本与共 104 项无窗口断言全部 PASS；`Verify-Windows.ps1` 完整通过，编辑器保持运行 10 秒无提前退出，`git diff --check` 通过；当前主线仍为 P13A；提交：待提交。
+- 验证：旧 `ccache=ON` Cache 被自动重配，首次 Ensure 约 5.95 秒、后续命中约 118 ms；测试工程可独立构建，Cerberus 正式样本与共 104 项无窗口断言全部 PASS；`Verify-Windows.ps1` 完整通过，编辑器保持运行 10 秒无提前退出，`git diff --check` 通过；当前主线仍为 P13A；提交：`de0cad0`。
 
 ### 2026-08-16：Assimp 新设备构建自修复
 
 - 定位新设备的 `assimp/config.h` C1083：Assimp 子模块只提供 `config.h.in`，实际 `config.h` 必须由上游 CMake 写入被忽略的 `vendor/assimp-build/<配置>/include`；仓库已有 Premake include/link 配置，但新设备未生成独立构建目录；
 - `Win-BuildAssimp-vs2026.bat` 改用 `vswhere` 定位 VS 18/2026 和随 VS 安装的 CMake，移除固定 C 盘路径，并显式关闭会错误包裹 MSVC `lib.exe`、造成“日志成功但静态库未落盘”的 MinGW ccache；
 - 新增快速 `Win-EnsureAssimp-vs2026.bat`，Premake 为 Debug 与 Release/Dist 写入对应 PreBuildEvent；后续由 2026-08-17 里程碑补充构建指纹、子模块提交与 CMake 配置校验。`Verify-Windows.ps1` 现检查 Assimp 子模块并在 Debug 构建前补齐依赖；
-- 验证：新建 Debug 构建目录后生成 `config.h`、`assimp-vc145-mtd.lib` 与 `zlibstaticd.lib`；快速 Ensure 命中后不重复编译；重新生成 VS2026 工程，GlimmerEngine `Debug | x64` 整解决方案成功构建，AssimpModelImporter 编译和编辑器最终链接通过；当前主线仍为 P13A；提交：待提交。
+- 验证：新建 Debug 构建目录后生成 `config.h`、`assimp-vc145-mtd.lib` 与 `zlibstaticd.lib`；快速 Ensure 命中后不重复编译；重新生成 VS2026 工程，GlimmerEngine `Debug | x64` 整解决方案成功构建，AssimpModelImporter 编译和编辑器最终链接通过；当前主线仍为 P13A；提交：`113898a`。
 
 ### 2026-08-14：静态 FBX 与导入 PBR 材质
 
@@ -235,7 +251,7 @@
 - MeshMaterialSource 扩展 BaseColor、Normal、Metallic、Roughness、AO、Emissive 路径与因子；除读取 Assimp 材质语义外，可在模型相邻、Textures、Textures/Raw 内按 `_N/_M/_R/_AO` 约定补全外部贴图。Model 按 MaterialIndex 共享加载纹理，Renderer3D 让显式 `.glmat` 通道优先、导入通道回退；
 - PBRModel 新增 Metallic/Roughness 贴图采样，固定使用 texture unit 11/12，保持 0～3 材质、4～7 CSM、8～10 IBL 的现有槽位边界；Content Browser 将 FBX 显示为 Model；
 - 验证：Cerberus FBX 成功产生有效三角 Submesh，全部顶点切线有限且归一化；当时的本机 A/N/M/R/AO 验证已由 2026-08-17 版本化 A/N/M/R 回归取代。Cerberus 大文件后来已进入正式 assets，许可风险见技术债；
-- 当前主线返回 P13A GPU 水文数值与视觉验收；提交：待提交。
+- 当前主线返回 P13A GPU 水文数值与视觉验收；提交：`0261eb7`。
 
 ### 2026-08-14：模型导入边界与 Assimp 接入准备
 
@@ -243,14 +259,14 @@
 - 新增纯 CPU `MeshSource`、`SubmeshSource`、`MeshMaterialSource` 和统一 `ModelImporter` 分发边界；既有 tinyobjloader 逻辑迁入 `ObjModelImporter`，`Model` 只消费导入结果并创建 GPU `Mesh`，为后续 Assimp importer 和内部 `.glmesh` 烘焙隔离第三方格式；
 - 当前资产注册仍只把 `.obj` 认作 Model，Assimp 静态库尚未链接到运行时，FBX/glTF/GLB 仍明确不属于已支持格式；下一阶段需实现 `AssimpModelImporter`、坐标/单位/节点/材质契约和内部二进制资产后再开放扩展名；
 - 验证：Assimp v6.0.5 Debug 静态库在 VS2026 下成功构建，实际输出 `assimp-vc145-mtd.lib` 并只启用 OBJ/FBX/GLTF，立即重复脚本只做约 5 秒配置/目标检查而未重编源文件；新增 3 条 OBJ→MeshSource 回归后 100 项无窗口断言全部 PASS，GlimmerEditor-CyouBranch `Debug | x64` 构建成功，立即重复构建仅检查并输出既有目标；
-- 提交：待提交。
+- 提交：`ede3d86`。
 
 ### 2026-08-13：P12.1 后处理职责收拢
 
 - 新增引擎侧 `PostProcessRenderer`，集中持有 Display FBO、半分辨率 Bloom Ping-Pong FBO、三张后处理 Shader 引用、运行时参数以及 Bloom/Tone Mapping Pass 执行；
 - `EditorLayer` 不再实现 Bloom 与 Tone Mapping 算法，只提交 Scene Color/Depth、相机逆 VP/位置、SkyLight 和 DirectionalLight 输入，并将 `PostProcessSettings` 暴露给既有 Settings UI；画面算法、默认参数和 Scene YAML 边界保持不变；
 - 验证：Premake 已将新增源文件纳入 Glimmer 工程；VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；最终编辑器以项目工作目录和雾验证开关持续运行 15 秒，无提前退出；
-- 提交：待提交。
+- 提交：`822a921`。
 
 ### 2026-08-13：P12 山脉大气表现与后处理
 
@@ -258,7 +274,7 @@
 - 显示映射改为 `2^EV` 摄影曝光、可调 ACES White Point 和单次 Gamma；新增半分辨率 HDR Bloom，使用软阈值提取与双缓冲高斯模糊，合成后再统一经过雾、EV 和 ACES；
 - TAA 评估结论为暂缓：当前没有投影 Jitter、上一帧 ViewProjection、HDR History 或 Motion Vector；只用 Depth 重投影会使移动 Model/Instancing/Sprite/透明物体和编辑器相机切换产生拖影。后续须先建立 Velocity 附件、实体 Previous Transform、历史失效规则、邻域 Clamp 与透明响应 Mask，EntityID 仍保持非时域拾取；
 - 验证：VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 下全部后处理、Terrain 与 Shadow Shader 编译成功；固定相机验证远景雾化、高处细节、环境色关联、默认 EV/ACES 高光和太阳 Bloom，无断言、崩溃或整屏泛白；
-- 提交：待提交。
+- 提交：`91505b2`、`1e73acd`、`0930a54`、`8a9cbaa`。
 
 ### 2026-08-13：P11 Terrain Chunk、LOD 与剔除
 
@@ -266,7 +282,7 @@
 - Runtime 持有约 `1 / 1/2 / 1/4` 密度的三份共享网格，Color Pass 按世界距离选择 LOD，加入 5 单位迟滞和相邻四方向最多一级的约束；Shadow 固定使用 LOD0；
 - 三档网格四边使用 Skirt 遮盖 T-Junction；Debug Overview 提供 LOD 数量、三角形数、距离阈值及红/绿/蓝 LOD 调试着色；
 - 验证：88 项无窗口回归全部 PASS，VS2026 `Debug | x64` 整解决方案构建成功；Intel Iris Xe / OpenGL 4.6 下 Terrain、ShadowDepth 与三条 Compute Shader 均正常加载；固定相机截图呈现连续的红/绿/蓝近中远区域，颜色边界未露出天空盒或 Clear Color，也未出现孤立越级 Chunk；
-- 提交：待提交。
+- 提交：`dccd0b7`、`e610d73`、`af2823b`、`4ba3081`。
 
 ### 2026-08-12：P10 IBL 环境光照
 
@@ -274,7 +290,7 @@
 - `EnvironmentLighting` 按源 Handle、Runtime Version、派生图类型与生成参数缓存 `32×32 / 64 samples` Diffuse Irradiance 和 `64×64 / 64 samples`、7 层 GGX Specular Prefilter，正常帧不重复读回或卷积；
 - 新增与具体环境无关、进程级共享的 `64×64 RG16F / 128 samples` Split-Sum BRDF LUT；PBRModel 使用 slot 8/9/10，Terrain 使用 slot 20/21/22，并按 `Prefilter × (F0 × scale + bias)` 完成环境镜面项；
 - GTX 1050 / OpenGL 4.6 下 BRDF LUT 在日志相邻秒内生成一次；Diffuse 与 Specular 各生成一次，PBR Lab 6/6，默认 Terrain、Shadow 与三条 Terrain Compute Shader 均成功加载；
-- 验证：编辑器增量构建成功，78 项无窗口回归全部 PASS，新增覆盖 LUT 有限/有界及 Roughness/掠射角响应；构建产物保留，提交：待提交。
+- 验证：编辑器增量构建成功，78 项无窗口回归全部 PASS，新增覆盖 LUT 有限/有界及 Roughness/掠射角响应；构建产物保留；提交：`85ae9ee`、`6a9bb58`、`d31fb00`。
 
 ### 2026-08-11：P8.1 TerrainMaterial 采样优化
 
@@ -282,7 +298,7 @@
 - TerrainRenderer 新增独立非阻塞 GPU Timer、采样模式、距离阈值、DrawCall/绑定纹理统计；Debug Overview 可即时切换 Full-4、Top-2、Top-2 + Dominant Normal/AO 与 Auto Distance。Auto 成为默认，Full-4 与 Handle=0 的无纹理基础颜色路径继续作为质量和性能基线；
 - 新增独立 TerrainSamplingBenchmarkTool：不持有 Scene 或 EditorLayer 状态，按唯一 GPU Query 样本执行 15 次预热和每档 30 次采样；无人值守入口只为默认 Terrain 分配完整 DefaultTerrain、固定相机，完成后正常退出；
 - GTX 1050/OpenGL 4.6 固定场景结果：Full-4 10.681 ms，Top-2 6.026 ms（降低 43.6%），Top-2 + Dominant Normal/AO 4.226 ms（降低 60.4%）；三档固定视口截图未发现新增条带接缝，Terrain 图形/Compute Shader 均成功编译；
-- 验证：Premake VS2026 重新生成成功，VS2026 Debug x64 全解决方案构建成功，64 项无窗口断言全部 PASS；提交：待提交。
+- 验证：Premake VS2026 重新生成成功，VS2026 Debug x64 全解决方案构建成功，64 项无窗口断言全部 PASS；提交：`5a6e815`。
 
 ### 2026-08-11：tmpTerrain 地质地貌迁移实验
 
@@ -290,7 +306,7 @@
 - `TerrainNoiseSettings` 新增 GeologyBlend、GeologyScale、RiftStrength 与 TrendStrength；参数进入 Terrain Preset、Scene YAML、Inspector 连续编辑事务和 Runtime Dirty/Regenerate 链路，GeologyBlend 设为 0 时跳过新增计算并恢复原始生成公式；
 - 未迁移原型的浅水、泥沙、蒸发和气象耦合 Pass：原始 `TerrainData_CS.hlsl` 在单次 Dispatch 中用 Group Barrier 后跨 Workgroup 读取输出，存在数据竞争，后续必须按固定步长拆成 Flux、Water Update、Velocity、Sediment 和 Erosion 等独立 Ping-Pong Pass；
 - 验证：GTX 1050/OpenGL 4.6 下 GenerateFBM、ThermalErosion、DeriveTerrainMaps 与 Terrain 图形 Shader 编译成功；两次 GPU 输出确定性 Hash 均为 `16881604791310884879`，共 30 次 Dispatch；VS2026 `Debug | x64` 全解决方案构建成功，64 项无窗口断言全部 PASS；
-- 提交：待提交。
+- 提交：`4038de0`。
 
 ### 2026-08-11：P9 方向光阴影与 CSM
 
@@ -299,14 +315,14 @@
 - 明确半透明投影策略：Opaque 与 Mask 参与方向光阴影，Blend 默认不写 Shadow Map，避免半透明表面投出错误的实心轮廓；未来若需要彩色透射或抖动阴影，作为独立能力建设；
 - 建立非阻塞 `GPUTimer`、9 组 Shadow Benchmark、无人值守入口和包含 Opaque/Mask/Blend 对照、四级深度标记及远近两种构图的 Shadow Visual Validation；
 - 验证：RTX 4060 完成固定 2500 实体、9 组各 30 样本性能基准；GTX 1050/OpenGL 4.6 实际窗口检查级联覆盖/过渡、Mask 镂空、Opaque 接触阴影及 Blend 无实心阴影，默认 Bias 下未见明显大面积 Acne 或 Peter Panning；VS2026 `Debug | x64` 全解决方案构建成功，立即重复同配置构建只执行增量项目检查，64 项无窗口断言全部 PASS；
-- 提交：待提交。
+- 提交：`33e0b63`、`74accc4`、`85e77a8`、`bc9af86`、`fef07a9`、`05c02df`、`a60c6d2`、`05fa519`、`02466ca`、`e8e1575`、`1d360ea`、`9ab1b44`。
 
 ### 2026-08-09：Renderer2D 空批次残留修复
 
 - 修复实体添加 `SpriteRendererComponent` 后再移除时，视口仍残留白色 Quad 的问题；根因是空 Batch 把 `indexCount = 0` 传入 `DrawIndexed`，而底层将 0 解释为绘制完整预生成索引缓冲，导致上一帧 VBO 残留被再次提交；
 - `Renderer2D::Flush` 现对零索引批次直接返回，不绑定纹理、不发起 Draw Call，也不增加统计；保留其他调用方使用 `DrawIndexed(0)` 绘制完整索引缓冲的既有语义；
 - 验证：VS2026 `Debug | x64` 完整编辑器目标构建成功；55 项无窗口断言及最终汇总全部 PASS；默认 Alpine 场景在 Intel Iris Xe/OpenGL 4.6 下稳定运行，Texture、ShadowDepth、Terrain 与三个 Terrain Compute Shader 均成功加载；
-- 提交：待提交。
+- 提交：`d19b76f`。
 
 ### 2026-08-09：P8 TerrainMaterial 与分层 PBR
 
@@ -320,7 +336,7 @@
 - VS 启动时出现的撕裂/显示异常最终确认来自显卡切换与独显选择，不应归因于 Terrain Shader；完整四层 Triplanar 的采样成本仍作为独立性能问题登记到 P8.1；
 - 验证：VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案和独立测试目标构建成功；53 项无窗口断言全部 PASS；Intel Iris Xe/OpenGL 4.6 下 Terrain 图形 Shader 与三个 Compute Shader 编译成功，GPU 确定性哈希仍为 `4345498711584764525`、30 Dispatch；
 - README：新增“TerrainMaterial 四层 Triplanar PBR”；ARCHITECTURE：同步资产类型、场景引用、Renderer 数据流和编辑器入口；
-- 提交：待提交。
+- 提交：`3fb5cbb`。
 
 ### 2026-08-09：P7 山脉生成、派生图与 Authoring Erosion
 
@@ -331,7 +347,7 @@
 - Scene YAML 保存 Preset、三项新增地貌参数、Authoring Erosion 和两个 Compute Shader Handle；旧场景缺 Preset 时按 Custom 读取。Inspector 提供预设、Mountain、Authoring Erosion 控件、生成版本和 Dispatch 数，全部复用 P6 的单命令事务；
 - 验证：`scripts\Verify-Windows.bat` 完整通过，VS2026/MSBuild 18.8.2 `Debug | x64` 全解决方案构建成功且 46 项无窗口断言全部 PASS；Intel Iris Xe/OpenGL 4.6 下三个 Compute Shader 编译成功，默认 Alpine 每次执行 30 Dispatch；相同参数两次 GPU 输出哈希均为 `4345498711584764525`，高度与派生图无 NaN/Inf、范围合法且材质权重归一化；
 - README：新增“山脉生成、派生图与 Authoring Erosion”；ARCHITECTURE：同步 Terrain 三段式 Compute 数据流和 Runtime 所有权；
-- 提交：待提交。
+- 提交：`4038de0`。
 
 ### 2026-08-09：P6 Terrain 生命周期与编辑事务收口
 
@@ -341,7 +357,7 @@
 - 无窗口回归扩展到 35 项，覆盖 Terrain Transform/实体复制、Specification YAML 往返、Runtime 非持久化、Edit → Play Scene Copy 隔离、复制赋值失效以及单条 Terrain 命令 Undo/Redo；测试目标复用编辑器 CommandHistory 实现但仍不创建窗口或图形上下文；
 - 验证：`scripts\Verify-Windows.bat` 完整通过，Premake VS2026 生成、MSBuild 18.8.2 `Debug | x64` 全解决方案构建和 35 项断言全部成功；完整编辑器在正确项目工作目录下稳定运行 8 秒；已知 GLFW Premake 弃用警告仍保留；
 - README：新增“Terrain 生命周期与 Inspector 编辑事务收口”，并修正旧 TerrainPanel 说明；ARCHITECTURE：同步 Runtime 所有权、Inspector 事务覆盖和测试边界；
-- 提交：待提交。
+- 提交：`af9fea6`。
 
 ### 2026-08-09：P5 自动化回归测试与可重复构建验证
 
@@ -351,7 +367,7 @@
 - 新增 `scripts/Verify-Windows.bat` 无暂停入口及其 PowerShell 实现：绕过本机脚本执行策略后检查递归子模块是否初始化，调用仓库内 Premake 生成 VS2026 `.slnx`，自动查找或接收显式 MSBuild 路径，构建全解决方案 `Debug | x64`，最后运行无窗口测试；
 - 验证：统一脚本完整通过；Premake 成功生成 `GlimmerRegressionTests.vcxproj`，VS2026/MSBuild 18.8.2 全解决方案构建成功，23 项正常断言全部 PASS；强制失败运行返回退出码 1；测试临时目录自动清理；
 - README：新增“无窗口回归测试与 Windows 一键验证”，记录跨设备 Clone、子模块、生成、构建和测试流程；ARCHITECTURE：补充独立测试目标及其依赖/隔离边界；
-- 提交：待提交。
+- 提交：`c500bdd`。
 
 ### 2026-08-09：PBR 材质通道与颜色空间契约
 
@@ -363,7 +379,7 @@
 - 验证：Premake VS2026 重新生成成功；VS2026 `Debug | x64` 全解决方案构建成功；自动 Lab 稳定运行 8 秒并记录 `6/6 items` 渲染 PASS、旧 `.glmat` 与全部新 Override YAML 往返 PASS；测试进程正常关闭，临时文件/日志已清理；`git diff --check` 通过；
 - 未覆盖：Metallic/Roughness 仍为标量，独立贴图或打包 ORM 通道、镜像 UV 的 Tangent Handedness、IBL 与阴影留给后续；
 - README：新增“PBR 材质纹理通道扩展与 Material Lab”；
-- 提交：待提交。
+- 提交：`8a69243`。
 
 ### 2026-08-09：可扩展 Debug 面板与 GPU Instancing Lab
 
@@ -373,7 +389,7 @@
 - 面板根据实体数、Submesh 数、1024 实例分块和预设计算理论 Items、DrawCall、Instanced/Individual Draw 与 InstanceCount，逐帧对照 Renderer3D Statistics 显示 Pending/PASS/FAIL，并提供首/中/末代表实体拾取入口；
 - 验证：重新生成 VS2026 工程后 `Debug | x64` 全解决方案构建成功；完整编辑器稳定运行 8 秒；`git diff --check` 通过；
 - README：新增“可扩展 Debug 面板与 GPU Instancing Lab”；
-- 提交：待提交。
+- 提交：`8a69243`。
 
 ### 2026-08-09：Transparent RenderQueue 与材质 AlphaMode
 
@@ -387,7 +403,7 @@
 - 顺序修复：RenderDoc 抓帧确认旧实现的 Renderer2D Draw 早于 Skybox，导致透明区域先与 Clear Color 混合；现已把实际 Renderer2D Draw 延迟到 Skybox Draw 之后、3D Transparent 之前；
 - 验证：VS2026 `Debug | x64` 全解决方案构建成功；顺序修复后完整编辑器稳定运行 8 秒；`git diff --check` 通过；测试场景、日志和后台进程无残留；
 - README：新增“Transparent RenderQueue 与材质 AlphaMode”；
-- 提交：待提交。
+- 提交：`069fede`、`5bac5c3`。
 
 ### 2026-08-07：3D Instancing 与 MaterialInstance 缓存
 
@@ -422,7 +438,7 @@
 - 验证：VS2026 `Debug | x64` 全解决方案构建成功；原生冒烟测试通过保存/重载/Undo/Redo及文件锁定失败回滚；编辑器在 Intel Iris Xe/OpenGL 4.6 下完成初始化并稳定运行 8 秒；`git diff --check`；
 - 已知警告：保留既有 C4244、C4267 和 `strncpy` C4996 警告；
 - README：新增“材质编辑事务与 Undo/Redo”；
-- 提交：待提交。
+- 提交：`d705f58`。
 
 ### 2026-08-05：建立三文档同步制度
 
@@ -430,7 +446,7 @@
 - 要求每次任务完成前同步审查三份文档，并按职责更新，避免不同设备和会话获得过期上下文；
 - 在根 `AGENTS.md` 固化读取、更新和完成检查规则；
 - 验证：三份文档职责与更新触发条件已交叉核对，`git diff --check`；
-- 提交：待提交。
+- 提交：`85798df`。
 
 ### 2026-08-05：架构文档同步
 
@@ -438,7 +454,7 @@
 - 明确当前完整编辑器、较早宿主、OpenGL 可运行后端与 Vulkan 接口预埋之间的边界；
 - 同步记录 MaterialInstance、Edit/Play、CommandHistory 和尚未实现的 RenderQueue/材质事务；
 - 验证：文档结构与关键源码逐项核对，`git diff --check`；
-- 提交：待提交。
+- 提交：`85798df`、`0022057`。
 
 ### 2026-08-05：项目品牌与 Windows 应用图标
 
@@ -504,10 +520,8 @@
 
 ### 构建与依赖
 
-- 部分 Git 子模块包含 Premake 生成的未跟踪文件，可能使根仓库显示子模块为脏状态；不要在不确认内容的情况下清理或重置子模块；
 - VS2026 Premake 生成的主入口是 `GlimmerEngine.slnx`；旧 `GlimmerEngine.sln` 可能来自 VS2022 或早期生成，自动验证脚本优先构建 `.slnx`；
-- SPIRV-Cross 上游 Premake 会递归包含 samples/tests，根 Premake 当前通过 `removefiles` 排除；修改依赖生成逻辑时必须复验；
-- GLFW Premake 仍使用已弃用的 `flags`、`NoRuntimeChecks` 和 `NoIncrementalLink` 写法，会产生生成警告。
+- GLFW、Glad、ImGui、yaml-cpp、ImGuizmo 与 SPIRV-Cross 的 Premake 项目由主仓库 `scripts/premake/Dependencies.lua` 统一定义；子模块只提供源码，不应再写入本地 Premake 或 Visual Studio 工程；修改适配层时必须复验 SPIRV-Cross CLI/samples/tests 排除规则；
 - Assimp 是独立生成且不提交产物的静态依赖；Glimmer 的 PreBuildEvent 与 `Verify-Windows.ps1` 会检查产物、构建 Schema、配置、子模块提交和 ccache 状态，过期时自动调用 Ensure/Build 脚本。仍可手动运行 `scripts/Win-BuildAssimp-vs2026.bat Debug|Release` 强制重新配置依赖。
 - `assets/models/Cerberus` 已提交约 175 MiB 的 FBX/TGA 测试资源，但仓库缺少原许可说明；公开分发或商业使用前必须补齐明确的再分发许可，否则应从发布资产与版本化回归中替换为自有小型样本。
 - Model 资源已恢复 Cube、Plane、UV Sphere、bunny、planet、spacecraft、suzanne；注册表中的 `models/New Folder/Cube.obj`、`models/dragon.obj`、`models/UV Sphere.obj` 仍缺少源文件，需要从原设备恢复或移除失效条目。
@@ -531,7 +545,7 @@
 - Terrain 已完成固定 `3×3` Chunk、三档距离 LOD/迟滞/相邻约束/Skirt、Color/Shadow 剔除、四层 Triplanar PBR、固定步水文与 Runtime Erosion；运行时 Height 会刷新 Normal/Slope、Analysis 和 Material Weights。尚无显式 Bake，模拟结果关闭或重建后丢弃；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
-- P14 已完成 CPU/GPU 场、TerrainRuntime 所有权、固定步调度、四场诊断和 GPU 趋势 Contract；Rainfall/Evaporation 到 P13 Water 的守恒耦合、材质权重反馈和植被实例化仍未实现；
+- P14 已完成 CPU/GPU 场、TerrainRuntime 所有权、固定步调度、四场诊断、GPU 趋势 Contract，以及 Rainfall/Evaporation 到 P13 Water 的守恒耦合；材质权重反馈、正式水面/岸线视觉层和植被实例化仍未实现；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 
 ## 固定验证清单
