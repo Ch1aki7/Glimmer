@@ -311,7 +311,8 @@ void main()
 vec4 GlimmerPostProcess(GlimmerPostProcessInput inputData)
 {
     // Implement only the effect. The engine supplies HDR color, depth,
-    // viewport size, time and camera reconstruction data through inputData.
+    // world normal, screen velocity, previous-frame history, viewport size,
+    // time and camera reconstruction data through inputData.
     return inputData.SceneColor;
 }
 )") ? path : std::filesystem::path{};

@@ -189,4 +189,5 @@ void main()
         result = mix(result, GlimmerResolveCascadeDebugColor(v_WorldPosition), 0.65);
     o_Color = vec4(max(result, vec3(0.0)), outputAlpha);
     o_EntityID = v_EntityID;
+    o_Normal = vec4(normal * 0.5 + 0.5, 1.0);
 }

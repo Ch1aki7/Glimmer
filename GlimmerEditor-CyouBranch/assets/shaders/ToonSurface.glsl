@@ -64,5 +64,5 @@ void main()
     if (u_ShadowCascadeDebug != 0 && u_ShadowEnabled != 0)
         result = mix(result,
             GlimmerResolveCascadeDebugColor(v_WorldPosition), 0.65);
-    GlimmerWriteColor(result, surface.Alpha);
+    GlimmerWriteColor(result, surface.Alpha, surface.Normal);
 }

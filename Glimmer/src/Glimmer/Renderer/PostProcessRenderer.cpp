@@ -26,9 +26,21 @@ namespace gl {
 		m_BloomFramebuffers[0] = Framebuffer::Create(bloomSpecification);
 		m_BloomFramebuffers[1] = Framebuffer::Create(bloomSpecification);
 
+		FramebufferSpecification velocitySpecification;
+		velocitySpecification.Attachments = { { FramebufferTextureFormat::RG16F } };
+		m_VelocityFramebuffer = Framebuffer::Create(velocitySpecification);
+
+		FramebufferSpecification historySpecification;
+		historySpecification.Attachments = { { FramebufferTextureFormat::RGBA16F } };
+		m_HistoryFramebuffers[0] = Framebuffer::Create(historySpecification);
+		m_HistoryFramebuffers[1] = Framebuffer::Create(historySpecification);
+
 		m_ToneMappingShader = shaderLibrary.Load(shaderPaths.ToneMapping);
 		m_BloomExtractShader = shaderLibrary.Load(shaderPaths.BloomExtract);
 		m_BloomBlurShader = shaderLibrary.Load(shaderPaths.BloomBlur);
+		m_VelocityShader = shaderLibrary.Load(shaderPaths.Velocity);
+		m_HistoryCopyShader = shaderLibrary.Load(shaderPaths.HistoryCopy);
+		ResetHistory();
 	}
 
 	void PostProcessRenderer::Shutdown()
@@ -46,9 +58,14 @@ namespace gl {
 		m_ToneMappingShader.reset();
 		m_BloomExtractShader.reset();
 		m_BloomBlurShader.reset();
+		m_VelocityShader.reset();
+		m_HistoryCopyShader.reset();
 		m_DisplayFramebuffer.reset();
 		m_BloomFramebuffers = {};
 		m_CustomPassFramebuffers = {};
+		m_VelocityFramebuffer.reset();
+		m_HistoryFramebuffers = {};
+		ResetHistory();
 	}
 
 	void PostProcessRenderer::Resize(uint32_t width, uint32_t height)
@@ -65,11 +82,23 @@ namespace gl {
 		const uint32_t bloomHeight = std::max(height / 2u, 1u);
 		m_BloomFramebuffers[0]->Resize(bloomWidth, bloomHeight);
 		m_BloomFramebuffers[1]->Resize(bloomWidth, bloomHeight);
+		m_VelocityFramebuffer->Resize(width, height);
+		m_HistoryFramebuffers[0]->Resize(width, height);
+		m_HistoryFramebuffers[1]->Resize(width, height);
 		if (m_CustomPassFramebuffers[0])
 		{
 			m_CustomPassFramebuffers[0]->Resize(width, height);
 			m_CustomPassFramebuffers[1]->Resize(width, height);
 		}
+		ResetHistory();
+	}
+
+	void PostProcessRenderer::ResetHistory()
+	{
+		m_PreviousViewProjection = glm::mat4(1.0f);
+		m_HistoryReadIndex = 0;
+		m_PreviousCameraValid = false;
+		m_HistoryValid = false;
 	}
 
 	void PostProcessRenderer::EnsureCustomPassFramebuffers(
@@ -119,6 +148,7 @@ namespace gl {
 		});
 		m_CustomPassShaders.push_back(std::move(shader));
 		m_CustomPassLibraryKeys.push_back(libraryKey);
+		ResetHistory();
 		const auto& displaySpecification =
 			m_DisplayFramebuffer->GetSpecification();
 		EnsureCustomPassFramebuffers(
@@ -138,6 +168,7 @@ namespace gl {
 		m_CustomPassLibraryKeys.erase(m_CustomPassLibraryKeys.begin() + index);
 		if (m_CustomPasses.empty())
 			m_CustomPassFramebuffers = {};
+		ResetHistory();
 		return true;
 	}
 
@@ -152,6 +183,7 @@ namespace gl {
 		std::swap(m_CustomPassShaders[fromIndex], m_CustomPassShaders[toIndex]);
 		std::swap(m_CustomPassLibraryKeys[fromIndex],
 			m_CustomPassLibraryKeys[toIndex]);
+		ResetHistory();
 		return true;
 	}
 
@@ -159,7 +191,10 @@ namespace gl {
 	{
 		if (index >= m_CustomPasses.size())
 			return false;
+		if (m_CustomPasses[index].Enabled == enabled)
+			return true;
 		m_CustomPasses[index].Enabled = enabled;
+		ResetHistory();
 		return true;
 	}
 
@@ -175,6 +210,33 @@ namespace gl {
 		if (!m_CustomPasses.empty())
 			EnsureCustomPassFramebuffers(
 				displaySpecification.Width, displaySpecification.Height);
+
+		RenderPassSpecification velocityPass;
+		velocityPass.Target = m_VelocityFramebuffer;
+		velocityPass.ClearColorValue = { 0.0f, 0.0f, 0.0f, 0.0f };
+		RenderPass::Begin(velocityPass);
+		m_VelocityShader->Bind();
+		m_VelocityShader->UploadUniformInt("u_SceneDepth", 1);
+		m_VelocityShader->UploadUniformInt("u_HasCamera",
+			input.HasCamera ? 1 : 0);
+		m_VelocityShader->UploadUniformInt("u_HasPreviousCamera",
+			m_PreviousCameraValid ? 1 : 0);
+		m_VelocityShader->UploadUniformMat4(
+			"u_InverseViewProjection", input.InverseViewProjection);
+		m_VelocityShader->UploadUniformMat4(
+			"u_PreviousViewProjection", m_PreviousViewProjection);
+		if (input.SceneDepthTexture != 0)
+			m_VelocityShader->BindTexture(
+				"u_SceneDepth", 1, input.SceneDepthTexture);
+		Renderer2D::DrawPostProcess(
+			m_VelocityShader, input.SceneColorTexture, displayResolution);
+		RenderPass::End();
+
+		const uint32_t velocityTexture = GetVelocityTextureID();
+		const uint32_t historyTexture = m_HistoryValid
+			? m_HistoryFramebuffers[m_HistoryReadIndex]
+				->GetColorAttachmentRendererID()
+			: input.SceneColorTexture;
 
 		uint32_t resolvedSceneColor = input.SceneColorTexture;
 		uint32_t executedCustomPasses = 0;
@@ -192,6 +254,15 @@ namespace gl {
 			const Ref<Shader>& shader = m_CustomPassShaders[index];
 			shader->Bind();
 			shader->UploadUniformInt("u_SceneDepth", 1);
+			shader->UploadUniformInt("u_SceneNormal", 2);
+			shader->UploadUniformInt("u_SceneVelocity", 3);
+			shader->UploadUniformInt("u_HistoryTexture", 4);
+			shader->UploadUniformInt("u_HasNormal",
+				input.SceneNormalTexture != 0 ? 1 : 0);
+			shader->UploadUniformInt("u_HasVelocity",
+				velocityTexture != 0 ? 1 : 0);
+			shader->UploadUniformInt("u_HistoryValid",
+				m_HistoryValid ? 1 : 0);
 			shader->UploadUniformInt("u_HasCamera", input.HasCamera ? 1 : 0);
 			shader->UploadUniformFloat3(
 				"u_CameraPosition", input.CameraPosition);
@@ -200,6 +271,12 @@ namespace gl {
 			if (input.SceneDepthTexture != 0)
 				shader->BindTexture(
 					"u_SceneDepth", 1, input.SceneDepthTexture);
+			shader->BindTexture("u_SceneNormal", 2,
+				input.SceneNormalTexture != 0
+					? input.SceneNormalTexture : input.SceneColorTexture);
+			shader->BindTexture("u_SceneVelocity", 3,
+				velocityTexture != 0 ? velocityTexture : input.SceneColorTexture);
+			shader->BindTexture("u_HistoryTexture", 4, historyTexture);
 			Renderer2D::DrawPostProcess(
 				shader, resolvedSceneColor, displayResolution);
 			RenderPass::End();
@@ -207,6 +284,20 @@ namespace gl {
 			resolvedSceneColor = m_CustomPassFramebuffers[targetIndex]
 				->GetColorAttachmentRendererID();
 			++executedCustomPasses;
+		}
+
+		if (!m_CustomPasses.empty())
+		{
+			const uint32_t historyWriteIndex = 1u - m_HistoryReadIndex;
+			RenderPassSpecification historyPass;
+			historyPass.Target = m_HistoryFramebuffers[historyWriteIndex];
+			historyPass.ClearColorValue = { 0.0f, 0.0f, 0.0f, 1.0f };
+			RenderPass::Begin(historyPass);
+			Renderer2D::DrawPostProcess(
+				m_HistoryCopyShader, resolvedSceneColor, displayResolution);
+			RenderPass::End();
+			m_HistoryReadIndex = historyWriteIndex;
+			m_HistoryValid = true;
 		}
 
 		uint32_t bloomTexture = 0;
@@ -330,12 +421,27 @@ namespace gl {
 		Renderer2D::DrawPostProcess(
 			m_ToneMappingShader, resolvedSceneColor, displayResolution);
 		RenderPass::End();
+
+		if (input.HasCamera)
+		{
+			m_PreviousViewProjection = glm::inverse(input.InverseViewProjection);
+			m_PreviousCameraValid = true;
+		}
+		else
+			m_PreviousCameraValid = false;
 	}
 
 	uint32_t PostProcessRenderer::GetOutputTextureID() const
 	{
 		return m_DisplayFramebuffer
 			? m_DisplayFramebuffer->GetColorAttachmentRendererID()
+			: 0;
+	}
+
+	uint32_t PostProcessRenderer::GetVelocityTextureID() const
+	{
+		return m_VelocityFramebuffer
+			? m_VelocityFramebuffer->GetColorAttachmentRendererID()
 			: 0;
 	}
 

@@ -22,6 +22,7 @@ namespace gl {
 		{
 		case FramebufferTextureFormat::RGBA8:            return GL_RGBA;
 		case FramebufferTextureFormat::RED_INTEGER:      return GL_RED_INTEGER;
+		case FramebufferTextureFormat::RG16F:            return GL_RG;
 		case FramebufferTextureFormat::RGBA16F:           return GL_RGBA;
 		case FramebufferTextureFormat::Depth24Stencil8:   return GL_DEPTH_STENCIL;
 		case FramebufferTextureFormat::Depth32F:          return GL_DEPTH_COMPONENT;
@@ -35,6 +36,7 @@ namespace gl {
 		{
 		case FramebufferTextureFormat::RGBA8:            return GL_RGBA8;
 		case FramebufferTextureFormat::RED_INTEGER:      return GL_R32I;
+		case FramebufferTextureFormat::RG16F:            return GL_RG16F;
 		case FramebufferTextureFormat::RGBA16F:           return GL_RGBA16F;
 		case FramebufferTextureFormat::Depth24Stencil8:   return GL_DEPTH24_STENCIL8;
 		case FramebufferTextureFormat::Depth32F:          return GL_DEPTH_COMPONENT32F;
@@ -48,6 +50,7 @@ namespace gl {
 		{
 		case FramebufferTextureFormat::RGBA8:            return GL_UNSIGNED_BYTE;
 		case FramebufferTextureFormat::RED_INTEGER:      return GL_INT;
+		case FramebufferTextureFormat::RG16F:            return GL_FLOAT;
 		case FramebufferTextureFormat::RGBA16F:           return GL_FLOAT;
 		case FramebufferTextureFormat::Depth24Stencil8:   return GL_UNSIGNED_INT_24_8;
 		case FramebufferTextureFormat::Depth32F:          return GL_FLOAT;
@@ -355,6 +358,17 @@ namespace gl {
 	{
 		if (attachmentIndex >= m_ColorAttachments.size()) return;
 		glClearBufferiv(GL_COLOR, (GLint)attachmentIndex, &value);
+	}
+
+	void OpenGLFramebuffer::ClearColorAttachment(
+		uint32_t attachmentIndex, const glm::vec4& value)
+	{
+		if (attachmentIndex >= m_ColorAttachments.size()
+			|| IsDepthFormat(m_ColorAttachments[attachmentIndex].Format)
+			|| m_ColorAttachments[attachmentIndex].Format
+				== FramebufferTextureFormat::RED_INTEGER)
+			return;
+		glClearBufferfv(GL_COLOR, static_cast<GLint>(attachmentIndex), &value[0]);
 	}
 
 }

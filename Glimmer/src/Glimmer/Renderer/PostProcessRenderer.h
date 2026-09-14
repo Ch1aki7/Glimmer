@@ -47,6 +47,7 @@ namespace gl {
 	{
 		uint32_t SceneColorTexture = 0;
 		uint32_t SceneDepthTexture = 0;
+		uint32_t SceneNormalTexture = 0;
 		bool HasCamera = false;
 		glm::mat4 InverseViewProjection{ 1.0f };
 		glm::vec3 CameraPosition{ 0.0f };
@@ -60,6 +61,8 @@ namespace gl {
 		const char* ToneMapping = "assets/shaders/ToneMapping.glsl";
 		const char* BloomExtract = "assets/shaders/BloomExtract.glsl";
 		const char* BloomBlur = "assets/shaders/BloomBlur.glsl";
+		const char* Velocity = "assets/shaders/PostProcessVelocity.glsl";
+		const char* HistoryCopy = "assets/shaders/PostProcessHistoryCopy.glsl";
 	};
 
 	struct CustomPostProcessPass
@@ -81,6 +84,7 @@ namespace gl {
 		bool RemoveCustomPass(size_t index);
 		bool MoveCustomPass(size_t fromIndex, size_t toIndex);
 		bool SetCustomPassEnabled(size_t index, bool enabled);
+		void ResetHistory();
 		const std::vector<CustomPostProcessPass>& GetCustomPasses() const
 		{
 			return m_CustomPasses;
@@ -89,6 +93,8 @@ namespace gl {
 		PostProcessSettings& GetSettings() { return m_Settings; }
 		const PostProcessSettings& GetSettings() const { return m_Settings; }
 		uint32_t GetOutputTextureID() const;
+		uint32_t GetVelocityTextureID() const;
+		bool HasValidHistory() const { return m_HistoryValid; }
 		bool IsInitialized() const { return m_DisplayFramebuffer != nullptr; }
 
 	private:
@@ -98,13 +104,21 @@ namespace gl {
 		Ref<Framebuffer> m_DisplayFramebuffer;
 		std::array<Ref<Framebuffer>, 2> m_BloomFramebuffers;
 		std::array<Ref<Framebuffer>, 2> m_CustomPassFramebuffers;
+		Ref<Framebuffer> m_VelocityFramebuffer;
+		std::array<Ref<Framebuffer>, 2> m_HistoryFramebuffers;
 		Ref<Shader> m_ToneMappingShader;
 		Ref<Shader> m_BloomExtractShader;
 		Ref<Shader> m_BloomBlurShader;
+		Ref<Shader> m_VelocityShader;
+		Ref<Shader> m_HistoryCopyShader;
 		ShaderLibrary* m_ShaderLibrary = nullptr;
 		std::vector<CustomPostProcessPass> m_CustomPasses;
 		std::vector<Ref<Shader>> m_CustomPassShaders;
 		std::vector<std::string> m_CustomPassLibraryKeys;
+		glm::mat4 m_PreviousViewProjection{ 1.0f };
+		uint32_t m_HistoryReadIndex = 0;
+		bool m_PreviousCameraValid = false;
+		bool m_HistoryValid = false;
 	};
 
 }

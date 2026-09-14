@@ -19,6 +19,7 @@ void main()
 #version 450 core
 
 layout(location = 0) out vec4 o_Color;
+layout(location = 2) out vec4 o_Normal;
 layout(location = 0) in vec3 v_Direction;
 
 uniform samplerCube u_Skybox;
@@ -28,4 +29,5 @@ void main()
 {
     vec3 environment = texture(u_Skybox, normalize(v_Direction)).rgb;
     o_Color = vec4(environment * max(u_Intensity, 0.0), 1.0);
+    o_Normal = vec4(0.0);
 }

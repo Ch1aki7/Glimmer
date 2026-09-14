@@ -55,6 +55,13 @@ void GlimmerWriteColor(vec3 linearColor, float alpha)
     o_Color = vec4(max(linearColor, vec3(0.0)),
         u_AlphaMode == 0 ? 1.0 : alpha);
     o_EntityID = v_EntityID;
+    o_Normal = vec4(normalize(v_WorldNormal) * 0.5 + 0.5, 1.0);
+}
+
+void GlimmerWriteColor(vec3 linearColor, float alpha, vec3 worldNormal)
+{
+    GlimmerWriteColor(linearColor, alpha);
+    o_Normal = vec4(normalize(worldNormal) * 0.5 + 0.5, 1.0);
 }
 
 #endif

@@ -40,6 +40,7 @@ void main()
 
 layout(location = 0) out vec4 color;
 layout(location = 1) out int entityID;
+layout(location = 2) out vec4 sceneNormal;
 
 struct VertexOutput
 {
@@ -97,4 +98,5 @@ void main()
 	color = texColor;
 
 	entityID = v_EntityID;
+	sceneNormal = vec4(0.0);
 }

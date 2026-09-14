@@ -74,6 +74,7 @@ void main()
 
 layout(location = 0) out vec4 o_Color;
 layout(location = 1) out int o_EntityID;
+layout(location = 2) out vec4 o_Normal;
 
 in vec3 v_WorldPos;
 in vec3 v_Normal;
@@ -558,4 +559,5 @@ void main()
 	}
 	o_Color = vec4(max(result, vec3(0.0)), 1.0);
 	o_EntityID = v_EntityID;
+	o_Normal = vec4(normal * 0.5 + 0.5, 1.0);
 }

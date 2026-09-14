@@ -2983,11 +2983,11 @@ Bloom 阈值会考虑当前 Exposure EV，提取出的颜色仍保持线性；�
 
 ### Sampler 和尺寸管理
 
-Display Framebuffer 跟随 Viewport 尺寸，Bloom 纹理保持一半宽高，最小为 `1×1`；Custom Ping-Pong 保持完整 Viewport 尺寸，并且只在存在自定义 Pass 时分配。`PostProcessRenderer::Resize()` 只在尺寸变化时重建已有附件。
+Display Framebuffer 跟随 Viewport 尺寸，Bloom 纹理保持一半宽高，最小为 `1×1`；Custom Color Ping-Pong 保持完整 Viewport 尺寸，并且只在存在自定义 Pass 时分配。Camera Velocity 使用全分辨率 `RG16F`，Custom History 使用两张全分辨率 `RGBA16F`；Resize 会同步调整它们并令历史失效。
 
 Tone Mapping Shader 同时声明 `sampler2D` 和 `samplerCube`。OpenGL 会检查整个 Program 的 Sampler 类型，即便当前雾分支没有执行，所以 Cube Sampler 固定使用纹理单元 2，Bloom 使用单元 3，不能依赖默认值都落在 0。这个问题在部分驱动上会直接让 Draw 失败，属于看起来像 Shader 逻辑、实际是绑定契约的典型坑。
 
-后处理无法完全绕过。即使 Bloom、Fog 和 Grayscale 都关闭，场景仍会经过 Exposure、ACES 与 Gamma，保证 Viewport 始终收到显示空间颜色。Settings 目前是编辑器会话内的运行时状态，没有写进 Scene YAML；TAA 也尚未实现，当前没有 Jitter、Velocity 或 HDR History。
+后处理无法完全绕过。即使 Bloom、Fog 和 Grayscale 都关闭，场景仍会经过 Exposure、ACES 与 Gamma，保证 Viewport 始终收到显示空间颜色。Settings 目前是编辑器会话内的运行时状态，没有写进 Scene YAML。当前已有基于深度重投影的 Camera Velocity 和 Custom HDR History，但尚无投影 Jitter、动态实体速度、Disocclusion/Clamp 与 Reactive Mask，因此仍不是 TAA。
 
 ## 天空盒与 SkyLight 资产化
 
@@ -3945,12 +3945,12 @@ Intel Iris Xe/OpenGL 4.6 验证覆盖 BloomExtract、BloomBlur 与 ToneMapping S
 
 P12 期间我评估过 Temporal Anti-Aliasing，最后决定先不接。原因并不玄乎：当时管线只有当前帧 HDR、Depth 和 EntityID，缺少可靠的像素运动数据。若直接把上一帧颜色按固定 Alpha 混回来，静止截图可能更平滑，编辑器一动就会留下残影。
 
-当前源码仍缺少这些前置条件：
+当前源码对这些前置条件的覆盖是：
 
-- 相机投影没有 Halton 一类的亚像素 Jitter，也不保存 Previous ViewProjection；
-- Scene FBO 没有 RG16F Velocity Attachment；
+- 相机投影还没有 Halton 一类的亚像素 Jitter；PostProcessRenderer 已保存 Previous ViewProjection；
+- 已有独立 `RG16F` Camera Velocity，但它由当前 Depth 重投影生成，不是逐物体 Velocity MRT；
 - Model、GPU Instancing 和 Sprite 没有 Previous Transform 数据；
-- 后处理没有 HDR History Ping-Pong，也没有 Resize、Play/Stop、场景切换和相机跳变时的失效规则；
+- 自定义 Pass 已有 HDR History Ping-Pong，并覆盖 Resize、Play/Stop、场景切换、Pass 结构变化与显式相机聚焦失效；
 - Shader 没有 Depth Disocclusion、Neighborhood Clamp 和 Transparent/Emissive Reactive Mask。
 
 仅靠当前 Depth 重建世界位置，再投影到上一帧，只能照顾静态几何与相机运动。移动模型、实例、Sprite、Blend 物体和编辑器 Gizmo 都缺少自身速度，历史颜色会拖在后面。这样的结果不适合成为编辑器默认抗锯齿。
@@ -3967,7 +3967,7 @@ Projection Jitter
   -> Resize、场景和相机状态变化时清空 History
 ```
 
-TAA 只应处理 HDR Scene Color，并放在 Bloom 提取之前。EntityID 继续读取当前帧整数附件，不能参与历史混合，否则鼠标拾取会和画面产生一帧或多帧错位。到目前为止这项功能仍未实现，这一章记录的是接入条件和暂缓理由。
+TAA 只应处理 HDR Scene Color，并放在 Bloom 提取之前。EntityID 继续读取当前帧整数附件，不能参与历史混合，否则鼠标拾取会和画面产生一帧或多帧错位。现有 Camera Velocity 与 Custom History 已完成其中一部分基础设施，但仍不构成 TAA；这一章继续记录剩余接入条件。
 
 ## 后处理渲染器职责收拢
 
@@ -4549,10 +4549,14 @@ vec4 GlimmerPostProcess(GlimmerPostProcessInput inputData)
 | `Time` | 引擎运行时间 |
 | `SceneColor` | 当前 Pass 输入的线性 HDR 颜色 |
 | `SceneDepth` | 原始 Scene Depth |
+| `SceneNormal` / `SceneNormalValidity` | 解码后的世界空间法线与逐像素有效标记 |
+| `Velocity` | 当前 UV 减上一帧 UV 的相机运动向量；`UV - Velocity` 可回到上一帧位置 |
+| `HistoryColor` / `HistoryValid` | 上一帧自定义 Pass 链最终 HDR 颜色与有效状态 |
 | `HasCamera` / `CameraPosition` | 相机是否有效与世界位置 |
+| `HasNormal` / `HasVelocity` | 对应输入附件是否可用 |
 | `InverseViewProjection` | 当前相机逆 ViewProjection |
 
-辅助函数 `GlimmerSampleScene(uv)`、`GlimmerSampleDepth(uv)` 和 `GlimmerReconstructWorldPosition(uv, depth)` 分别用于邻域采样、深度读取和世界位置重建。`assets/shaders/PostProcess` 提供以下可直接拖入的示例；每份文件均独立工作，也可以按列表顺序组合：
+辅助函数除 Scene、Depth 与世界位置重建外，还提供 `GlimmerSampleNormal()`、`GlimmerSampleNormalValidity()`、`GlimmerSampleVelocity()` 和 `GlimmerSampleHistory()`。`assets/shaders/PostProcess` 提供以下可直接拖入的示例；每份文件均独立工作，也可以按列表顺序组合：
 
 | Shader | 效果与主要 ABI 用法 |
 | --- | --- |
@@ -4562,6 +4566,9 @@ vec4 GlimmerPostProcess(GlimmerPostProcessInput inputData)
 | `WaveDistortion.glsl` | 使用 Time 与 TexelSize 产生连续二维波纹扭曲 |
 | `DepthOutline.glsl` | 对原始 Scene Depth 做四邻域差分并压暗物体轮廓 |
 | `FilmGrain.glsl` | 根据像素坐标和离散时间生成随亮度变化的动态颗粒 |
+| `NormalOutline.glsl` | 比较四邻域世界法线并利用 Validity 描出几何折角和物体边缘 |
+| `CameraMotionBlur.glsl` | 沿 RG16F Camera Velocity 多次采样当前 HDR Color |
+| `TemporalEcho.glsl` | 用 Velocity 重投影 Previous Custom History，形成受运动增强的时间残像 |
 
 尖括号 Include 会从所属 `assets/shaders` 根目录解析，因此 Shader 放在任意子目录仍可使用 `<Glimmer/...>`；双引号 Include 仍相对当前文件。
 
@@ -4569,13 +4576,16 @@ vec4 GlimmerPostProcess(GlimmerPostProcessInput inputData)
 
 ```text
 Scene RGBA16F
+  + Scene Depth / World Normal
+  -> Camera Velocity RG16F
   -> Custom Pass 0
   -> Custom Pass 1 ...（两张全分辨率 RGBA16F Ping-Pong）
+  -> 写入 Previous Custom History RGBA16F Ping-Pong
   -> Bloom Extract / Blur
   -> Fog + Exposure + ACES + Gamma
   -> Viewport RGBA8
 ```
 
-因此自定义效果能处理 HDR 高光，并自然影响后续 Bloom。两张 Custom FBO 只在首个 Pass 加入时创建，最后一个 Pass 移除后释放；全屏绘制上传的是目标 FBO 的真实分辨率，不再误用窗口尺寸。当前列表和启用状态属于编辑器会话，不写入 `.glimmer`；也还没有材质式参数反射、Normal/Velocity/History 输入、前后阶段选择或 Render Graph。颜色分级、像素化、描边、溶解式屏幕遮罩和深度雾变体已经可写；TAA、运动模糊、SSR 等仍需先补齐跨帧资源与 GBuffer 契约。
+因此自定义效果能处理 HDR 高光，并自然影响后续 Bloom。所有 Pass 在同一帧读取同一份上一帧 History，链末结果才写入另一张 History，避免帧内反馈。Resize、场景切换、Edit/Play、临时 Debug Scene、Pass 增删/排序/启用变化和显式相机聚焦都会令历史失效。当前列表和启用状态仍属于编辑器会话，不写入 `.glimmer`；尚无材质式参数反射、前后阶段选择或 Render Graph。Velocity 只覆盖相机运动，动态对象 Motion Vector、完整 TAA、SSR 所需的材质/粗糙度与更严格历史拒绝仍未完成。
 
-设置 `GLIMMER_POST_PROCESS_VALIDATE=1` 可在启动时依次挂入全部六个示例，真实渲染 5 帧后退出。GTX 1050 / OpenGL 4.6 验证中，六个 Shader、顶点 ABI 与片元 ABI 均成功递归编译，六级 Pass 链正常执行；VS2026 `Debug | x64` 编辑器工程构建通过。
+设置 `GLIMMER_POST_PROCESS_VALIDATE=1` 可在启动时依次挂入全部九个示例，真实渲染 5 帧并确认 Normal、Velocity、History 资源有效后退出。GTX 1050 / OpenGL 4.6 验证中，内部 Velocity/History Shader、PBR/Toon/Terrain Normal 输出、九个示例与两份 ABI 均成功编译执行；VS2026 `Debug | x64` 完整解决方案和全部无窗口回归通过。

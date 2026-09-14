@@ -29,4 +29,5 @@ void main()
 {
     o_Color = u_OutlineColor;
     o_EntityID = v_EntityID;
+    o_Normal = vec4(normalize(v_WorldNormal) * 0.5 + 0.5, 1.0);
 }

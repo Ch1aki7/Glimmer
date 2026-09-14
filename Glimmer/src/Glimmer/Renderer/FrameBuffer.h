@@ -1,5 +1,6 @@
 #pragma once
 #include "Glimmer/Core/Core.h"
+#include <glm/glm.hpp>
 #include <vector>
 
 namespace gl {
@@ -10,6 +11,7 @@ namespace gl {
 		None = 0,
 		RGBA8,              // 标准颜色
 		RED_INTEGER,        // 实体 ID 拾取
+		RG16F,              // 屏幕空间向量（Velocity 等）
 		RGBA16F,            // HDR 半精度浮点
 		Depth24Stencil8,    // 深度/模板
 		Depth32F,           // 可采样阴影深度
@@ -60,6 +62,8 @@ namespace gl {
 		virtual int ReadPixel(uint32_t attachmentIndex, int x, int y) const = 0;
 		// 清除指定附件为某个值（整数附件用 glClearBufferiv）
 		virtual void ClearAttachment(uint32_t attachmentIndex, int value) = 0;
+		virtual void ClearColorAttachment(
+			uint32_t attachmentIndex, const glm::vec4& value) = 0;
 
 		virtual const FramebufferSpecification& GetSpecification() const = 0;
 

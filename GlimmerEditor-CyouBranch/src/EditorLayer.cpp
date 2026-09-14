@@ -141,6 +141,8 @@ namespace gl {
 			OnSceneStop();
 
 		m_CommandHistory.Clear();
+		if (m_PostProcessRenderer.IsInitialized())
+			m_PostProcessRenderer.ResetHistory();
 		m_GizmoTransformEdit.Reset();
 		m_GizmoEditScene.reset();
 		m_GizmoEditEntity = UUID(0);
@@ -523,6 +525,7 @@ namespace gl {
 		PersistEditorCameraState();
 		m_TemporaryDebugCameraState = m_EditorCamera.GetState();
 		m_ActiveScene = scene;
+		m_PostProcessRenderer.ResetHistory();
 		m_HierarchyPanel.SetContext(m_ActiveScene);
 		m_InspectorPanel.SetContext(m_ActiveScene);
 		m_HierarchyPanel.SetCommandHistory(nullptr);
@@ -538,6 +541,7 @@ namespace gl {
 			return;
 
 		m_ActiveScene = m_EditorScene;
+		m_PostProcessRenderer.ResetHistory();
 		m_HierarchyPanel.SetContext(m_ActiveScene);
 		m_InspectorPanel.SetContext(m_ActiveScene);
 		m_HierarchyPanel.SetCommandHistory(&m_CommandHistory);
@@ -565,6 +569,7 @@ namespace gl {
 
 		m_RuntimeScene = Scene::Copy(m_EditorScene);
 		m_ActiveScene = m_RuntimeScene;
+		m_PostProcessRenderer.ResetHistory();
 		m_ActiveScene->OnRuntimeStart();
 		m_SceneState = SceneState::Play;
 		GL_CORE_INFO("Runtime scene started.");
@@ -593,6 +598,7 @@ namespace gl {
 			m_RuntimeScene->OnRuntimeStop();
 
 		m_ActiveScene = m_EditorScene;
+		m_PostProcessRenderer.ResetHistory();
 		m_RuntimeScene.reset();
 		m_SceneState = SceneState::Edit;
 		GL_CORE_INFO("Runtime scene stopped; editor scene restored.");
@@ -671,6 +677,7 @@ namespace gl {
 			radius = 0.5f;
 
 		m_EditorCamera.Focus(center, radius * 2.5f);
+		m_PostProcessRenderer.ResetHistory();
 	}
 
 	void EditorLayer::OnAttach() {
@@ -715,6 +722,7 @@ namespace gl {
 		sceneFramebufferSpec.Attachments = {
 			{ FramebufferTextureFormat::RGBA16F },
 			{ FramebufferTextureFormat::RED_INTEGER }, // 鼠标拾取
+			{ FramebufferTextureFormat::RGBA16F },     // 世界空间法线
 			{ FramebufferTextureFormat::Depth24Stencil8 }
 		};
 		m_Framebuffer = Framebuffer::Create(sceneFramebufferSpec);
@@ -723,13 +731,16 @@ namespace gl {
 		m_PostProcessValidationAutorun = ShouldValidatePostProcess();
 		if (m_PostProcessValidationAutorun)
 		{
-			constexpr std::array<const char*, 6> validationPasses = {
+			constexpr std::array<const char*, 9> validationPasses = {
 				"assets/shaders/PostProcess/Pixelate.glsl",
 				"assets/shaders/PostProcess/Vignette.glsl",
 				"assets/shaders/PostProcess/ChromaticAberration.glsl",
 				"assets/shaders/PostProcess/WaveDistortion.glsl",
 				"assets/shaders/PostProcess/DepthOutline.glsl",
-				"assets/shaders/PostProcess/FilmGrain.glsl"
+				"assets/shaders/PostProcess/FilmGrain.glsl",
+				"assets/shaders/PostProcess/NormalOutline.glsl",
+				"assets/shaders/PostProcess/CameraMotionBlur.glsl",
+				"assets/shaders/PostProcess/TemporalEcho.glsl"
 			};
 			bool allPassesAdded = true;
 			for (const char* shaderPath : validationPasses)
@@ -934,6 +945,7 @@ namespace gl {
 		scenePass.ClearColorValue = { 0.1f, 0.1f, 0.1f, 1 };
 		RenderPass::Begin(scenePass);
 		m_Framebuffer->ClearAttachment(1, -1);
+		m_Framebuffer->ClearColorAttachment(2, glm::vec4(0.0f));
 		glm::mat4 postProcessViewProjection{ 1.0f };
 		glm::vec3 postProcessCameraPosition{ 0.0f };
 		bool hasPostProcessCamera = false;
@@ -1016,6 +1028,8 @@ namespace gl {
 			m_Framebuffer->GetColorAttachmentRendererID();
 		postProcessInput.SceneDepthTexture =
 			m_Framebuffer->GetDepthAttachmentRendererID();
+		postProcessInput.SceneNormalTexture =
+			m_Framebuffer->GetColorAttachmentRendererID(2);
 		postProcessInput.HasCamera = hasPostProcessCamera;
 		postProcessInput.CameraPosition = postProcessCameraPosition;
 		postProcessInput.InverseViewProjection =
@@ -1046,9 +1060,16 @@ namespace gl {
 		if (m_PostProcessValidationAutorun
 			&& ++m_PostProcessValidationFrames >= 5)
 		{
+			const bool temporalInputsReady =
+				postProcessInput.SceneNormalTexture != 0
+				&& m_PostProcessRenderer.GetVelocityTextureID() != 0
+				&& m_PostProcessRenderer.HasValidHistory();
+			GL_CORE_ASSERT(temporalInputsReady,
+				"Post-process temporal input validation failed.");
 			m_PostProcessValidationAutorun = false;
 			GL_CORE_INFO(
-				"Post-process validation rendered 5 frames; closing the editor.");
+				"Post-process validation passed: Normal, Velocity and History "
+				"are bound across 9 sample passes for 5 rendered frames.");
 			Application::Get().Close();
 		}
 	}

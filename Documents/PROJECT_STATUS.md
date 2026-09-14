@@ -147,6 +147,14 @@
 - `Ctrl+Z` 可恢复 Gizmo 拖动前的位移、旋转和缩放，`Ctrl+Y`/`Ctrl+Shift+Z` 可重做；场景切换会清理未完成的 Gizmo 事务，命令通过 UUID 查找目标而不依赖临时 EnTT Handle；
 - 验证：`scripts\Verify-Windows.bat` 通过 VS2026 `Debug | x64` 完整解决方案构建和全部无窗口回归；提交：待提交。
 
+### 2026-09-14：后处理 Normal、Velocity 与 History ABI
+
+- Scene FBO 新增带逐像素有效标记的世界空间 Normal MRT；PBR、Toon、Terrain、Sprite 与 Skybox 明确写入或清空该附件；Framebuffer 新增 `RG16F` 和浮点颜色附件定点清理能力；
+- PostProcessRenderer 新增由 Depth + Current Inverse VP + Previous VP 生成的全分辨率 Camera Velocity，以及两张全分辨率 `RGBA16F` Custom History Ping-Pong；History 在 Resize、场景/模式切换、调试场景切换、Pass 结构变化和相机聚焦时失效；
+- `PostProcessABI` 新增 `SceneNormal/Validity`、`Velocity`、`HistoryColor/Valid`、能力标记及对应邻域采样函数；新增 NormalOutline、CameraMotionBlur、TemporalEcho 三个示例，资产创建模板同步说明新输入；
+- 当前 Velocity 只覆盖静态世界在相机运动下的屏幕位移，尚无动态 Model/Instancing/Sprite Previous Transform；History 也尚无 Depth Disocclusion、Neighborhood Clamp、Reactive Mask 或投影 Jitter，因此不能视作完整 TAA；
+- 验证：`scripts\Verify-Windows.bat` 通过 VS2026 `Debug | x64` 完整构建与全部无窗口回归；GTX 1050/OpenGL 4.6 成功编译内部 Velocity/History Shader、PBR/Toon/Terrain Normal 输出及九个示例 Pass，并确认 Normal、Velocity、History 在五帧真实链路中有效；提交：待提交。
+
 ### 2026-09-14：编辑器场景保存可靠性
 
 - `SceneSerializer` 新增内存快照输出；EditorLayer 以实际可序列化内容而非 CommandHistory 推断 Dirty，因此 Tag、Sprite、Model 等尚未完全进入命令栈的直接组件修改同样不会漏报；原生窗口标题显示 `场景名* - Glimmer Editor - Cyou Branch`，保存或恢复干净状态后立即移除星号，File 菜单保持普通 `Save`；
@@ -185,7 +193,7 @@
 - `PostProcessRenderer` 新增可启用、排序、移除的自定义 Pass 列表，在 Scene HDR Color 之后、Bloom/Tone Mapping 之前用两张全分辨率 `RGBA16F` Framebuffer Ping-Pong；资源按首个 Pass 按需创建，在最后一个 Pass 移除时释放，内置 Bloom/Tone Mapping 也改用实际目标分辨率而非窗口尺寸；
 - Settings 新增自定义后处理列表和 `.glsl` 拖放入口，Content Browser 新增 Post Process Shader 创建模板；自定义 Shader 注册进共享 `ShaderLibrary`，继续支持主文件和递归 Include 热重载；`PostProcess` 示例集现包含 Pixelate、Vignette、Chromatic Aberration、Wave Distortion、Depth Outline 与 Film Grain；
 - 修正尖括号 Shader Include 根目录：位于任意 `assets/shaders` 子目录的 Shader 均能通过 `<Glimmer/...>` 引用稳定 ABI；新增 `GLIMMER_POST_PROCESS_VALIDATE=1` 自动验证入口；
-- 当前 Pass 栈属于编辑器会话运行时状态，不写入 Scene YAML，也尚无参数反射、History/Velocity/Normal 输入、阶段选择或 Render Graph；P14 当前主线保持不变；
+- 当时的 Pass 栈属于编辑器会话运行时状态，不写入 Scene YAML，尚无参数反射、History/Velocity/Normal 输入、阶段选择或 Render Graph；Normal、Camera Velocity 与 Custom History 已于 2026-09-14 补齐，其余边界保持不变；P14 当前主线保持不变；
 - 验证：VS2026 `Debug | x64` 编辑器与回归工程构建成功，无窗口回归全部 PASS；GTX 1050 / OpenGL 4.6 下六个示例与递归 ABI Include 均编译成功，六级自定义 Pass 链连续渲染 5 帧后正常自动退出；`git diff --check` 通过；提交：`d3c7abf`。
 
 ### 2026-09-09：Content Browser 连续缩放与紧凑列表
@@ -286,7 +294,7 @@
 
 - Scene Depth 重建世界位置，在单一 ToneMapping 链中实现距离雾、沿相机射线解析积分的指数高度雾，以及 Manual/SkyLight/Directional Light 三档线性雾色；
 - 显示映射改为 `2^EV` 摄影曝光、可调 ACES White Point 和单次 Gamma；新增半分辨率 HDR Bloom，使用软阈值提取与双缓冲高斯模糊，合成后再统一经过雾、EV 和 ACES；
-- TAA 评估结论为暂缓：当前没有投影 Jitter、上一帧 ViewProjection、HDR History 或 Motion Vector；只用 Depth 重投影会使移动 Model/Instancing/Sprite/透明物体和编辑器相机切换产生拖影。后续须先建立 Velocity 附件、实体 Previous Transform、历史失效规则、邻域 Clamp 与透明响应 Mask，EntityID 仍保持非时域拾取；
+- TAA 评估结论仍为暂缓：后处理现已有 Previous ViewProjection、Depth 重投影 Camera Velocity、Custom HDR History 和基础失效规则，但移动 Model/Instancing/Sprite/透明物体仍无自身速度。后续仍须补齐投影 Jitter、实体 Previous Transform、Depth Disocclusion、邻域 Clamp 与透明/发光 Reactive Mask，EntityID 保持非时域拾取；
 - 验证：VS2026 `Debug | x64` 整解决方案构建成功，88 项无窗口回归全部 PASS；Intel Iris Xe / OpenGL 4.6 下全部后处理、Terrain 与 Shadow Shader 编译成功；固定相机验证远景雾化、高处细节、环境色关联、默认 EV/ACES 高光和太阳 Bloom，无断言、崩溃或整屏泛白；
 - 提交：`91505b2`、`1e73acd`、`0930a54`、`8a9cbaa`。
 
