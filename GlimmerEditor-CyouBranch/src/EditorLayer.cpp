@@ -1208,6 +1208,10 @@ namespace gl {
 		ImGui::EndMenuBar();
 		}
 
+		// Draw the current inspector before controls that may replace its
+		// selection, so active widgets can finish their deactivation transaction.
+		m_InspectorPanel.OnImGuiRender();
+
 		// --- Scene Hierarchy ---
 		if (m_DebugPanel.IsTemporarySceneActive())
 		{
@@ -1219,7 +1223,6 @@ namespace gl {
 		}
 		else
 			m_HierarchyPanel.OnImGuiRender();
-		m_InspectorPanel.OnImGuiRender();
 
 		// --- Content Browser ---
 		m_ContentBrowser.OnImGuiRender();

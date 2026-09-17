@@ -1828,6 +1828,8 @@ ContentBrowserPanel -> SelectAsset(AssetHandle)
 
 右键菜单提供 Duplicate 和 Delete。删除会先弹确认框，操作完成后清理选中项。创建、复制和删除在 Edit 模式下都会记录到 `EditorCommandHistory`，`EntitySnapshot` 依靠 UUID 恢复实体及可复制组件。这样 Undo 删除时恢复的是原实体身份，而不是随手创建一个外观相同的新对象。
 
+Inspector 会分别用实体 UUID 和 AssetHandle 隔离整组 ImGui 控件 ID，并在 Hierarchy 与 Content Browser 接受新选择之前先绘制当前对象。正在编辑 Tag、组件字段或共享材质参数时直接点击另一对象，旧控件会先完成失焦事务，新 Inspector 也不会继承旧对象尚未结束的输入缓冲，因此不会把同一次改名或参数编辑写入两个对象。
+
 ```cpp
 m_HierarchyPanel.SetContext(m_ActiveScene);
 m_HierarchyPanel.SetSelectionContext(&m_SelectionContext);

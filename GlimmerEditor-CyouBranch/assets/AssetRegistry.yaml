@@ -12,6 +12,12 @@ AssetRegistry:
   - Handle: 801164346423064841
     Type: Model
     FilePath: models/geos/Plane.obj
+  - Handle: 811752827401641218
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/Grass.fbx
+  - Handle: 1586174086713150662
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/Bush_2.fbx
   - Handle: 1626385373724971314
     Type: Cubemap
     FilePath: textures/hdr/grasslands_sunset_4k.hdr
@@ -33,9 +39,15 @@ AssetRegistry:
     FilePath: textures/NoiseTex.png
     ColorSpace: Linear
     Semantic: Normal
+  - Handle: 2902767064256207831
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/OBJ/BirchTree_1.obj
   - Handle: 3179645585411309739
     Type: Model
     FilePath: models/New Folder/Cube.obj
+  - Handle: 3227858363864428104
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/BirchTree_4.fbx
   - Handle: 3229483665213786188
     Type: Shader
     FilePath: shaders/PostProcess/New Post Process.glsl
@@ -58,6 +70,9 @@ AssetRegistry:
   - Handle: 3818937180868702455
     Type: Model
     FilePath: models/dragon.obj
+  - Handle: 3918990524908533442
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/Bush_Snow_1.fbx
   - Handle: 4106150851551311864
     Type: Texture2D
     FilePath: textures/pbr/snow/Snow005_1K-PNG_Displacement.png
@@ -88,6 +103,9 @@ AssetRegistry:
     FilePath: models/g4/g4.png
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 6210505448352208794
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/BirchTree_5.fbx
   - Handle: 6250739528996233267
     Type: Texture2D
     FilePath: textures/pbr/lava/Lava_03_emissive-1K.png
@@ -103,6 +121,9 @@ AssetRegistry:
     FilePath: textures/Checkerboard.png
     ColorSpace: SRGB
     Semantic: Color
+  - Handle: 7458908427511725803
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/Cactus_5.fbx
   - Handle: 7633283146183385932
     Type: Shader
     FilePath: shaders/Terrain/GenerateFBM.comp
@@ -229,6 +250,12 @@ AssetRegistry:
   - Handle: 10520412357890499155
     Type: Shader
     FilePath: shaders/PostProcess.glsl
+  - Handle: 10898944061228362348
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/BirchTree_Dead_Snow_1.fbx
+  - Handle: 10938402791744966824
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/Plant_2.fbx
   - Handle: 10985595076332161870
     Type: Texture2D
     FilePath: textures/pbr/lava/Lava_03_basecolor-1K.png
@@ -244,6 +271,12 @@ AssetRegistry:
     FilePath: textures/pbr/lava/Lava_03_ambientocclusion-1K.png
     ColorSpace: Linear
     Semantic: Data
+  - Handle: 11827320154500133863
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/BirchTree_2.fbx
+  - Handle: 11875632704679434016
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/WoodLog.fbx
   - Handle: 12085106509985387647
     Type: Model
     FilePath: models/spacecraft.obj
@@ -257,6 +290,9 @@ AssetRegistry:
     FilePath: textures/pbr/ground/Ground054_1K-PNG_Displacement.png
     ColorSpace: Linear
     Semantic: Normal
+  - Handle: 13438989693412698373
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/BirchTree_Dead_2.fbx
   - Handle: 13472256562800029033
     Type: Texture2D
     FilePath: textures/pbr/brick/factory_brick_nor_dx_1k.png
@@ -274,6 +310,9 @@ AssetRegistry:
   - Handle: 14395647676425568118
     Type: Cubemap
     FilePath: skyboxes/desert-evening.glsky
+  - Handle: 15035452324907109381
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/BirchTree_1.fbx
   - Handle: 15224388513069551945
     Type: Texture2D
     FilePath: textures/pbr/snow/Snow005_1K-PNG_NormalDX.png
@@ -295,6 +334,9 @@ AssetRegistry:
   - Handle: 16046880885886658744
     Type: Shader
     FilePath: shaders/Skybox.glsl
+  - Handle: 16795921877533908754
+    Type: Model
+    FilePath: models/vegetation/Ultimate Nature Pack - Jun 2019/FBX/BirchTree_3.fbx
   - Handle: 17101010101010101001
     Type: Shader
     FilePath: shaders/ToonOutline.glsl

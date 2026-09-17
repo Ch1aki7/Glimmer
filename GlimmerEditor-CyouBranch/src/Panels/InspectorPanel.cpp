@@ -51,13 +51,26 @@ namespace gl
 		{
 			Entity entity = m_Selection->GetEntity();
 			if (entity)
+			{
+				const uint64_t entityID = static_cast<uint64_t>(entity.GetUUID());
+				ImGui::PushID(static_cast<int>(entityID >> 32));
+				ImGui::PushID(static_cast<int>(entityID & 0xffffffffu));
 				DrawComponents(entity);
+				ImGui::PopID();
+				ImGui::PopID();
+			}
 			else
 				ImGui::TextDisabled("The selected entity is no longer valid.");
 		}
 		else if (m_Selection->IsAssetSelected())
 		{
-			DrawAssetInspector(m_Selection->GetAsset());
+			const AssetHandle asset = m_Selection->GetAsset();
+			const uint64_t assetID = static_cast<uint64_t>(asset);
+			ImGui::PushID(static_cast<int>(assetID >> 32));
+			ImGui::PushID(static_cast<int>(assetID & 0xffffffffu));
+			DrawAssetInspector(asset);
+			ImGui::PopID();
+			ImGui::PopID();
 		}
 		else
 		{

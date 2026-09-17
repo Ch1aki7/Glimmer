@@ -5,7 +5,7 @@
 
 ## 文档状态
 
-- 最近更新：2026-09-14
+- 最近更新：2026-09-17
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
@@ -140,6 +140,13 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-09-17：Inspector 跨对象编辑状态隔离
+
+- Inspector 现在分别以实体稳定 UUID 和 AssetHandle 作为整组 ImGui 控件的 ID 作用域；切换实体或资产时，新对象的同名控件不会继承上一对象仍处于活动状态的编辑缓冲；
+- Inspector 调整到选择来源之前绘制，使当前控件先完成失焦和连续编辑事务，再由 Hierarchy 或 Content Browser 切换选择；修复了编辑实体名称时直接点击另一实体，旧名称同时写入两个实体的问题，并防止 Transform、组件属性及共享材质滑块出现同类跨对象写入或事务丢失；
+- 审计确认列表型界面已有各自作用域：Content Browser 条目、Shader 列表、Terrain Material Layer、材质纹理槽和后处理 Pass 均在循环内使用独立 ID；未改变 Scene、SelectionContext 或组件序列化边界；
+- 验证：`scripts\Verify-Windows.bat` 通过 VS2026 `Debug | x64` 完整解决方案构建和全部无窗口回归；提交：待提交。
 
 ### 2026-09-14：Viewport Gizmo 变换撤销
 
