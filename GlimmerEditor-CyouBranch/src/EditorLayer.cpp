@@ -1005,6 +1005,9 @@ namespace gl {
 						skyLight.Intensity);
 				}
 			}
+			if (hasSkyboxCamera)
+				m_ActiveScene->RenderWaterSurfaces(skyboxProjection * skyboxView,
+					postProcessCameraPosition);
 			m_ActiveScene->FlushSpritePass();
 			Renderer3D::EndScene();
 		}

@@ -1,5 +1,6 @@
 #include "glpch.h"
 #include "TerrainRenderer.h"
+#include "WaterSurfaceRenderer.h"
 #include "EnvironmentLighting.h"
 
 #include "Glimmer/Asset/AssetManager.h"
@@ -564,6 +565,12 @@ namespace gl {
 		const bool hasHydrology = runtime.GPUHydrology != nullptr;
 		const bool hasClimate = runtime.GPUClimate != nullptr;
 		shader->UploadUniformInt("u_HasHydrology", hasHydrology ? 1 : 0);
+		const auto& waterSettings = WaterSurfaceRenderer::GetSettings();
+		shader->UploadUniformFloat("u_ShoreWetness", waterSettings.Enabled
+			&& !s_Data.VisualizeLODs
+			&& s_Data.HydrologyVisualization == HydrologyVisualizationMode::None
+			&& s_Data.ClimateVisualization == ClimateVisualizationMode::None
+			? waterSettings.ShoreWetness : 0.0f);
 		shader->UploadUniformInt("u_HydrologyVisualization",
 			hasHydrology
 				? static_cast<int>(s_Data.HydrologyVisualization) : 0);

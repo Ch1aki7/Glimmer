@@ -2,6 +2,7 @@
 
 #include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Renderer/TerrainRenderer.h"
+#include "Glimmer/Renderer/WaterSurfaceRenderer.h"
 
 #include <imgui.h>
 #include <utility>
@@ -123,6 +124,17 @@ namespace gl {
 				if (ImGui::Checkbox("Visualize Terrain LODs", &visualizeLODs))
 					TerrainRenderer::SetLODVisualizationEnabled(visualizeLODs);
 				ImGui::TextDisabled("LOD0 Red, LOD1 Green, LOD2 Blue");
+				auto water = WaterSurfaceRenderer::GetSettings();
+				bool waterChanged = ImGui::Checkbox("Water Surface", &water.Enabled);
+				waterChanged |= ImGui::SliderFloat("Water Absorption", &water.Absorption, 0.0f, 10.0f);
+				waterChanged |= ImGui::SliderFloat("Refraction Pixels", &water.RefractionPixels, 0.0f, 32.0f);
+				waterChanged |= ImGui::SliderFloat("Flow Foam", &water.FoamStrength, 0.0f, 1.0f);
+				waterChanged |= ImGui::SliderFloat("Sediment Tint", &water.SedimentTint, 0.0f, 4.0f);
+				waterChanged |= ImGui::SliderFloat("Shore Wetness", &water.ShoreWetness, 0.0f, 1.0f);
+				if (waterChanged) WaterSurfaceRenderer::SetSettings(water);
+				const auto waterStats = WaterSurfaceRenderer::GetStatistics();
+				ImGui::Text("Water: %u draws, snapshot %s", waterStats.DrawCalls,
+					waterStats.SnapshotReady ? "ready" : "inactive");
 				ImGui::Text("Bound Material Textures: %u",
 					terrainStatistics.BoundMaterialTextures);
 				if (terrainStatistics.GpuTimingAvailable)
@@ -173,7 +185,7 @@ namespace gl {
 					TerrainRenderer::GetHydrologyVisualizationMode());
 				const char* visualizationModes[] = {
 					"None", "Water Depth", "Suspended Sediment",
-					"Sediment Capacity", "Sediment Saturation"
+					"Sediment Capacity", "Sediment Saturation", "Water Velocity"
 				};
 				if (ImGui::Combo("Visualization##Hydrology", &visualizationMode,
 					visualizationModes, IM_ARRAYSIZE(visualizationModes)))

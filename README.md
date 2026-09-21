@@ -4436,7 +4436,7 @@ Hydrology 的 `Validate / Readback` 与 Climate 的 `Readback` 都会刷新耦�
 
 验证时，新增 `ClimateWaterSource` 与修改后的水文 Shader 在 GTX 1050 / OpenGL 4.6 上编译通过。原水文 Contract 保持通过，相对水量误差为 `9.83321e-7`；空间 Source/Sink Contract 先施加 `+0.10`，再施加 `-0.04`，最终水深 `0.06`，预算误差 `0`。气候 Contract 仍得到 Downwind Moisture `1`、Rising/Flat Rain `0.2/0` 和 Frame Partition Delta `0`。当次 Windows 增量构建及 114 项无窗口回归全部通过。
 
-耦合完成后，开发顺序先转向材质反馈，暂不生成植被实体。当前主线会把 Humidity、Temperature 和 VegetationPotential 接入 Terrain Material Weight，定义动态生态权重如何与已有 Height、Slope、Curvature 权重组合并保持归一化。
+耦合完成后的推进顺序为视觉基线、独立水面、气候材质反馈，再到植被实例化。视觉基线与只读 P13 数据的 Water Surface Pass 基础已经完成，下一步把 Humidity、Temperature 和 VegetationPotential 接入 Terrain Material Weight，定义动态生态权重如何与已有 Height、Slope、Curvature 权重组合并保持归一化。
 
 ## 模型 Shader ABI 与多 Pass 法线外扩
 
@@ -4591,3 +4591,23 @@ Scene RGBA16F
 因此自定义效果能处理 HDR 高光，并自然影响后续 Bloom。所有 Pass 在同一帧读取同一份上一帧 History，链末结果才写入另一张 History，避免帧内反馈。Resize、场景切换、Edit/Play、临时 Debug Scene、Pass 增删/排序/启用变化和显式相机聚焦都会令历史失效。当前列表和启用状态仍属于编辑器会话，不写入 `.glimmer`；尚无材质式参数反射、前后阶段选择或 Render Graph。Velocity 只覆盖相机运动，动态对象 Motion Vector、完整 TAA、SSR 所需的材质/粗糙度与更严格历史拒绝仍未完成。
 
 设置 `GLIMMER_POST_PROCESS_VALIDATE=1` 可在启动时依次挂入全部九个示例，真实渲染 5 帧并确认 Normal、Velocity、History 资源有效后退出。GTX 1050 / OpenGL 4.6 验证中，内部 Velocity/History Shader、PBR/Toon/Terrain Normal 输出、九个示例与两份 ABI 均成功编译执行；VS2026 `Debug | x64` 完整解决方案和全部无窗口回归通过。
+
+## P14 Terrain 本地视觉验证
+
+本地以固定 Alpine Seed 11、1280×720、相机与光照，关闭侵蚀和外部降雨，Reset 后执行 120 个耦合固定步。在 Intel Iris Xe / OpenGL 4.6 上，两次验证的九张图像及模拟统计一致；完整构建与无窗口回归通过。验证脚本、截图和独立报告不作为项目文件维护。
+
+`Debug → Runtime Hydrology → Water Velocity` 用颜色表示 X/Z 方向、亮度表示速度，不修改模拟状态。当时的正常图在气候/水文演进前后完全相同，记录了水面接入前的视觉缺口；最大速度 44320 的数值边界仍保留在项目状态中。后续水面已在视觉侧增加近干格衰减、有限值回退和速度限幅，未改变模拟。
+
+## 独立 Water Surface 与水文视觉反馈
+
+正常 Terrain 现在能显示已有水文场产生的水面。先在 `Debug → Overview → Runtime Hydrology / Climate` 推进环境模拟，再关闭水文和气候诊断着色即可观察；无水时不显示水面。`Water Surface` 开关及 Absorption、Refraction Pixels、Flow Foam、Sediment Tint、Shore Wetness 控制属于编辑器会话，不保存到场景。
+
+水面复用 Terrain Chunk 网格并按水深抬升，读取 Height、Water、Velocity 和 Sediment，实现深度吸收、颜色变化、屏幕空间折射、环境反射、流速泡沫与泥沙染色。Terrain 同时根据邻近水深暗化岸线、降低湿润表面的粗糙度；这是一种瞬时响应，没有另建湿润模拟。气候通过现有降雨/蒸发改变 Water，水面和岸线仅观察结果，不改写模拟、不重新运行 Terrain Authoring。
+
+渲染顺序为 Opaque/Terrain → Skybox → Water Surface → Sprite/透明模型 → 后处理。水面先复制 Scene HDR Color 与 Depth 到独立快照，随后采样快照并写回 Scene，避免读写同一附件。深度检测会拒绝从折射偏移位置拉入前景；水面写入有效法线、深度和 Terrain EntityID，点击水面仍选中对应地形。关闭开关或进入水文/气候/LOD 诊断时跳过水面，Reset 后使用重置后的 Water，Resize 自动适配快照。
+
+首版水面将水深小于等于 .002 的格点视为干格，速度分量限制在 ±20，并对 NaN/Inf 回退；泥沙按 `Sediment / max(WaterDepth, .02)` 得到受限浓度。波纹和泡沫相位使用固定步模拟时间，暂停后保持静止。这些是视觉侧的稳定性保护，不代表已经修复水文近干格的速度极值。
+
+验证在本地完成：VS2026 `Debug | x64` 完整解决方案和无窗口回归通过；Intel Iris Xe / OpenGL 4.6 的受控 GPU 验证覆盖干格、吸收/折射/泥沙响应、前景遮挡、拾取/法线、速度极值与 NaN/Inf、Resize、快照绑定保持、重叠水面顺序、诊断/关闭绕过及 Reset，Water 纹理绘制前后相同。完整编辑器隔离 Terrain Fixture 正常退出，原水文/气候 GPU Contract 保持 PASS。验证程序和日志仅留在本地 `bin`，不新增项目验证脚本、独立报告或图片。
+
+当前折射背景只包含不透明物体和天空；水下透明模型与多层水体透射、SSR、投影阴影、专用水体 LOD/剔除及持续岸线湿润尚未实现。现有网格的细分和 LOD 仍限制浅水边缘精度；场景 Camera Velocity 也不表示水流运动。P14 的动态生态材质权重和植被实例化继续作为后续工作。

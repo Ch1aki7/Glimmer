@@ -37,6 +37,8 @@ namespace gl {
 			const glm::mat4& projection, const glm::vec3& cameraPosition,
 			float cameraNear, float cameraFar, bool deferSpritePass = false);
 		void FlushSpritePass();
+		void RenderWaterSurfaces(const glm::mat4& viewProjection,
+			const glm::vec3& cameraPosition);
 		void OnViewportResize(uint32_t width, uint32_t height);
 
 	private:

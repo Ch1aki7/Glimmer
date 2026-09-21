@@ -57,6 +57,9 @@ namespace gl {
 		virtual uint32_t GetColorAttachmentRendererID(uint32_t index = 0) const = 0;
 		virtual uint32_t GetDepthAttachmentRendererID() const = 0;
 		virtual uint32_t GetRendererID() const = 0;
+		// Same-size, single-sample color-0 and depth snapshot. No binding changes.
+		// Returns false for unsupported formats, sizes or self copies.
+		virtual bool CopyColorAndDepthTo(Framebuffer& destination) const = 0;
 
 		// 读取指定附件的像素值（用于鼠标拾取等场景）
 		virtual int ReadPixel(uint32_t attachmentIndex, int x, int y) const = 0;

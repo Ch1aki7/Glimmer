@@ -3,6 +3,29 @@
 #include <glad/glad.h>
 
 namespace gl {
+	bool OpenGLFramebuffer::CopyColorAndDepthTo(Framebuffer& destination) const
+	{
+		auto* target = dynamic_cast<OpenGLFramebuffer*>(&destination);
+		if (!target || target == this || m_Specification.Samples != 1
+			|| target->m_Specification.Samples != 1
+			|| m_Specification.Width != target->m_Specification.Width
+			|| m_Specification.Height != target->m_Specification.Height
+			|| m_ColorAttachments.empty() || target->m_ColorAttachments.empty()
+			|| !m_DepthAttachment.RendererID || !target->m_DepthAttachment.RendererID
+			|| m_DepthAttachment.Format != target->m_DepthAttachment.Format
+			|| m_ColorAttachments[0].Format != target->m_ColorAttachments[0].Format
+			|| (m_ColorAttachments[0].Format != FramebufferTextureFormat::RGBA16F
+				&& m_ColorAttachments[0].Format != FramebufferTextureFormat::RGBA8))
+			return false;
+		const auto copy = [&](uint32_t source, uint32_t output) {
+			glCopyImageSubData(source, GL_TEXTURE_2D, 0, 0, 0, 0,
+				output, GL_TEXTURE_2D, 0, 0, 0, 0,
+				m_Specification.Width, m_Specification.Height, 1);
+		};
+		copy(m_ColorAttachments[0].RendererID, target->m_ColorAttachments[0].RendererID);
+		copy(m_DepthAttachment.RendererID, target->m_DepthAttachment.RendererID);
+		return true;
+	}
 
 	static const uint32_t s_MaxFramebufferSize = 8192;
 

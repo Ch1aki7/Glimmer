@@ -127,7 +127,7 @@ sequenceDiagram
 | `RendererAPI` / `RenderCommand` | 清屏、视口、索引绘制与实例化索引绘制等低层命令 | `OpenGLRendererAPI` |
 | GPU 资源抽象 | Buffer、VertexArray、Texture、Framebuffer、UniformBuffer、PixelBuffer | 对应的 `OpenGL*` 实现 |
 | Shader 抽象 | 图形 Shader、Compute Shader、热重载结果 | GLSL/OpenGL Program |
-| 场景渲染器 | `Renderer2D`、`Renderer3D`、`TerrainRenderer`、`SkyboxRenderer` | OpenGL 驱动的静态渲染器 |
+| 场景渲染器 | `Renderer2D`、`Renderer3D`、`TerrainRenderer`、`WaterSurfaceRenderer`、`SkyboxRenderer` | OpenGL 驱动的静态渲染器 |
 | Pass 编排 | FBO 绑定、清理和结束生命周期 | `RenderPass` |
 
 `Renderer::Init()` 依次初始化 `RenderCommand`、Renderer2D、Renderer3D、绑定点 1 的 Light UBO 和 SkyboxRenderer。资源对象通过静态 `Create` 工厂根据 `RendererAPI` 选择后端；目前选择 Vulkan 会触发“尚未实现”的断言。
@@ -149,7 +149,8 @@ flowchart TD
     Terrain --> TR["TerrainRenderer::Draw"]
     TR --> Skybox
     Sprites --> R2DSubmit["记录 Sprite Pass（延迟遍历与提交）"]
-    Skybox --> R2DFlush["Scene::FlushSpritePass"]
+    Skybox --> Water["Scene::RenderWaterSurfaces → WaterSurfaceRenderer"]
+    Water --> R2DFlush["Scene::FlushSpritePass"]
     R2DSubmit --> R2DFlush
     R2DFlush --> Transparent["Renderer3D::EndScene（远到近 / 普通 Draw）"]
 ```
@@ -166,7 +167,7 @@ Renderer3D 在 `SubmitModel` 阶段解析 Model、Material 和 Shader，并通�
 
 提交时，Opaque 和 Mask 进入 OpaqueQueue，Blend 进入 TransparentQueue。`FlushOpaqueAndMask` 按 ShaderHandle、MaterialHandle、四组 Texture GPU ID、Mesh、完整最终材质位模式和 EntityID 排序；Mesh、Shader、全部纹理、最终 MaterialProperties 和纹理存在状态完全相同的连续项形成兼容 Batch。BaseColor、Normal、AO、Emissive 固定使用纹理单元 0～3，切换状态按 slot 独立缓存。支持实例化契约且 Batch 大于一项时上传最多 1024 项的动态 Instance Buffer 并调用 `DrawIndexedInstanced`；不同 Override 结果会拆批，不支持实例属性的 Shader 自动执行普通 Draw。
 
-完整编辑器先完成 Opaque/Mask 和 Terrain，再绘制 Skybox，随后依次 Flush Sprite Batch 和调用 `Renderer3D::EndScene`。这保证 2D Alpha 与已经存在的 Skybox 颜色混合，而不是与 Scene Clear Color 混合。TransparentQueue 按实体 Transform 原点到相机的平方距离由远到近稳定排序，首版始终普通 Draw；它开启标准 SourceAlpha 混合、保留深度测试并关闭深度写入，结束后恢复 Blend 禁用、DepthWrite 启用和 Less 深度函数。较早编辑器宿主没有 Skybox 插入点，在 Scene 更新内立即 Flush Sprite，并在返回后结束透明队列。OpenGL `DrawIndexed` 不隐式解绑 Texture2D，纹理和 Pass 状态由上层渲染器维护。
+完整编辑器先完成 Opaque/Mask 和 Terrain，再绘制 Skybox 与 Water Surface，随后依次 Flush Sprite Batch 和调用 `Renderer3D::EndScene`。这保证 2D Alpha 与已经存在的 Skybox 颜色混合，而不是与 Scene Clear Color 混合。TransparentQueue 按实体 Transform 原点到相机的平方距离由远到近稳定排序，首版始终普通 Draw；它开启标准 SourceAlpha 混合、保留深度测试并关闭深度写入，结束后恢复 Blend 禁用、DepthWrite 启用和 Less 深度函数。较早编辑器宿主没有 Skybox 插入点，在 Scene 更新内立即 Flush Sprite，并在返回后结束透明队列。OpenGL `DrawIndexed` 不隐式解绑 Texture2D，纹理和 Pass 状态由上层渲染器维护。
 
 BufferLayout 的元素带 `PerVertex / PerInstance` 输入频率；OpenGLVertexArray 持续分配属性位置，将 Mat3/Mat4 拆为列属性，并为实例元素设置 divisor 1。Shader 在初次链接和热重载后检查 `a_InstanceTransform`、`a_InstanceEntityData` 和 `u_UseInstancing`，由公共接口报告是否支持实例化，Renderer3D 不依赖 OpenGLShader 类型。
 
@@ -243,7 +244,7 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 
 Color Pass 和 ShadowRenderer 都使用同一个 `TerrainChunkLayout`，按每个 Chunk 的局部 XZ 范围与 Terrain HeightScale 构造独立 AABB，再通过共用的 `FrustumCulling` 八角点算法连同实体 Transform 投入 Camera 或 Light Clip Space。只有八个角点全部位于同一平面外才剔除，因此跨越视锥边界的 Chunk 保守保留；通过测试后才上传 Chunk Uniform 并提交 Draw。Color Pass 使用距离 LOD，Shadow Pass 固定使用 `TerrainRuntime::Mesh` 指向的 LOD0；两条路径都在顶点阶段把 Skirt 标记顶点下移，遮盖不同分辨率的接缝。Chunk 布局、LOD 历史、统计和共享 Mesh 都是运行时状态，不进入 Scene YAML。
 
-`tmp/tmpTerrain` 的 16 个 HLSL 文件是不完整的外部原型片段，缺少 Common、ShadingModels、Random、Meteorograph、WorldDefinitions 和 MeshGeneration 等依赖，并固定假设 4096² 数据场与 256² 相机跟随网格，因此不属于当前运行链路，也不是可替换的后端。原型在同一 Dispatch 写入 WaterFlow 后只用 Workgroup Barrier 读取邻组结果，不具备跨 Workgroup 可见性；半拉格朗日泥沙回溯也不满足当前质量守恒契约。可迁移范围只限于视觉思想：后续可在现有 OpenGL Pass 中读取 P13/P14 纹理，重写独立水面、深度吸收/折射、速度泡沫、泥沙染色和岸线/积雪响应，但不得改写现有模拟所有权。运行时水文仍必须遵守 SimulationGrid 的 Ping-Pong 所有权和跨 Dispatch 全局 Barrier。
+`tmp/tmpTerrain` 的 16 个 HLSL 文件是不完整的外部原型片段，缺少 Common、ShadingModels、Random、Meteorograph、WorldDefinitions 和 MeshGeneration 等依赖，并固定假设 4096² 数据场与 256² 相机跟随网格，因此不属于当前运行链路，也不是可替换的后端。原型在同一 Dispatch 写入 WaterFlow 后只用 Workgroup Barrier 读取邻组结果，不具备跨 Workgroup 可见性；半拉格朗日泥沙回溯也不满足当前质量守恒契约。可迁移范围只限于视觉思想：当前独立 Water Surface 已在 OpenGL Pass 中读取 P13 数据，实现吸收/折射、速度泡沫、泥沙染色和瞬时岸线湿润；气候积雪响应仍待实现，但不得改写现有模拟所有权。运行时水文仍必须遵守 SimulationGrid 的 Ping-Pong 所有权和跨 Dispatch 全局 Barrier。
 
 P13A～P13C 的纯 CPU `TerrainHydrologyRuntime` 是 GPU 数值基线。它持有独立的 Height 初始快照，以及 Water、四方向 Flux、二维 Velocity 和 Sediment；Sediment 表示单位地表面积上的悬浮质量。该运行时由 `TerrainRuntime::Hydrology` 独立拥有，默认可为空，不随 TerrainComponent 复制或序列化，也不复用 `TerrainGenerator` 的 Height Ping-Pong。每个固定步先从同一旧状态计算四邻域水出流并按可用水量缩放；再以旧 Sediment 质量除以当前可用水体积得到浓度，用同一四向 Water Flux 计算泥沙质量流率，并按可用泥沙质量二次限幅；最后统一汇总邻格入流和自身出流。完成输运状态更新后，CPU 由 `CapacityScale × WaterDepth × Speed` 派生 Capacity，并由 `Sediment / Capacity` 派生 Saturation。
 
@@ -258,6 +259,14 @@ GPU 路径由同一 `TerrainRuntime` 独占一个 `TerrainHydrologyGPU`。Water�
 `Scene` 将帧 `Timestep` 传给 `TerrainRenderer::BeginScene`。Shadow Pass 可以调用 `Prepare` 创建资源，但只有 BeginScene/EndScene 之间的 Color Pass 首次 Prepare 会消费请求，避免同一帧因阴影和九个 Chunk 重复推进。`TerrainRuntime::GPUEnvironment` 是 Climate/Hydrology 的统一固定步协调器；两个既有 Play 和 SingleStep 入口都消费同一累加器，每个子步严格执行 Climate → 全局图像 Barrier → Hydrology，禁止两个 Runtime 各自按帧积累并重复推进。任一 Reset 请求在耦合模式下共同恢复气候、水文和总量预算。显式 Readback 同时读取两侧统计，并以 AtmosphericWater + SurfaceWater 对比 InitialTotal + 外部标量 Rainfall，普通帧不做同步读回。Terrain Color/Shadow 顶点阶段继续统一读取 Runtime Height；派生图只在本帧环境步确实改变 Height 且侵蚀/沉积启用时刷新，所有运行时纹理与预算均不进入 Scene YAML。
 
 `.glterrainmat` 与普通 `.glmat` 是两个注册表类型和两套 YAML 根。TerrainMaterial 固定拥有 Grass、Soil、Rock、Snow 四层；每层保存颜色、Albedo/Normal/AO Handle、Tiling、Metallic、Roughness、NormalScale 和 AOStrength，资产级参数控制三平面锐度与高度/坡度/曲率/湿度混合强度。缺失纹理时使用层颜色、几何法线和 AO=1；存在纹理必须分别满足 sRGB Color、Linear Normal、Linear Data 语义。TerrainMaterial 保存也采用临时文件替换，但不进入 MaterialInstance 或实体 MaterialOverrides 链路。
+
+水体渲染由引擎侧 `WaterSurfaceRenderer` 负责，`Scene::RenderWaterSurfaces` 只收集已有 GPU Hydrology 的 Terrain、Transform 和 EntityID。完整编辑器在 Skybox 之后、Sprite/透明模型之前调用；非延迟宿主在 Scene 更新内、Sprite 之前调用，目标缺少 HDR/EntityID/Normal/Depth 四附件或缺少 Shader 时跳过。Renderer 不调用 Terrain Prepare、Advance 或 Reset，不持有跨帧 Terrain 指针，只读取当前 Runtime Height、Water、Velocity、Sediment 和环境模拟时间。
+
+`Framebuffer::CopyColorAndDepthTo` 提供等尺寸、单采样 Color0/Depth 的 GPU 快照；OpenGL 使用 `glCopyImageSubData`，拒绝自身、附件格式或尺寸不兼容的复制，保持 FBO 绑定不变。WaterSurfaceRenderer 复用一份 HDR+Depth 快照，Resize 时重建附件、每次渲染前完整覆盖，Shutdown 在 GL Context 销毁前释放。水面向原 Scene FBO 写入显式背景合成颜色、Terrain EntityID、有效世界法线和水面深度，关闭固定功能混合，避免附件反馈，并让近水面通过深度测试胜出；不复制或采样目标正在写入的附件。
+
+水面复用 Terrain 的九个 Chunk 与选定 LOD Mesh，仅绘制表面索引、不绘制 Skirt；顶点沿局部 Y 增加水深。尚无水体高度上界统计，因此不套用干地形 Bounds 剔除。独立 Shader 实现 Beer–Lambert 吸收、受场景深度约束的屏幕空间折射、SkyLight Prefilter/Fresnel、简化方向光高光、速度驱动的泡沫与泥沙浓度染色；Terrain 正常 PBR 读取邻域 Water 作瞬时岸线暗化/粗糙度反馈。无效水深/速度/泥沙输入在视觉层回退，水深视觉上限 1000、近干格阈值 .002、速度分量限幅 ±20，均不回写模拟。波纹相位读取固定步模拟时间，暂停/Reset 不依赖墙钟。
+
+`WaterSurfaceSettings` 和 Draw/Snapshot 统计为会话状态，Debug Overview 提供开关、吸收、折射像素偏移、泡沫、泥沙色与岸线湿润控制；不写 TerrainComponent 或 Scene YAML。水文/气候/LOD 诊断绕过水面和湿润反馈。首版没有水下透明物体折射、多层水体透射、SSR、波面几何动画、专用水体 LOD/剔除或持续湿润历史；水面不投射阴影，方向光高光尚不采样 CSM。当前 Camera Velocity 不表示水流运动，时间后处理仍受既有缺少 Reactive Mask 的限制。
 
 ### 5.5 Shader、Compute 与数据读回
 
@@ -390,6 +399,8 @@ Instancing Lab 同时托管 Shadow Benchmark 状态机和 Shadow Visual Validati
 EditorLayer 识别 `GLIMMER_SHADOW_BENCHMARK_AUTORUN` 后，通过 DebugPanel 的受控接口生成固定 2500 实体的 Maximum Instancing Lab 并启动相同状态机。完成时 InstancingLabTool 将 9 组统计写入日志，EditorLayer 再请求 Application 正常关闭；`GLIMMER_SHADOW_VISUAL_AUTORUN` 使用同一边界生成视觉场景，`GLIMMER_SHADOW_VISUALIZE_CASCADES` 与 `GLIMMER_SHADOW_VISUAL_CLOSEUP` 分别选择级联着色和投影物近景。自动入口不绕过临时 Scene 隔离，也不另建第二套阴影逻辑。
 
 `GLIMMER_TERRAIN_SAMPLING_BENCHMARK_AUTORUN` 仅在诊断运行中创建带 DefaultTerrain 资产的独立 Terrain Validation Scene、固定 EditorCamera，并启动与手动入口相同的 TerrainSamplingBenchmarkTool；三档完成后由 EditorLayer 请求正常退出。`GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE=0..3` 使用同一验证 Fixture 选择单档供截图检查。EditorLayer 显式标记这类 Fixture，并在卸载时跳过最后场景偏好写入；这些入口不加载、覆盖或清空用户最后场景，也不保存场景、相机或采样设置。
+
+Water Velocity 诊断直接读取既有 slot 24，以颜色表示 X/Z 方向、亮度表示速度；它不修改模拟状态，也不属于正式水体 Pass。
 
 ### 9.2 选择与面板职责
 

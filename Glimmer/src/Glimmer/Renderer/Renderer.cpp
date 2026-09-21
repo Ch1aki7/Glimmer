@@ -3,6 +3,7 @@
 #include "Renderer2D.h"
 #include "Renderer3D.h"
 #include "TerrainRenderer.h"
+#include "WaterSurfaceRenderer.h"
 #include "ShadowRenderer.h"
 #include "SkyboxRenderer.h"
 #include "EnvironmentLighting.h"
@@ -49,6 +50,7 @@ namespace gl {
 	}
 
 	void Renderer::Shutdown() {
+		WaterSurfaceRenderer::Shutdown();
 		ShadowRenderer::Shutdown();
 		TerrainRenderer::Shutdown();
 		EnvironmentLighting::Shutdown();

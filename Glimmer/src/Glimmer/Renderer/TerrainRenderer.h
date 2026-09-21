@@ -23,7 +23,8 @@ namespace gl {
 			Water,
 			Sediment,
 			SedimentCapacity,
-			SedimentSaturation
+			SedimentSaturation,
+			Velocity
 		};
 
 		enum class ClimateVisualizationMode : int

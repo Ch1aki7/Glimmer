@@ -123,6 +123,7 @@ uniform float u_TerrainDetailDistance;
 uniform int u_TerrainLODVisualization;
 uniform int u_TerrainLODLevel;
 uniform sampler2D u_WaterDepthMap;
+uniform float u_ShoreWetness;
 uniform sampler2D u_WaterVelocityMap;
 uniform sampler2D u_SedimentMap;
 uniform sampler2D u_SedimentCapacityMap;
@@ -413,6 +414,23 @@ void main()
 		roughness += clamp(layer.Roughness, 0.04, 1.0) * weight;
 		ao += layerAO * weight;
 	}
+	// Shallow water and adjacent wet cells darken the bank without writing
+	// hydrology or rerunning terrain authoring. No persistent wetness history.
+	if (u_HasHydrology != 0 && u_ShoreWetness > 0.0)
+	{
+		vec2 texel = 1.0 / vec2(textureSize(u_WaterDepthMap, 0));
+		float wetDepth = 0.0;
+		for (int axis = -1; axis <= 1; ++axis)
+		{
+			float a = texture(u_WaterDepthMap, clamp(v_TerrainUV + vec2(axis, 0) * texel, vec2(0), vec2(1))).r;
+			float b = texture(u_WaterDepthMap, clamp(v_TerrainUV + vec2(0, axis) * texel, vec2(0), vec2(1))).r;
+			if (!isnan(a) && !isinf(a)) wetDepth = max(wetDepth, a);
+			if (!isnan(b) && !isinf(b)) wetDepth = max(wetDepth, b);
+		}
+		float wetness = smoothstep(0.001, 0.04, wetDepth) * u_ShoreWetness;
+		albedo *= 1.0 - 0.32 * wetness;
+		roughness = mix(roughness, 0.24, wetness);
+	}
 	vec3 normal = normalize(detailNormal);
 	vec3 viewDirection = normalize(u_CameraPos - v_WorldPos);
 	vec3 reflectance = mix(vec3(0.04), albedo, metallic);
@@ -519,6 +537,14 @@ void main()
 				clamp(log2(saturation) * 0.25, 0.0, 1.0));
 		float saturationWeight = saturation > 0.0 ? 0.82 : 0.0;
 		result = mix(result, saturationColor, saturationWeight);
+	}
+	else if (u_HydrologyVisualization == 5 && u_HasHydrology != 0)
+	{
+		vec2 velocity = texture(u_WaterVelocityMap, v_TerrainUV).xy;
+		float speed = length(velocity);
+		vec2 direction = speed > 0.00001 ? velocity / speed : vec2(0.0);
+		result = mix(vec3(0.02), vec3(direction * 0.5 + 0.5, 1.0),
+			1.0 - exp(-speed * 2.0));
 	}
 	else if (u_ClimateVisualization == 1 && u_HasClimate != 0)
 	{

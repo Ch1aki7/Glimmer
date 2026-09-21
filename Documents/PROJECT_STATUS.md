@@ -5,12 +5,12 @@
 
 ## 文档状态
 
-- 最近更新：2026-09-17
+- 最近更新：2026-09-21
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P14 简化气候与植被闭环
-- 主线状态：进行中（CPU/GPU 气候场与守恒水文耦合已完成，下一步让气候场驱动 Terrain Material Weight）
+- 主线状态：进行中（CPU/GPU 气候场、守恒水文耦合、视觉基线与水面渲染基础已完成，下一步接入气候材质权重）
 
 ## 使用与更新规则
 
@@ -59,7 +59,7 @@
 
 **依赖**：P13 已稳定，P8 能接收湿度/植被材质权重，已满足。
 
-**状态**：进行中。CPU 基线、GPU 场、Terrain Runtime 所有权、诊断、受控 GPU Contract 和水文守恒耦合已完成；材质反馈与植被实例化尚未完成。
+**状态**：进行中。CPU 基线、GPU 场、Terrain Runtime 所有权、诊断、受控 GPU Contract、水文守恒耦合、可复现视觉基线与水面渲染基础已完成；气候材质反馈与植被实例化尚未完成。
 
 **目标**
 
@@ -98,10 +98,10 @@
 
 **下一步**
 
-- 保留现有 Terrain Entity、`3×3` Chunk/LOD、四层 Triplanar PBR、SimulationGrid Ping-Pong、固定步气候/水文和序列化边界，不整体替换为 `tmp/tmpTerrain`；先建立可重复截图的视觉基线，再以现有 OpenGL Pass 重写原型中可取的独立水面、深度吸收/折射、速度泡沫、泥沙染色、岸线湿润与温度积雪反馈；
-- 将 Humidity、Temperature 和 VegetationPotential 作为 Terrain Material Weight 的附加输入，先定义原地貌权重与动态生态权重的组合契约；
-- 为动态材质权重补充确定性与归一化验证，避免气候步直接重复执行完整地形派生；
-- 完成材质反馈后再建设物种资产、分布规则和 GPU 植被实例化，不把单株测试实体永久写入默认场景。
+1. **当前实施项：气候材质反馈**。定义静态地貌与动态生态权重组合契约，接入 Humidity、Temperature、VegetationPotential；加入湿润、植被覆盖与低温积雪，最终 Grass/Soil/Rock/Snow 有限、非负、归一化，气候步不得重复运行完整 Authoring 派生链。
+2. **材质反馈验证**。覆盖相同 Seed/固定步、极端输入、非有限值、权重和、Reset、帧划分和 Terrain 重建，并补真实 GPU 截图或 Contract。
+3. **GPU 植被实例化**。整理树木/灌木/草地资产与适生分布规则、确定性 Seed、Instancing/LOD/剔除/批次；测试实体仅在隔离 Lab 中，验证 Reset、分布复现与 Edit/Play 隔离。
+4. **P14 总体验收**。检查风向输运与迎风坡降雨、闭合水预算、正常画面的水文/气候响应和植被复现，完成完整构建、无窗口回归、GPU 验证与三份文档同步。
 
 ## 后续任务
 
@@ -140,6 +140,21 @@
 ## 已完成里程碑
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
+
+### 2026-09-21：P14 水面渲染基础
+
+- 新增引擎侧 WaterSurfaceRenderer 与独立 Shader，Scene 收集既有 Terrain Runtime，只读 Height/Water/Velocity/Sediment；完整编辑器在 Skybox 后、Sprite/透明模型前执行，不修改模拟、不新增默认场景实体；
+- 增加等尺寸 Color0/Depth GPU 快照，避免附件反馈；水面具备吸收/深度颜色、屏幕空间折射、环境反射、速度泡沫、泥沙染色，以及 Terrain 瞬时岸线湿润；写入水面深度、世界法线和 Terrain EntityID，支持 Resize、Reset、调试绕过和会话参数；
+- 近干格/非有限输入和速度极值在视觉侧保护，波纹相位使用固定步模拟时间。水下透明折射、分层透射、SSR、专用水体 LOD/剔除和持续湿润留在技术债中，不宣称 P14 总体完成；
+- 验证：VS2026 Debug x64 完整构建与无窗口回归通过；Intel Iris Xe / OpenGL 4.6 本地 GPU 契约覆盖干格、吸收/折射/泥沙变化、前景遮挡、EntityID/Normal、极端/NaN/Inf、Resize、复制绑定隔离、重叠水面顺序、关闭/诊断绕过及 Reset，Water 输入绘制前后相同；完整编辑器隔离 Terrain Fixture 正常退出，原水文与气候 Contract PASS；
+- 验证程序/日志仅留本地 bin；三份现有文档同步，无新增验证脚本、报告或截图归档。下一实施项为动态生态材质权重；提交：待提交。
+
+### 2026-09-21：P14 Terrain 本地视觉基线验证
+
+- 本地固定 Alpine Seed 11、1280×720、相机/光照和环境参数，Reset 后执行 120 个耦合单步；Intel Iris Xe / OpenGL 4.6.0（32.0.101.6790）两次验证的九张图像 SHA-256 和模拟统计一致；
+- 初始图与第 120 步正常图逐字节相同，确认正常材质尚未反映气候/水文状态；正常视图 30 样本平均分别为 131.041/145.978 ms，9 Draw、33326 三角形，性能波动不作为优化结论；发现最大速度 44320，保留在技术债中；
+- 新增只读 Water Velocity 调试视图。按用户要求，移除专用采集脚本、自动运行类、截图读回接口、独立报告和项目内截图/日志归档，仅保留本地验证结果与现有文档中的必要结论；
+- 验证：基线阶段 VS2026 `Debug | x64` 完整构建、全部无窗口回归和两次 GPU 采集通过；清理后重新生成工程，完整构建、无窗口回归、无残留引用检查及 `git diff --check` 通过。P14 总体未完成，下一实施项仍为 Water Surface Pass；提交：待提交。
 
 ### 2026-09-17：Inspector 跨对象编辑状态隔离
 
@@ -565,6 +580,7 @@
 
 ### 渲染
 
+- P14 全尺寸视觉基线在 120 步读到最大 Velocity 44320；`HydrologyUpdate` 用前后水深平均值（下限 `1e-6`）作分母，近干格与当前 Source 的关系需要专项核查。水面泡沫已对只读速度和水深做有限值、干格与范围保护；模拟端的速度定义仍待核查；
 - Renderer3D 已有 Opaque/Mask/Transparent Queue、状态排序、Opaque Instancing 和 MaterialInstance 缓存；Transparent 首版仍按实体原点而不是 Mesh Bounds 中心排序，且不支持透明实例化或 OIT；
 - 模型材质已支持多 Pass、通用 Float/Float4 参数和 None/Back/Front Cull；Pass 目前通过 `.glmat` YAML 编辑，Inspector 尚无 Pass/参数列表 UI，实体 Override 也不覆盖共享 Pass 参数；透明多 Pass 仍按逐项透明队列执行，法线外扩宽度使用世界单位而不是屏幕像素；
 - AlphaMode Shader 契约当前由 PBRModel 完整实现；自定义 3D Shader 若要正确支持 Mask/Blend，仍需自行声明并使用 `u_AlphaMode`、`u_AlphaCutoff`；
@@ -574,7 +590,8 @@
 - Terrain 已完成固定 `3×3` Chunk、三档距离 LOD/迟滞/相邻约束/Skirt、Color/Shadow 剔除、四层 Triplanar PBR、固定步水文与 Runtime Erosion；运行时 Height 会刷新 Normal/Slope、Analysis 和 Material Weights。尚无显式 Bake，模拟结果关闭或重建后丢弃；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
-- P14 已完成 CPU/GPU 场、TerrainRuntime 所有权、固定步调度、四场诊断、GPU 趋势 Contract，以及 Rainfall/Evaporation 到 P13 Water 的守恒耦合；材质权重反馈、正式水面/岸线视觉层和植被实例化仍未实现；
+- P14 已完成 CPU/GPU 场、TerrainRuntime 所有权、固定步调度、四场诊断、GPU 趋势 Contract，以及 Rainfall/Evaporation 到 P13 Water 的守恒耦合；水面/瞬时岸线视觉基础已接入；气候材质权重反馈和植被实例化仍未实现；
+- Water Surface 当前使用不透明/天空快照和既有 Terrain LOD，尚无水下透明折射、分层水体透射、SSR、水面投影阴影、专用水体 LOD/剔除、持续湿润历史或水流 Motion Vector；浅水边缘受网格细分限制，空水域仍会提交表面 Draw 后在片元阶段剔除；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 
 ## 固定验证清单

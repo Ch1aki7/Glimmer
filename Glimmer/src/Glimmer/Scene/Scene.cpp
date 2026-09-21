@@ -6,6 +6,8 @@
 #include "Glimmer/Renderer/Renderer2D.h"
 #include "Glimmer/Renderer/Renderer3D.h"
 #include "Glimmer/Renderer/TerrainRenderer.h"
+#include "Glimmer/Renderer/WaterSurfaceRenderer.h"
+#include "Glimmer/Terrain/Terrain.h"
 #include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Glimmer/Renderer/RenderPass.h"
 #include "Entity.h"
@@ -334,7 +336,10 @@ namespace gl {
 				m_SpritePassPending = true;
 			}
 			else
+			{
+				RenderWaterSurfaces(viewProjection, cameraPosition);
 				RenderSprites(viewProjection);
+			}
 		}
 		else
 			ShadowRenderer::Disable();
@@ -381,7 +386,26 @@ namespace gl {
 			m_SpritePassPending = true;
 		}
 		else
+		{
+			RenderWaterSurfaces(viewProjection, cameraPosition);
 			RenderSprites(viewProjection);
+		}
+	}
+
+	void Scene::RenderWaterSurfaces(const glm::mat4& viewProjection,
+		const glm::vec3& cameraPosition)
+	{
+		std::vector<WaterSurfaceInstance> instances;
+		auto view = m_Registry.view<TransformComponent, TerrainComponent>();
+		for (auto entity : view)
+		{
+			const auto& terrain = view.get<TerrainComponent>(entity);
+			if (!terrain.Runtime || !terrain.Runtime->GPUHydrology) continue;
+			instances.push_back({ &terrain, view.get<TransformComponent>(entity).GetTransform(),
+				static_cast<int>(static_cast<uint32_t>(entity)) });
+		}
+		WaterSurfaceRenderer::Render(RenderPass::IsActive() ? RenderPass::GetCurrent().Target : nullptr,
+			instances, viewProjection, cameraPosition);
 	}
 
 	void Scene::FlushSpritePass()
