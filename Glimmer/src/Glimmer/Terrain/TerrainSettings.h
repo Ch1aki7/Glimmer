@@ -10,7 +10,7 @@
 namespace gl {
 	inline constexpr float TerrainWorldSizeMinimum = 16.0f;
 	inline constexpr float TerrainWorldSizeMaximum = 8192.0f;
-	inline constexpr float TerrainWorldSizeDefault = 256.0f;
+	inline constexpr float TerrainWorldSizeDefault = 1024.0f;
 
 	enum class TerrainPreset
 	{
@@ -24,6 +24,7 @@ namespace gl {
 
 	struct TerrainNoiseSettings
 	{
+		bool WorldSpaceFrequency = true;
 		int Seed = 1;
 		int Octaves = 7;
 		float Frequency = 2.2f;
@@ -56,10 +57,10 @@ namespace gl {
 	{
 		bool Procedural = true;
 		TerrainPreset Preset = TerrainPreset::Custom;
-		uint32_t HeightMapResolution = 512;
+		uint32_t HeightMapResolution = 1024;
 		uint32_t MeshResolution = 256;
 		float WorldSize = TerrainWorldSizeDefault;
-		float HeightScale = 24.0f;
+		float HeightScale = 96.0f;
 		AssetHandle HeightMapHandle{ 0 };
 		AssetHandle RenderShaderHandle{ 0 };
 		AssetHandle GenerationShaderHandle{ 0 };

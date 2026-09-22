@@ -3,6 +3,7 @@
 #include "Glimmer/Renderer/RenderCommand.h"
 #include "Glimmer/Renderer/Shader.h"
 #include "Glimmer/Renderer/TerrainRenderer.h"
+#include "Glimmer/Renderer/FrustumCulling.h"
 #include "Glimmer/Renderer/EnvironmentLighting.h"
 #include "Glimmer/Terrain/Terrain.h"
 #include "Glimmer/Terrain/TerrainChunkLayout.h"
@@ -113,10 +114,21 @@ namespace gl {
 			const auto chunks = TerrainChunkLayout::Build(worldSize, runtime.Mesh->GetGridSize());
 			for (size_t index = 0; index < chunks.size(); ++index)
 			{
-				// Water has no CPU height bound. Do not cull it with dry-ground bounds.
-				const auto& mesh = runtime.LODMeshes[std::min(runtime.ChunkLODLevels[index], 2u)];
-				if (!mesh) continue;
+				// Include the shader's maximum visual water depth in the bound.
 				const auto& chunk = chunks[index];
+				const float halfSize = chunk.WorldSize * 0.5f;
+				if (!FrustumCulling::IntersectsClipFrustum(
+					{ chunk.LocalOffset.x - halfSize,
+						std::min(0.0f, terrain.HeightScale),
+						chunk.LocalOffset.y - halfSize },
+					{ chunk.LocalOffset.x + halfSize,
+						std::max(0.0f, terrain.HeightScale) + 1000.0f,
+						chunk.LocalOffset.y + halfSize },
+					instance.Transform, viewProjection)) continue;
+				const uint32_t lod = index < runtime.ChunkLODLevels.size()
+					? std::min(runtime.ChunkLODLevels[index], 2u) : 0u;
+				const auto& mesh = runtime.LODMeshes[lod];
+				if (!mesh) continue;
 				s_Shader->UploadUniformFloat2("u_UVOffset", chunk.UVOffset);
 				s_Shader->UploadUniformFloat2("u_UVScale", chunk.UVScale);
 				s_Shader->UploadUniformFloat2("u_LocalOffset", chunk.LocalOffset);

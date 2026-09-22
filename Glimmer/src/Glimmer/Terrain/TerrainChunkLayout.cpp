@@ -1,7 +1,17 @@
 #include "glpch.h"
 #include "TerrainChunkLayout.h"
+#include <cmath>
 
 namespace gl {
+	uint32_t TerrainChunkLayout::SelectAxisCount(float terrainWorldSize)
+	{
+		// Preserve the original layout for existing small terrains. Larger
+		// terrains aim for 256-unit tiles, capped at 16 per axis.
+		if (!std::isfinite(terrainWorldSize) || terrainWorldSize <= 768.0f)
+			return AxisCount;
+		return glm::clamp(static_cast<uint32_t>(std::ceil(terrainWorldSize / 256.0f)),
+			AxisCount, 16u);
+	}
 
 	uint32_t TerrainChunkLayout::CalculateSharedMeshResolution(
 		uint32_t terrainMeshResolution)
@@ -10,25 +20,26 @@ namespace gl {
 		return (sanitized + AxisCount - 1) / AxisCount;
 	}
 
-	std::array<TerrainChunkRegion, TerrainChunkLayout::ChunkCount>
+	std::vector<TerrainChunkRegion>
 		TerrainChunkLayout::Build(
 			float terrainWorldSize,
 			uint32_t sharedMeshResolution)
 	{
-		std::array<TerrainChunkRegion, ChunkCount> chunks;
+		const uint32_t axisCount = SelectAxisCount(terrainWorldSize);
+		std::vector<TerrainChunkRegion> chunks(axisCount * axisCount);
 		const float worldSize = glm::max(terrainWorldSize, 0.0001f);
-		const float chunkWorldSize = worldSize / static_cast<float>(AxisCount);
-		const float uvScale = 1.0f / static_cast<float>(AxisCount);
+		const float chunkWorldSize = worldSize / static_cast<float>(axisCount);
+		const float uvScale = 1.0f / static_cast<float>(axisCount);
 		const float localScale = chunkWorldSize
 			/ static_cast<float>(glm::max(sharedMeshResolution, 1u));
 		const float minimumCenter = -worldSize * 0.5f
 			+ chunkWorldSize * 0.5f;
 
-		for (uint32_t z = 0; z < AxisCount; ++z)
+		for (uint32_t z = 0; z < axisCount; ++z)
 		{
-			for (uint32_t x = 0; x < AxisCount; ++x)
+			for (uint32_t x = 0; x < axisCount; ++x)
 			{
-				TerrainChunkRegion& chunk = chunks[z * AxisCount + x];
+				TerrainChunkRegion& chunk = chunks[z * axisCount + x];
 				chunk.Coordinate = { x, z };
 				chunk.UVOffset = {
 					static_cast<float>(x) * uvScale,
@@ -118,6 +129,37 @@ namespace gl {
 					if (z + 1 < AxisCount) constrain(index + AxisCount);
 				}
 			}
+		}
+		return levels;
+	}
+
+	std::vector<uint32_t> TerrainChunkLayout::StabilizeNeighborLODs(
+		std::vector<uint32_t> levels, uint32_t axisCount)
+	{
+		if (axisCount == 0 || levels.size() != static_cast<size_t>(axisCount) * axisCount)
+			return levels;
+		for (uint32_t& level : levels)
+			level = glm::min(level, 2u);
+		bool changed = true;
+		while (changed)
+		{
+			changed = false;
+			for (uint32_t z = 0; z < axisCount; ++z)
+				for (uint32_t x = 0; x < axisCount; ++x)
+				{
+				const uint32_t index = z * axisCount + x;
+					const auto constrain = [&](uint32_t neighbor) {
+						if (levels[index] > levels[neighbor] + 1u)
+						{
+							levels[index] = levels[neighbor] + 1u;
+							changed = true;
+						}
+					};
+					if (x > 0) constrain(index - 1);
+					if (x + 1 < axisCount) constrain(index + 1);
+					if (z > 0) constrain(index - axisCount);
+					if (z + 1 < axisCount) constrain(index + axisCount);
+				}
 		}
 		return levels;
 	}

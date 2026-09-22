@@ -9,6 +9,7 @@
 #include "Glimmer/Simulation/TerrainEnvironmentGPU.h"
 
 #include <array>
+#include <vector>
 
 namespace gl {
 	struct TerrainRuntime
@@ -29,7 +30,7 @@ namespace gl {
 		uint64_t ClimateFrameSerial = 0;
 		Ref<TerrainMesh> Mesh;
 		std::array<Ref<TerrainMesh>, 3> LODMeshes;
-		std::array<uint32_t, 9> ChunkLODLevels{};
+		std::vector<uint32_t> ChunkLODLevels;
 		bool HasChunkLODHistory = false;
 		Ref<Texture2D> HeightMap;
 		Ref<Texture2D> NormalSlopeMap;

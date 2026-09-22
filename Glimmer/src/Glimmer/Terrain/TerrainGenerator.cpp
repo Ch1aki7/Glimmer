@@ -33,6 +33,8 @@ namespace gl {
 		m_GenerationShader->UploadUniformInt("u_Seed", settings.Seed);
 		m_GenerationShader->UploadUniformInt("u_Octaves", settings.Octaves);
 		m_GenerationShader->UploadUniformFloat("u_Frequency", settings.Frequency);
+		m_GenerationShader->UploadUniformFloat("u_WorldFrequencyScale",
+			settings.WorldSpaceFrequency ? ClampTerrainWorldSize(worldSize) / 256.0f : 1.0f);
 		m_GenerationShader->UploadUniformFloat("u_Lacunarity", settings.Lacunarity);
 		m_GenerationShader->UploadUniformFloat("u_Persistence", settings.Persistence);
 		m_GenerationShader->UploadUniformFloat("u_DomainWarp", settings.DomainWarp);

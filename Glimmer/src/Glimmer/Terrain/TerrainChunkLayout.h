@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 #include <glm/glm.hpp>
 
 namespace gl {
@@ -21,10 +22,11 @@ namespace gl {
 	public:
 		static constexpr uint32_t AxisCount = 3;
 		static constexpr uint32_t ChunkCount = AxisCount * AxisCount;
+		static uint32_t SelectAxisCount(float terrainWorldSize);
 
 		static uint32_t CalculateSharedMeshResolution(
 			uint32_t terrainMeshResolution);
-		static std::array<TerrainChunkRegion, ChunkCount> Build(
+		static std::vector<TerrainChunkRegion> Build(
 			float terrainWorldSize,
 			uint32_t sharedMeshResolution);
 		static std::array<uint32_t, 3> CalculateLODResolutions(
@@ -36,6 +38,8 @@ namespace gl {
 			float hysteresis);
 		static std::array<uint32_t, ChunkCount> StabilizeNeighborLODs(
 			std::array<uint32_t, ChunkCount> levels);
+		static std::vector<uint32_t> StabilizeNeighborLODs(
+			std::vector<uint32_t> levels, uint32_t axisCount);
 	};
 
 }

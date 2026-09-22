@@ -449,6 +449,11 @@ namespace gl {
 						commit(commandName, valueBeforeWidget);
 					};
 
+					drawNoise("Edit Terrain World Frequency", [&]() {
+						return ImGui::Checkbox("World-space Noise Frequency",
+							&noise.WorldSpaceFrequency);
+					});
+					ImGui::TextDisabled("On: terrain features keep their world scale as the map grows.");
 					drawNoise("Edit Terrain Seed", [&]() {
 						return ImGui::DragInt("Seed", &noise.Seed, 1.0f);
 					});

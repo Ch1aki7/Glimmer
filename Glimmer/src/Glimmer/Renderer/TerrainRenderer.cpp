@@ -673,23 +673,50 @@ namespace gl {
 		}
 		const auto chunks = TerrainChunkLayout::Build(
 			terrainWorldSize, runtime.Mesh->GetGridSize());
-		std::array<uint32_t, TerrainChunkLayout::ChunkCount> lodLevels{};
+		const uint32_t axisCount = TerrainChunkLayout::SelectAxisCount(terrainWorldSize);
+		std::vector<uint32_t> lodLevels(chunks.size());
+		const bool hasLODHistory = runtime.HasChunkLODHistory
+			&& runtime.ChunkLODLevels.size() == chunks.size();
+		const float transformDeterminant = glm::determinant(transform);
+		const bool canMeasureLocalDistance = std::isfinite(transformDeterminant)
+			&& std::abs(transformDeterminant) > 1e-8f;
+		const glm::vec3 localCamera = canMeasureLocalDistance
+			? glm::vec3(glm::inverse(transform) * glm::vec4(cameraPosition, 1.0f))
+			: glm::vec3(0.0f);
+		const float lodMinimumHeight = std::min(0.0f, specification.HeightScale);
+		const float lodMaximumHeight = std::max(0.0f, specification.HeightScale);
 		for (size_t index = 0; index < chunks.size(); ++index)
 		{
+			const auto& chunk = chunks[index];
 			const glm::vec4 worldCenter = transform * glm::vec4(
-				chunks[index].LocalOffset.x,
+				chunk.LocalOffset.x,
 				(specification.HeightScale * 0.5f),
-				chunks[index].LocalOffset.y, 1.0f);
-			const float distance = glm::distance(
-				cameraPosition, glm::vec3(worldCenter));
-			lodLevels[index] = runtime.HasChunkLODHistory
+				chunk.LocalOffset.y, 1.0f);
+			float distance = glm::distance(cameraPosition, glm::vec3(worldCenter));
+			if (canMeasureLocalDistance)
+			{
+				const float halfSize = chunk.WorldSize * 0.5f;
+				const glm::vec3 closestLocal(
+					glm::clamp(localCamera.x,
+						chunk.LocalOffset.x - halfSize,
+						chunk.LocalOffset.x + halfSize),
+					glm::clamp(localCamera.y, lodMinimumHeight, lodMaximumHeight),
+					glm::clamp(localCamera.z,
+						chunk.LocalOffset.y - halfSize,
+						chunk.LocalOffset.y + halfSize));
+				const glm::vec3 closestWorld = glm::vec3(
+					transform * glm::vec4(closestLocal, 1.0f));
+				distance = glm::distance(cameraPosition, closestWorld);
+			}
+			lodLevels[index] = hasLODHistory
 				? TerrainChunkLayout::SelectLODLevelWithHysteresis(
 					distance, s_Data.LODMiddleDistance, s_Data.LODFarDistance,
 					runtime.ChunkLODLevels[index], s_Data.LODHysteresis)
 				: TerrainChunkLayout::SelectLODLevel(distance,
 					s_Data.LODMiddleDistance, s_Data.LODFarDistance);
 		}
-		lodLevels = TerrainChunkLayout::StabilizeNeighborLODs(lodLevels);
+		lodLevels = TerrainChunkLayout::StabilizeNeighborLODs(
+			std::move(lodLevels), axisCount);
 		runtime.ChunkLODLevels = lodLevels;
 		runtime.HasChunkLODHistory = true;
 		const float minimumHeight = std::min(0.0f, specification.HeightScale);

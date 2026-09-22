@@ -2648,7 +2648,7 @@ Content Browser 中的图片
 
 `TerrainMesh` 只生成规则网格和 Skirt 顶点，不把高度烘进 Vertex Buffer。`HeightScale` 改变时无需重建网格，Shader 会使用高度图尺寸计算 `u_TexelSize`，并按地形世界尺寸计算 `u_SampleSpacing`。后一个值不能写死为 `1.0`，否则高分辨率图片的坡度和法线会偏掉。
 
-当前地形被拆成固定 `3×3` Chunk，Runtime 为它准备三档共享 LOD Mesh。每帧根据相机距离选择层级，再做迟滞和相邻级差约束；视锥外的 Chunk 不提交，Skirt 负责遮住不同层级交界处的裂缝。这里仍是一张完整高度纹理，没有动态 Chunk 流送。
+地形最初被拆成固定 `3×3` Chunk，Runtime 为它准备三档共享 LOD Mesh。每帧根据相机距离选择层级，再做迟滞和相邻级差约束；视锥外的 Chunk 不提交，Skirt 负责遮住不同层级交界处的裂缝。这里仍是一张完整高度纹理，没有动态 Chunk 流送。
 
 ### 绘制时我刻意保留的边界
 
@@ -2659,7 +2659,7 @@ Terrain 与普通场景几何共用颜色和深度目标，所以它必须尊重
 ### 当前边界
 
 - 外部高度图不会自动生成程序化路径的三张派生图。
-- Chunk 布局固定为 `3×3`，目前没有大世界流送和动态细分。
+- 当前 Chunk 数量按世界尺寸自适应；仍没有大世界流送和动态细分。
 - Runtime 水文、侵蚀与气候修改不会自动烘回图片，也不会随 Scene 保存。
 
 这套实现留下的经验很直接：先把高度数据、几何拓扑和运行时资源拆开。地形功能越往后加，这个边界越省事。
@@ -2733,7 +2733,7 @@ Terrain Dirty / 手动 Regenerate / Compute Shader 重载成功
 
 ### 渲染与模拟怎样接上
 
-生成器产出的 Height 是地形后续系统的共同起点。`TerrainRenderer` 用它做顶点位移，固定 `3×3` Chunk 从同一张纹理的不同 UV 区域采样；三档 LOD 改变的是网格密度，不复制高度数据。TerrainMaterial 读取派生权重，Runtime 水文或侵蚀修改 Height 后会按需要刷新派生图。
+生成器产出的 Height 是地形后续系统的共同起点。`TerrainRenderer` 用它做顶点位移，各 Chunk 从同一张纹理的不同 UV 区域采样；三档 LOD 改变的是网格密度，不复制高度数据。TerrainMaterial 读取派生权重，Runtime 水文或侵蚀修改 Height 后会按需要刷新派生图。
 
 Authoring 与 Runtime 模拟必须分开看。前者由可序列化参数确定，适合反复生成同一地貌；后者有固定时间步和独立状态集，目前不会写回 `TerrainSpecification`。如果要保存模拟结果，需要单独设计显式 Bake，不能把运行时纹理偷偷塞进 Scene 序列化。
 
@@ -2741,7 +2741,7 @@ Authoring 与 Runtime 模拟必须分开看。前者由可序列化参数确定�
 
 设置 `GLIMMER_TERRAIN_VALIDATE=1` 后，生成器会读回 Height 和三张派生图，检查数值范围、Material Weight 归一化以及同一规格重复生成的 Hash。这个入口会同步读回 GPU，只用于受控验证，不放进正常帧循环。
 
-目前仍使用固定范围的高度纹理与固定 `3×3` Chunk，没有动态大世界流送。生成结果也没有磁盘派生缓存或 Bake 格式。对现在的编辑器来说，这个边界够清楚：规格负责复现地貌，Runtime 负责昂贵资源，后续模拟在自己的时间轴上运行。
+目前仍使用单张高度纹理与按世界尺寸自适应的 Chunk，没有动态大世界流送。生成结果也没有磁盘派生缓存或 Bake 格式。对现在的编辑器来说，这个边界够清楚：规格负责复现地貌，Runtime 负责昂贵资源，后续模拟在自己的时间轴上运行。
 
 ## UUID 与稳定实体标识
 
@@ -3543,7 +3543,7 @@ DeriveTerrainMaps.comp
 
 ### 与运行时侵蚀的分工
 
-Authoring Erosion 只在 Terrain Dirty、用户 Regenerate 或 Compute Shader 成功热重载后运行，普通渲染帧不会继续改变基础高度。P13 的水文侵蚀使用另一套固定步 Runtime Height、Water 与 Sediment 状态；它不改生成初态，也没有隐式 Bake。运行时高度真的变化时，每个 Color Frame 最多刷新一次派生图，Shadow 和九个 Chunk 的重复 Prepare 不会重复推进模拟。
+Authoring Erosion 只在 Terrain Dirty、用户 Regenerate 或 Compute Shader 成功热重载后运行，普通渲染帧不会继续改变基础高度。P13 的水文侵蚀使用另一套固定步 Runtime Height、Water 与 Sediment 状态；它不改生成初态，也没有隐式 Bake。运行时高度真的变化时，每个 Color Frame 最多刷新一次派生图，Shadow 和多个 Chunk 的重复 Prepare 不会重复推进模拟。
 
 三个 Authoring Compute Shader 都支持热重载。成功编译后 Terrain 变为 Dirty 并完整重建；失败时继续保留上一份有效 Program 和地形结果。
 
@@ -3846,17 +3846,17 @@ LUT 与具体 HDR 无关，所以 `EnvironmentLighting::Init()` 只生成一次�
 
 78 项无窗口回归覆盖 Prefilter 粗糙度响应、BRDF LUT 有限范围和掠射角 Fresnel。GTX 1050/OpenGL 4.6 实测中，Prefilter、Diffuse 和 BRDF LUT 都只记录一次生成；PBRModel、Terrain 与 PBR Material Lab 的 6 个模型正常渲染。
 
-## Terrain 固定 3×3 Chunk、LOD 与剔除
+## Terrain Chunk、LOD 与剔除的初始实现
 
 Terrain 最初始终以整张网格提交。只要山地有一小角进入视野，全部三角形都会参与 Color 和 Shadow Pass；想加 LOD 时，也找不到比整块地形更细的切换单位。P11 先把地形固定拆成 `3x3` 九块。这个规模谈不上动态地形系统，但足够把共享网格、剔除、LOD 稳定性和接缝处理验证清楚。
 
 ### 世界长宽不再等于网格分辨率
 
-Terrain Inspector 现在用两个独立参数控制规模与精度：`World Size (X/Z)` 是正方形地形的实际水平长宽，允许 16～8192，默认 256；`Mesh Resolution` 只控制几何网格细分，仍限制在 16～512。要扩大地图时只调前者，不会因为长宽扩大而按平方增加三角形数量。需要近景轮廓更细时，再单独提高后者。
+Terrain Inspector 现在用两个独立参数控制规模与精度：`World Size (X/Z)` 是正方形地形的实际水平长宽，允许 16～8192，新建地形默认 1024；`Mesh Resolution` 只控制几何网格细分，仍限制在 16～512。要扩大地图时只调前者，不会因为长宽扩大而按平方增加三角形数量。需要近景轮廓更细时，再单独提高后者。
 
 世界尺寸同时用于地形生成、法线等派生图的采样间距、水文与气候格点的物理尺度、Chunk 布局、颜色/阴影剔除边界和编辑器选中聚焦，因此不会出现画面放大而模拟或阴影仍停留在旧范围的问题。字段写入 Scene YAML；旧场景没有 `WorldSize` 时会用原来的 `MeshResolution` 还原水平尺寸，不改变已有场景外观。
 
-### 九个区域，共用三份网格
+### 初始九个区域，共用三份网格
 
 `TerrainChunkLayout` 是纯 CPU 布局工具。它把整体世界尺寸和 Height UV 各分成三份：
 
@@ -3872,13 +3872,13 @@ Color Pass 为每块建立局部 AABB，再乘实体 Transform 与相机视锥�
 
 ### 让 LOD 切换少露破绽
 
-Color Pass 按 Chunk 世界中心到相机的距离选择三级 LOD，默认阈值是 `90 / 180`。每块保存上一帧级别，跨过阈值外侧 5 个世界单位后才切换；这段迟滞能压住相机停在阈值附近时的来回跳动。初选结束后还会约束上下左右邻块，级别最多相差一级。
+初始版本按 Chunk 世界中心到相机的距离选择三级 LOD，默认阈值是 `90 / 180`。每块保存上一帧级别，跨过阈值外侧 5 个世界单位后才切换；这段迟滞能压住相机停在阈值附近时的来回跳动。初选结束后还会约束上下左右邻块，级别最多相差一级。
 
 不同分辨率的边缘会产生 T-Junction。每份 `TerrainMesh` 因此复制四条边界顶点，并用 `a_Skirt` 标记让 Vertex Shader 向下拉出裙边。Skirt 只盖住侧面缝隙，表面仍采样原来的 Height 和 Normal；Color 与 Shadow 都使用它。
 
-Debug Panel 会显示 Candidate、Submitted、Culled、三级 LOD 数量和提交三角形数。完整可见时 Candidate 固定为 9，Submitted 与 Culled 的和也应为 9。`Visualize Terrain LODs` 用红、绿、蓝标出 LOD0/1/2，环境变量 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 可用于固定相机检查，设置不会写入场景。
+Debug Panel 会显示 Candidate、Submitted、Culled、三级 LOD 数量和提交三角形数。初始 3×3 地形完整可见时 Candidate 为 9；当前数量取决于世界尺寸，Submitted 与 Culled 的和应为 Candidate。`Visualize Terrain LODs` 用红、绿、蓝标出 LOD0/1/2，环境变量 `GLIMMER_TERRAIN_LOD_VISUALIZE=1` 可用于固定相机检查，设置不会写入场景。
 
-88 项无窗口回归覆盖九块完整覆盖、共享网格向上取整、视锥边界、距离阈值、迟滞和相邻级差。Intel Iris Xe/OpenGL 4.6 的固定截图确认三档区域连续，颜色交界处没有露出 Skybox 或 Clear Color；默认场景也没有出现 Chunk 误剔除。当前边界仍是固定 `3x3`、离散三级 LOD 和 Skirt，尚未实现动态 Chunk 层级或连续几何 Morph。
+88 项无窗口回归覆盖九块完整覆盖、共享网格向上取整、视锥边界、距离阈值、迟滞和相邻级差。Intel Iris Xe/OpenGL 4.6 的固定截图确认三档区域连续，颜色交界处没有露出 Skybox 或 Clear Color；默认场景也没有出现 Chunk 误剔除。当前边界是单张 HeightMap、离散三级 LOD 和 Skirt，尚未实现动态 Chunk 层级或连续几何 Morph。
 
 ## Scene Depth 距离雾
 
@@ -4048,7 +4048,7 @@ Height(Read) + Water(Read) + Flux(Read)
 
 `TerrainRuntime` 按 GenerationVersion 创建水文资源，地形重新生成后旧模拟会被替换。P13A 最初由 Hydrology 自己推进固定步；P14 接入气候后，`TerrainEnvironmentGPU` 统一拥有累加器，每个子步按 Climate、Barrier、Hydrology 的顺序执行。Hydrology 和 Climate 的 Play/Single Step 都进入这一个时钟。
 
-`TerrainRenderer` 使用 FrameSerial 保证同一 Color Frame 只推进一次。Shadow Prepare 和九个 Chunk 的重复访问只读取结果，不会悄悄多跑模拟。普通帧也不做 GPU Readback；统计读取与 Contract 验证都需要显式请求。
+`TerrainRenderer` 使用 FrameSerial 保证同一 Color Frame 只推进一次。Shadow Prepare 和多个 Chunk 的重复访问只读取结果，不会悄悄多跑模拟。普通帧也不做 GPU Readback；统计读取与 Contract 验证都需要显式请求。
 
 Debug Panel 可以 Play、Pause、Single Step、Reset，也能调整 Rainfall 并查看 Water 诊断。当前面板还扩展到 Sediment、Capacity、Saturation、运行时侵蚀和气候 Source/Sink。水深着色只是 Terrain Fragment Shader 的诊断覆盖，不会抬高网格，也没有折射、反射、透明水面或岸线泡沫。
 
@@ -4610,4 +4610,12 @@ Scene RGBA16F
 
 验证在本地完成：VS2026 `Debug | x64` 完整解决方案和无窗口回归通过；Intel Iris Xe / OpenGL 4.6 的受控 GPU 验证覆盖干格、吸收/折射/泥沙响应、前景遮挡、拾取/法线、速度极值与 NaN/Inf、Resize、快照绑定保持、重叠水面顺序、诊断/关闭绕过及 Reset，Water 纹理绘制前后相同。完整编辑器隔离 Terrain Fixture 正常退出，原水文/气候 GPU Contract 保持 PASS。验证程序和日志仅留在本地 `bin`，不新增项目验证脚本、独立报告或图片。
 
-当前折射背景只包含不透明物体和天空；水下透明模型与多层水体透射、SSR、投影阴影、专用水体 LOD/剔除及持续岸线湿润尚未实现。现有网格的细分和 LOD 仍限制浅水边缘精度；场景 Camera Velocity 也不表示水流运动。P14 的动态生态材质权重和植被实例化继续作为后续工作。
+当前折射背景只包含不透明物体和天空；水下透明模型与多层水体透射、SSR、投影阴影、独立水体 LOD/逐块水量剔除及持续岸线湿润尚未实现。现有网格的细分和 LOD 仍限制浅水边缘精度；场景 Camera Velocity 也不表示水流运动。P14 的动态生态材质权重和植被实例化继续作为后续工作。
+
+## 大尺度 Terrain 分块与世界尺度地貌
+
+新建 Terrain 默认 WorldSize=1024、HeightMapResolution=1024、HeightScale=96。预设可调整高度幅度；旧场景保留序列化数值。Inspector 的 World-space Noise Frequency 控制 FBM 尺度：开启时以 256 世界单位为频率基准，扩大地形范围会增加可见地貌数量，而非把同一座山直接拉宽。新地形默认开启；旧场景 YAML 缺少该字段时按原归一化 UV 频率读取。切换地形预设不会改变此模式。
+
+TerrainChunkLayout 按世界长宽选择每轴 3～16 块，以 256 为目标块宽；1024 为 4×4，2048 为 8×8。所有块仍共用一张 HeightMap、三份 LOD 网格和材质。Color LOD 使用相机到块水平范围的最近距离，保留迟滞与相邻级差约束；Shadow 继续使用 LOD0。水面沿用地形块和 LOD，并以视觉水深上限构造保守 AABB 做视锥剔除。编辑器相机默认远裁剪面为 4096，聚焦和缩放时扩展可见距离与移动速度。
+
+Windows Debug x64 全量验证与回归通过，覆盖旧 YAML 兼容、2048 地形 8×8 覆盖和相邻 LOD。Intel Iris Xe / OpenGL 4.6.0 的现有 Terrain Sampling Benchmark 三档各 30 样本通过，GPU 平均分别为 Full-4 43.168 ms、Top-2 23.008 ms、Top-2 + Dominant Normal/AO 15.566 ms。该基准使用独立 Fixture，未构成新地貌的固定相机视觉验收。当前仍是单张高度图与离散三级网格 LOD，近景数据精度、切换过渡、远景构图和目标显卡性能需继续验证。

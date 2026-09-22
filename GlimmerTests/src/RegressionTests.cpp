@@ -196,6 +196,7 @@ namespace {
 			&& left.DerivationShaderHandle == right.DerivationShaderHandle
 			&& left.TerrainMaterialHandle == right.TerrainMaterialHandle
 			&& leftNoise.Seed == rightNoise.Seed
+			&& leftNoise.WorldSpaceFrequency == rightNoise.WorldSpaceFrequency
 			&& leftNoise.Octaves == rightNoise.Octaves
 			&& Near(leftNoise.Frequency, rightNoise.Frequency)
 			&& Near(leftNoise.Lacunarity, rightNoise.Lacunarity)
@@ -485,6 +486,7 @@ namespace {
 		terrain.Specification.DerivationShaderHandle = gl::AssetHandle(6005);
 		terrain.Specification.TerrainMaterialHandle = gl::AssetHandle(6006);
 		terrain.Specification.Noise.Seed = 73;
+		terrain.Specification.Noise.WorldSpaceFrequency = true;
 		terrain.Specification.Noise.Octaves = 7;
 		terrain.Specification.Noise.Frequency = 1.35f;
 		terrain.Specification.Noise.Lacunarity = 2.4f;
@@ -586,6 +588,40 @@ namespace {
 			context.Check(!restoredTerrain.Runtime,
 				"terrain runtime is not serialized");
 		}
+		std::string legacyTerrainSnapshot = savedSnapshot;
+		const size_t frequencyKey = legacyTerrainSnapshot.find(
+			"WorldSpaceFrequency:");
+		context.Check(frequencyKey != std::string::npos,
+			"new terrain snapshot records world-space frequency mode");
+		if (frequencyKey != std::string::npos)
+		{
+			const size_t precedingNewline = legacyTerrainSnapshot.rfind('\n', frequencyKey);
+			const size_t lineStart = precedingNewline == std::string::npos
+				? 0 : precedingNewline + 1;
+			const size_t lineEnd = legacyTerrainSnapshot.find('\n', frequencyKey);
+			legacyTerrainSnapshot.erase(lineStart,
+				lineEnd == std::string::npos ? std::string::npos
+					: lineEnd - lineStart + 1);
+		}
+		const auto legacyTerrainPath = directory / "LegacyTerrain.glimmer";
+		{
+			std::ofstream legacyTerrainFile(legacyTerrainPath);
+			legacyTerrainFile << legacyTerrainSnapshot;
+		}
+		gl::Ref<gl::Scene> legacyTerrainScene = gl::CreateRef<gl::Scene>();
+		const bool legacyTerrainLoaded =
+			gl::SceneSerializer(legacyTerrainScene).Deserialize(
+				legacyTerrainPath.string());
+		const gl::Entity legacyTerrainEntity = legacyTerrainLoaded
+			? legacyTerrainScene->FindEntityByUUID(entityUUID) : gl::Entity{};
+		context.Check(legacyTerrainLoaded,
+			"legacy terrain snapshot without frequency mode remains readable");
+		context.Check(static_cast<bool>(legacyTerrainEntity),
+			"legacy terrain snapshot restores the original entity");
+		context.Check(legacyTerrainLoaded && legacyTerrainEntity
+			&& !legacyTerrainEntity.GetComponent<gl::TerrainComponent>()
+				.Specification.Noise.WorldSpaceFrequency,
+			"legacy terrain without frequency mode keeps normalized UV generation");
 		context.Check(restored.HasComponent<gl::DirectionalLightComponent>(),
 			"directional light component survives scene round trip");
 		if (restored.HasComponent<gl::DirectionalLightComponent>())
@@ -833,6 +869,33 @@ namespace {
 			}
 		context.Check(neighborDeltaIsBounded && stable[1] == 1 && stable[3] == 1,
 			"terrain chunk LOD stabilization limits adjacent chunks to one level");
+
+		const uint32_t largeAxis = gl::TerrainChunkLayout::SelectAxisCount(2048.0f);
+		const auto largeChunks = gl::TerrainChunkLayout::Build(2048.0f, sharedResolution);
+		bool largeCoverage = largeAxis == 8 && largeChunks.size() == 64;
+		for (uint32_t z = 0; z < largeAxis; ++z)
+			for (uint32_t x = 0; x < largeAxis; ++x)
+			{
+				const auto& chunk = largeChunks[z * largeAxis + x];
+				largeCoverage &= Near(chunk.WorldSize, 256.0f)
+					&& Near(chunk.UVOffset,
+						glm::vec2(x, z) / static_cast<float>(largeAxis));
+			}
+		largeCoverage &= Near(largeChunks.front().LocalOffset
+			- glm::vec2(largeChunks.front().WorldSize * 0.5f),
+			glm::vec2(-1024.0f));
+		largeCoverage &= Near(largeChunks.back().LocalOffset
+			+ glm::vec2(largeChunks.back().WorldSize * 0.5f),
+			glm::vec2(1024.0f));
+		context.Check(largeCoverage,
+			"large terrain uses continuous smaller tiles without stretching chunk bounds");
+		std::vector<uint32_t> largeLevels(largeChunks.size(), 2u);
+		largeLevels[0] = 0;
+		const auto stableLarge = gl::TerrainChunkLayout::StabilizeNeighborLODs(
+			std::move(largeLevels), largeAxis);
+		context.Check(stableLarge.size() == largeChunks.size()
+			&& stableLarge[1] == 1 && stableLarge[largeAxis] == 1,
+			"large terrain constrains LOD across tile neighbors");
 	}
 
 	void TestTerrainHydrologyRuntime(TestContext& context)
@@ -1136,7 +1199,7 @@ namespace {
 			"finite editor camera state is accepted");
 		const auto restored = camera.GetState();
 		context.Check(Near(restored.FocalPoint, requested.FocalPoint)
-			&& Near(restored.Distance, 500.0f)
+			&& Near(restored.Distance, 900.0f)
 			&& Near(restored.Pitch, -89.0f)
 			&& Near(restored.Yaw, requested.Yaw),
 			"editor camera state restoration applies runtime bounds");

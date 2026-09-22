@@ -56,7 +56,8 @@ namespace gl {
 				const bool accelerated =
 					Input::IsKeyPressed(GL_KEY_LEFT_SHIFT)
 					|| Input::IsKeyPressed(GL_KEY_RIGHT_SHIFT);
-				const float speed = m_MoveSpeed * (accelerated ? 3.0f : 1.0f);
+				const float speed = std::max(m_MoveSpeed, m_Distance * 0.1f)
+					* (accelerated ? 3.0f : 1.0f);
 				m_FocalPoint += glm::normalize(moveDirection)
 					* speed * static_cast<float>(ts);
 				UpdateView();
@@ -92,7 +93,14 @@ namespace gl {
 	{
 		float delta = e.GetYOffset() * m_ZoomSpeed;
 		m_Distance -= delta * m_Distance * 0.1f;          // 距离比例缩放
-		m_Distance = glm::clamp(m_Distance, 0.5f, 500.0f);
+		m_Distance = glm::clamp(m_Distance, 0.5f, 16384.0f);
+		const float farClip = std::max(4096.0f, m_Distance * 3.0f);
+		if (farClip != m_FarClip)
+		{
+			m_FarClip = farClip;
+			m_NearClip = std::max(0.1f, m_FarClip / 20000.0f);
+			UpdateProjection();
+		}
 		UpdateView();
 		return false;
 	}
@@ -107,7 +115,10 @@ namespace gl {
 		float pitchDegrees, float yawDegrees)
 	{
 		m_FocalPoint = focalPoint;
-		m_Distance = glm::clamp(distance, 0.5f, 500.0f);
+		m_Distance = glm::clamp(distance, 0.5f, 16384.0f);
+		m_FarClip = std::max(4096.0f, m_Distance * 3.0f);
+		m_NearClip = std::max(0.1f, m_FarClip / 20000.0f);
+		UpdateProjection();
 		m_Pitch = glm::clamp(pitchDegrees, -89.0f, 89.0f);
 		m_Yaw = yawDegrees;
 		UpdateView();
@@ -135,7 +146,10 @@ namespace gl {
 	void EditorCamera::Focus(const glm::vec3& focalPoint, float distance)
 	{
 		m_FocalPoint = focalPoint;
-		m_Distance = glm::clamp(distance, 0.5f, 500.0f);
+		m_Distance = glm::clamp(distance, 0.5f, 16384.0f);
+		m_FarClip = std::max(4096.0f, m_Distance * 3.0f);
+		m_NearClip = std::max(0.1f, m_FarClip / 20000.0f);
+		UpdateProjection();
 		UpdateView();
 	}
 

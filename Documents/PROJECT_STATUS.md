@@ -5,12 +5,12 @@
 
 ## 文档状态
 
-- 最近更新：2026-09-21
+- 最近更新：2026-09-22
 - 当前分支：`main`
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
-- 当前主线：P14 简化气候与植被闭环
-- 主线状态：进行中（CPU/GPU 气候场、守恒水文耦合、视觉基线与水面渲染基础已完成，下一步接入气候材质权重）
+- 当前主线：P16 大尺度地形真实地貌重构
+- 主线状态：进行中（自适应分块、世界尺度噪声和视距基础已完成；下一步是多尺度数据与视觉验收）
 
 ## 使用与更新规则
 
@@ -55,11 +55,31 @@
 
 ## 当前主线
 
-### P14：简化气候与植被闭环
+### P16：大尺度地形真实地貌重构
+
+**状态**：进行中。第一阶段已完成并验证；用户已明确将大尺度地形提升为当前优先级。
+
+**目标**
+
+- 在常用编辑器视野内呈现更大、更可信的山地尺度，参考 AfterglowRender 的地形构图与主流引擎的分块/LOD 思路；
+- 保持已有场景的噪声语义和水平尺寸兼容，地形、水面、模拟和阴影共享同一世界范围。
+
+**下一步与验收**
+
+1. 设计分层高度数据或近远分辨率方案，避免扩大世界后单张 HeightMap 在近景明显欠采样；给出显存、生成与模拟成本边界。
+2. 完成地貌频谱、侵蚀形态、材质尺度与远景构图的固定相机视觉对照；分别验证新建场景和旧场景。
+3. 在目标显卡上验证大视距颜色/阴影/水面提交量与 GPU 帧时，按证据调整默认质量和 LOD；补齐连续几何过渡或可接受的视觉证据。
+4. 完整构建、回归、真实 GPU 运行和三份文档同步后，完成 P16 总体验收。
+
+## 后续任务
+
+任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
+
+### P14：简化气候与植被闭环（待继续）
 
 **依赖**：P13 已稳定，P8 能接收湿度/植被材质权重，已满足。
 
-**状态**：进行中。CPU 基线、GPU 场、Terrain Runtime 所有权、诊断、受控 GPU Contract、水文守恒耦合、可复现视觉基线与水面渲染基础已完成；气候材质反馈与植被实例化尚未完成。
+**状态**：待继续。CPU 基线、GPU 场、Terrain Runtime 所有权、诊断、受控 GPU Contract、水文守恒耦合、可复现视觉基线与水面渲染基础已完成；气候材质反馈与植被实例化尚未完成。
 
 **目标**
 
@@ -84,7 +104,7 @@
 
 - 新增 `TerrainClimateGPU`，由 `TerrainRuntime` 独占 Temperature、AtmosphericMoisture、VegetationPotential 三组 `R32F` Ping-Pong 和 Rainfall 派生纹理；
 - 三段 Compute 固定执行 Temperature/Evaporation → Conservative Upwind Advection → Condensation/Orographic Rain/Vegetation Response，每段 Barrier 后才交换所有权；
-- TerrainRenderer 按 GenerationVersion 重建气候 Runtime，并通过 FrameSerial 保证 Shadow 与九个 Chunk 的重复 Prepare 不会重复推进；
+- TerrainRenderer 按 GenerationVersion 重建气候 Runtime，并通过 FrameSerial 保证 Shadow 与多个 Chunk 的重复 Prepare 不会重复推进；
 - DebugPanel 已提供 Play、Single Step、Reset、Wind、Initial Moisture、显式 Readback 和四种 Terrain 诊断着色；
 - GTX 1050 / OpenGL 4.6 受控 `3×1` GPU Contract PASS：下风向湿度 `1`、迎风坡/平地最大降雨 `0.2/0`、帧划分差值 `0`。
 
@@ -102,10 +122,6 @@
 2. **材质反馈验证**。覆盖相同 Seed/固定步、极端输入、非有限值、权重和、Reset、帧划分和 Terrain 重建，并补真实 GPU 截图或 Contract。
 3. **GPU 植被实例化**。整理树木/灌木/草地资产与适生分布规则、确定性 Seed、Instancing/LOD/剔除/批次；测试实体仅在隔离 Lab 中，验证 Reset、分布复现与 Edit/Play 隔离。
 4. **P14 总体验收**。检查风向输运与迎风坡降雨、闭合水预算、正常画面的水文/气候响应和植被复现，完成完整构建、无窗口回归、GPU 验证与三份文档同步。
-
-## 后续任务
-
-任务按依赖和建议实施顺序排列。除非用户调整方向，当前主线完成后依次提升。自动化回归可以穿插建设，但同一时刻仍只保留一个功能主线。
 
 ### P15：统一图像导入与内部纹理资产
 
@@ -141,11 +157,18 @@
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
+### 2026-09-22：P16 大尺度地形第一阶段
+
+- 新建 Terrain 默认世界长宽 1024、HeightMap 1024、HeightScale 96；每轴 Chunk 数量按世界尺寸从 3 自适应到 16，1024 为 4×4、2048 为 8×8，仍共享三档网格和整张 HeightMap；
+- FBM 增加可序列化世界尺度频率，新地形随 WorldSize 扩大保持相近地貌特征尺度；旧 YAML 缺字段时恢复旧 UV 模式，预设切换保留模式；
+- Color LOD 按 Chunk XZ 最近距离选择并稳定相邻级差；水面按视觉水深上限保守视锥剔除；编辑器远裁剪面与移动速度适应大范围地形；
+- 验证：Windows Debug x64 完整构建与无窗口回归 PASS；旧场景往返、2048 地形 8×8 覆盖与邻块 LOD 回归 PASS；Intel Iris Xe / OpenGL 4.6.0 编辑器 GPU 地形采样基准 PASS，三档各 30 样本平均 43.168/23.008/15.566 ms；git diff --check PASS。尚未完成固定相机视觉对照和目标显卡性能验收，故 P16 总体仍为当前主线；提交：待提交。
+
 ### 2026-09-21：P14 水面渲染基础
 
 - 新增引擎侧 WaterSurfaceRenderer 与独立 Shader，Scene 收集既有 Terrain Runtime，只读 Height/Water/Velocity/Sediment；完整编辑器在 Skybox 后、Sprite/透明模型前执行，不修改模拟、不新增默认场景实体；
 - 增加等尺寸 Color0/Depth GPU 快照，避免附件反馈；水面具备吸收/深度颜色、屏幕空间折射、环境反射、速度泡沫、泥沙染色，以及 Terrain 瞬时岸线湿润；写入水面深度、世界法线和 Terrain EntityID，支持 Resize、Reset、调试绕过和会话参数；
-- 近干格/非有限输入和速度极值在视觉侧保护，波纹相位使用固定步模拟时间。水下透明折射、分层透射、SSR、专用水体 LOD/剔除和持续湿润留在技术债中，不宣称 P14 总体完成；
+- 近干格/非有限输入和速度极值在视觉侧保护，波纹相位使用固定步模拟时间。水下透明折射、分层透射、SSR、独立水体 LOD/逐块水量剔除和持续湿润留在技术债中，不宣称 P14 总体完成；
 - 验证：VS2026 Debug x64 完整构建与无窗口回归通过；Intel Iris Xe / OpenGL 4.6 本地 GPU 契约覆盖干格、吸收/折射/泥沙变化、前景遮挡、EntityID/Normal、极端/NaN/Inf、Resize、复制绑定隔离、重叠水面顺序、关闭/诊断绕过及 Reset，Water 输入绘制前后相同；完整编辑器隔离 Terrain Fixture 正常退出，原水文与气候 Contract PASS；
 - 验证程序/日志仅留本地 bin；三份现有文档同步，无新增验证脚本、报告或截图归档。下一实施项为动态生态材质权重；提交：待提交。
 
@@ -587,11 +610,11 @@
 - PBRModel 已支持 BaseColor、Normal、AO、Emissive 以及 FBX 导入的独立 Metallic/Roughness Texture；`.glmat` 尚未暴露 Metallic/Roughness 纹理 Handle，也未定义 ORM 打包通道；当前 Vertex Tangent 不包含镜像 UV 所需的 Handedness；
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
-- Terrain 已完成固定 `3×3` Chunk、三档距离 LOD/迟滞/相邻约束/Skirt、Color/Shadow 剔除、四层 Triplanar PBR、固定步水文与 Runtime Erosion；运行时 Height 会刷新 Normal/Slope、Analysis 和 Material Weights。尚无显式 Bake，模拟结果关闭或重建后丢弃；
+- Terrain 已完成按世界尺寸自适应的 Chunk、三档距离 LOD/迟滞/相邻约束/Skirt、Color/Shadow 剔除、四层 Triplanar PBR、固定步水文与 Runtime Erosion；运行时 Height 会刷新 Normal/Slope、Analysis 和 Material Weights。尚无显式 Bake，模拟结果关闭或重建后丢弃；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
 - P14 已完成 CPU/GPU 场、TerrainRuntime 所有权、固定步调度、四场诊断、GPU 趋势 Contract，以及 Rainfall/Evaporation 到 P13 Water 的守恒耦合；水面/瞬时岸线视觉基础已接入；气候材质权重反馈和植被实例化仍未实现；
-- Water Surface 当前使用不透明/天空快照和既有 Terrain LOD，尚无水下透明折射、分层水体透射、SSR、水面投影阴影、专用水体 LOD/剔除、持续湿润历史或水流 Motion Vector；浅水边缘受网格细分限制，空水域仍会提交表面 Draw 后在片元阶段剔除；
+- Water Surface 当前使用不透明/天空快照和既有 Terrain LOD，尚无水下透明折射、分层水体透射、SSR、水面投影阴影、独立水体 LOD/逐块水量剔除、持续湿润历史或水流 Motion Vector；浅水边缘受网格细分限制，空水域仍会提交表面 Draw 后在片元阶段剔除；
 - Vulkan 目前只有接口和依赖预埋，没有可运行后端。
 
 ## 固定验证清单

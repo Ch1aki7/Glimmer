@@ -34,6 +34,7 @@ namespace gl {
 		}
 
 		TerrainNoiseSettings noise;
+		noise.WorldSpaceFrequency = specification.Noise.WorldSpaceFrequency;
 		TerrainAuthoringSettings authoring;
 		float heightScale = 24.0f;
 

@@ -20,7 +20,7 @@ namespace gl {
 	class EditorCamera {
 	public:
 		EditorCamera(float fov = 45.0f, float aspectRatio = 1.777f,
-		             float nearClip = 0.1f, float farClip = 1000.0f);
+		             float nearClip = 0.1f, float farClip = 4096.0f);
 
 		void OnUpdate(Timestep ts);
 		void OnEvent(Event& e);
@@ -56,7 +56,7 @@ namespace gl {
 		float m_FOV = 45.0f;
 		float m_AspectRatio = 1.777f;
 		float m_NearClip = 0.1f;
-		float m_FarClip = 1000.0f;
+		float m_FarClip = 4096.0f;
 
 		// 球形坐标
 		glm::vec3 m_FocalPoint = { 0.0f, 0.0f, 0.0f };

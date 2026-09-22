@@ -7,6 +7,7 @@ uniform int u_Seed;
 uniform int u_Octaves;
 uniform int u_Preset;
 uniform float u_Frequency;
+uniform float u_WorldFrequencyScale;
 uniform float u_Lacunarity;
 uniform float u_Persistence;
 uniform float u_DomainWarp;
@@ -148,7 +149,8 @@ void main()
 		return;
 
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
-	vec2 position = (uv - 0.5 + u_Offset) * u_Frequency;
+	vec2 position = ((uv - 0.5) * u_WorldFrequencyScale + u_Offset)
+		* u_Frequency;
 
 	vec2 warp = vec2(
 		FBM(position * 0.45 + vec2(17.13, 3.71)),
