@@ -195,6 +195,7 @@ namespace {
 			&& left.ErosionShaderHandle == right.ErosionShaderHandle
 			&& left.DerivationShaderHandle == right.DerivationShaderHandle
 			&& left.TerrainMaterialHandle == right.TerrainMaterialHandle
+			&& leftNoise.SynthesisVersion == rightNoise.SynthesisVersion
 			&& leftNoise.Seed == rightNoise.Seed
 			&& leftNoise.WorldSpaceFrequency == rightNoise.WorldSpaceFrequency
 			&& leftNoise.Octaves == rightNoise.Octaves
@@ -486,6 +487,7 @@ namespace {
 		terrain.Specification.DerivationShaderHandle = gl::AssetHandle(6005);
 		terrain.Specification.TerrainMaterialHandle = gl::AssetHandle(6006);
 		terrain.Specification.Noise.Seed = 73;
+		terrain.Specification.Noise.SynthesisVersion = 2;
 		terrain.Specification.Noise.WorldSpaceFrequency = true;
 		terrain.Specification.Noise.Octaves = 7;
 		terrain.Specification.Noise.Frequency = 1.35f;
@@ -589,6 +591,18 @@ namespace {
 				"terrain runtime is not serialized");
 		}
 		std::string legacyTerrainSnapshot = savedSnapshot;
+		const size_t synthesisKey = legacyTerrainSnapshot.find(
+			"SynthesisVersion:");
+		context.Check(synthesisKey != std::string::npos,
+			"new terrain snapshot records synthesis version");
+		if (synthesisKey != std::string::npos)
+		{
+			const size_t lineStart = legacyTerrainSnapshot.rfind('\n', synthesisKey) + 1;
+			const size_t lineEnd = legacyTerrainSnapshot.find('\n', synthesisKey);
+			legacyTerrainSnapshot.erase(lineStart,
+				lineEnd == std::string::npos ? std::string::npos
+					: lineEnd - lineStart + 1);
+		}
 		const size_t frequencyKey = legacyTerrainSnapshot.find(
 			"WorldSpaceFrequency:");
 		context.Check(frequencyKey != std::string::npos,
@@ -622,6 +636,18 @@ namespace {
 			&& !legacyTerrainEntity.GetComponent<gl::TerrainComponent>()
 				.Specification.Noise.WorldSpaceFrequency,
 			"legacy terrain without frequency mode keeps normalized UV generation");
+		context.Check(legacyTerrainLoaded && legacyTerrainEntity
+			&& legacyTerrainEntity.GetComponent<gl::TerrainComponent>()
+				.Specification.Noise.SynthesisVersion == 1,
+			"legacy terrain without synthesis version keeps original generator");
+		if (legacyTerrainLoaded && legacyTerrainEntity)
+		{
+			auto legacySpecification = legacyTerrainEntity
+				.GetComponent<gl::TerrainComponent>().Specification;
+			gl::ApplyTerrainPreset(legacySpecification, gl::TerrainPreset::Alpine);
+			context.Check(legacySpecification.Noise.SynthesisVersion == 1,
+				"preset changes preserve a legacy terrain synthesis version");
+		}
 		context.Check(restored.HasComponent<gl::DirectionalLightComponent>(),
 			"directional light component survives scene round trip");
 		if (restored.HasComponent<gl::DirectionalLightComponent>())
@@ -743,6 +769,10 @@ namespace {
 				+ gl::TerrainPresetToString(preset));
 			context.Check(first.Preset == preset
 				&& first.Noise.Seed != previousSeed
+				&& first.HeightScale
+					>= gl::TerrainWorldSizeDefault * 0.06f
+				&& first.HeightScale
+					<= gl::TerrainWorldSizeDefault * 0.17f
 				&& first.Noise.GeologyBlend >= 0.0f
 				&& first.Noise.GeologyBlend <= 1.0f
 				&& first.Noise.GeologyScale >= 0.25f
@@ -754,7 +784,7 @@ namespace {
 				&& first.Authoring.ThermalIterations <= 128
 				&& first.Authoring.ThermalStrength >= 0.0f
 				&& first.Authoring.ThermalStrength <= 0.5f,
-				std::string("terrain preset has bounded authoring settings: ")
+				std::string("terrain preset has world-scale relief and bounded authoring settings: ")
 				+ gl::TerrainPresetToString(preset));
 			previousSeed = first.Noise.Seed;
 		}

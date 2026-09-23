@@ -12,10 +12,27 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <vector>
 namespace gl {
 	namespace {
+		std::string GetEnvironmentValue(const char* name)
+		{
+#ifdef GL_PLATFORM_WINDOWS
+			char* value = nullptr;
+			size_t length = 0;
+			if (_dupenv_s(&value, &length, name) != 0 || !value)
+				return {};
+			std::string result(value);
+			std::free(value);
+			return result;
+#else
+			const char* value = std::getenv(name);
+			return value ? value : "";
+#endif
+		}
+
 		bool HasEnvironmentVariable(const char* name)
 		{
 #ifdef GL_PLATFORM_WINDOWS
@@ -72,6 +89,61 @@ namespace gl {
 				std::getenv("GLIMMER_TERRAIN_SAMPLING_VISUAL_MODE");
 			return value ? std::atoi(value) : -1;
 #endif
+		}
+
+		uint32_t GetTerrainSynthesisVersion()
+		{
+			const std::string value = GetEnvironmentValue(
+				"GLIMMER_TERRAIN_SYNTHESIS_VERSION");
+			return value.empty() ? 2u
+				: std::clamp(static_cast<uint32_t>(std::atoi(value.c_str())), 1u, 2u);
+		}
+
+		bool WriteRgbaBmp(const std::filesystem::path& path,
+			const std::vector<uint8_t>& rgba, uint32_t width, uint32_t height)
+		{
+			if (width == 0 || height == 0
+				|| rgba.size() != static_cast<size_t>(width) * height * 4u)
+				return false;
+			std::error_code error;
+			if (!path.parent_path().empty())
+				std::filesystem::create_directories(path.parent_path(), error);
+			if (error)
+				return false;
+
+			const uint32_t rowBytes = width * 3u;
+			const uint32_t rowStride = (rowBytes + 3u) & ~3u;
+			const uint32_t pixelBytes = rowStride * height;
+			const uint32_t fileBytes = 54u + pixelBytes;
+			std::ofstream output(path, std::ios::binary | std::ios::trunc);
+			if (!output)
+				return false;
+			auto write16 = [&output](uint16_t value) {
+				output.put(static_cast<char>(value & 0xffu));
+				output.put(static_cast<char>((value >> 8u) & 0xffu));
+			};
+			auto write32 = [&output](uint32_t value) {
+				for (uint32_t shift = 0; shift < 32u; shift += 8u)
+					output.put(static_cast<char>((value >> shift) & 0xffu));
+			};
+			output.put('B'); output.put('M');
+			write32(fileBytes); write16(0); write16(0); write32(54);
+			write32(40); write32(width); write32(height); write16(1); write16(24);
+			write32(0); write32(pixelBytes); write32(2835); write32(2835);
+			write32(0); write32(0);
+			const std::array<char, 3> padding{};
+			for (uint32_t y = 0; y < height; ++y)
+			{
+				for (uint32_t x = 0; x < width; ++x)
+				{
+					const size_t offset = (static_cast<size_t>(y) * width + x) * 4u;
+					output.put(static_cast<char>(rgba[offset + 2]));
+					output.put(static_cast<char>(rgba[offset + 1]));
+					output.put(static_cast<char>(rgba[offset]));
+				}
+				output.write(padding.data(), rowStride - rowBytes);
+			}
+			return output.good();
 		}
 
 		bool ShouldAutorunShadowVisualValidation()
@@ -684,6 +756,8 @@ namespace gl {
 		GL_PROFILE_FUNCTION();
 		AssetManager::Initialize("assets");
 		const int terrainSamplingVisualMode = GetTerrainSamplingVisualMode();
+		m_TerrainCapturePath = GetEnvironmentValue("GLIMMER_TERRAIN_CAPTURE_PATH");
+		const uint32_t terrainSynthesisVersion = GetTerrainSynthesisVersion();
 
 		m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
 		m_ShaderLib.Load("assets/shaders/StarNest.glsl");
@@ -777,6 +851,7 @@ namespace gl {
 		m_UsesTerrainValidationScene =
 			ShouldAutorunTerrainSamplingBenchmark()
 			|| terrainSamplingVisualMode >= 0
+			|| !m_TerrainCapturePath.empty()
 			|| ShouldVisualizeTerrainLODs();
 		if (m_UsesTerrainValidationScene)
 		{
@@ -785,7 +860,8 @@ namespace gl {
 				terrainShaderHandle,
 				terrainGenerationShaderHandle,
 				terrainErosionShaderHandle,
-				terrainDerivationShaderHandle));
+				terrainDerivationShaderHandle,
+				terrainSynthesisVersion));
 			m_EditorScenePath.clear();
 			GL_CORE_INFO("Terrain validation fixture scene activated.");
 		}
@@ -894,6 +970,15 @@ namespace gl {
 				150.0f, -30.0f, 0.0f);
 			GL_CORE_INFO("Terrain Sampling Visual mode active: {0}.",
 				terrainSamplingVisualMode);
+		}
+		else if (!m_TerrainCapturePath.empty())
+		{
+			TerrainRenderer::SetSamplingMode(
+				TerrainRenderer::SamplingMode::AutomaticDistance);
+			m_EditorCamera.SetView({ 0.0f, 35.0f, 0.0f },
+				650.0f, -30.0f, 35.0f);
+			GL_CORE_INFO("Terrain fixed-camera capture armed: synthesis v{0}, path={1}",
+				terrainSynthesisVersion, m_TerrainCapturePath.string());
 		}
 
 
@@ -1060,6 +1145,23 @@ namespace gl {
 			}
 		}
 		m_PostProcessRenderer.Execute(postProcessInput);
+		if (!m_TerrainCapturePath.empty() && ++m_TerrainCaptureFrames >= 5)
+		{
+			std::vector<uint8_t> pixels;
+			uint32_t width = 0;
+			uint32_t height = 0;
+			const bool captured = m_PostProcessRenderer.CaptureOutputRGBA8(
+				pixels, width, height)
+				&& WriteRgbaBmp(m_TerrainCapturePath, pixels, width, height);
+			if (captured)
+				GL_CORE_INFO("Terrain fixed-camera capture PASS: {0} ({1}x{2})",
+					m_TerrainCapturePath.string(), width, height);
+			else
+				GL_CORE_ERROR("Terrain fixed-camera capture FAIL: {0}",
+					m_TerrainCapturePath.string());
+			m_TerrainCapturePath.clear();
+			Application::Get().Close();
+		}
 		if (m_PostProcessValidationAutorun
 			&& ++m_PostProcessValidationFrames >= 5)
 		{

@@ -438,6 +438,18 @@ namespace gl {
 			: 0;
 	}
 
+	bool PostProcessRenderer::CaptureOutputRGBA8(std::vector<uint8_t>& pixels,
+		uint32_t& width, uint32_t& height) const
+	{
+		if (!m_DisplayFramebuffer
+			|| !m_DisplayFramebuffer->ReadColorAttachmentRGBA8(0, pixels))
+			return false;
+		const auto& specification = m_DisplayFramebuffer->GetSpecification();
+		width = specification.Width;
+		height = specification.Height;
+		return true;
+	}
+
 	uint32_t PostProcessRenderer::GetVelocityTextureID() const
 	{
 		return m_VelocityFramebuffer

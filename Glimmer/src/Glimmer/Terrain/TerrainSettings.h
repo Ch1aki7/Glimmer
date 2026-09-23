@@ -24,6 +24,7 @@ namespace gl {
 
 	struct TerrainNoiseSettings
 	{
+		uint32_t SynthesisVersion = 2;
 		bool WorldSpaceFrequency = true;
 		int Seed = 1;
 		int Octaves = 7;

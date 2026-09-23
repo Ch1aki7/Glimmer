@@ -319,8 +319,10 @@ namespace gl {
 				if (first.Valid && second.Valid && first.Hash == second.Hash)
 				{
 					GL_CORE_INFO(
-						"Terrain GPU validation PASS: deterministic hash={0}, dispatches={1}",
-						first.Hash, runtime.LastGenerationDispatchCount);
+						"Terrain GPU validation PASS: deterministic hash={0}, dispatches={1}, height=[{2}, {3}], mean={4}, stddev={5}",
+						first.Hash, runtime.LastGenerationDispatchCount,
+						first.HeightMinimum, first.HeightMaximum,
+						first.HeightMean, first.HeightStandardDeviation);
 				}
 				else
 				{

@@ -34,9 +34,12 @@ namespace gl {
 		}
 
 		TerrainNoiseSettings noise;
+		noise.SynthesisVersion = specification.Noise.SynthesisVersion;
 		noise.WorldSpaceFrequency = specification.Noise.WorldSpaceFrequency;
 		TerrainAuthoringSettings authoring;
-		float heightScale = 24.0f;
+		// Presets were authored when the default terrain covered 256 world units.
+		// Keep their relative relief after the default footprint increased to 1024.
+		float heightScale = 96.0f;
 
 		switch (preset)
 		{
@@ -54,7 +57,7 @@ namespace gl {
 				noise.GeologyScale = 3.4f;
 				noise.RiftStrength = 0.08f;
 				noise.TrendStrength = 0.12f;
-				heightScale = 42.0f;
+				heightScale = 168.0f;
 				authoring.ThermalIterations = 28;
 				authoring.Talus = 0.010f;
 				authoring.ThermalStrength = 0.30f;
@@ -73,7 +76,7 @@ namespace gl {
 				noise.GeologyScale = 2.2f;
 				noise.RiftStrength = 0.14f;
 				noise.TrendStrength = 0.10f;
-				heightScale = 30.0f;
+				heightScale = 120.0f;
 				authoring.ThermalIterations = 14;
 				authoring.Talus = 0.018f;
 				authoring.ThermalStrength = 0.22f;
@@ -93,7 +96,7 @@ namespace gl {
 				noise.GeologyScale = 1.6f;
 				noise.RiftStrength = 0.02f;
 				noise.TrendStrength = 0.08f;
-				heightScale = 16.0f;
+				heightScale = 64.0f;
 				authoring.ThermalIterations = 8;
 				authoring.Talus = 0.020f;
 				authoring.ThermalStrength = 0.18f;
@@ -111,7 +114,7 @@ namespace gl {
 				noise.GeologyScale = 2.5f;
 				noise.RiftStrength = 0.03f;
 				noise.TrendStrength = 0.04f;
-				heightScale = 38.0f;
+				heightScale = 152.0f;
 				authoring.ThermalIterations = 18;
 				authoring.Talus = 0.014f;
 				authoring.ThermalStrength = 0.26f;
@@ -131,7 +134,7 @@ namespace gl {
 				noise.GeologyScale = 2.8f;
 				noise.RiftStrength = 0.22f;
 				noise.TrendStrength = 0.14f;
-				heightScale = 34.0f;
+				heightScale = 136.0f;
 				authoring.ThermalIterations = 48;
 				authoring.Talus = 0.008f;
 				authoring.ThermalStrength = 0.38f;

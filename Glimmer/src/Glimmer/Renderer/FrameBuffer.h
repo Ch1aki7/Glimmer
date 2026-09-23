@@ -63,6 +63,10 @@ namespace gl {
 
 		// 读取指定附件的像素值（用于鼠标拾取等场景）
 		virtual int ReadPixel(uint32_t attachmentIndex, int x, int y) const = 0;
+		// Reads a single-sample color attachment as display-ready RGBA8 pixels.
+		// Rows retain the graphics API's bottom-up order for direct image export.
+		virtual bool ReadColorAttachmentRGBA8(uint32_t attachmentIndex,
+			std::vector<uint8_t>& pixels) const = 0;
 		// 清除指定附件为某个值（整数附件用 glClearBufferiv）
 		virtual void ClearAttachment(uint32_t attachmentIndex, int value) = 0;
 		virtual void ClearColorAttachment(

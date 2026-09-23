@@ -93,6 +93,8 @@ namespace gl {
 		PostProcessSettings& GetSettings() { return m_Settings; }
 		const PostProcessSettings& GetSettings() const { return m_Settings; }
 		uint32_t GetOutputTextureID() const;
+		bool CaptureOutputRGBA8(std::vector<uint8_t>& pixels,
+			uint32_t& width, uint32_t& height) const;
 		uint32_t GetVelocityTextureID() const;
 		bool HasValidHistory() const { return m_HistoryValid; }
 		bool IsInitialized() const { return m_DisplayFramebuffer != nullptr; }

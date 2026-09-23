@@ -1,6 +1,7 @@
 #include "glpch.h"
 #include "OpenGLFramebuffer.h"
 #include <glad/glad.h>
+#include <limits>
 
 namespace gl {
 	bool OpenGLFramebuffer::CopyColorAndDepthTo(Framebuffer& destination) const
@@ -375,6 +376,28 @@ namespace gl {
 		glReadBuffer(GL_COLOR_ATTACHMENT0 + attachmentIndex);
 		glReadPixels(x, y, 1, 1, GL_RED_INTEGER, GL_INT, &pixel);
 		return pixel;
+	}
+
+	bool OpenGLFramebuffer::ReadColorAttachmentRGBA8(
+		uint32_t attachmentIndex, std::vector<uint8_t>& pixels) const
+	{
+		if (m_Specification.Samples != 1
+			|| attachmentIndex >= m_ColorAttachments.size())
+			return false;
+		const auto format = m_ColorAttachments[attachmentIndex].Format;
+		if (format != FramebufferTextureFormat::RGBA8
+			&& format != FramebufferTextureFormat::RGBA16F)
+			return false;
+
+		const size_t byteCount = static_cast<size_t>(m_Specification.Width)
+			* static_cast<size_t>(m_Specification.Height) * 4u;
+		if (byteCount > static_cast<size_t>(std::numeric_limits<GLsizei>::max()))
+			return false;
+		pixels.resize(byteCount);
+		glGetTextureImage(m_ColorAttachments[attachmentIndex].RendererID, 0,
+			GL_RGBA, GL_UNSIGNED_BYTE, static_cast<GLsizei>(byteCount),
+			pixels.data());
+		return glGetError() == GL_NO_ERROR;
 	}
 
 	void OpenGLFramebuffer::ClearAttachment(uint32_t attachmentIndex, int value)

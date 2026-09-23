@@ -6,6 +6,7 @@ layout(r32f, binding = 0) writeonly uniform image2D u_Output;
 uniform int u_Seed;
 uniform int u_Octaves;
 uniform int u_Preset;
+uniform int u_SynthesisVersion;
 uniform float u_Frequency;
 uniform float u_WorldFrequencyScale;
 uniform float u_Lacunarity;
@@ -141,6 +142,133 @@ float WorleyDistance(vec2 position)
 	return clamp(minimumDistance / 1.41421356, 0.0, 1.0);
 }
 
+// The conditional synthesis limits octave wavelength to the height texture's
+// sampling density. The legacy functions above remain unchanged for old scenes.
+float FilteredFBM(vec2 position, float pixelFootprint)
+{
+	float sum = 0.0;
+	float weightSum = 0.0;
+	float amplitude = 1.0;
+	float frequency = 1.0;
+	for (int octave = 0; octave < min(u_Octaves, 12); ++octave)
+	{
+		float weight = 1.0 - smoothstep(0.25, 0.48,
+			pixelFootprint * frequency);
+		if (weight <= 0.0) break;
+		sum += GradientNoise(position * frequency) * amplitude * weight;
+		weightSum += amplitude * weight;
+		position = mat2(0.80, -0.60, 0.60, 0.80) * position
+			+ vec2(13.17, 7.31);
+		frequency *= u_Lacunarity;
+		amplitude *= u_Persistence;
+	}
+	return weightSum > 0.0 ? sum / weightSum : 0.5;
+}
+
+float FilteredRidges(vec2 position, float pixelFootprint)
+{
+	float sum = 0.0;
+	float weightSum = 0.0;
+	float amplitude = 0.5;
+	float previous = 1.0;
+	for (int octave = 0; octave < min(u_Octaves, 10); ++octave)
+	{
+		float weight = 1.0 - smoothstep(0.25, 0.48, pixelFootprint);
+		if (weight <= 0.0) break;
+		float ridge = 1.0 - abs(GradientNoise(position) * 2.0 - 1.0);
+		ridge *= ridge * previous;
+		previous = clamp(ridge * 1.8, 0.0, 1.0);
+		sum += ridge * amplitude * weight;
+		weightSum += amplitude * weight;
+		position = mat2(0.80, -0.60, 0.60, 0.80) * position
+			* u_Lacunarity + vec2(5.23, 17.71);
+		pixelFootprint *= u_Lacunarity;
+		amplitude *= u_Persistence;
+	}
+	return weightSum > 0.0 ? sum / weightSum : 0.0;
+}
+
+float ConditionalHeight(vec2 uv, vec2 position, ivec2 size)
+{
+	float pixelFootprint = u_Frequency * u_WorldFrequencyScale
+		/ float(min(size.x, size.y));
+	vec2 warp = vec2(
+		FBM(position * 0.33 + vec2(17.13, 3.71)),
+		FBM(position * 0.33 + vec2(5.37, 29.41))) - 0.5;
+	vec2 p = position + warp * (u_DomainWarp * 0.45);
+	vec2 oriented = Rotation(u_MountainDirection) * p;
+	float mountainWidth = clamp(u_MountainWidth, 0.05, 1.0);
+	vec2 beltScale = vec2(mix(0.20, 0.62, mountainWidth),
+		mix(1.85, 0.95, mountainWidth));
+
+	// Broad land mass and elongated belts decide where mountains can exist.
+	float region = FBM(p * max(u_ContinentScale * 0.7, 0.035)
+		+ vec2(41.7, 9.2));
+	float land = smoothstep(0.35, 0.66, region);
+	float belt = FBM(oriented * beltScale + vec2(73.4, 31.6));
+	float mountainMask = land * smoothstep(0.43, 0.65, belt);
+	float hillNoise = FilteredFBM(p * 0.8 + vec2(3.1, 19.7),
+		pixelFootprint * 0.8);
+	vec2 ridgeScale = vec2(beltScale.x * 2.1, beltScale.y * 1.75);
+	float ridge = FilteredRidges(oriented * ridgeScale
+		+ vec2(27.1, 8.7), pixelFootprint * max(ridgeScale.x, ridgeScale.y));
+	float relief = 0.10 + land * 0.19
+		+ (hillNoise - 0.5) * mix(0.08, 0.19, land);
+	float mountain = mountainMask * (0.08 + 0.50 * ridge)
+		* clamp(u_RidgeStrength, 0.0, 1.0);
+
+	// Geological cells modulate rock relief only inside mountain regions.
+	if (u_GeologyBlend > 0.0)
+	{
+		float cells = 1.0 - WorleyDistance(p * max(u_GeologyScale, 0.25)
+			+ vec2(7.3, 31.9));
+		mountain += mountainMask * (cells - 0.5)
+			* (u_GeologyBlend * 0.17);
+		float rift = FilteredFBM(p * max(u_GeologyScale, 0.25)
+			+ vec2(113.7, 47.3), pixelFootprint * max(u_GeologyScale, 0.25));
+		mountain -= mountainMask * pow(1.0 - abs(rift * 2.0 - 1.0), 8.0)
+			* u_RiftStrength * u_GeologyBlend;
+	}
+	float height = relief + mountain;
+
+	// The valley signal is conditional on mountainous terrain. It is a
+	// shape cue, not a water-flow or sediment transport simulation.
+	float valleyNoise = GradientNoise(oriented * vec2(0.8, 2.7)
+		+ vec2(97.1, 43.2));
+	float valley = pow(1.0 - abs(valleyNoise * 2.0 - 1.0), 7.0);
+	height -= valley * mountainMask * u_ErosionStrength
+		* (u_Preset == 5 ? 0.60 : 0.32);
+
+	float detail = FilteredFBM(p * 3.6 + vec2(7.7, 61.3),
+		pixelFootprint * 3.6) - 0.5;
+	height += detail * u_DetailStrength
+		* (0.12 + smoothstep(0.27, 0.58, height) * 0.88);
+	height += mountainMask * u_TrendStrength
+		* (FilteredFBM(oriented * 0.22 + vec2(151.1, 23.7),
+			pixelFootprint * 0.22) - 0.5);
+
+	if (u_Preset == 2)
+	{
+		float terraced = floor(height * 6.0 + 0.5) / 6.0;
+		height = mix(height, terraced + (height - terraced) * 0.2,
+			clamp(u_PlateauStrength, 0.0, 1.0));
+	}
+	else if (u_Preset == 3)
+		height = 0.09 + land * 0.18 + (hillNoise - 0.5) * 0.27
+			+ detail * u_DetailStrength * 0.25;
+	else if (u_Preset == 4)
+	{
+		// Radius is measured in 256-unit terrain coordinates, not map UV.
+		float radial = length((uv - 0.5) * u_WorldFrequencyScale
+			+ warp * 0.10);
+		float cone = 1.0 - smoothstep(0.06, 0.62, radial);
+		float crater = exp(-pow((radial - 0.12) / 0.045, 2.0));
+		height = max(height * 0.35, 0.06 + cone * 0.72
+			- crater * 0.35 + detail * 0.05);
+	}
+	return clamp(height, 0.0, 1.0);
+}
+
 void main()
 {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -151,6 +279,11 @@ void main()
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
 	vec2 position = ((uv - 0.5) * u_WorldFrequencyScale + u_Offset)
 		* u_Frequency;
+	if (u_SynthesisVersion >= 2)
+	{
+		imageStore(u_Output, pixel, vec4(ConditionalHeight(uv, position, size)));
+		return;
+	}
 
 	vec2 warp = vec2(
 		FBM(position * 0.45 + vec2(17.13, 3.71)),

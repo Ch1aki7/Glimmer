@@ -9,6 +9,10 @@ namespace gl {
 	{
 		bool Valid = false;
 		uint64_t Hash = 0;
+		float HeightMinimum = 0.0f;
+		float HeightMaximum = 0.0f;
+		float HeightMean = 0.0f;
+		float HeightStandardDeviation = 0.0f;
 		std::string Message;
 	};
 

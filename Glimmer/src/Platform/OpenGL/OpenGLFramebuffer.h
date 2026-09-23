@@ -19,6 +19,8 @@ namespace gl {
 		virtual uint32_t GetRendererID() const override { return m_RendererID; }
 		virtual bool CopyColorAndDepthTo(Framebuffer& destination) const override;
 		virtual int ReadPixel(uint32_t attachmentIndex, int x, int y) const override;
+		virtual bool ReadColorAttachmentRGBA8(uint32_t attachmentIndex,
+			std::vector<uint8_t>& pixels) const override;
 		virtual void ClearAttachment(uint32_t attachmentIndex, int value) override;
 		virtual void ClearColorAttachment(
 			uint32_t attachmentIndex, const glm::vec4& value) override;

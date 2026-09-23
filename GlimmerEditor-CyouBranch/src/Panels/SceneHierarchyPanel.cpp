@@ -438,6 +438,16 @@ namespace gl {
 				if (spec.Procedural)
 				{
 					auto& noise = spec.Noise;
+					before = terrain;
+					int synthesisVersion = static_cast<int>(
+						std::clamp(noise.SynthesisVersion, 1u, 2u) - 1u);
+					if (ImGui::Combo("Terrain Synthesis", &synthesisVersion,
+						"Legacy (v1)\0Conditional Fractal (v2)\0"))
+					{
+						noise.SynthesisVersion = static_cast<uint32_t>(synthesisVersion + 1);
+						TerrainRenderer::Invalidate(terrain);
+					}
+					commit("Edit Terrain Synthesis", before);
 					auto drawNoise = [this, entity, &terrain, &commit](
 						const char* commandName, auto drawWidget) {
 						const TerrainComponent valueBeforeWidget = terrain;

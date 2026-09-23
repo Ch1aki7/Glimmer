@@ -228,15 +228,17 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 
 地形实体由 `TerrainComponent` 保存可序列化的 `TerrainSpecification`，运行时 GPU 对象放在不持久化的 `TerrainRuntime` 中：
 
-- `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion 与 Derive Maps；GenerateFBM 可按序列化的 GeologyBlend 选择性叠加 Worley 地质块、陡峭区遮罩、裂谷和大尺度趋势，Blend 为 0 时保持原生成公式；
+- `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion 与 Derive Maps；序列化的 Noise SynthesisVersion 选择旧版合成或新版条件分形。新版先形成低频陆地区域与定向山带，再在山地区域叠加抗混叠 Ridged 细节、Worley 地质扰动、裂谷、趋势和条件谷地；旧 YAML 缺版本时固定走 v1；
 - Height 使用 R32F `SimulationGrid` Ping-Pong；侵蚀每轮只读 ReadTexture、只写 WriteTexture，Barrier 后交换，禁止同纹理读写；
 - 派生阶段从最终 Height 生成三张 RGBA16F Runtime 纹理：Normal/Slope、Curvature/Flow Potential、Grass/Soil/Rock/Snow Material Weights；
 - Custom、Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 预设属于可序列化规格，手动修改预设参数后转为 Custom；
+- 五个内建预设的 HeightScale 以默认 1024 世界宽度为基准保持约 6%～17% 的垂直幅度；旧场景仍使用自身序列化高度；
 - 也可引用导入的高度图 Texture Asset；
 - `TerrainSpecification::WorldSize` 独立定义正方形地形的 X/Z 世界尺寸，有限范围为 16～8192；它驱动生成与派生图的物理采样间距、水文/气候 CellSize、Chunk 局部范围、Color/Shadow Bounds 和编辑器聚焦边界。`MeshResolution` 只负责几何细分，因此扩大占地不会同步扩大共享网格的顶点与三角形数量；旧 Scene YAML 缺少该字段时按原 `MeshResolution` 恢复旧水平尺寸；
 - `TerrainNoiseSettings::WorldSpaceFrequency` 控制程序化 FBM 的水平频率解释：新地形默认以 256 世界单位为基准保持地貌特征尺度，旧 Scene YAML 缺少字段时继续使用归一化 UV 频率；预设切换保留当前模式；
 - `TerrainMesh` 生成规则表面与四条重复边界 Skirt；`TerrainChunkLayout` 以纯 CPU 数据按世界尺寸选择每轴 3～16 个 Chunk（以 256 为目标块宽），描述全局 UV、局部 XZ、世界尺寸、三档 LOD 分辨率及相邻级差约束；
 - `TerrainRenderer` 延迟创建/重建运行时资源并完成地形绘制；Runtime 持有按 `ceil(MeshResolution / 3)`、约二分之一和约四分之一建立的 LOD0/1/2 三份共享 Chunk Mesh，全部区域共用 Height/派生纹理和材质绑定，并通过逐块 Uniform 恢复完整覆盖；Color Pass 先执行 Camera Frustum 剔除，再按相机到 Chunk XZ 范围的最近距离选择 LOD，复用上帧级别施加 5 单位迟滞，并把四方向相邻级差限制为 1；程序化路径使用派生法线和归一化四层权重，外部高度图保持即时法线回退；
+- 单采样 RGBA8/RGBA16F Framebuffer 支持只读转换为 RGBA8；PostProcessRenderer 只暴露最终显示附件的捕获接口，编辑器 Terrain Fixture 可按环境变量选择 v1/v2，在固定相机渲染五帧后写出 BMP 并退出；
 - `TerrainSpecification::TerrainMaterialHandle` 引用独立 `.glterrainmat`；Handle 为 0 时 TerrainRenderer 使用内建四层颜色/PBR 参数且不加载具体层纹理，有效 Handle 才从 AssetManager 缓存解析四层参数，并使用纹理单元 4～15 绑定每层 Albedo/Normal/AO；
 - Terrain Shader 以世界坐标对 XY/XZ/YZ 三个平面采样并按法线方向混合，避免陡坡沿网格 UV 拉伸；派生权重再叠加高度、坡度、曲率和 Flow/低地湿度修正，最后进入 Cook–Torrance 直接光与线性 HDR 输出；
 - TerrainRenderer 的采样质量是纯运行时全局状态：Full-4 保留完整基线，Top-2 在最终权重确定后裁剪低贡献层，Dominant Detail 只为主导层读取 Normal/AO，Auto Distance 在近景 Top-2 与远景 Dominant Detail 间平滑衰减次要层细节；默认使用 Full-4，以完整保留四层连续权重和每层 Albedo/Normal/AO 过渡，Auto 的距离阈值仍为 80 世界单位。采样设置、GPU Timer 与 Statistics 不进入 Scene YAML；

@@ -4619,3 +4619,21 @@ Scene RGBA16F
 TerrainChunkLayout 按世界长宽选择每轴 3～16 块，以 256 为目标块宽；1024 为 4×4，2048 为 8×8。所有块仍共用一张 HeightMap、三份 LOD 网格和材质。Color LOD 使用相机到块水平范围的最近距离，保留迟滞与相邻级差约束；Shadow 继续使用 LOD0。水面沿用地形块和 LOD，并以视觉水深上限构造保守 AABB 做视锥剔除。编辑器相机默认远裁剪面为 4096，聚焦和缩放时扩展可见距离与移动速度。
 
 Windows Debug x64 全量验证与回归通过，覆盖旧 YAML 兼容、2048 地形 8×8 覆盖和相邻 LOD。Intel Iris Xe / OpenGL 4.6.0 的现有 Terrain Sampling Benchmark 三档各 30 样本通过，GPU 平均分别为 Full-4 43.168 ms、Top-2 23.008 ms、Top-2 + Dominant Normal/AO 15.566 ms。该基准使用独立 Fixture，未构成新地貌的固定相机视觉验收。当前仍是单张高度图与离散三级网格 LOD，近景数据精度、切换过渡、远景构图和目标显卡性能需继续验证。
+
+## Terrain 分形生成重构分析
+
+P16 下一实施项先处理地貌生成。当前 GenerateFBM.comp 已有梯度噪声、Ridged fBm、Worley、Domain Warp、山脉方向和预设；问题集中在信号的组合方式：低频大陆、山脉遮罩、山脊和沟谷都在单次像素计算里混合，沟谷由噪声形状直接减高，不能保证沿真实汇流方向连接。火山预设仍用整图 UV 计算径向形状，因此扩大 WorldSize 会把火山同步放大。最终统一 clamp/pow 也会压缩高低地形的动态范围。有限次 Authoring 目前只有 Thermal Erosion；Runtime Hydraulic Erosion 是独立的非持久状态，不能当作静态生成结果。
+
+方案先在现有 R32F Height 输出契约内重写为分阶段生成：低频地貌骨架与可控山系 → 按地质区域、海拔和坡度选择分形类型及频带 → 形成受地形引导的谷地/排水结构 → 可选有限次 Authoring 侵蚀 → 派生法线、分析图和材质权重。WorldSize、Seed 和 Offset 使用一致的世界坐标语义；最大频率受 HeightMap 像素间距限制，避免在高度图中产生混叠。旧场景保留旧算法，新的生成版本由 Scene YAML 明确选择。
+
+目前不预设全面替换噪声核。现有梯度噪声可作为低频控制信号；Ridged 信号适合山脊，Worley 更适合局部地质遮罩而不是直接充当整幅地貌。先固定 Seed、世界尺寸、相机和光照，比较现有核与候选 Simplex/OpenSimplex 的形态、方向性和 GPU 生成耗时；只有可见伪影或明确成本收益时才替换。也不需要把预生成噪声图片作为基础输入：现有 Compute 在生成时计算噪声并写入 HeightMap；外部高度图仍保留为独立的用户资产路径。真实感主要取决于地貌骨架、条件调制和侵蚀，单换噪声图片不能替代这些结构。
+
+AfterglowRender 文档将条件分形基础地貌与后续水蚀、风蚀、热蚀分开，并指出纯噪声地形的各向同性问题；其 4096×4096 全局模拟规格不能直接套入当前单张高度与水文纹理链。
+
+当前实现已加入 Terrain Synthesis v2。它先生成低频陆地区域和由 Mountain Direction/Width 控制的长条山带，只在山地区域叠加 Ridged fBm、Worley 地质扰动、裂谷、趋势和谷地信号；丘陵与高频细节分别受区域和高度约束。高频 fBm 会根据 WorldSize、HeightMapResolution 和 Lacunarity 对接近像素 Nyquist 上限的 octave 平滑降权，减少大范围高度图的细碎混叠。Volcanic 半径改用 256 世界单位基准，不再随整张地图同比放大。谷地仍是静态形态提示，真正的水流搬运与沉积继续由独立侵蚀链负责。
+
+Terrain Inspector 的 Terrain Synthesis 可以在 Legacy v1 与 Conditional Fractal v2 间切换。SynthesisVersion 写入 Scene YAML；旧 YAML 缺字段时使用 v1，切换预设也保留当前版本。新地形默认 v2。Intel Iris Xe/OpenGL 4.6.0 上，固定 Alpine Fixture 的 Compute Shader 编译及确定性验证通过：重复生成哈希 6355609087535305251，高度范围 0.0814901～0.6298751、均值 0.2167487、标准差 0.1010291。
+
+固定视角对照已接入完整渲染链。设置 `GLIMMER_TERRAIN_SYNTHESIS_VERSION=1|2` 和 `GLIMMER_TERRAIN_CAPTURE_PATH=<bmp>` 会启用独立 Terrain Fixture，在同一 Seed、650 距离相机、光照和后处理下渲染五帧，读回最终 RGBA8 并保存后退出。558×353 的 Alpine 对照中，v1 仍接近中心丘体上均匀分布尖峰，v2 显示更连续且分层的定向山脊；未观察到足以优先更换梯度噪声核的网格方向伪影。Simplex/OpenSimplex 暂不替换，后续优先投入分层高度数据和受汇流约束的侵蚀。
+
+对照也暴露了旧预设的垂直尺度问题：默认水平宽度由 256 扩到 1024 后，原 16～42 的 HeightScale 会把地貌压平。五个内建预设现按同一四倍比例改为 64～168，使默认 1024 地形保持约 6%～17% 垂直幅度；旧场景继续使用自身保存的 HeightScale，不会自动改变。

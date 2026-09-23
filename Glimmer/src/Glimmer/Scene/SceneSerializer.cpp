@@ -243,6 +243,8 @@ namespace gl {
 		out << YAML::Key << "DerivationShader" << YAML::Value << static_cast<uint64_t>(spec.DerivationShaderHandle);
 		out << YAML::Key << "TerrainMaterial" << YAML::Value << static_cast<uint64_t>(spec.TerrainMaterialHandle);
 		out << YAML::Key << "Noise" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "SynthesisVersion" << YAML::Value
+			<< std::clamp(noise.SynthesisVersion, 1u, 2u);
 		out << YAML::Key << "WorldSpaceFrequency" << YAML::Value << noise.WorldSpaceFrequency;
 		out << YAML::Key << "Seed" << YAML::Value << noise.Seed;
 		out << YAML::Key << "Octaves" << YAML::Value << noise.Octaves;
@@ -298,6 +300,9 @@ namespace gl {
 		if (const auto noiseNode = node["Noise"])
 		{
 			auto& noise = spec.Noise;
+			noise.SynthesisVersion = noiseNode["SynthesisVersion"]
+				? std::clamp(noiseNode["SynthesisVersion"].as<uint32_t>(), 1u, 2u)
+				: 1u;
 			// Old scenes used normalized map UV; keep their terrain unchanged.
 			noise.WorldSpaceFrequency = noiseNode["WorldSpaceFrequency"]
 				? noiseNode["WorldSpaceFrequency"].as<bool>() : false;
@@ -329,7 +334,11 @@ namespace gl {
 			if (const auto offset = noiseNode["Offset"]; offset && offset.size() >= 2)
 				noise.Offset = { offset[0].as<float>(), offset[1].as<float>() };
 		}
-		else spec.Noise.WorldSpaceFrequency = false;
+		else
+		{
+			spec.Noise.SynthesisVersion = 1;
+			spec.Noise.WorldSpaceFrequency = false;
+		}
 		if (const auto authoringNode = node["Authoring"])
 		{
 			auto& authoring = spec.Authoring;

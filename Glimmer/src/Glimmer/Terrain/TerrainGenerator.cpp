@@ -29,6 +29,8 @@ namespace gl {
 		m_LastDispatchCount = 0;
 
 		m_GenerationShader->Bind();
+		m_GenerationShader->UploadUniformInt("u_SynthesisVersion",
+			static_cast<int>(std::clamp(settings.SynthesisVersion, 1u, 2u)));
 		m_GenerationShader->UploadUniformInt("u_Preset", static_cast<int>(specification.Preset));
 		m_GenerationShader->UploadUniformInt("u_Seed", settings.Seed);
 		m_GenerationShader->UploadUniformInt("u_Octaves", settings.Octaves);
@@ -216,6 +218,21 @@ namespace gl {
 			result.Message = "Terrain output contains NaN, Inf, or out-of-range values.";
 			return result;
 		}
+		const auto [minimumHeight, maximumHeight] = std::minmax_element(
+			height.begin(), height.end());
+		result.HeightMinimum = *minimumHeight;
+		result.HeightMaximum = *maximumHeight;
+		double heightSum = 0.0;
+		for (float value : height) heightSum += value;
+		result.HeightMean = static_cast<float>(heightSum / height.size());
+		double squaredDeviation = 0.0;
+		for (float value : height)
+		{
+			const double deviation = value - result.HeightMean;
+			squaredDeviation += deviation * deviation;
+		}
+		result.HeightStandardDeviation = static_cast<float>(std::sqrt(
+			squaredDeviation / height.size()));
 
 		for (size_t pixel = 0; pixel < pixelCount; ++pixel)
 		{

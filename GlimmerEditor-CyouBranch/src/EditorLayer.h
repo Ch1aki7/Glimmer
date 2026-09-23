@@ -106,6 +106,8 @@ namespace gl {
 		bool m_PostProcessValidationAutorun = false;
 		uint32_t m_PostProcessValidationFrames = 0;
 		bool m_UsesTerrainValidationScene = false;
+		std::filesystem::path m_TerrainCapturePath;
+		uint32_t m_TerrainCaptureFrames = 0;
 
 
 		// 设置灯光参数

@@ -12,6 +12,7 @@ namespace gl {
 		AssetHandle renderShaderHandle,
 		AssetHandle generationShaderHandle,
 		AssetHandle erosionShaderHandle,
-		AssetHandle derivationShaderHandle);
+		AssetHandle derivationShaderHandle,
+		uint32_t synthesisVersion = 2);
 
 }
