@@ -1869,7 +1869,7 @@ style.FrameRounding = 16.0f;
 
 Multi-Viewport 渲染结束后，ImGui 会切换多个 GLFW Context。`ImGuiLayer::End()` 会保存当前 Context，执行 Platform Windows 更新和绘制，再恢复原 Context，避免下一帧 OpenGL 命令落到错误窗口。事件阻断则只看 ImGui 的 `WantCaptureMouse` 与 `WantCaptureKeyboard`，不重复向后端注入输入。
 
-这套样式目前是写死的：没有深浅主题切换，没有 DPI 感知缩放，也没有配置文件。`ScaleAllSizes(1.2f)` 只解决了当前开发设备上的密度问题。后续若认真处理多显示器 DPI，尺寸应从平台缩放计算，而不是继续叠加常量。
+这套样式目前是写死的：没有深浅主题切换，没有 DPI 感知缩放，也没有配置文件。`ScaleAllSizes(1.2f)` 只解决了当前开发设备上的密度问题，当前没有按多显示器平台缩放调整尺寸。
 
 ## 场景层级面板完善：内联组件检查器
 
@@ -2325,11 +2325,9 @@ UBO 适合 ViewProjection、光源环境这类跨 Draw 共享的数据。材质�
   尚缺统一后端工厂、Vulkan Context 和完整资源实现
 ```
 
-### 真正接入时要补什么
+### 当前实现边界
 
-下一步应先统一 RendererAPI、Buffer、VertexArray、Texture 和 Shader 的创建入口，再建立 Vulkan Context、Surface、Swapchain 与帧同步。随后才能定义 Render Pass、Pipeline、Descriptor 和 Command Buffer 如何对应现有 Renderer2D/Renderer3D 调用。
-
-SPIR-V 也不能只停留在 `CreateFromBinary()`。需要确定 GLSL 到 SPIR-V 的编译阶段、反射结果如何生成 Descriptor/Pipeline Layout、缓存怎样版本化，以及热重载失败时怎样保留上一条有效 Pipeline。在这些工作完成前，项目的可运行后端仍然只有 OpenGL。
+Vulkan Context、Surface、Swapchain、帧同步以及完整后端资源尚未实现；SPIR-V 工厂签名也不代表已经存在完整的编译、反射和 Pipeline 链路。项目当前可运行的后端只有 OpenGL，相关实施方案统一维护在 Documents/PROJECT_STATUS.md。
 
 ## 内容浏览器 (Content Browser Panel)
 
@@ -3246,11 +3244,11 @@ RenderItem 持有 Mesh、Shader 和纹理的强引用，也保存最终 Material
 
 | 文档 | 保存什么 |
 | --- | --- |
-| `Documents/PROJECT_STATUS.md` | 唯一当前主线、验收条件、完成记录、优先级和技术债 |
+| `Documents/PROJECT_STATUS.md` | 唯一当前主线、实施计划与设计方案、验收条件、完成记录、优先级和技术债 |
 | `ARCHITECTURE.md` | 已经落地的模块职责、所有权、依赖、数据流和边界 |
-| `README.md` | 功能用途、开发思路、操作方式、验证记录和踩坑笔记 |
+| `README.md` | 已实现功能用途、实现笔记、操作方式、验证记录和踩坑笔记；不包含未实施计划 |
 
-这三个文件解决的问题不同。排期变化只改 PROJECT_STATUS；代码改变模块关系时才改 ARCHITECTURE；用户或开发者能感知到的行为变化写进 README。计划中的结构不能提前写成架构事实，已经完成的工作也不能继续挂在当前主线里。
+这三个文件解决的问题不同。未实施计划、设计建议、候选验收指标和排期统一写入 PROJECT_STATUS；代码改变模块关系时才改 ARCHITECTURE；已实现且用户或开发者能感知到的行为变化写进 README；README 只说明当前限制，不保存待办或未来方案。计划中的结构不能提前写成架构事实，已经完成的工作也不能继续挂在当前主线里。
 
 每项任务结束前都要复核三份文档。没有事实变化的文件保持原样，但要确认它与源码以及另外两份文档没有冲突。真有冲突时以源码为准，当次就修正，避免把过期上下文带到下一台设备或下一次会话。
 
@@ -3264,7 +3262,7 @@ RenderItem 持有 Mesh、Shader 和纹理的强引用，也保存最终 Material
 
 可执行阶段、依赖顺序和验收条件统一进入 `Documents/PROJECT_STATUS.md`；模块已经怎样连接写入 `ARCHITECTURE.md`；README 继续保留每项能力的开发过程和使用边界。当前主线以 PROJECT_STATUS 中唯一的 `当前主线` 为准，README 章节顺序只反映建设历史，不承担排期。
 
-截至当前状态，地形链已经走过程序化生成、派生图、Authoring Erosion、四层 TerrainMaterial、Chunk LOD、阴影、运行时水文侵蚀和 CPU/GPU 气候场。P14 正在把气候结果接到 Terrain Material Weight 与植被闭环。这里不再复制完整任务表，因为复制一份很快就会产生两种答案。
+截至当前状态，地形链已经走过程序化生成、派生图、Authoring Erosion、四层 TerrainMaterial、Chunk LOD、阴影、运行时水文侵蚀和 CPU/GPU 气候场。气候结果尚未参与正常 Terrain Material Weight，植被实例化尚未实现。任务状态与实施顺序以 PROJECT_STATUS 为准。
 
 ### 沿用至今的工程约束
 
@@ -3539,7 +3537,7 @@ DeriveTerrainMaps.comp
 
 高度使用 `R32F SimulationGrid`。每轮热侵蚀只读当前纹理、只写另一张纹理，Barrier 后再交换索引，没有同纹理的无保护读写。默认 Alpine 是 1 次生成、28 次热侵蚀和 1 次派生，共 30 次 Dispatch。
 
-三张派生图都是运行时 `RGBA16F`：Normal/Slope 保存编码法线与坡度，Analysis 保存曲率、局部 Flow Potential 和高度，MaterialWeight 保存 Grass、Soil、Rock、Snow 四层归一化权重。P14 正在为这份静态地貌权重加入气候与植被反馈，但动态生态输入不会反过来重跑整条 Authoring 管线。
+三张派生图都是运行时 `RGBA16F`：Normal/Slope 保存编码法线与坡度，Analysis 保存曲率、局部 Flow Potential 和高度，MaterialWeight 保存 Grass、Soil、Rock、Snow 四层归一化权重。当前权重由静态地貌派生，尚未消费动态气候与植被场。
 
 ### 与运行时侵蚀的分工
 
@@ -3581,7 +3579,7 @@ Authoring Erosion 只在 Terrain Dirty、用户 Regenerate 或 Compute Shader �
 - Asset Inspector 的 Save/Reload 仍是显式操作，材质字段还没有接入统一的 Command History、Dirty 和退出保存提示；
 - 默认内存场景的 `TerrainMaterialHandle` 为 `0`，此时使用内建回退材质。只有场景明确引用 `.glterrainmat` 时，才会加载资产中的贴图。
 
-当前 MaterialWeight 仍由静态地貌派生。P14 已经产出 Temperature、Humidity 和 VegetationPotential，但这些动态场尚未回写材质权重；这项工作留在气候与植被闭环里处理，避免每个气候步都重复整套地形派生。
+当前 MaterialWeight 仍由静态地貌派生。P14 已经产出 Temperature、Humidity 和 VegetationPotential，但这些动态场尚未回写材质权重。
 
 验证覆盖 `.glterrainmat` 的保存与加载、场景 Handle 往返、缺失贴图回退、四层权重归一化，以及 Debug/Release 构建。默认材质资产可直接在 Terrain Inspector 中拖放和重载。
 
@@ -3688,7 +3686,7 @@ Inspector 的 `Geological Features` 区域提供四个参数：
 - 网格、数据分辨率、世界大小和材质参数大量硬编码，没有当前 TerrainSpecification、Scene YAML、AssetHandle、Undo/Redo、热重载和 Runtime 重建契约；
 - 原型的 Terrain Normal 初始化还把 Top 邻居误写成 Right 邻居，并把边界 clamp 上限写成元素数量而不是最后一个有效索引，不能把原型输出当成已验证基准。
 
-因此后续采用混合路线：保留 Glimmer 当前 Terrain Runtime 和分 Pass 守恒模拟，在现有 OpenGL 渲染链上新增正式 Water Surface Pass；再把水深吸收、屏幕空间折射、速度驱动泡沫、泥沙染色、岸线湿润和温度积雪逐项重写。每项效果读取现有 P13/P14 纹理，不回写模拟状态，也不复制原型的 4096² 固定规格。待正常画面能稳定表达这些数据后，再继续用 Humidity、Temperature 和 Vegetation Potential 调制四层 Material Weight，并进入 GPU 植被实例化。
+当前正式 Water Surface Pass 已在 OpenGL 渲染链中读取 P13 水深、速度和泥沙，实现吸收、屏幕空间折射、泡沫、泥沙染色和瞬时岸线湿润；它不回写模拟状态，也没有复制原型的 4096² 固定规格。温度积雪、动态生态材质权重和植被实例化尚未实现。
 
 ## TerrainMaterial Top-2 采样与 GPU 基准
 
@@ -4436,7 +4434,7 @@ Hydrology 的 `Validate / Readback` 与 Climate 的 `Readback` 都会刷新耦�
 
 验证时，新增 `ClimateWaterSource` 与修改后的水文 Shader 在 GTX 1050 / OpenGL 4.6 上编译通过。原水文 Contract 保持通过，相对水量误差为 `9.83321e-7`；空间 Source/Sink Contract 先施加 `+0.10`，再施加 `-0.04`，最终水深 `0.06`，预算误差 `0`。气候 Contract 仍得到 Downwind Moisture `1`、Rising/Flat Rain `0.2/0` 和 Frame Partition Delta `0`。当次 Windows 增量构建及 114 项无窗口回归全部通过。
 
-耦合完成后的推进顺序为视觉基线、独立水面、气候材质反馈，再到植被实例化。视觉基线与只读 P13 数据的 Water Surface Pass 基础已经完成，下一步把 Humidity、Temperature 和 VegetationPotential 接入 Terrain Material Weight，定义动态生态权重如何与已有 Height、Slope、Curvature 权重组合并保持归一化。
+本地视觉基线与只读 P13 数据的 Water Surface Pass 基础已经完成。Humidity、Temperature 和 VegetationPotential 当前仍用于气候诊断，尚未参与正常 Terrain Material Weight；植被实例化尚未实现。
 
 ## 模型 Shader ABI 与多 Pass 法线外扩
 
@@ -4610,7 +4608,7 @@ Scene RGBA16F
 
 验证在本地完成：VS2026 `Debug | x64` 完整解决方案和无窗口回归通过；Intel Iris Xe / OpenGL 4.6 的受控 GPU 验证覆盖干格、吸收/折射/泥沙响应、前景遮挡、拾取/法线、速度极值与 NaN/Inf、Resize、快照绑定保持、重叠水面顺序、诊断/关闭绕过及 Reset，Water 纹理绘制前后相同。完整编辑器隔离 Terrain Fixture 正常退出，原水文/气候 GPU Contract 保持 PASS。验证程序和日志仅留在本地 `bin`，不新增项目验证脚本、独立报告或图片。
 
-当前折射背景只包含不透明物体和天空；水下透明模型与多层水体透射、SSR、投影阴影、独立水体 LOD/逐块水量剔除及持续岸线湿润尚未实现。现有网格的细分和 LOD 仍限制浅水边缘精度；场景 Camera Velocity 也不表示水流运动。P14 的动态生态材质权重和植被实例化继续作为后续工作。
+当前折射背景只包含不透明物体和天空；水下透明模型与多层水体透射、SSR、投影阴影、独立水体 LOD/逐块水量剔除及持续岸线湿润尚未实现。现有网格的细分和 LOD 仍限制浅水边缘精度；场景 Camera Velocity 也不表示水流运动。动态生态材质权重和植被实例化尚未实现。
 
 ## 大尺度 Terrain 分块与世界尺度地貌
 
@@ -4618,22 +4616,14 @@ Scene RGBA16F
 
 TerrainChunkLayout 按世界长宽选择每轴 3～16 块，以 256 为目标块宽；1024 为 4×4，2048 为 8×8。所有块仍共用一张 HeightMap、三份 LOD 网格和材质。Color LOD 使用相机到块水平范围的最近距离，保留迟滞与相邻级差约束；Shadow 继续使用 LOD0。水面沿用地形块和 LOD，并以视觉水深上限构造保守 AABB 做视锥剔除。编辑器相机默认远裁剪面为 4096，聚焦和缩放时扩展可见距离与移动速度。
 
-Windows Debug x64 全量验证与回归通过，覆盖旧 YAML 兼容、2048 地形 8×8 覆盖和相邻 LOD。Intel Iris Xe / OpenGL 4.6.0 的现有 Terrain Sampling Benchmark 三档各 30 样本通过，GPU 平均分别为 Full-4 43.168 ms、Top-2 23.008 ms、Top-2 + Dominant Normal/AO 15.566 ms。该基准使用独立 Fixture，未构成新地貌的固定相机视觉验收。当前仍是单张高度图与离散三级网格 LOD，近景数据精度、切换过渡、远景构图和目标显卡性能需继续验证。
+Windows Debug x64 全量验证与回归通过，覆盖旧 YAML 兼容、2048 地形 8×8 覆盖和相邻 LOD。Intel Iris Xe / OpenGL 4.6.0 的现有 Terrain Sampling Benchmark 三档各 30 样本通过，GPU 平均分别为 Full-4 43.168 ms、Top-2 23.008 ms、Top-2 + Dominant Normal/AO 15.566 ms。该基准使用独立 Fixture，未构成新地貌的固定相机视觉验收。当前仍是单张高度图与离散三级网格 LOD，尚无连续几何过渡；该阶段没有完成目标显卡的大视距性能验收。
 
-## Terrain 分形生成重构分析
-
-P16 下一实施项先处理地貌生成。当前 GenerateFBM.comp 已有梯度噪声、Ridged fBm、Worley、Domain Warp、山脉方向和预设；问题集中在信号的组合方式：低频大陆、山脉遮罩、山脊和沟谷都在单次像素计算里混合，沟谷由噪声形状直接减高，不能保证沿真实汇流方向连接。火山预设仍用整图 UV 计算径向形状，因此扩大 WorldSize 会把火山同步放大。最终统一 clamp/pow 也会压缩高低地形的动态范围。有限次 Authoring 目前只有 Thermal Erosion；Runtime Hydraulic Erosion 是独立的非持久状态，不能当作静态生成结果。
-
-方案先在现有 R32F Height 输出契约内重写为分阶段生成：低频地貌骨架与可控山系 → 按地质区域、海拔和坡度选择分形类型及频带 → 形成受地形引导的谷地/排水结构 → 可选有限次 Authoring 侵蚀 → 派生法线、分析图和材质权重。WorldSize、Seed 和 Offset 使用一致的世界坐标语义；最大频率受 HeightMap 像素间距限制，避免在高度图中产生混叠。旧场景保留旧算法，新的生成版本由 Scene YAML 明确选择。
-
-目前不预设全面替换噪声核。现有梯度噪声可作为低频控制信号；Ridged 信号适合山脊，Worley 更适合局部地质遮罩而不是直接充当整幅地貌。先固定 Seed、世界尺寸、相机和光照，比较现有核与候选 Simplex/OpenSimplex 的形态、方向性和 GPU 生成耗时；只有可见伪影或明确成本收益时才替换。也不需要把预生成噪声图片作为基础输入：现有 Compute 在生成时计算噪声并写入 HeightMap；外部高度图仍保留为独立的用户资产路径。真实感主要取决于地貌骨架、条件调制和侵蚀，单换噪声图片不能替代这些结构。
-
-AfterglowRender 文档将条件分形基础地貌与后续水蚀、风蚀、热蚀分开，并指出纯噪声地形的各向同性问题；其 4096×4096 全局模拟规格不能直接套入当前单张高度与水文纹理链。
+## Terrain 条件分形生成 v2
 
 当前实现已加入 Terrain Synthesis v2。它先生成低频陆地区域和由 Mountain Direction/Width 控制的长条山带，只在山地区域叠加 Ridged fBm、Worley 地质扰动、裂谷、趋势和谷地信号；丘陵与高频细节分别受区域和高度约束。高频 fBm 会根据 WorldSize、HeightMapResolution 和 Lacunarity 对接近像素 Nyquist 上限的 octave 平滑降权，减少大范围高度图的细碎混叠。Volcanic 半径改用 256 世界单位基准，不再随整张地图同比放大。谷地仍是静态形态提示，真正的水流搬运与沉积继续由独立侵蚀链负责。
 
 Terrain Inspector 的 Terrain Synthesis 可以在 Legacy v1 与 Conditional Fractal v2 间切换。SynthesisVersion 写入 Scene YAML；旧 YAML 缺字段时使用 v1，切换预设也保留当前版本。新地形默认 v2。Intel Iris Xe/OpenGL 4.6.0 上，固定 Alpine Fixture 的 Compute Shader 编译及确定性验证通过：重复生成哈希 6355609087535305251，高度范围 0.0814901～0.6298751、均值 0.2167487、标准差 0.1010291。
 
-固定视角对照已接入完整渲染链。设置 `GLIMMER_TERRAIN_SYNTHESIS_VERSION=1|2` 和 `GLIMMER_TERRAIN_CAPTURE_PATH=<bmp>` 会启用独立 Terrain Fixture，在同一 Seed、650 距离相机、光照和后处理下渲染五帧，读回最终 RGBA8 并保存后退出。558×353 的 Alpine 对照中，v1 仍接近中心丘体上均匀分布尖峰，v2 显示更连续且分层的定向山脊；未观察到足以优先更换梯度噪声核的网格方向伪影。Simplex/OpenSimplex 暂不替换，后续优先投入分层高度数据和受汇流约束的侵蚀。
+固定视角对照已接入完整渲染链。设置 `GLIMMER_TERRAIN_SYNTHESIS_VERSION=1|2` 和 `GLIMMER_TERRAIN_CAPTURE_PATH=<bmp>` 会启用独立 Terrain Fixture，在同一 Seed、650 距离相机、光照和后处理下渲染五帧，读回最终 RGBA8 并保存后退出。558×353 的 Alpine 对照中，v1 仍接近中心丘体上均匀分布尖峰，v2 显示更连续且分层的定向山脊；未观察到足以优先更换梯度噪声核的网格方向伪影。当前继续使用梯度噪声核。
 
 对照也暴露了旧预设的垂直尺度问题：默认水平宽度由 256 扩到 1024 后，原 16～42 的 HeightScale 会把地貌压平。五个内建预设现按同一四倍比例改为 64～168，使默认 1024 地形保持约 6%～17% 垂直幅度；旧场景继续使用自身保存的 HeightScale，不会自动改变。

@@ -1,6 +1,6 @@
 # Glimmer 项目架构说明
 
-> 本文最近于 2026-09-11 对照当前源码同步，只描述已经落地的结构与数据流。
+> 本文最近于 2026-09-30 对照当前源码同步，只描述已经落地的结构与数据流。
 > 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
 ## 1. 项目定位与当前边界
@@ -229,6 +229,7 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 地形实体由 `TerrainComponent` 保存可序列化的 `TerrainSpecification`，运行时 GPU 对象放在不持久化的 `TerrainRuntime` 中：
 
 - `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion 与 Derive Maps；序列化的 Noise SynthesisVersion 选择旧版合成或新版条件分形。新版先形成低频陆地区域与定向山带，再在山地区域叠加抗混叠 Ridged 细节、Worley 地质扰动、裂谷、趋势和条件谷地；旧 YAML 缺版本时固定走 v1；
+- 当前 Authoring Thermal 的 Talus 是归一化高度差阈值，不含 WorldSize、HeightScale 或邻居距离；Derive 的 Curvature 是未按世界间距归一化的四邻域 Laplacian，Flow Potential 是中心到最低邻居的局部落差，均不是流域/汇流网络。Terrain Shader 在顶点阶段读取 Normal/Slope、Analysis 与四层 Weight 后插值；派生正曲率与材质负曲率湿度分支存在符号语义边界，尚未通过专门的碗形/凸丘验证；
 - Height 使用 R32F `SimulationGrid` Ping-Pong；侵蚀每轮只读 ReadTexture、只写 WriteTexture，Barrier 后交换，禁止同纹理读写；
 - 派生阶段从最终 Height 生成三张 RGBA16F Runtime 纹理：Normal/Slope、Curvature/Flow Potential、Grass/Soil/Rock/Snow Material Weights；
 - Custom、Alpine、Plateau、Rolling Hills、Volcanic、Eroded Valley 预设属于可序列化规格，手动修改预设参数后转为 Custom；
@@ -507,8 +508,8 @@ flowchart LR
 
 | 文档 | 记录内容 | 不负责记录 |
 | --- | --- | --- |
-| `Documents/PROJECT_STATUS.md` | 当前任务、优先级、验收、完成记录与技术债 | 详细架构和长篇实现教程 |
+| `Documents/PROJECT_STATUS.md` | 当前任务、实施计划与设计方案、优先级、验收、完成记录与技术债 | 已实现架构的详细说明和长篇实现教程 |
 | `ARCHITECTURE.md` | 已实现架构、模块所有权、依赖、数据流与当前边界 | 尚未落地的规划清单 |
-| `README.md` | 功能行为、建设过程、使用/维护方式、验证和 KB | 当前任务排期 |
+| `README.md` | 已实现功能行为、建设过程、使用/维护方式、验证和 KB | 未实施计划、设计建议、候选验收指标与任务排期 |
 
 完成任何代码、资源、构建或工作流任务时都必须审查三份文档。只有对应事实发生变化时才修改 ARCHITECTURE 或 README，但 PROJECT_STATUS 必须反映任务结果、验证证据与下一步。若文档与源码冲突，以源码为准，并在同一任务内修正文档。
