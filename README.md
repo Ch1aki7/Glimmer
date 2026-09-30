@@ -3522,7 +3522,7 @@ Inspector 提供 Alpine、Plateau、Rolling Hills、Volcanic 和 Eroded Valley �
 
 方向性山链由 MountainDirection 与 MountainWidth 控制，PlateauStrength 负责台地过渡，Channel Erosion 在基础噪声里刻出沟谷。后续地质细化又加入 GeologyBlend、GeologyScale、RiftStrength 和 TrendStrength，用多套结构场混合断层、裂谷与大尺度走向。它们都属于生成参数，不是逐帧模拟状态。
 
-Thermal Erosion 有 Enable、Iterations、Talus 和 Strength。Iterations 在运行时限制为最多 128，Strength 限制到 0.5。它处理局部坡差，和 GenerateFBM 中的 Channel Erosion 是两件事：前者多轮搬运高度，后者直接参与基础形状函数。
+Thermal Erosion 有 Enable、Iterations、稳定阈值和 Strength。Terrain Data v1 使用 Talus 归一化高度差，v2 使用 Stable Slope (degrees) 坡角。Iterations 在运行时限制为最多 128，Strength 限制到 0.5。它处理局部坡差，和 GenerateFBM 中的 Channel Erosion 是两件事：前者多轮搬运高度，后者直接参与基础形状函数。
 
 ### 三段 Authoring 管线
 
@@ -4627,3 +4627,15 @@ Terrain Inspector 的 Terrain Synthesis 可以在 Legacy v1 与 Conditional Frac
 固定视角对照已接入完整渲染链。设置 `GLIMMER_TERRAIN_SYNTHESIS_VERSION=1|2` 和 `GLIMMER_TERRAIN_CAPTURE_PATH=<bmp>` 会启用独立 Terrain Fixture，在同一 Seed、650 距离相机、光照和后处理下渲染五帧，读回最终 RGBA8 并保存后退出。558×353 的 Alpine 对照中，v1 仍接近中心丘体上均匀分布尖峰，v2 显示更连续且分层的定向山脊；未观察到足以优先更换梯度噪声核的网格方向伪影。当前继续使用梯度噪声核。
 
 对照也暴露了旧预设的垂直尺度问题：默认水平宽度由 256 扩到 1024 后，原 16～42 的 HeightScale 会把地貌压平。五个内建预设现按同一四倍比例改为 64～168，使默认 1024 地形保持约 6%～17% 垂直幅度；旧场景继续使用自身保存的 HeightScale，不会自动改变。
+
+### Terrain Data v2 与局部尺度
+
+Terrain Inspector 的 **Terrain Data** 独立于 Terrain Synthesis。新建地形默认 World-scale v2，旧 Scene YAML 缺少 DataVersion 时使用 Legacy v1；保存保留版本，切换预设也保留当前版本。显式切换 Data 会重新生成地形并重建运行时模拟初始状态。
+
+Data v2 程序化高度的首末节点覆盖整个局部 XZ 范围，间距为 `WorldSize/(N-1)`；地形颜色、阴影和水面共用端点到纹素中心的换算。派生坡度保存 `坡角/90°`，曲率按物理高度及采样间距平方计算，凹地为正；材质消费时相应换算符号，使凹地的土壤/湿润修正方向一致。曲率写入 Analysis 前以固定局部单位参考压缩到 [0,1]，它不是未编码的原始 Laplacian。
+
+Data v2 的热侵蚀面板使用 **Stable Slope (degrees)**，默认 35°、范围 0～80°。阈值由坡角、HeightScale 和水平/斜向邻居距离换算，零高度幅度跳过热侵蚀；边界不会重复搬运夹取邻居。搬运强度与迭代次数仍影响结果，不保证不同分辨率的侵蚀形态完全相同。Data v1 与导入高度图保留原采样行为。
+
+以上参数使用地形局部单位；非均匀 Transform 不保证世界物理尺度。当前仍使用全局 Height/派生图及同分辨率模拟，没有局部细节 Tile 或独立低分辨率模拟。Flow Potential 仍是局部下坡提示，不能当作真实汇流或河网。
+
+验证 Fixture 默认 Data v1，以保留原对照。设置 `GLIMMER_TERRAIN_DATA_VERSION=2`、`GLIMMER_TERRAIN_VALIDATE=1` 与 `GLIMMER_TERRAIN_CAPTURE_PATH=<bmp>` 可运行新数据验证：五预设 × 512/1024/2048 的基线、解析坡角/端点、碗形/凸丘、稳定坡角和角点热蚀质量检查。Intel Iris Xe/OpenGL 4.6.0 上均通过，Alpine 1024 重复生成哈希为 `1222385975937983075`；同机旧 Data 与改动前着色器的数据哈希及固定截图一致。Debug x64 完整构建、193 项无窗口 PASS 输出及水文/气候 GPU 契约通过。数据哈希只用于同机同驱动的对照。

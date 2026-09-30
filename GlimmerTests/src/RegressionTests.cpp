@@ -14,6 +14,7 @@
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Terrain/Terrain.h"
 #include "Glimmer/Terrain/TerrainChunkLayout.h"
+#include "Glimmer/Terrain/TerrainSampling.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
 #include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
 #include "Glimmer/Simulation/TerrainClimateRuntime.h"
@@ -184,6 +185,7 @@ namespace {
 		const auto& leftNoise = left.Noise;
 		const auto& rightNoise = right.Noise;
 		return left.Procedural == right.Procedural
+			&& left.DataVersion == right.DataVersion
 			&& left.Preset == right.Preset
 			&& left.HeightMapResolution == right.HeightMapResolution
 			&& left.MeshResolution == right.MeshResolution
@@ -221,6 +223,7 @@ namespace {
 			&& left.Authoring.ThermalIterations
 				== right.Authoring.ThermalIterations
 			&& Near(left.Authoring.Talus, right.Authoring.Talus)
+			&& Near(left.Authoring.StableSlopeDegrees, right.Authoring.StableSlopeDegrees)
 			&& Near(left.Authoring.ThermalStrength,
 				right.Authoring.ThermalStrength);
 	}
@@ -591,6 +594,17 @@ namespace {
 				"terrain runtime is not serialized");
 		}
 		std::string legacyTerrainSnapshot = savedSnapshot;
+		for (const char* key : { "DataVersion:", "StableSlopeDegrees:" })
+		{
+			const size_t keyPosition = legacyTerrainSnapshot.find(key);
+			context.Check(keyPosition != std::string::npos, "terrain snapshot records data contract fields");
+			if (keyPosition != std::string::npos)
+			{
+				const size_t lineStart = legacyTerrainSnapshot.rfind('\n', keyPosition) + 1;
+				const size_t lineEnd = legacyTerrainSnapshot.find('\n', keyPosition);
+				legacyTerrainSnapshot.erase(lineStart, lineEnd - lineStart + 1);
+			}
+		}
 		const size_t synthesisKey = legacyTerrainSnapshot.find(
 			"SynthesisVersion:");
 		context.Check(synthesisKey != std::string::npos,
@@ -645,6 +659,8 @@ namespace {
 			auto legacySpecification = legacyTerrainEntity
 				.GetComponent<gl::TerrainComponent>().Specification;
 			gl::ApplyTerrainPreset(legacySpecification, gl::TerrainPreset::Alpine);
+			context.Check(legacySpecification.DataVersion == 1,
+				"missing data version and preset changes retain legacy sampling and erosion");
 			context.Check(legacySpecification.Noise.SynthesisVersion == 1,
 				"preset changes preserve a legacy terrain synthesis version");
 		}
@@ -716,6 +732,8 @@ namespace {
 		gl::TerrainComponent after = editorTerrain;
 		after.Specification.HeightScale = 46.0f;
 		after.Specification.Noise.Frequency = 2.75f;
+		after.Specification.DataVersion = 1;
+		after.Specification.Authoring.StableSlopeDegrees = 48.0f;
 		const gl::UUID uuid = terrainEntity.GetUUID();
 		auto apply = [source, uuid](const gl::TerrainComponent& value) {
 			gl::Entity target = source->FindEntityByUUID(uuid);
@@ -728,10 +746,15 @@ namespace {
 			"Edit Terrain Noise", before, after, apply));
 		context.Check(Near(editorTerrain.Specification.HeightScale, 46.0f)
 			&& Near(editorTerrain.Specification.Noise.Frequency, 2.75f)
+			&& editorTerrain.Specification.DataVersion == 1
+			&& Near(editorTerrain.Specification.Authoring.StableSlopeDegrees, 48.0f)
 			&& !editorTerrain.Runtime,
 			"terrain edit command applies specification and invalidates runtime");
 		context.Check(history.Undo()
 			&& Near(editorTerrain.Specification.HeightScale, 28.0f)
+			&& editorTerrain.Specification.DataVersion == before.Specification.DataVersion
+			&& Near(editorTerrain.Specification.Authoring.StableSlopeDegrees,
+				before.Specification.Authoring.StableSlopeDegrees)
 			&& Near(editorTerrain.Specification.Noise.Frequency,
 				before.Specification.Noise.Frequency),
 			"terrain edit command restores the activation snapshot");
@@ -797,6 +820,78 @@ namespace {
 				std::numeric_limits<float>::quiet_NaN()),
 				gl::TerrainWorldSizeDefault),
 			"terrain world size applies finite runtime bounds");
+	}
+
+	void TestTerrainSamplingContract(TestContext& context)
+	{
+		using gl::TerrainSampleLayout;
+		for (uint32_t count : { 512u, 1024u, 2048u })
+		{
+			const gl::TerrainSamplingGrid nodes(count, 1024.0f, TerrainSampleLayout::EndpointNodes);
+			const gl::TerrainSamplingGrid cells(count, 1024.0f, TerrainSampleLayout::CellCenters);
+			context.Check(Near(nodes.Position(0), -512.0f)
+				&& Near(nodes.Position(count - 1), 512.0f), "node grid includes both endpoints");
+			context.Check(Near(cells.Position(0), -512.0f + cells.Spacing() * 0.5f)
+				&& Near(cells.Position(count - 1), 512.0f - cells.Spacing() * 0.5f),
+				"cell grid partitions the domain without duplicated endpoints");
+			for (uint32_t index : { 0u, count / 2u, count - 1u })
+				context.Check(Near(nodes.TextureUV(nodes.Position(index)), (index + 0.5f) / count)
+					&& Near(cells.TextureUV(cells.Position(index)), (index + 0.5f) / count),
+					"position to texture UV lands at the same texel center");
+			const double d = nodes.Spacing();
+			const auto plane = gl::TerrainDerivePhysicalSample(0.5,
+				0.5 - d * 0.5 / 1024.0, 0.5 + d * 0.5 / 1024.0,
+				0.5 - d * 0.25 / 1024.0, 0.5 + d * 0.25 / 1024.0, d, 1024.0);
+			const float expectedAngle = std::atan(std::hypot(0.5f, 0.25f)) * 57.2957795f;
+			context.Check(Near(plane.SlopeDegrees, expectedAngle)
+				&& std::abs(plane.Concavity) < 1e-8, "physical planar slope is resolution independent");
+			const double quadratic = 0.00001 * d * d / 96.0;
+			const auto bowl = gl::TerrainDerivePhysicalSample(0.5, 0.5 + quadratic,
+				0.5 + quadratic, 0.5 + quadratic, 0.5 + quadratic, d, 96.0);
+			const auto hill = gl::TerrainDerivePhysicalSample(0.5, 0.5 - quadratic,
+				0.5 - quadratic, 0.5 - quadratic, 0.5 - quadratic, d, 96.0);
+			context.Check(std::abs(bowl.Concavity - 0.00004) < 1e-8
+				&& std::abs(hill.Concavity + 0.00004) < 1e-8,
+				"quadratic curvature has a consistent world scale and bowl-positive sign");
+			const float talus = gl::TerrainTalusHeight(35.0f, nodes.Spacing(), 96.0f);
+			context.Check(std::abs(std::atan(talus * 96.0f / nodes.Spacing()) * 57.2957795f
+				- 35.0f) < 0.001f, "talus converts to the same stable slope at every resolution");
+			context.Check(Near(gl::TerrainTalusHeight(35.0f, nodes.Spacing() * std::sqrt(2.0f), 96.0f),
+				talus * std::sqrt(2.0f)), "diagonal thermal thresholds use diagonal distances");
+		}
+		const auto flat = gl::TerrainDerivePhysicalSample(0.5, 0.5, 0.5, 0.5, 0.5, 1.0, 0.0);
+		context.Check(flat.SlopeDegrees == 0.0f && flat.Concavity == 0.0,
+			"zero vertical amplitude gives a flat finite surface");
+		context.Check(gl::TerrainTalusHeight(35.0f, 1.0f, 0.0f) == 0.0f
+			&& gl::TerrainTalusHeight(35.0f, 1.0f, std::numeric_limits<float>::infinity()) == 0.0f
+			&& gl::TerrainStableSlope(std::numeric_limits<float>::quiet_NaN()) == 35.0f,
+			"invalid thermal metrics have finite fallback semantics");
+		bool invalidGridRejected = false;
+		try { gl::TerrainSamplingGrid invalid(1, 1024.0f, TerrainSampleLayout::EndpointNodes); }
+		catch (const std::invalid_argument&) { invalidGridRejected = true; }
+		context.Check(invalidGridRejected, "node grids reject undefined one-sample spacing");
+		bool invalidSampleRejected = false;
+		try { gl::TerrainDerivePhysicalSample(std::numeric_limits<double>::quiet_NaN(), 0, 0, 0, 0, 1, 1); }
+		catch (const std::invalid_argument&) { invalidSampleRejected = true; }
+		context.Check(invalidSampleRejected, "CPU metric reference rejects nonfinite height inputs");
+		context.Check(Near(gl::TerrainComposeHeight(20, 2, 19, 18), 21),
+			"render composition adds simulation delta once, not absolute runtime height");
+		const auto full = gl::TerrainEstimateTextureBudget(1024, 1024, 256, 2, 16);
+		const auto reduced = gl::TerrainEstimateTextureBudget(1024, 512, 256, 2, 16);
+		context.Check(full.GenerationBytes == 32ull * 1024 * 1024
+			&& full.SimulationBytes == 116ull * 1024 * 1024
+			&& full.DetailBytes == 16ull * 261 * 261 * 28
+			&& full.TotalBytes() - reduced.TotalBytes() == 87ull * 1024 * 1024,
+			"terrain budget includes ping-pong, halo and optional simulation decoupling");
+		for (auto preset : { gl::TerrainPreset::Alpine, gl::TerrainPreset::Plateau,
+			gl::TerrainPreset::RollingHills, gl::TerrainPreset::Volcanic, gl::TerrainPreset::ErodedValley })
+		{
+			gl::TerrainSpecification specification;
+			specification.DataVersion = 1;
+			gl::ApplyTerrainPreset(specification, preset);
+			context.Check(specification.DataVersion == 1,
+				"all presets preserve legacy data semantics independently of noise version");
+		}
 	}
 
 	void TestTerrainChunkLayout(TestContext& context)
@@ -1775,6 +1870,8 @@ int main(int argc, char** argv)
 	TestTerrainCopyAndTransactions(context);
 	std::cout << "[RUN] Terrain presets\n";
 	TestTerrainPresets(context);
+	std::cout << "[RUN] Terrain sampling contract\n";
+	TestTerrainSamplingContract(context);
 	std::cout << "[RUN] Terrain chunk layout\n";
 	TestTerrainChunkLayout(context);
 	std::cout << "[RUN] Terrain hydrology runtime\n";

@@ -15,7 +15,7 @@ namespace gl {
 		AssetHandle generationShaderHandle,
 		AssetHandle erosionShaderHandle,
 		AssetHandle derivationShaderHandle,
-		uint32_t synthesisVersion)
+		uint32_t synthesisVersion, uint32_t dataVersion)
 	{
 		auto scene = CreateRef<Scene>();
 		auto sunEntity = scene->CreateEntity("Sun");
@@ -36,6 +36,7 @@ namespace gl {
 		auto terrainEntity = scene->CreateEntity("Terrain");
 		auto& terrain = terrainEntity.AddComponent<TerrainComponent>();
 		ApplyTerrainPreset(terrain.Specification, TerrainPreset::Alpine);
+		terrain.Specification.DataVersion = std::clamp(dataVersion, 1u, 2u);
 		terrain.Specification.Noise.SynthesisVersion =
 			std::clamp(synthesisVersion, 1u, 2u);
 		terrain.Specification.RenderShaderHandle = renderShaderHandle;

@@ -566,6 +566,9 @@ namespace gl {
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		s_Data.DepthShader->UploadUniformFloat(
 			"u_MaxHeight", terrain.Specification.HeightScale);
+		s_Data.DepthShader->UploadUniformInt("u_TerrainDataVersion",
+			terrain.Specification.Procedural
+				? std::clamp(terrain.Specification.DataVersion, 1u, 2u) : 1u);
 		s_Data.DepthShader->UploadUniformFloat("u_SkirtDepth", std::max(
 			2.0f, std::abs(terrain.Specification.HeightScale) * 0.08f));
 		terrain.Runtime->HeightMap->Bind(0);

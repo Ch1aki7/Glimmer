@@ -1,4 +1,4 @@
-﻿#version 430 core
+#version 430 core
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(r32f, binding = 0) writeonly uniform image2D u_Output;
@@ -7,6 +7,7 @@ uniform int u_Seed;
 uniform int u_Octaves;
 uniform int u_Preset;
 uniform int u_SynthesisVersion;
+uniform int u_TerrainDataVersion;
 uniform float u_Frequency;
 uniform float u_WorldFrequencyScale;
 uniform float u_Lacunarity;
@@ -277,6 +278,9 @@ void main()
 		return;
 
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+	if (u_TerrainDataVersion >= 2)
+		uv = vec2(size.x > 1 ? float(pixel.x) / float(size.x - 1) : 0.5,
+			size.y > 1 ? float(pixel.y) / float(size.y - 1) : 0.5);
 	vec2 position = ((uv - 0.5) * u_WorldFrequencyScale + u_Offset)
 		* u_Frequency;
 	if (u_SynthesisVersion >= 2)

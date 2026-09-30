@@ -10,7 +10,7 @@
 - 当前构建环境：Visual Studio 2026、v145、Windows x64
 - 当前默认验证配置：`Debug | x64`
 - 当前主线：P16 大尺度地形真实地貌重构
-- 主线状态：进行中（条件分形 v2 与视觉对照已完成；阶段方案已细化，当前实施项为 P16-A 近远分层高度与尺度契约）
+- 主线状态：进行中（P16-A 尺度与分层契约已验收；当前实施项为 P16-B 局部高度与连续几何，先进行 B1 等价 Tile 路径）
 
 ## 使用与更新规则
 
@@ -66,12 +66,11 @@
 
 **阶段顺序与验收**
 
-2026-09-23 已完成的 v2、预设高度重标定及固定视角验证仅保留在“已完成里程碑”。下列为待实施工作；详细数据契约、子步骤、候选预算和验证矩阵见本节下方“P16 分阶段实施与优化方案”。规划完成不代表实现完成。
+已完成的条件分形 v2、预设高度重标定、固定视角验证及 P16-A 仅保留在“已完成里程碑”。下列为待实施工作；详细数据契约、子步骤、候选预算和验证矩阵见本节下方“P16 分阶段实施与优化方案”。规划完成不代表实现完成。
 
 | 阶段 | 状态/依赖 | 交付与进入下一阶段的条件 |
 | --- | --- | --- |
-| P16-A 近远分层高度与尺度契约 | **当前实施项**；待实施 | A1 冻结基线与采样/单位契约；A2 统一坡角、曲率与版本兼容；A3 定义 Base/Detail/Simulation Delta、缓存预算与低分辨率模拟映射。解析地形、旧场景往返和资源预算验证通过后进入 B |
-| P16-B 局部高度与连续几何 | 待开始；依赖 A | B1 无细节的 Tile 等价路径；B2 确定性局部细节、边界 Halo 与缓存回退；B3 屏幕误差 LOD/Morph 与 Color/Shadow/Water 共用表面；B4 可选模拟降采样。接边、重载、移动视角、质量预算及近景轮廓通过 |
+| P16-B 局部高度与连续几何 | **当前实施项**；A 前置已通过，B 尚未开始 | B1 无细节的 Tile 等价路径；B2 确定性局部细节、边界 Halo 与缓存回退；B3 屏幕误差 LOD/Morph 与 Color/Shadow/Water 共用表面；B4 可选模拟降采样。接边、重载、移动视角、质量预算及近景轮廓通过 |
 | P16-C 山系与排水骨架 | 待开始；依赖 A/B | C1 新版本区域/山脊/岩性；C2 洼地、湖泊、出口与流向；C3 汇流累积及河谷剖面。非湖泊路径全部终止于合法出口/湖泊，无环路，跨块一致；灰模体现主支河谷和山麓过渡 |
 | P16-D 创作侵蚀与持久生成配方 | 待开始；依赖 C | D1 稳定性/近干格速度核查；D2 有限次水蚀、沉积和热蚀；D3 侵蚀历史场及配方版本/保存/Undo。水与地形+泥沙守恒、Reset、重建复现通过；不隐式保存 Runtime |
 | P16-E 静态地貌材质与预设 | 待开始；依赖 D | E1 正确曲率/汇流及侵蚀沉积权重；E2 近景片元派生采样与微细节；E3 五预设按地貌特征调参。四层权重有效且归一化，纹理不会掩盖灰模缺陷，LOD 不改变地貌归属 |
@@ -87,9 +86,9 @@
 
 以下保存源码审查、外部方案对照及设计建议，没有新增实现或 GPU 视觉验收。现有条件分形已经形成区域与定向山带；主要差距集中在汇流结构、尺度一致性、近景数据/几何分辨率及地貌到材质的联系。
 
-`GenerateFBM.comp` 的 valley 仍由噪声减高，`ErosionStrength` 在这里是形态参数。`DeriveTerrainMaps.comp` 的 Flow Potential 为中心到最低四邻居的落差，陡峭山脊也可能得到较大值，不能当作真实河流或湿度。Curvature 使用 `邻居和 - 4×中心`，碗形中心为正；材质却用负曲率提高湿度与 Soil，需统一符号契约后用解析碗形和凸丘验证。曲率也没有除以世界采样间距平方，分辨率改变会改变它的视觉意义。
+`GenerateFBM.comp` 的 valley 仍由噪声减高，`ErosionStrength` 在这里是形态参数。Flow Potential 仍是局部下坡量，不能当作真实河流或湿度。初次审查发现 Data v1 曲率未除以世界采样间距平方，派生凹地正号与材质解释不一致；Data v2 已在 P16-A 修正并通过解析碗形/凸丘验证，旧数据保留原解释。
 
-热侵蚀 Talus 目前直接比较归一化高度差。建议后续以稳定坡角定义阈值：`normalizedTalus = tan(angle) × neighbourDistance / HeightScale`，斜向邻居使用 √2 倍间距，并处理零高度幅度。迭代次数和搬运速率也需要尺度验证，不能只修改阈值便宣称分辨率无关。
+Data v1 热侵蚀 Talus 直接比较归一化高度差；Data v2 已使用 `normalizedTalus = tan(angle) × neighbourDistance / HeightScale`，包含斜向邻居和零高度幅度处理。迭代次数和搬运速率仍需要尺度验证，不能只修改阈值便宣称侵蚀结果分辨率无关。
 
 默认 WorldSize=1024、HeightMapResolution=1024 时，派生图使用约 1.001 单位间距；MeshResolution=256 经固定除数 3 得到 Chunk LOD0 的 86 格，4×4 Chunk 每块 256 单位，几何间距约 2.98，LOD1/2 约 5.95/11.64。Normal、Analysis 和 Weight 当前在顶点采样后插值，所以提高高度图分辨率不能独自解决轮廓与材质边界精度。Height 生成采用像素中心 UV，派生间距采用 `N-1`，分层/跨块设计应明确统一端点或像素中心契约。世界单位是否对应米也必须显式定义。
 
@@ -109,15 +108,11 @@
 
 ### P16 分阶段实施与优化方案
 
-本方案于 2026-09-30 细化，所有新增能力均为待实现设计。本文件集中维护阶段状态、优先级、设计方案和验收条件；ARCHITECTURE 只记录源码事实，README 只记录已实现行为、使用方式与验证结果。当前交付目标为连续山系、连接河谷、合理坡脚沉积、稳定近远景和可控资源成本；动态生态与植被继续由 P14 完成。
+本方案于 2026-09-30 细化，P16-A 已验收并移入里程碑，以下 B～F 仍为待实现设计。本文件集中维护阶段状态、优先级、设计方案和验收条件；ARCHITECTURE 只记录源码事实，README 只记录已实现行为、使用方式与验证结果。当前交付目标为连续山系、连接河谷、合理坡脚沉积、稳定近远景和可控资源成本；动态生态与植被继续由 P14 完成。
 
-#### A：先固定尺度和数据契约
+#### B～F 共用的分层设计边界
 
-| 子步骤 | 改动范围与交付 | 验证 |
-| --- | --- | --- |
-| A1 基线/坐标 | 复用 Terrain Fixture，记录五预设与 512/1024/2048 数据规格；明确局部 XZ、世界单位换算、HeightScale 和正方形边界。新分层高度采用端点节点，Simulation 为单元中心，分别定义 index→position→UV，不再共用未经校正的 N/N-1 公式 | 常量面、斜面、碗形、凸丘；同一位置 CPU/GPU 采样一致；旧场景与已有 v1/v2 输出保留 |
-| A2 派生/侵蚀尺度 | 新路径以 atan/坡角解释坡度，曲率由物理高度 Laplacian/间距² 得出并固定凹地为正；Talus 由稳定坡角与各方向距离换算。旧字段保留旧解释，通过显式数据/侵蚀版本进入新语义 | 三档分辨率同地貌坡角一致；曲率符号正确；坡角阈值、斜邻居、零 HeightScale、NaN/Inf 有定义 |
-| A3 分层职责 | 定义 BaseHeight、DetailResidual、SimulationDelta 和每层空间范围/版本；初次先维持现有模拟分辨率，降采样作为 B4 独立变化。收敛 TerrainSettings、TerrainRuntime、Generator 与 Renderer 边界 | 资源清单、版本失效表、生成/Reset/场景复制时序完整；旧 YAML 缺字段不会自动迁移 |
+P16-A 已提供端点/单元中心 CPU 契约和组合/预算工具；运行时模拟仍与 Height 使用同一节点布局，独立单元中心重采样属于 B4，不能当作已完成迁移。
 
 新高度由 `Hrender = BaseHeight + DetailResidual + Resample(SimulationDelta)` 组成，均先换算到同一局部高度单位。SimulationDelta 是相对模拟初始高度的差，不把 Runtime 绝对高度再次相加。DetailResidual 只承载基础高度未覆盖的频带，限制坡度/幅度，河道附近由排水遮罩削弱；新层生成时不能逐 Tile 重新归一化高度，否则会破坏接边与海拔。新数据布局版本与 Noise SynthesisVersion 分开，C 阶段新地貌算法才增加合成版本；预设切换继续保留版本。
 
@@ -274,6 +269,25 @@ P14 后续消费静态权重与侵蚀历史，再以 Temperature、Moisture、Ve
 - 发布构建、资源打包与项目模板。
 
 ## 已完成里程碑
+
+### 2026-09-30：P16-A 尺度与分层契约
+
+- A1：新增引擎层 `TerrainSampling.h`，区分端点节点和单元中心的间距/位置/纹素 UV；Data v2 程序化 Height 使用端点布局，Color/Shadow/Water 共用采样换算。当前 Runtime 模拟保持原分辨率和节点布局，未分配局部 Tile。
+- A2：DataVersion 与 SynthesisVersion 分离，新规格默认 Data v2，旧 YAML 缺字段固定 Data v1；预设保留版本，编辑器切换和坡角参数参加既有配置/Undo 链。v2 使用物理梯度坡角、凹地正曲率和世界距离稳定坡角阈值；修正热蚀边界重复邻居搬运。旧 Data v1 行为保留。
+- A3：实现 Base+Detail+(Current-Initial) 局部高度组合和 Ping-Pong/Halo 原始纹理预算工具，并验证 Delta 只相加一次。生成器/水文/气候所有权保持不变；DataVersion 改动经既有失效/重建流程刷新派生和模拟初始状态，场景复制只复制规格，Runtime 不序列化。此项是契约交付，局部细节资源、缓存、LOD Morph 和模拟降采样尚未实现。
+- 验证：`scripts/Verify-Windows.bat` Debug x64 全解决方案构建与 193 项无窗口 PASS 输出通过；解析场覆盖三档端点/坡角、碗形/凸丘、稳定坡角、斜邻居、零幅度/非有限值、旧场景往返、Undo 和资源预算。Intel Iris Xe / OpenGL 4.6.0（驱动 32.0.101.6790）实际 GPU 三档斜面及边缘法线误差 <0.002、坡角误差 <1°；二次曲率符号/土壤权重、34° 面保持、角点热蚀质量误差 <1e-5、零幅度检查通过。五预设 × 三分辨率的有限性/范围/法线及四层权重检查通过。
+- Alpine 1024 Data v2 重复生成哈希 `1222385975937983075`；Data v1 与本次改动前的三张 Compute Shader 对照哈希均为 `12660624032591812628`，固定截图 SHA-256 均为 `BFC65B781458B1D9237F4449A09B7039C5A03685ADF5F43D0A9EDE3ECB3DC065`。哈希仅作同机同驱动证据，不要求等于历史驱动值。水文/气候 GPU 契约及固定视角截图通过，未以此宣称河网或近景细节已完成。
+- 基线：Seed=1、WorldSize=1024、五预设默认参数及热侵蚀，Data/Synthesis=2；下面为归一化 Height 范围，完整 hash/spec 由 `GLIMMER_TERRAIN_VALIDATE=1` 的基线日志输出。
+
+| 预设 | HeightScale | 512² | 1024² | 2048² |
+| --- | --- | --- | --- | --- |
+| Alpine | 168 | 0.081573～0.608876 | 0.081489～0.619971 | 0.081659～0.654059 |
+| Plateau | 120 | 0.138131～0.482104 | 0.138105～0.482870 | 0.138095～0.482465 |
+| Rolling Hills | 64 | 0.052844～0.316829 | 0.052830～0.316848 | 0.052828～0.316848 |
+| Volcanic | 152 | 0.044158～0.779133 | 0.044922～0.779866 | 0.045143～0.779827 |
+| Eroded Valley | 136 | 0.081761～0.502787 | 0.081598～0.541656 | 0.081467～0.564809 |
+
+- 本轮已复核并同步 PROJECT_STATUS、ARCHITECTURE、README；当前实施项提升为 P16-B/B1，P16 总体仍进行中；提交：待提交。
 
 此处只记录足以影响后续决策的结果。完整设计、代码片段和教学说明位于 README。
 
@@ -750,7 +764,7 @@ P14 后续消费静态权重与侵蚀历史，再以 Temperature、Moisture、Ve
 - Renderer2D 仍固定使用 TextureShader，`.glmat` 的 ShaderHandle 尚未参与批次兼容判断；
 - 完整编辑器的 Sprite 统一在 Skybox 后、3D Transparent 前 Flush；Renderer2D 尚无独立 AlphaMode、透明距离排序或与 3D Transparent 的跨队列排序，零 Alpha 的 EntityID/深度语义仍需后续单独收口；
 - Terrain 已完成按世界尺寸自适应的 Chunk、三档距离 LOD/迟滞/相邻约束/Skirt、Color/Shadow 剔除、四层 Triplanar PBR、固定步水文与 Runtime Erosion；运行时 Height 会刷新 Normal/Slope、Analysis 和 Material Weights。尚无显式 Bake，模拟结果关闭或重建后丢弃；
-- P16 源码审查：Authoring Talus 使用归一化高度差而非世界坡角，曲率 Laplacian 未按世界间距归一化；派生正曲率代表局部凹地，但材质负曲率分支增加湿度/土壤，符号契约待统一并以碗形/凸丘验证。Analysis Flow 仅为局部最大落差，不是上游汇流累积；Normal/Analysis/Weight 在顶点读取后插值，近景精度受网格约束。近远分层高度、跨块模拟边界与连续几何过渡尚未实现；
+- P16：Data v1 保留旧 Talus、曲率与材质解释；Data v2 尺度/符号问题已在 P16-A 修正并验收，但热侵蚀搬运速率和迭代次数仍不保证分辨率无关。Analysis Flow 只是局部下坡量，不是上游汇流累积；Normal/Analysis/Weight 在顶点读取后插值，近景精度受网格约束。局部 Tile 资源、跨块模拟边界与连续几何过渡尚未实现；
 - CSM 已完成 Practical Split、Texel Snap、可调重叠混合、基于 Bounds 的 Shadow Frustum 剔除、运行时级联着色、Alpha Mask 投影和每级 Model Instancing；Terrain 仍独立提交，Blend 默认不参与 Shadow Pass，尚无彩色透射或抖动式半透明阴影；
 - SkyLight 已支持六面 LDR/等距柱状 HDR、线性 `RGBA16F`、完整普通 Mip Chain、内存派生缓存，以及 Model/Terrain 共用的 Diffuse Irradiance、GGX Specular Prefilter 和 Split-Sum BRDF LUT；尚无持久化磁盘缓存、环境旋转、局部 Reflection Probe 或动态场景反射；
 - P14 已完成 CPU/GPU 场、TerrainRuntime 所有权、固定步调度、四场诊断、GPU 趋势 Contract，以及 Rainfall/Evaporation 到 P13 Water 的守恒耦合；水面/瞬时岸线视觉基础已接入；气候材质权重反馈和植被实例化仍未实现；

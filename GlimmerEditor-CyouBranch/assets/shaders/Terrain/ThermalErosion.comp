@@ -6,6 +6,8 @@ layout(r32f, binding = 1) writeonly uniform image2D u_Destination;
 
 uniform float u_Talus;
 uniform float u_Strength;
+uniform int u_TerrainDataVersion;
+uniform vec2 u_TalusPerAxis;
 
 const ivec2 Neighbours[8] = ivec2[](
 	ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1),
@@ -22,11 +24,18 @@ float HeightAt(ivec2 pixel, ivec2 size)
 	return imageLoad(u_Source, ClampPixel(pixel, size)).r;
 }
 
+float TalusBetween(ivec2 source, ivec2 destination)
+{
+	return u_TerrainDataVersion >= 2
+		? length(vec2(destination - source) * u_TalusPerAxis) : u_Talus;
+}
+
 float Outflow(ivec2 sourcePixel, ivec2 destinationPixel, ivec2 size)
 {
 	float sourceHeight = HeightAt(sourcePixel, size);
 	float destinationHeight = HeightAt(destinationPixel, size);
-	float destinationExcess = max(sourceHeight - destinationHeight - u_Talus, 0.0);
+	float destinationExcess = max(sourceHeight - destinationHeight
+		- TalusBetween(sourcePixel, destinationPixel), 0.0);
 	if (destinationExcess <= 0.0)
 		return 0.0;
 
@@ -35,7 +44,10 @@ float Outflow(ivec2 sourcePixel, ivec2 destinationPixel, ivec2 size)
 	for (int index = 0; index < 8; ++index)
 	{
 		ivec2 neighbour = ClampPixel(sourcePixel + Neighbours[index], size);
-		float excess = max(sourceHeight - HeightAt(neighbour, size) - u_Talus, 0.0);
+		if (u_TerrainDataVersion >= 2
+			&& any(notEqual(neighbour, sourcePixel + Neighbours[index]))) continue;
+		float excess = max(sourceHeight - HeightAt(neighbour, size)
+			- TalusBetween(sourcePixel, neighbour), 0.0);
 		totalExcess += excess;
 		maximumExcess = max(maximumExcess, excess);
 	}
@@ -57,6 +69,8 @@ void main()
 	for (int index = 0; index < 8; ++index)
 	{
 		ivec2 neighbour = ClampPixel(pixel + Neighbours[index], size);
+		if (u_TerrainDataVersion >= 2
+			&& any(notEqual(neighbour, pixel + Neighbours[index]))) continue;
 		outgoing += Outflow(pixel, neighbour, size);
 		incoming += Outflow(neighbour, pixel, size);
 	}

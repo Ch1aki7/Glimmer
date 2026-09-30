@@ -316,7 +316,15 @@ namespace gl {
 				runtime.ValidationComplete = runtimeDerived.Valid;
 				if (second.Hash != runtimeDerived.Hash)
 					runtime.ValidationComplete = false;
-				if (first.Valid && second.Valid && first.Hash == second.Hash)
+				if (specification.DataVersion >= 2)
+				{
+					const auto contract = TerrainGenerator::ValidateSamplingContract(
+						generationPath.string(), erosionPath.string(), derivationPath.string());
+					runtime.ValidationComplete &= contract.Valid;
+					if (contract.Valid) GL_CORE_INFO("Terrain sampling contract PASS: {0}", contract.Message);
+					else GL_CORE_ERROR("Terrain sampling contract FAIL: {0}", contract.Message);
+				}
+				if (first.Valid && second.Valid && first.Hash == second.Hash && runtime.ValidationComplete)
 				{
 					GL_CORE_INFO(
 						"Terrain GPU validation PASS: deterministic hash={0}, dispatches={1}, height=[{2}, {3}], mean={4}, stddev={5}",
@@ -544,6 +552,8 @@ namespace gl {
 		shader->UploadUniformFloat3("u_CameraPos", cameraPosition);
 		shader->UploadUniformInt("u_EntityID", entityID);
 		shader->UploadUniformFloat("u_MaxHeight", specification.HeightScale);
+		shader->UploadUniformInt("u_TerrainDataVersion",
+			specification.Procedural ? std::clamp(specification.DataVersion, 1u, 2u) : 1u);
 		shader->UploadUniformFloat("u_UVScale", 1.0f);
 		shader->UploadUniformFloat2("u_TexelSize", {
 			1.0f / static_cast<float>(runtime.HeightMap->GetWidth()),

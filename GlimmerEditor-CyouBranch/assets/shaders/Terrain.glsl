@@ -1,5 +1,6 @@
 #type vertex
 #version 450 core
+#include <Glimmer/TerrainSampling.glslinc>
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec2 a_TexCoord;
@@ -41,6 +42,7 @@ void main()
 {
 	vec2 uv = u_ChunkUVOffset
 		+ a_TexCoord * u_ChunkUVScale * u_UVScale;
+	uv = GlimmerTerrainTextureUV(u_HeightMap, uv);
 	float height = SampleHeight(uv);
 	float leftHeight = SampleHeight(uv - vec2(u_TexelSize.x, 0.0));
 	float rightHeight = SampleHeight(uv + vec2(u_TexelSize.x, 0.0));
@@ -71,6 +73,7 @@ void main()
 
 #type fragment
 #version 450 core
+#include <Glimmer/TerrainSampling.glslinc>
 
 layout(location = 0) out vec4 o_Color;
 layout(location = 1) out int o_EntityID;
@@ -189,6 +192,8 @@ vec4 ResolveMaterialWeights(vec3 normal)
 	vec4 weights = max(v_MaterialWeights, vec4(0.0001));
 	float slope = 1.0 - clamp(normal.y, 0.0, 1.0);
 	float curvature = v_TerrainAnalysis.x * 2.0 - 1.0;
+	// These material terms use convex-positive values; v2 data is concave-positive.
+	if (u_TerrainDataVersion >= 2) curvature = -curvature;
 	float flow = clamp(v_TerrainAnalysis.y, 0.0, 1.0);
 	float moisture = clamp((1.0 - v_Height) * 0.45 + flow * 0.70
 		+ max(-curvature, 0.0) * 0.25, 0.0, 1.0);

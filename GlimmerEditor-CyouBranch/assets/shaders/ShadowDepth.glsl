@@ -1,5 +1,6 @@
 #type vertex
 #version 450 core
+#include <Glimmer/TerrainSampling.glslinc>
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec2 a_TerrainTexCoord;
@@ -28,6 +29,7 @@ void main()
 	{
 		vec2 terrainUV = u_ChunkUVOffset
 			+ a_TerrainTexCoord * u_ChunkUVScale;
+		terrainUV = GlimmerTerrainTextureUV(u_HeightMap, terrainUV);
 		localPosition.xz = a_Position.xz * u_ChunkLocalScale
 			+ u_ChunkLocalOffset;
 		localPosition.y = texture(u_HeightMap, terrainUV).r * u_MaxHeight;

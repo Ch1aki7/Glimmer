@@ -36,6 +36,9 @@ namespace gl {
 		const Ref<Texture2D>& GetMaterialWeightMap() const { return m_MaterialWeightMap; }
 		uint32_t GetLastDispatchCount() const { return m_LastDispatchCount; }
 		TerrainValidationResult ValidateOutputs() const;
+		static TerrainValidationResult ValidateSamplingContract(
+			const std::string& generationShaderPath, const std::string& erosionShaderPath,
+			const std::string& derivationShaderPath);
 		const SimulationGridSpecification& GetGridSpecification() const
 		{
 			return m_HeightGrid.GetSpecification();
@@ -45,7 +48,8 @@ namespace gl {
 		void CreateDerivedTextures();
 		void Dispatch2D(const Ref<ComputeShader>& shader,
 			bool countGenerationDispatch = true);
-		void RunThermalErosion(const TerrainAuthoringSettings& settings);
+		void RunThermalErosion(const TerrainAuthoringSettings& settings,
+			float heightScale, float worldSize);
 		void DeriveMaps(float heightScale, float worldSize);
 		void DeriveMaps(const Ref<Texture2D>& heightMap,
 			float heightScale, float worldSize, bool countGenerationDispatch);
@@ -58,6 +62,7 @@ namespace gl {
 		Ref<Texture2D> m_AnalysisMap;
 		Ref<Texture2D> m_MaterialWeightMap;
 		uint32_t m_LastDispatchCount = 0;
+		uint32_t m_DataVersion = 1;
 	};
 
 }

@@ -758,6 +758,9 @@ namespace gl {
 		const int terrainSamplingVisualMode = GetTerrainSamplingVisualMode();
 		m_TerrainCapturePath = GetEnvironmentValue("GLIMMER_TERRAIN_CAPTURE_PATH");
 		const uint32_t terrainSynthesisVersion = GetTerrainSynthesisVersion();
+		const std::string terrainDataValue = GetEnvironmentValue("GLIMMER_TERRAIN_DATA_VERSION");
+		const uint32_t terrainDataVersion = terrainDataValue.empty() ? 1u
+			: std::clamp(static_cast<uint32_t>(std::atoi(terrainDataValue.c_str())), 1u, 2u);
 
 		m_ShaderLib.Load("assets/shaders/BalatroVortex.glsl");
 		m_ShaderLib.Load("assets/shaders/StarNest.glsl");
@@ -861,7 +864,7 @@ namespace gl {
 				terrainGenerationShaderHandle,
 				terrainErosionShaderHandle,
 				terrainDerivationShaderHandle,
-				terrainSynthesisVersion));
+				terrainSynthesisVersion, terrainDataVersion));
 			m_EditorScenePath.clear();
 			GL_CORE_INFO("Terrain validation fixture scene activated.");
 		}

@@ -439,6 +439,15 @@ namespace gl {
 				{
 					auto& noise = spec.Noise;
 					before = terrain;
+					int dataVersion = static_cast<int>(std::clamp(spec.DataVersion, 1u, 2u) - 1u);
+					if (ImGui::Combo("Terrain Data", &dataVersion,
+						"Legacy (v1)\0World-scale (v2)\0"))
+					{
+						spec.DataVersion = static_cast<uint32_t>(dataVersion + 1);
+						TerrainRenderer::Invalidate(terrain);
+					}
+					commit("Edit Terrain Data Version", before);
+					before = terrain;
 					int synthesisVersion = static_cast<int>(
 						std::clamp(noise.SynthesisVersion, 1u, 2u) - 1u);
 					if (ImGui::Combo("Terrain Synthesis", &synthesisVersion,
@@ -546,6 +555,9 @@ namespace gl {
 						return changed;
 					});
 					drawNoise("Edit Terrain Talus", [&]() {
+						if (spec.DataVersion >= 2)
+							return ImGui::SliderFloat("Stable Slope (degrees)",
+								&authoring.StableSlopeDegrees, 0.0f, 80.0f);
 						return ImGui::DragFloat("Talus", &authoring.Talus,
 							0.0005f, 0.0001f, 0.25f, "%.4f");
 					});

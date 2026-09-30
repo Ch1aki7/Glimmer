@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <filesystem>
 #include <fstream>
+#include <cmath>
 
 namespace gl {
 	namespace {
@@ -230,6 +231,7 @@ namespace gl {
 		const auto& noise = spec.Noise;
 		out << YAML::Key << "TerrainComponent" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "Procedural" << YAML::Value << spec.Procedural;
+		out << YAML::Key << "DataVersion" << YAML::Value << std::clamp(spec.DataVersion, 1u, 2u);
 		out << YAML::Key << "Preset" << YAML::Value << TerrainPresetToString(spec.Preset);
 		out << YAML::Key << "HeightMapResolution" << YAML::Value << spec.HeightMapResolution;
 		out << YAML::Key << "MeshResolution" << YAML::Value << spec.MeshResolution;
@@ -272,6 +274,9 @@ namespace gl {
 		out << YAML::Key << "ThermalIterations" << YAML::Value
 			<< spec.Authoring.ThermalIterations;
 		out << YAML::Key << "Talus" << YAML::Value << spec.Authoring.Talus;
+		out << YAML::Key << "StableSlopeDegrees" << YAML::Value
+			<< (std::isfinite(spec.Authoring.StableSlopeDegrees)
+				? std::clamp(spec.Authoring.StableSlopeDegrees, 0.0f, 80.0f) : 35.0f);
 		out << YAML::Key << "ThermalStrength" << YAML::Value
 			<< spec.Authoring.ThermalStrength;
 		out << YAML::EndMap << YAML::EndMap;
@@ -280,6 +285,8 @@ namespace gl {
 	static void DeserializeComponent(const YAML::Node& node, TerrainComponent& comp)
 	{
 		auto& spec = comp.Specification;
+		spec.DataVersion = node["DataVersion"]
+			? std::clamp(node["DataVersion"].as<uint32_t>(), 1u, 2u) : 1u;
 		if (node["Procedural"]) spec.Procedural = node["Procedural"].as<bool>();
 		spec.Preset = node["Preset"]
 			? TerrainPresetFromString(node["Preset"].as<std::string>())
@@ -349,6 +356,12 @@ namespace gl {
 					authoringNode["ThermalIterations"].as<uint32_t>(), 128u);
 			if (authoringNode["Talus"])
 				authoring.Talus = glm::clamp(authoringNode["Talus"].as<float>(), 0.0001f, 0.25f);
+			if (authoringNode["StableSlopeDegrees"])
+			{
+				const float angle = authoringNode["StableSlopeDegrees"].as<float>();
+				authoring.StableSlopeDegrees = std::isfinite(angle)
+					? std::clamp(angle, 0.0f, 80.0f) : 35.0f;
+			}
 			if (authoringNode["ThermalStrength"])
 				authoring.ThermalStrength = glm::clamp(
 					authoringNode["ThermalStrength"].as<float>(), 0.0f, 0.5f);

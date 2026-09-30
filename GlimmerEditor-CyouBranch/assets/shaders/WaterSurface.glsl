@@ -1,5 +1,6 @@
 #type vertex
 #version 450 core
+#include <Glimmer/TerrainSampling.glslinc>
 layout(location=0) in vec3 a_Position;
 layout(location=1) in vec2 a_TexCoord;
 uniform sampler2D u_Height;
@@ -17,6 +18,7 @@ float finiteValue(float v) { return isnan(v) || isinf(v) ? 0.0 : v; }
 void main()
 {
     v_UV = u_UVOffset + a_TexCoord * u_UVScale;
+    v_UV = GlimmerTerrainTextureUV(u_Height, v_UV);
     float ground = finiteValue(textureLod(u_Height, v_UV, 0).r) * u_HeightScale;
     float depth = clamp(finiteValue(textureLod(u_Water, v_UV, 0).r), 0.0, 1000.0);
     vec3 local = vec3(a_Position.x * u_LocalScale + u_LocalOffset.x,

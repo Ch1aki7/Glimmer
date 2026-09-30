@@ -103,6 +103,8 @@ namespace gl {
 				|| std::abs(glm::determinant(instance.Transform)) < 1e-8f) continue;
 			s_Shader->UploadUniformMat4("u_Transform", instance.Transform);
 			s_Shader->UploadUniformFloat("u_HeightScale", terrain.HeightScale);
+			s_Shader->UploadUniformInt("u_TerrainDataVersion",
+				terrain.Procedural ? std::clamp(terrain.DataVersion, 1u, 2u) : 1u);
 			s_Shader->UploadUniformFloat("u_WorldSize", worldSize);
 			s_Shader->UploadUniformInt("u_EntityID", instance.EntityID);
 			s_Shader->UploadUniformFloat("u_Time", runtime.GPUEnvironment

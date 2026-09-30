@@ -8,6 +8,7 @@ layout(rgba16f, binding = 3) writeonly uniform image2D u_MaterialWeights;
 
 uniform float u_HeightScale;
 uniform float u_WorldSize;
+uniform int u_TerrainDataVersion;
 
 float HeightAt(ivec2 pixel, ivec2 size)
 {
@@ -38,10 +39,33 @@ void main()
 	float curvature = clamp(0.5 + laplacian * 12.0, 0.0, 1.0);
 	float lowestNeighbour = min(min(left, right), min(down, up));
 	float flowPotential = clamp((center - lowestNeighbour) * 24.0, 0.0, 1.0);
+	if (u_TerrainDataVersion >= 2)
+	{
+		vec2 stepSize = max(vec2(u_WorldSize) / vec2(max(size - 1, ivec2(1))), vec2(0.0001));
+		float gx = (right - left) * u_HeightScale / (stepSize.x
+			* (pixel.x > 0 && pixel.x < size.x - 1 ? 2.0 : 1.0));
+		float gz = (up - down) * u_HeightScale / (stepSize.y
+			* (pixel.y > 0 && pixel.y < size.y - 1 ? 2.0 : 1.0));
+		normal = normalize(vec3(-gx, 1.0, -gz));
+		// Angle / 90 degrees; positive concavity denotes a bowl.
+		slope = atan(length(vec2(gx, gz))) / 1.57079632679;
+		float cx = pixel.x > 0 && pixel.x < size.x - 1
+			? (left + right - 2.0 * center) / (stepSize.x * stepSize.x) : 0.0;
+		float cz = pixel.y > 0 && pixel.y < size.y - 1
+			? (down + up - 2.0 * center) / (stepSize.y * stepSize.y) : 0.0;
+		float concavity = (cx + cz) * u_HeightScale;
+		// Fixed one-local-unit reference length, bounded for RGBA16F.
+		curvature = 0.5 + 0.5 * concavity / (1.0 + abs(concavity));
+		flowPotential = clamp(max(max((center - left) / stepSize.x,
+			(center - right) / stepSize.x), max((center - down) / stepSize.y,
+			(center - up) / stepSize.y)) * u_HeightScale, 0.0, 1.0);
+	}
+	// Layer thresholds retain their calibration to 1-normal.y.
+	float materialSlope = u_TerrainDataVersion >= 2 ? 1.0 - normal.y : slope;
 
-	float snow = smoothstep(0.68, 0.88, center) * (1.0 - smoothstep(0.32, 0.72, slope));
-	float rock = smoothstep(0.16, 0.56, slope) + smoothstep(0.76, 0.96, center) * 0.35;
-	float grass = smoothstep(0.10, 0.28, center) * (1.0 - smoothstep(0.18, 0.48, slope))
+	float snow = smoothstep(0.68, 0.88, center) * (1.0 - smoothstep(0.32, 0.72, materialSlope));
+	float rock = smoothstep(0.16, 0.56, materialSlope) + smoothstep(0.76, 0.96, center) * 0.35;
+	float grass = smoothstep(0.10, 0.28, center) * (1.0 - smoothstep(0.18, 0.48, materialSlope))
 		* (1.0 - snow);
 	float soil = max(0.08, (1.0 - rock) * (1.0 - snow) * (0.55 + curvature * 0.45));
 	vec4 weights = max(vec4(grass, soil, rock, snow), vec4(0.0));

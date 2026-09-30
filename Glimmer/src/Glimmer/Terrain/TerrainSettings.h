@@ -51,11 +51,14 @@ namespace gl {
 		bool EnableThermalErosion = true;
 		uint32_t ThermalIterations = 24;
 		float Talus = 0.012f;
+		float StableSlopeDegrees = 35.0f;
 		float ThermalStrength = 0.35f;
 	};
 
 	struct TerrainSpecification
 	{
+		// Independent of the noise algorithm. Missing YAML fields retain v1.
+		uint32_t DataVersion = 2;
 		bool Procedural = true;
 		TerrainPreset Preset = TerrainPreset::Custom;
 		uint32_t HeightMapResolution = 1024;
