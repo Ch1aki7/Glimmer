@@ -4639,3 +4639,32 @@ Data v2 的热侵蚀面板使用 **Stable Slope (degrees)**，默认 35°、范�
 以上参数使用地形局部单位；非均匀 Transform 不保证世界物理尺度。当前仍使用全局 Height/派生图及同分辨率模拟，没有局部细节 Tile 或独立低分辨率模拟。Flow Potential 仍是局部下坡提示，不能当作真实汇流或河网。
 
 验证 Fixture 默认 Data v1，以保留原对照。设置 `GLIMMER_TERRAIN_DATA_VERSION=2`、`GLIMMER_TERRAIN_VALIDATE=1` 与 `GLIMMER_TERRAIN_CAPTURE_PATH=<bmp>` 可运行新数据验证：五预设 × 512/1024/2048 的基线、解析坡角/端点、碗形/凸丘、稳定坡角和角点热蚀质量检查。Intel Iris Xe/OpenGL 4.6.0 上均通过，Alpine 1024 重复生成哈希为 `1222385975937983075`；同机旧 Data 与改动前着色器的数据哈希及固定截图一致。Debug x64 完整构建、193 项无窗口 PASS 输出及水文/气候 GPU 契约通过。数据哈希只用于同机同驱动的对照。
+
+## Terrain 配方数据与 CPU 印章参考
+
+Terrain 规格现在可保存有序 `Recipe.Stamps`，配方版本独立于 DataVersion 和 Noise SynthesisVersion。基础地貌来源与 Seed 仍使用原有规格，配方不重复保存 Seed。此处提供引擎数据与 CPU 参考 API；当前 GPU 生成器和 Inspector 尚未消费印章，设置配方不会改变视口地形。
+
+印章支持 Ellipse、Rectangle 轮廓与 Add、SetHeight 操作。Center 为 Terrain 局部 XZ，Size 是不含过渡的完整核心宽/深，RotationDegrees 遵循局部 Y 轴旋转；Height 在 Add 中是局部高度增量，在 SetHeight 中是绝对局部 Y。Strength 为 0～1，外侧 TransitionWidth 为零时形成硬边，否则平滑衰减至零。矩形采用有符号距离；椭圆采用按短半轴缩放的径向度量，因此长椭圆外侧过渡不保证精确等距。
+
+```cpp
+gl::TerrainRecipe recipe;
+gl::TerrainStamp stamp;
+stamp.ID = 1; // 配方内稳定、非零且唯一，不根据相机重新生成。
+stamp.Shape = gl::TerrainStampShape::Rectangle;
+stamp.Operation = gl::TerrainStampOperation::SetHeight;
+stamp.Size = { 64.0f, 64.0f };
+stamp.Height = 30.0f;
+recipe.Stamps.push_back(stamp);
+
+auto sample = gl::EvaluateTerrainRecipe(recipe, { 0.0f, 0.0f }, 0.2f, 100.0f);
+if (sample.Validation.Valid()) {
+    // sample.NormalizedHeight = 0.3，局部高度为 30。
+    // sample.Clipped 表示是否触及 [0, HeightScale] 的存储边界。
+}
+```
+
+参考评估按列表顺序合成；重排会改变重叠结果，禁用或零强度操作不改变高度。每个有贡献操作完成后限制高度到既有范围并报告 Clipped，输入不会被修改。非空列表要求程序化 Data v2、正且有限的 HeightScale，最多 64 个操作；`ValidateTerrainRecipe` 返回错误类型、操作索引与原因，拒绝重复 ID、未知版本/枚举、非有限值、非正尺寸、负过渡或越界强度。无效评估应先检查 Validation，不消费其高度字段。
+
+Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与 Stamps；空配方省略新字段，旧场景缺字段仍恢复空列表。保存前验证失败不会替换原文件；加载前预检全部 Terrain 配方，非法配方不会向目标场景添加任何实体。整体 TerrainComponent 快照携带列表，Scene Copy 与 Edit/Play 保持独立副本，既有组件命令可撤销/重做整份配方；当前尚无印章控件。
+
+2026-10-06 的 VS2026 `Debug | x64` 全解决方案构建及无窗口回归通过，共 233 条 PASS 输出。解析平台/过渡、旋转、顺序、裁切和非法输入，以及配方保存/重载、版本拒绝、Scene Copy、预设保留与整份配方 Undo/Redo 均通过；本数据切片没有运行 GPU 数值或视觉验收。

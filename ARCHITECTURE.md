@@ -1,6 +1,6 @@
 # Glimmer 项目架构说明
 
-> 本文最近于 2026-09-30 对照当前源码同步，只描述已经落地的结构与数据流。
+> 本文最近于 2026-10-06 对照当前源码同步，只描述已经落地的结构与数据流。
 > 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
 ## 1. 项目定位与当前边界
@@ -229,6 +229,9 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 地形实体由 `TerrainComponent` 保存可序列化的 `TerrainSpecification`，运行时 GPU 对象放在不持久化的 `TerrainRuntime` 中：
 
 - `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion 与 Derive Maps；序列化的 Noise SynthesisVersion 选择旧版合成或新版条件分形。新版先形成低频陆地区域与定向山带，再在山地区域叠加抗混叠 Ridged 细节、Worley 地质扰动、裂谷、趋势和条件谷地；旧 YAML 缺版本时固定走 v1；
+- `TerrainSpecification::Recipe` 保存版本 1 的有序解析印章数据；`TerrainRecipe.h/.cpp` 位于引擎 Terrain 层，只依赖纯数据/数学，不持有 Scene、编辑器、纹理或模拟对象。印章具有非零唯一 uint64 ID、Ellipse/Rectangle、Add/SetHeight、启用、局部 XZ/完整核心尺寸、绕 Y 旋转、外侧过渡宽度、强度及局部高度参数。基础来源与 Seed 继续由既有 Specification/Noise 保存，没有第二份 Seed；
+- `ValidateTerrainRecipe` 返回错误类型、操作索引和原因，拒绝未知版本/枚举、超 64 项、重复 ID、非有限参数或无效尺寸/过渡/强度；非空配方要求程序化 Data v2 和正 HeightScale。空配方保留旧 Data/导入/零高度规格的合法性。`EvaluateTerrainRecipe` 是显式 CPU 参考：按保存顺序求权重并合成，Add 使用增量，SetHeight 使用绝对局部 Y；每次实际影响表面时限制在 [0,HeightScale] 并返回 Clipped。Rectangle 使用有符号距离，Ellipse 使用按短半轴缩放的径向度量，不保证椭圆过渡为精确等距带；
+- 当前配方仅接入数据与持久化，尚未接入 TerrainGenerator 的 GPU 生成链或 Inspector 控件。现有 GPU 高度、渲染与模拟仍按原管线运行，CPU 参考不更新 Runtime；保护遮罩和地表查询也尚未实现；
 - `TerrainSpecification::DataVersion` 独立于 Noise SynthesisVersion；新规格默认 2，旧 YAML 缺字段读为 1，预设切换保留版本。Data v1 保留像素中心生成、归一化 Talus、旧坡度/曲率与材质解释；Data v2 程序化 Height 使用覆盖完整局部 XZ 范围的端点节点，间距为 WorldSize/(N-1)。Color、Shadow、Water 通过共享 `TerrainSampling.glslinc` 将局部 UV 映射到端点纹素中心；导入高度图仍走旧采样路径；
 - Data v2 的 Normal/Slope 使用物理高度梯度与 atan 坡角/90°，边缘用单边差分；Analysis Curvature 为物理高度 Laplacian/间距²，凹地为正，以固定局部单位参考映射到 [0,1]，边缘缺邻居方向的二阶导数置零。材质消费时转换到原有凸地符号，派生层阈值仍按 1-normal.y 校准。Flow Potential 为局部最大下坡梯度，不是流域/汇流网络；Normal/Slope、Analysis 与四层 Weight 仍在顶点阶段读取后插值；
 - Data v2 Authoring Thermal 以 StableSlopeDegrees（默认 35°，范围 0～80°）和各轴/斜向邻居距离换算归一化高度差阈值；零或无效 HeightScale 跳过侵蚀，边界不重复搬运夹取邻居。稳定坡角已具有局部尺度含义，搬运速度和迭代次数仍不保证跨分辨率等价；
@@ -367,6 +370,7 @@ flowchart LR
 - 资源引用一律保存 AssetHandle，不保存运行时指针或 OpenGL ID；
 - Material Overrides 保存 Mask 和 Values，使禁用字段仍可保留编辑值；
 - Terrain 只保存 Specification，包括 Preset、Noise、Authoring Erosion、Compute Shader Handle 与 TerrainMaterialHandle；Height 和三张派生纹理加载后按需重建，不写入 YAML；
+- Terrain 非空 Recipe 以可选 YAML 子树保存全部印章字段和顺序；空配方不输出新字段，缺字段恢复空列表。保存前校验全部 Terrain 配方，非法/未知版本返回失败，不改输出字符串或已有文件；加载前预读并校验全部 Terrain，配方版本、字段或参数失败时尚未向目标 Scene 创建任何实体。该预检不代表其它组件的反序列化也已事务化；
 - NativeScript 包含函数指针，当前不参与场景序列化；
 - 反序列化使用 `CreateEntityWithUUID` 恢复稳定身份；
 - Scene 复制、保存/加载、Edit/Play 都以组件值为边界，不共享运行时脚本实例；

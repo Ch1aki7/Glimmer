@@ -178,6 +178,21 @@ namespace {
 			"Cerberus sidecar Albedo Normal Metallic and Roughness are resolved");
 	}
 
+	bool SameTerrainRecipe(const gl::TerrainRecipe& left, const gl::TerrainRecipe& right)
+	{
+		if (left.Version != right.Version || left.Stamps.size() != right.Stamps.size()) return false;
+		for (size_t i = 0; i < left.Stamps.size(); ++i)
+		{
+			const auto& a = left.Stamps[i];
+			const auto& b = right.Stamps[i];
+			if (a.ID != b.ID || a.Enabled != b.Enabled || a.Shape != b.Shape
+				|| a.Operation != b.Operation || !Near(a.Center, b.Center) || !Near(a.Size, b.Size)
+				|| !Near(a.RotationDegrees, b.RotationDegrees) || !Near(a.TransitionWidth, b.TransitionWidth)
+				|| !Near(a.Strength, b.Strength) || !Near(a.Height, b.Height)) return false;
+		}
+		return true;
+	}
+
 	bool SameTerrainSpecification(
 		const gl::TerrainSpecification& left,
 		const gl::TerrainSpecification& right)
@@ -185,6 +200,7 @@ namespace {
 		const auto& leftNoise = left.Noise;
 		const auto& rightNoise = right.Noise;
 		return left.Procedural == right.Procedural
+			&& SameTerrainRecipe(left.Recipe, right.Recipe)
 			&& left.DataVersion == right.DataVersion
 			&& left.Preset == right.Preset
 			&& left.HeightMapResolution == right.HeightMapResolution
@@ -679,6 +695,200 @@ namespace {
 				&& Near(restoredLight.ShadowCascadeBlend, 0.18f),
 				"directional shadow settings survive scene round trip");
 		}
+	}
+
+	void TestTerrainRecipe(TestContext& context, const std::filesystem::path& directory)
+	{
+		using Error = gl::TerrainRecipeError;
+		gl::TerrainRecipe empty;
+		context.Check(gl::ValidateTerrainRecipe(empty, 0.0f, 1, false).Valid()
+			&& gl::EvaluateTerrainRecipe(empty, { 0, 0 }, 0.375f, 0.0f).NormalizedHeight == 0.375f,
+			"empty recipe preserves legacy and zero-height terrain");
+		gl::TerrainStamp platform;
+		platform.ID = 9007199254740993ULL;
+		platform.Shape = gl::TerrainStampShape::Rectangle;
+		platform.Size = { 8, 8 };
+		platform.TransitionWidth = 4;
+		platform.Height = 60;
+		gl::TerrainRecipe recipe;
+		recipe.Stamps = { platform };
+		auto evaluate = [&recipe](glm::vec2 position, float scale = 100.0f) {
+			return gl::EvaluateTerrainRecipe(recipe, position, 20.0f / scale, scale);
+		};
+		context.Check(evaluate({ 0, 0 }).Validation.Valid()
+			&& Near(evaluate({ 0, 0 }).NormalizedHeight, 0.6f)
+			&& Near(evaluate({ 4, 0 }).NormalizedHeight, 0.6f),
+			"SetHeight platform core and boundary use absolute local height");
+		context.Check(Near(evaluate({ 6, 0 }).NormalizedHeight, 0.4f)
+			&& Near(evaluate({ 8, 0 }).NormalizedHeight, 0.2f)
+			&& Near(evaluate({ 100, 100 }).NormalizedHeight, 0.2f),
+			"rectangle transition has analytic midpoint and strict outer support");
+		context.Check(Near(evaluate({ 0, 0 }, 200).NormalizedHeight * 200, 60),
+			"HeightScale changes storage rather than stamp target units");
+		recipe.Stamps[0].Strength = 0.5f;
+		context.Check(Near(evaluate({ 0, 0 }).NormalizedHeight, 0.4f),
+			"stamp strength blends rather than changing target height");
+		recipe.Stamps[0].Enabled = false;
+		context.Check(Near(evaluate({ 0, 0 }).NormalizedHeight, 0.2f),
+			"disabled stamp preserves the base surface");
+		recipe.Stamps[0] = platform;
+		recipe.Stamps[0].Size = { 8, 2 };
+		recipe.Stamps[0].RotationDegrees = 90;
+		recipe.Stamps[0].TransitionWidth = 0;
+		context.Check(Near(evaluate({ 0, 3 }).NormalizedHeight, 0.6f)
+			&& Near(evaluate({ 3, 0 }).NormalizedHeight, 0.2f),
+			"rotated rectangle follows local Y rotation with a hard edge");
+		recipe.Stamps[0].Center = { 7, -9 };
+		context.Check(Near(evaluate({ 7, -6 }).NormalizedHeight, 0.6f)
+			&& Near(evaluate({ 10, -9 }).NormalizedHeight, 0.2f),
+			"stamp coordinates translate independently of terrain chunks");
+		recipe.Stamps[0] = platform;
+		recipe.Stamps[0].Shape = gl::TerrainStampShape::Ellipse;
+		recipe.Stamps[0].Size = { 8, 4 };
+		context.Check(Near(evaluate({ 4, 0 }).NormalizedHeight, 0.6f)
+			&& Near(evaluate({ 6, 0 }).NormalizedHeight, 0.5375f)
+			&& Near(evaluate({ 12, 0 }).NormalizedHeight, 0.2f),
+			"ellipse transition uses the documented minor-radius radial metric");
+		gl::TerrainStamp add = platform;
+		add.ID = 42;
+		add.Operation = gl::TerrainStampOperation::Add;
+		add.Height = 10;
+		recipe.Stamps = { platform, add };
+		context.Check(Near(evaluate({ 0, 0 }).NormalizedHeight, 0.7f),
+			"ordered SetHeight then Add accumulates local height");
+		std::swap(recipe.Stamps[0], recipe.Stamps[1]);
+		context.Check(Near(evaluate({ 0, 0 }).NormalizedHeight, 0.6f),
+			"reordering overlapping stamps intentionally changes composition");
+		recipe.Stamps = { add };
+		recipe.Stamps[0].Height = -100;
+		context.Check(evaluate({ 0, 0 }).Clipped && evaluate({ 0, 0 }).NormalizedHeight == 0,
+			"negative Add clips to the terrain lower bound and reports clipping");
+		recipe.Stamps[0].Height = 200;
+		context.Check(evaluate({ 0, 0 }).Clipped && evaluate({ 0, 0 }).NormalizedHeight == 1
+			&& !evaluate({ 100, 100 }).Clipped,
+			"upper clipping respects stamp support rather than altering the whole terrain");
+		recipe.Stamps[0].Height = std::numeric_limits<float>::max();
+		context.Check(evaluate({ 0, 0 }).NormalizedHeight == 1
+			&& evaluate({ 0, 0 }).Validation.Valid(),
+			"finite extreme height parameters do not overflow the CPU reference");
+		recipe.Stamps = { platform, add };
+		auto expectInvalid = [&](gl::TerrainRecipe invalid, Error error, const char* message) {
+			const auto validation = gl::ValidateTerrainRecipe(invalid, 100);
+			context.Check(validation.Error == error && !validation.Message.empty(), message);
+		};
+		auto invalid = recipe;
+		invalid.Version = 999;
+		expectInvalid(invalid, Error::UnsupportedVersion, "unknown recipe version is rejected without migration");
+		invalid = recipe; invalid.Stamps[1].ID = platform.ID;
+		expectInvalid(invalid, Error::DuplicateID, "duplicate stable stamp IDs are rejected");
+		context.Check(gl::ValidateTerrainRecipe(invalid, 100).StampIndex == 1,
+			"recipe diagnostic identifies the failing stamp index");
+		invalid = recipe; invalid.Stamps[0].ID = 0;
+		expectInvalid(invalid, Error::InvalidID, "zero stamp ID is rejected");
+		invalid = recipe; invalid.Stamps[0].Size.x = 0;
+		expectInvalid(invalid, Error::InvalidSize, "zero stamp dimensions are rejected rather than repaired");
+		invalid = recipe; invalid.Stamps[0].TransitionWidth = -1;
+		expectInvalid(invalid, Error::InvalidTransition, "negative stamp transition width is rejected");
+		invalid = recipe; invalid.Stamps[0].Strength = 1.1f;
+		expectInvalid(invalid, Error::InvalidStrength, "stamp strength outside its contract is rejected");
+		invalid = recipe; invalid.Stamps[0].Height = std::numeric_limits<float>::quiet_NaN();
+		expectInvalid(invalid, Error::NonFiniteParameter, "NaN stamp height is rejected");
+		invalid = recipe; invalid.Stamps[0].Center.x = std::numeric_limits<float>::infinity();
+		expectInvalid(invalid, Error::NonFiniteParameter, "infinite stamp position is rejected");
+		invalid = recipe; invalid.Stamps[0].Shape = static_cast<gl::TerrainStampShape>(77);
+		expectInvalid(invalid, Error::InvalidShape, "unknown stamp shape is rejected");
+		invalid = recipe; invalid.Stamps[0].Operation = static_cast<gl::TerrainStampOperation>(77);
+		expectInvalid(invalid, Error::InvalidOperation, "unknown stamp operation is rejected");
+		invalid = recipe; invalid.Stamps.resize(65);
+		expectInvalid(invalid, Error::TooManyStamps, "stamp capacity is checked before evaluation");
+		context.Check(gl::ValidateTerrainRecipe(recipe, 0).Error == Error::InvalidHeightScale
+			&& gl::ValidateTerrainRecipe(recipe, -1).Error == Error::InvalidHeightScale
+			&& gl::ValidateTerrainRecipe(recipe, std::numeric_limits<float>::infinity()).Error == Error::InvalidHeightScale,
+			"nonempty recipes require a finite positive height scale");
+		context.Check(gl::ValidateTerrainRecipe(recipe, 100, 1).Error == Error::UnsupportedTerrain
+			&& gl::ValidateTerrainRecipe(recipe, 100, 2, false).Error == Error::UnsupportedTerrain,
+			"recipe contract excludes legacy and imported terrain paths");
+		context.Check(gl::EvaluateTerrainRecipe(recipe, { 0, 0 }, -0.1f, 100).Validation.Error == Error::InvalidSample
+			&& gl::EvaluateTerrainRecipe(recipe, { INFINITY, 0 }, 0.2f, 100).Validation.Error == Error::InvalidSample,
+			"CPU reference reports invalid source samples explicitly");
+
+		const auto source = gl::CreateRef<gl::Scene>();
+		auto entity = source->CreateEntity("Recipe Terrain");
+		const auto uuid = entity.GetUUID();
+		auto& spec = entity.AddComponent<gl::TerrainComponent>().Specification;
+		spec.HeightScale = 100;
+		spec.Recipe = recipe;
+		spec.Recipe.Stamps[1].Enabled = false;
+		spec.Recipe.Stamps[1].Center = { -3, 7 };
+		spec.Recipe.Stamps[1].RotationDegrees = 23;
+		spec.Recipe.Stamps[1].Strength = 0.35f;
+		const auto path = directory / "TerrainRecipe.glimmer";
+		context.Check(gl::SceneSerializer(source).Serialize(path.string()), "terrain recipe saves through Scene YAML");
+		std::string yaml;
+		gl::SceneSerializer(source).SerializeToString(yaml);
+		const auto restored = gl::CreateRef<gl::Scene>();
+		const bool loaded = gl::SceneSerializer(restored).Deserialize(path.string());
+		const auto restoredEntity = restored->FindEntityByUUID(uuid);
+		context.Check(loaded && restoredEntity
+			&& SameTerrainRecipe(spec.Recipe, restoredEntity.GetComponent<gl::TerrainComponent>().Specification.Recipe)
+			&& !restoredEntity.GetComponent<gl::TerrainComponent>().Runtime,
+			"recipe round trip preserves order, exact uint64 IDs and all stamp parameters without runtime");
+		auto presetSpec = spec;
+		gl::ApplyTerrainPreset(presetSpec, gl::TerrainPreset::Alpine);
+		context.Check(SameTerrainRecipe(spec.Recipe, presetSpec.Recipe), "terrain preset switching preserves the authoring recipe");
+		const auto runtimeScene = gl::Scene::Copy(source);
+		auto& runtimeTerrain = runtimeScene->FindEntityByUUID(uuid).GetComponent<gl::TerrainComponent>();
+		runtimeTerrain.Specification.Recipe.Stamps[0].Height = 31;
+		context.Check(!runtimeTerrain.Runtime && Near(spec.Recipe.Stamps[0].Height, 60),
+			"Play scene recipe edits do not contaminate the editor recipe");
+		gl::TerrainComponent before = entity.GetComponent<gl::TerrainComponent>();
+		gl::TerrainComponent after = before;
+		std::swap(after.Specification.Recipe.Stamps[0], after.Specification.Recipe.Stamps[1]);
+		gl::EditorCommandHistory history;
+		history.Execute(std::make_unique<gl::ValueEditorCommand<gl::TerrainComponent>>(
+			"Reorder Terrain Stamps", before, after, [source, uuid](const gl::TerrainComponent& value) {
+				source->FindEntityByUUID(uuid).GetComponent<gl::TerrainComponent>() = value; return true;
+			}));
+		context.Check(SameTerrainRecipe(spec.Recipe, after.Specification.Recipe) && history.Undo()
+			&& SameTerrainRecipe(spec.Recipe, before.Specification.Recipe) && history.Redo()
+			&& SameTerrainRecipe(spec.Recipe, after.Specification.Recipe),
+			"component command snapshots undo and redo the whole ordered recipe");
+		history.Undo();
+		auto rejectLoad = [&](std::string badYaml, const char* message) {
+			const auto badPath = directory / "BadTerrainRecipe.glimmer";
+			{ std::ofstream stream(badPath); stream << badYaml; }
+			const auto destination = gl::CreateRef<gl::Scene>();
+			destination->CreateEntity("Existing Entity");
+			std::string original, unchanged;
+			gl::SceneSerializer(destination).SerializeToString(original);
+			const bool rejected = !gl::SceneSerializer(destination).Deserialize(badPath.string());
+			gl::SceneSerializer(destination).SerializeToString(unchanged);
+			context.Check(rejected && original == unchanged, message);
+		};
+		std::string futureYaml = yaml;
+		const auto versionPosition = futureYaml.find("Version: 1", futureYaml.find("Recipe:"));
+		futureYaml.replace(versionPosition, 10, "Version: 999");
+		rejectLoad(futureYaml, "unknown recipe version fails before modifying the destination scene");
+		std::string unknownShapeYaml = yaml;
+		const auto shapePosition = unknownShapeYaml.find("Shape: Rectangle");
+		unknownShapeYaml.replace(shapePosition, 16, "Shape: Unknown");
+		rejectLoad(unknownShapeYaml, "unknown stamp enum fails rather than silently converting to a default");
+		std::string malformedYaml = yaml;
+		const auto sizePosition = malformedYaml.find("Size: [8, 8]");
+		malformedYaml.replace(sizePosition, 12, "Size: [0, 8]");
+		rejectLoad(malformedYaml, "invalid stamp size fails before scene entity creation");
+		std::string savedOutput = "unchanged";
+		spec.Recipe.Version = 999;
+		context.Check(!gl::SceneSerializer(source).SerializeToString(savedOutput) && savedOutput == "unchanged"
+			&& !gl::SceneSerializer(source).Serialize(path.string()),
+			"unsupported in-memory recipe cannot be silently saved as another version");
+		std::ifstream savedFile(path);
+		const std::string retained((std::istreambuf_iterator<char>(savedFile)), std::istreambuf_iterator<char>());
+		context.Check(retained == yaml, "rejected recipe save preserves the existing scene file");
+		spec.Recipe = {};
+		context.Check(gl::SceneSerializer(source).SerializeToString(savedOutput)
+			&& savedOutput.find("Recipe:") == std::string::npos,
+			"empty recipe does not change the legacy Scene YAML representation");
 	}
 
 	void TestTerrainCopyAndTransactions(TestContext& context)
@@ -1868,6 +2078,8 @@ int main(int argc, char** argv)
 	TestLayerTeardown(context);
 	std::cout << "[RUN] Terrain copy and transactions\n";
 	TestTerrainCopyAndTransactions(context);
+	std::cout << "[RUN] Terrain recipe contract and persistence\n";
+	TestTerrainRecipe(context, temporaryDirectory.Path());
 	std::cout << "[RUN] Terrain presets\n";
 	TestTerrainPresets(context);
 	std::cout << "[RUN] Terrain sampling contract\n";

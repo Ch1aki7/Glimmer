@@ -225,6 +225,74 @@ namespace gl {
 			comp.Overrides.Values.AlphaCutoff = glm::clamp(
 				overrides["AlphaCutoff"].as<float>(), 0.0f, 1.0f);
 	}
+	static void SerializeTerrainRecipe(YAML::Emitter& out, const TerrainRecipe& recipe)
+	{
+		if (recipe.Stamps.empty()) return; // Preserve the old scene representation.
+		out << YAML::Key << "Recipe" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Version" << YAML::Value << recipe.Version;
+		out << YAML::Key << "Stamps" << YAML::Value << YAML::BeginSeq;
+		for (const auto& stamp : recipe.Stamps)
+		{
+			out << YAML::BeginMap;
+			out << YAML::Key << "ID" << YAML::Value << stamp.ID;
+			out << YAML::Key << "Enabled" << YAML::Value << stamp.Enabled;
+			out << YAML::Key << "Shape" << YAML::Value
+				<< (stamp.Shape == TerrainStampShape::Ellipse ? "Ellipse" : "Rectangle");
+			out << YAML::Key << "Operation" << YAML::Value
+				<< (stamp.Operation == TerrainStampOperation::Add ? "Add" : "SetHeight");
+			out << YAML::Key << "Center" << YAML::Value << YAML::Flow << YAML::BeginSeq
+				<< stamp.Center.x << stamp.Center.y << YAML::EndSeq;
+			out << YAML::Key << "Size" << YAML::Value << YAML::Flow << YAML::BeginSeq
+				<< stamp.Size.x << stamp.Size.y << YAML::EndSeq;
+			out << YAML::Key << "RotationDegrees" << YAML::Value << stamp.RotationDegrees;
+			out << YAML::Key << "TransitionWidth" << YAML::Value << stamp.TransitionWidth;
+			out << YAML::Key << "Strength" << YAML::Value << stamp.Strength;
+			out << YAML::Key << "Height" << YAML::Value << stamp.Height;
+			out << YAML::EndMap;
+		}
+		out << YAML::EndSeq << YAML::EndMap;
+	}
+
+	static TerrainRecipe DeserializeTerrainRecipe(const YAML::Node& node)
+	{
+		TerrainRecipe recipe;
+		if (!node) return recipe;
+		recipe.Version = node["Version"].as<uint32_t>();
+		if (recipe.Version != TerrainRecipe::CurrentVersion)
+			throw YAML::RepresentationException(node.Mark(), "Unsupported Terrain Recipe version.");
+		const auto stamps = node["Stamps"];
+		if (!stamps || !stamps.IsSequence() || stamps.size() > TerrainRecipe::MaximumStamps)
+			throw YAML::RepresentationException(node.Mark(), "Recipe Stamps must be a sequence with at most 64 entries.");
+		for (const auto stampNode : stamps)
+		{
+			TerrainStamp stamp;
+			stamp.ID = stampNode["ID"].as<uint64_t>();
+			stamp.Enabled = stampNode["Enabled"].as<bool>();
+			const auto shape = stampNode["Shape"].as<std::string>();
+			if (shape != "Ellipse" && shape != "Rectangle")
+				throw YAML::RepresentationException(stampNode.Mark(), "Unknown stamp shape.");
+			stamp.Shape = shape == "Ellipse" ? TerrainStampShape::Ellipse : TerrainStampShape::Rectangle;
+			const auto operation = stampNode["Operation"].as<std::string>();
+			if (operation != "Add" && operation != "SetHeight")
+				throw YAML::RepresentationException(stampNode.Mark(), "Unknown stamp operation.");
+			stamp.Operation = operation == "Add" ? TerrainStampOperation::Add : TerrainStampOperation::SetHeight;
+			auto readVector = [&stampNode](const char* key) {
+				const auto value = stampNode[key];
+				if (!value || !value.IsSequence() || value.size() != 2)
+					throw YAML::RepresentationException(stampNode.Mark(), "Stamp vectors must have exactly two elements.");
+				return glm::vec2(value[0].as<float>(), value[1].as<float>());
+			};
+			stamp.Center = readVector("Center");
+			stamp.Size = readVector("Size");
+			stamp.RotationDegrees = stampNode["RotationDegrees"].as<float>();
+			stamp.TransitionWidth = stampNode["TransitionWidth"].as<float>();
+			stamp.Strength = stampNode["Strength"].as<float>();
+			stamp.Height = stampNode["Height"].as<float>();
+			recipe.Stamps.push_back(stamp);
+		}
+		return recipe;
+	}
+
 	static void SerializeComponent(YAML::Emitter& out, const TerrainComponent& comp)
 	{
 		const auto& spec = comp.Specification;
@@ -279,7 +347,9 @@ namespace gl {
 				? std::clamp(spec.Authoring.StableSlopeDegrees, 0.0f, 80.0f) : 35.0f);
 		out << YAML::Key << "ThermalStrength" << YAML::Value
 			<< spec.Authoring.ThermalStrength;
-		out << YAML::EndMap << YAML::EndMap;
+		out << YAML::EndMap;
+		SerializeTerrainRecipe(out, spec.Recipe);
+		out << YAML::EndMap;
 	}
 
 	static void DeserializeComponent(const YAML::Node& node, TerrainComponent& comp)
@@ -366,6 +436,11 @@ namespace gl {
 				authoring.ThermalStrength = glm::clamp(
 					authoringNode["ThermalStrength"].as<float>(), 0.0f, 0.5f);
 		}
+		spec.Recipe = DeserializeTerrainRecipe(node["Recipe"]);
+		const auto validation = ValidateTerrainRecipe(spec.Recipe,
+			spec.HeightScale, spec.DataVersion, spec.Procedural);
+		if (!validation.Valid())
+			throw YAML::RepresentationException(node.Mark(), validation.Message);
 		comp.Runtime.reset();
 	}
 	static void SerializeComponent(YAML::Emitter& out, const DirectionalLightComponent& comp)
@@ -486,6 +561,20 @@ namespace gl {
 	{
 		if (!m_Scene)
 			return false;
+
+		// Validate before emitting anything, including otherwise empty/future recipes.
+		for (const auto entity : m_Scene->m_Registry.view<TerrainComponent>())
+		{
+			const auto& spec = m_Scene->m_Registry.get<TerrainComponent>(entity).Specification;
+			const auto validation = ValidateTerrainRecipe(spec.Recipe,
+				spec.HeightScale, spec.DataVersion, spec.Procedural);
+			if (!validation.Valid())
+			{
+				GL_CORE_ERROR("Could not save Terrain Recipe: {0} (stamp index {1})",
+					validation.Message, validation.StampIndex);
+				return false;
+			}
+		}
 
 		YAML::Emitter out;
 		out << YAML::BeginMap;
@@ -643,6 +732,16 @@ namespace gl {
 			const uint32_t version = data["Version"] ? data["Version"].as<uint32_t>() : 1;
 
 			auto entities = data["Entities"];
+			// Recipe failures must not add any entities to the destination scene.
+			for (const auto entityNode : entities)
+			{
+				const auto comps = entityNode["Components"];
+				if (comps && comps["TerrainComponent"])
+				{
+					TerrainComponent candidate;
+					DeserializeComponent(comps["TerrainComponent"], candidate);
+				}
+			}
 			for (auto entityNode : entities)
 			{
 				if (!entityNode["Components"]) continue;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Glimmer/Asset/Asset.h"
+#include "Glimmer/Terrain/TerrainRecipe.h"
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
@@ -73,6 +74,7 @@ namespace gl {
 		AssetHandle TerrainMaterialHandle{ 0 };
 		TerrainNoiseSettings Noise;
 		TerrainAuthoringSettings Authoring;
+		TerrainRecipe Recipe;
 	};
 
 	inline float ClampTerrainWorldSize(float worldSize)
