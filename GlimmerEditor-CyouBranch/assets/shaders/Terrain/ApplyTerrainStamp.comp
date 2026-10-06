@@ -4,6 +4,8 @@ layout(r32f, binding = 0) readonly uniform image2D u_InputHeight;
 layout(r32f, binding = 1) writeonly uniform image2D u_OutputHeight;
 // One invocation owns one flag; Dispatch barriers preserve prior clipping marks.
 layout(r32f, binding = 2) uniform image2D u_ClipMask;
+// A node has one owner per Dispatch; max union is independent of height and order.
+layout(r32f, binding = 3) uniform image2D u_ProtectionMap;
 uniform int u_Shape;
 uniform int u_Operation;
 uniform vec2 u_Center;
@@ -42,6 +44,8 @@ void main()
         weight = 1.0lf - t * t * (3.0lf - 2.0lf * t);
     }
     weight *= double(u_Strength);
+    float protection = max(imageLoad(u_ProtectionMap, pixel).r, float(weight));
+    imageStore(u_ProtectionMap, pixel, vec4(protection));
     float result = source;
     if (weight > 0.0lf)
     {

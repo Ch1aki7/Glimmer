@@ -68,6 +68,7 @@ namespace gl {
 			m_AnalysisMap.swap(candidate.m_AnalysisMap);
 			m_MaterialWeightMap.swap(candidate.m_MaterialWeightMap);
 			m_RecipeClipMask.swap(candidate.m_RecipeClipMask);
+			m_ProtectionMap.swap(candidate.m_ProtectionMap);
 			m_LastDispatchCount = candidate.m_LastDispatchCount;
 			m_DataVersion = candidate.m_DataVersion;
 			m_HasGeneratedSurface = true;
@@ -147,6 +148,8 @@ namespace gl {
 				mask.Usage = TextureUsage::Sampled | TextureUsage::Storage | TextureUsage::Readback;
 				m_RecipeClipMask = Texture2D::Create(mask);
 				m_RecipeClipMask->Clear(glm::vec4(0));
+				m_ProtectionMap = Texture2D::Create(mask);
+				m_ProtectionMap->Clear(glm::vec4(0));
 			}
 			const double angle = std::remainder(double(stamp.RotationDegrees), 360.0) * 0.017453292519943295;
 			m_StampShader->Bind();
@@ -163,6 +166,7 @@ namespace gl {
 			m_StampShader->BindImageTexture(0, m_HeightGrid.ReadTexture()->GetRendererID(), 0, ImageAccess::Read, ImageFormat::R32F);
 			m_StampShader->BindImageTexture(1, m_HeightGrid.WriteTexture()->GetRendererID(), 0, ImageAccess::Write, ImageFormat::R32F);
 			m_StampShader->BindImageTexture(2, m_RecipeClipMask->GetRendererID(), 0, ImageAccess::ReadWrite, ImageFormat::R32F);
+			m_StampShader->BindImageTexture(3, m_ProtectionMap->GetRendererID(), 0, ImageAccess::ReadWrite, ImageFormat::R32F);
 			Dispatch2D(m_StampShader);
 			ComputeShader::Barrier();
 			m_HeightGrid.Swap();
@@ -182,6 +186,7 @@ namespace gl {
 		m_HeightGrid.Resize(width, height);
 		CreateDerivedTextures();
 		m_RecipeClipMask.reset();
+		m_ProtectionMap.reset();
 		m_HasGeneratedSurface = false;
 	}
 
@@ -421,6 +426,7 @@ namespace gl {
 				if (!condition) throw std::runtime_error(message);
 			};
 			float maximumDifference = 0;
+			float maximumProtectionDifference = 0;
 			for (uint32_t resolution : { 65u, 129u })
 			{
 				SimulationGridSpecification grid;
@@ -429,9 +435,16 @@ namespace gl {
 				TerrainSpecification spec;
 				spec.Authoring.EnableThermalErosion = false;
 				require(generator.Generate(spec, spec.WorldSize), "Empty recipe generation failed.");
+				require(!generator.GetProtectionMap(), "Empty recipe allocates a protection map.");
 				const auto baseHash = generator.ValidateOutputs().Hash;
 				const auto baseDispatches = generator.GetLastDispatchCount();
 				std::vector<float> base(size_t(grid.Width) * grid.Height), actual(base.size());
+				auto readProtection = [&]() {
+					std::vector<float> values(base.size(), 0.0f);
+					if (generator.GetProtectionMap()) generator.GetProtectionMap()->GetImageData(values.data(), uint32_t(values.size() * sizeof(float)));
+					return values;
+				};
+				std::vector<float> unionReference;
 				generator.GetHeightMap()->GetImageData(base.data(), uint32_t(base.size() * sizeof(float)));
 				TerrainStamp platform;
 				platform.ID = 1; platform.Shape = TerrainStampShape::Rectangle;
@@ -448,12 +461,15 @@ namespace gl {
 				TerrainStamp disabled = platform;
 				disabled.ID = 4; disabled.Enabled = false;
 				TerrainStamp zero = platform; zero.ID = 5; zero.Strength = 0;
-				for (int scenario = 0; scenario < 5; ++scenario)
+				for (int scenario = 0; scenario < 8; ++scenario)
 				{
 					if (scenario == 0) spec.Recipe.Stamps = { platform };
 					if (scenario == 1) spec.Recipe.Stamps = { platform, crater, clip, disabled, zero };
 					if (scenario == 2) spec.Recipe.Stamps = { crater, platform };
 					if (scenario == 3) spec.Recipe.Stamps = { disabled, zero };
+					if (scenario == 5) spec.Recipe.Stamps = { clip, crater, platform, disabled, zero };
+					if (scenario == 6) { auto noHeightChange = platform; noHeightChange.Operation = TerrainStampOperation::Add; noHeightChange.Height = 0; spec.Recipe.Stamps = { noHeightChange }; }
+					if (scenario == 7) { auto fractional = platform; fractional.Strength = 0.375f; spec.Recipe.Stamps = { fractional }; }
 					if (scenario == 4)
 					{
 						spec.Recipe.Stamps.clear();
@@ -469,6 +485,11 @@ namespace gl {
 					const auto generated = generator.ValidateOutputs();
 					require(generated.Valid, "Stamp height/derived maps are invalid.");
 					generator.GetHeightMap()->GetImageData(actual.data(), uint32_t(actual.size() * sizeof(float)));
+					const auto protection = readProtection();
+					if (scenario == 1) unionReference = protection;
+					if (scenario == 5) require(protection == unionReference, "Protection max union depends on operation order.");
+					if (scenario == 6) require(generated.Hash == baseHash && std::any_of(protection.begin(), protection.end(), [](float p) { return p > 0; }),
+						"Zero height delta must protect its footprint without altering height/derived maps.");
 					uint64_t expectedClipped = 0;
 					TerrainSamplingGrid xGrid(grid.Width, spec.WorldSize, TerrainSampleLayout::EndpointNodes);
 					TerrainSamplingGrid zGrid(grid.Height, spec.WorldSize, TerrainSampleLayout::EndpointNodes);
@@ -480,29 +501,43 @@ namespace gl {
 							require(expected.Validation.Valid(), "CPU stamp reference failed.");
 							expectedClipped += expected.Clipped;
 							maximumDifference = std::max(maximumDifference, std::abs(actual[index] - expected.NormalizedHeight));
+							require(std::isfinite(protection[index]) && protection[index] >= 0 && protection[index] <= 1, "Protection node is outside [0, 1].");
+							maximumProtectionDifference = std::max(maximumProtectionDifference, std::abs(protection[index] - expected.ProtectionWeight));
+							const auto residual = EvaluateProtectedTerrainResidual((x % 2) ? 10.0f : -10.0f, expected.ProtectionWeight);
+							const float gpuMaskResidual = ((x % 2) ? 10.0f : -10.0f) * (1.0f - protection[index]);
+							require(residual.Validation.Valid() && std::abs(residual.Residual - gpuMaskResidual) <= 1e-4f,
+								"GPU protection does not match analytic residual attenuation.");
 						}
 					require(maximumDifference <= 1e-5f, "CPU/GPU stamp height exceeds normalized tolerance 1e-5.");
+					require(maximumProtectionDifference <= 1e-5f, "CPU/GPU protection exceeds tolerance 1e-5.");
 					require(generator.ReadRecipeClippedNodeCount() == expectedClipped, "GPU clipping diagnostic differs from CPU.");
 					if (scenario == 3)
 						require(generated.Hash == baseHash && generator.GetLastDispatchCount() == baseDispatches
-							&& !generator.GetRecipeClipMask(), "Disabled/zero-strength stamps alter the old path.");
+							&& !generator.GetRecipeClipMask() && !generator.GetProtectionMap(), "Disabled/zero-strength stamps alter the old path.");
 					require(generator.Generate(spec, spec.WorldSize) && generator.ValidateOutputs().Hash == generated.Hash,
 						"Stamp generation is not deterministic.");
+					require(readProtection() == protection, "Protection generation is not deterministic.");
 					const auto publishedHeight = generator.GetHeightMap();
 					const auto publishedNormal = generator.GetNormalSlopeMap();
 					const auto publishedMask = generator.GetRecipeClipMask();
+					const auto publishedProtection = generator.GetProtectionMap();
 					spec.Recipe.Version = 999;
 					require(!generator.Generate(spec, spec.WorldSize) && generator.GetHeightMap() == publishedHeight
 						&& generator.GetNormalSlopeMap() == publishedNormal && generator.GetRecipeClipMask() == publishedMask
+						&& generator.GetProtectionMap() == publishedProtection && readProtection() == protection
 						&& generator.ValidateOutputs().Hash == generated.Hash, "Rejected recipe changes the published surface.");
 					spec.Recipe.Version = TerrainRecipe::CurrentVersion;
 				}
 				const auto publishedHash = generator.ValidateOutputs().Hash;
+				const auto publishedProtectionMap = generator.GetProtectionMap();
+				const auto publishedProtectionValues = readProtection();
 				const auto originalStampShader = generator.m_StampShader;
 				generator.m_StampShader = ComputeShader::Create((std::filesystem::temp_directory_path()
 					/ "Glimmer-Missing-Stamp-Shader.comp").string(), false);
 				require(!generator.Generate(spec, spec.WorldSize) && generator.ValidateOutputs().Hash == publishedHash,
 					"Missing stamp shader modifies the published surface.");
+				require(generator.GetProtectionMap() == publishedProtectionMap && readProtection() == publishedProtectionValues,
+					"Missing stamp shader modifies protection.");
 				generator.m_StampShader = originalStampShader;
 				const auto invalidShaderPath = std::filesystem::temp_directory_path()
 					/ ("Glimmer-Invalid-Stamp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".comp");
@@ -511,6 +546,8 @@ namespace gl {
 				std::filesystem::remove(invalidShaderPath);
 				require(!generator.Generate(spec, spec.WorldSize) && generator.ValidateOutputs().Hash == publishedHash,
 					"Invalid stamp shader modifies the published surface.");
+				require(generator.GetProtectionMap() == publishedProtectionMap && readProtection() == publishedProtectionValues,
+					"Invalid stamp shader modifies protection.");
 				generator.m_StampShader = originalStampShader;
 				require(generator.Generate(spec, spec.WorldSize), "Generation cannot recover after shader failure.");
 				// Simulation consumes the composed static height and resets to that initial surface.
@@ -530,7 +567,8 @@ namespace gl {
 			result.Valid = true;
 			std::ostringstream message;
 			message << "65x81/129x145 CPU/GPU, 1/3/64 stamps, order, clipping, determinism, failure retention and simulation initial/Reset PASS; max normalized difference="
-				<< std::scientific << maximumDifference;
+				<< std::scientific << maximumDifference << "; protection max union/zero delta/fractional strength/residual/retention PASS; max protection difference="
+				<< maximumProtectionDifference;
 			result.Message = message.str();
 		}
 		catch (const std::exception& error) { result.Message = error.what(); }

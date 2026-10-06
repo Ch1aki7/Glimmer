@@ -41,6 +41,7 @@ namespace gl {
 		Ref<Texture2D> NormalSlopeMap;
 		Ref<Texture2D> AnalysisMap;
 		Ref<Texture2D> MaterialWeightMap;
+		Ref<Texture2D> ProtectionMap; // Static recipe output; simulation does not own or update it.
 		AssetHandle LoadedHeightMapHandle{ 0 };
 		AssetHandle LoadedGenerationShaderHandle{ 0 };
 		AssetHandle LoadedErosionShaderHandle{ 0 };

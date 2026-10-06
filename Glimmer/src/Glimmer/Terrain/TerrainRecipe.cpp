@@ -6,6 +6,19 @@
 #include <unordered_set>
 
 namespace gl {
+	TerrainResidualEvaluationResult EvaluateProtectedTerrainResidual(float residual, float protectionWeight)
+	{
+		TerrainResidualEvaluationResult result;
+		if (!std::isfinite(residual) || !std::isfinite(protectionWeight)
+			|| protectionWeight < 0.0f || protectionWeight > 1.0f)
+		{
+			result.Validation = { TerrainRecipeError::InvalidSample,
+				std::numeric_limits<size_t>::max(), "Residual must be finite and protection weight in [0, 1]." };
+			return result;
+		}
+		result.Residual = static_cast<float>(double(residual) * (1.0 - double(protectionWeight)));
+		return result;
+	}
 
 	TerrainRecipeValidationResult ValidateTerrainRecipe(const TerrainRecipe& recipe,
 		float heightScale, uint32_t dataVersion, bool procedural)
@@ -96,6 +109,7 @@ namespace gl {
 				weight = 1.0 - t * t * (3.0 - 2.0 * t);
 			}
 			weight *= stamp.Strength;
+			result.ProtectionWeight = std::max(result.ProtectionWeight, static_cast<float>(weight));
 			if (weight == 0.0) continue;
 			const double composed = stamp.Operation == TerrainStampOperation::Add
 				? height + weight * stamp.Height : height + weight * (double(stamp.Height) - height);

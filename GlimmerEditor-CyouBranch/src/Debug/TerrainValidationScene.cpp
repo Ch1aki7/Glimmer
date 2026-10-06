@@ -164,6 +164,9 @@ namespace gl {
 			const auto oldHeight = terrain.Runtime->HeightMap, oldNormal = terrain.Runtime->NormalSlopeMap,
 				oldAnalysis = terrain.Runtime->AnalysisMap, oldWeights = terrain.Runtime->MaterialWeightMap;
 			const auto oldMesh = terrain.Runtime->Mesh;
+			const auto oldProtection = terrain.Runtime->ProtectionMap;
+			require(oldProtection && oldProtection->GetWidth() == 145 && oldProtection == terrain.Runtime->Generator->GetProtectionMap(),
+				"Resize does not publish matching static protection.");
 			const auto oldHydrology = terrain.Runtime->GPUHydrology.get();
 			const auto oldVersion = terrain.Runtime->GenerationVersion;
 			for (int failure = 0; failure < 4; ++failure)
@@ -179,6 +182,7 @@ namespace gl {
 				require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GenerationError.empty()
 					&& terrain.Runtime->HeightMap == oldHeight && terrain.Runtime->NormalSlopeMap == oldNormal
 					&& terrain.Runtime->AnalysisMap == oldAnalysis && terrain.Runtime->MaterialWeightMap == oldWeights
+					&& terrain.Runtime->ProtectionMap == oldProtection
 					&& terrain.Runtime->Mesh == oldMesh && terrain.Runtime->GPUHydrology.get() == oldHydrology
 					&& terrain.Runtime->GenerationVersion == oldVersion
 					&& TerrainRenderer::GetSurfaceSpecification(terrain).WorldSize == 1536, "Failed edit changes published surface/state.");
@@ -195,6 +199,7 @@ namespace gl {
 			TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology && !terrain.Runtime->GPUClimate
 				&& !terrain.Runtime->GPUEnvironment && !terrain.Runtime->NormalSlopeMap
+				&& !terrain.Runtime->ProtectionMap
 				&& !TerrainRenderer::GetSurfaceSpecification(terrain).Procedural, "Successful imported source retains old procedural resources.");
 			terrain.Specification = published; TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GPUHydrology, "Procedural source cannot recover after import."); initialAndReset();

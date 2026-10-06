@@ -4671,13 +4671,13 @@ Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与
 
 ## Terrain GPU 印章合成与失败回退
 
-程序化 Data v2 现在按 `Recipe.Stamps` 顺序执行 GPU 印章。完整链路为 GenerateFBM → Thermal Erosion → ApplyTerrainStamp × 有效操作数 → DeriveTerrainMaps。空列表维持旧路径；禁用或零强度操作不 Dispatch，也不分配印章裁切图。每个有效操作独占一次 Height Ping-Pong，Barrier 后交换，最终高度统一派生法线/坡度、分析与四层材质权重，再作为水文初值。运行时侵蚀仍可改变印章结果，当前没有保护遮罩。
+程序化 Data v2 现在按 `Recipe.Stamps` 顺序执行 GPU 印章。完整链路为 GenerateFBM → Thermal Erosion → ApplyTerrainStamp × 有效操作数 → DeriveTerrainMaps。空列表维持旧路径；禁用或零强度操作不 Dispatch，也不分配印章遮罩。每个有效操作独占一次 Height Ping-Pong，Barrier 后交换，最终高度统一派生法线/坡度、分析与四层材质权重，再作为水文初值。独立保护遮罩已输出，但运行时侵蚀尚未消费它，仍可改变印章结果。
 
 宿主可写入 `terrain.Specification.Recipe.Stamps` 后调用 `TerrainRenderer::Invalidate(terrain)`；编辑器可通过 Inspector 的 Terrain Stamps 编辑同一规格。引擎只处理普通几何操作，平台的任务含义、地点选择与玩法规则由游戏宿主负责。印章 Shader 默认从生成 Shader 所在目录读取 `ApplyTerrainStamp.comp`，保持该文件与其他 Terrain Compute 一起部署。
 
 `TerrainGenerator::Generate` 返回 bool，失败原因由 `GetLastGenerationError()` 提供。配方或 Shader 校验失败时保留整套已发布高度/派生资源；首次失败没有可绘制结果。Renderer 还保留已发布规格，Color/Shadow/Water 使用同一尺寸、高度与采样版本，防止失败的新参数重新解释旧纹理。`TerrainRuntime::GenerationError` 保留诊断，显式 Invalidate 或成功 Shader 热重载重试。此回退针对受控数据/Shader 失败，不包含设备丢失恢复。
 
-`GetRecipeClipMask()` 返回 R32F 裁切标记，节点值 1 表示任意操作曾越过合法高度范围。普通帧不读回；`ReadRecipeClippedNodeCount()` 是显式同步诊断，会等待 GPU。完整候选发布在重建时额外分配 Height 双缓冲与三张派生图（约 32 字节/节点），有效印章额外增加 4 字节/节点裁切图；分辨率/Shader 更换期间还可能同时保留待发布生成器。当前没有局部脏区或印章批量优化，64 操作上限不代表性能预算已验收。
+`GetRecipeClipMask()` 返回 R32F 裁切标记，节点值 1 表示任意操作曾越过合法高度范围。普通帧不读回；`ReadRecipeClippedNodeCount()` 是显式同步诊断，会等待 GPU。完整候选发布在重建时额外分配 Height 双缓冲与三张派生图（约 32 字节/节点），有效印章额外增加裁切图与保护图各 4 字节/节点，合计约 40 字节/节点，不含模拟、Mip 或驱动开销；分辨率/Shader 更换期间还可能同时保留待发布生成器。当前没有局部脏区或印章批量优化，64 操作上限不代表性能预算已验收。
 
 真实 GPU 验证使用现有固定视角 Fixture，设置 `GLIMMER_TERRAIN_CAPTURE_PATH` 后启动编辑器；`GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 加入中性平台/盆地，`GLIMMER_TERRAIN_RECIPE_VALIDATE=1` 运行 CPU/GPU 数值 Contract，`GLIMMER_TERRAIN_VALIDATE=1` 运行原采样/派生与重复生成验证。测试模式执行同步读回，普通编辑流程不执行这些 Contract。
 
@@ -4689,8 +4689,28 @@ Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与
 
 增删、启用、形状/操作切换与重排各提交一条命令；连续参数从控件激活到释放合并为一条 Undo/Redo 命令。命令保存整份规格快照，应用时写回规格并 Invalidate，保留 Runtime 用于失败回退。修改 Height Resolution、Mesh Resolution 和 Procedural 也使用失效重建。Inspector 展示 Recipe rejected 或 Generation failed 的具体原因；修复参数后重新生成，Regenerate 可显式重试。导入高度图缺资产时保留旧表面，成功导入清理旧模拟资源。
 
-DebugPanel 的 Terrain Overview 提供 Terrain Gray Preview，使用中性材质与几何法线观察形状、过渡和阴影；它不修改配方、材质资产或模拟。普通材质、水面与 LOD 仍消费同一已发布地形规格。保护遮罩和持续动态保护尚未实现，静态创作检查保持模拟暂停。
+DebugPanel 的 Terrain Overview 提供 Terrain Gray Preview，使用中性材质与几何法线观察形状、过渡和阴影；它不修改配方、材质资产或模拟。普通材质、水面与 LOD 仍消费同一已发布地形规格。保护遮罩显示和持续动态保护尚未实现，静态创作检查保持模拟暂停。
 
 手动打开预置验证场景只需设置 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 后启动编辑器，无需设置截图或 Benchmark 参数，窗口会保持运行；从 Hierarchy 选择 Terrain 即可编辑。`GLIMMER_TERRAIN_GRAY_PREVIEW=1` 可默认启用灰模。`GLIMMER_TERRAIN_RECIPE_WATER_FIXTURE=1` 为该验证场景注入与组合高度匹配的静止水深，属于编辑器验证数据；配方重建会重置这些水量。`GLIMMER_TERRAIN_RECIPE_INTEGRATION=1` 执行隔离 ImGui 实际控件及 GPU 编辑闭环测试；配合 `GLIMMER_TERRAIN_CAPTURE_PATH` 捕获五帧后退出，测试包含显式同步读回，普通编辑流程不执行。集成测试与 `GLIMMER_TERRAIN_VALIDATE` / `GLIMMER_TERRAIN_RECIPE_VALIDATE` 分开运行，避免每次编辑重复整套数值 Contract。
 
 2026-10-06 的 VS2026 Debug x64 全解决方案构建与 243 条无窗口 PASS 输出通过。由于旧编辑器占用标准 exe，本次构建位于本地 `bin/P17-A3-review/`，保留原窗口；测试使用完全链接产物。隔离 ImGui 上下文直接激活实际 Add/Enable/Up-Down/Remove/Clear 和连续高度控件，Undo/Redo 通过；GPU 编辑闭环覆盖新增/拖动/重排、保存重载、Play 副本、129→145 分辨率与 WorldSize 修改、非法规格/缺 Shader/首次失败、旧资源/版本/模拟状态保留与恢复，以及从静态组合高度初始化和修改模拟高度后的 Reset。固定视角灰模、材质和静止水面已捕获并检查；空配方 Data v1/v2 图像与 A2 基线逐字节一致。
+
+## Terrain 保护权重输出
+
+印章现在同时输出独立保护权重 `P∈[0,1]`：轮廓与外侧过渡权重乘 Strength，再按 `P=max(P,w)` 合并。保护图与裁切标记不同，不取决于高度是否变化或越界；Add 高度为 0 也可保护其轮廓。重排仍影响高度合成，但不改变保护并集。禁用、零强度与空列表均不贡献保护。
+
+```cpp
+auto sample = gl::EvaluateTerrainRecipe(spec.Recipe, localXZ, baseHeight, spec.HeightScale);
+if (sample.Validation.Valid()) {
+    auto detail = gl::EvaluateProtectedTerrainResidual(residual, sample.ProtectionWeight);
+    if (detail.Validation.Valid()) {
+        // detail.Residual = residual * (1 - P)，这里只计算解析参考。
+    }
+}
+```
+
+GPU `TerrainGenerator::GetProtectionMap()` 与 `TerrainRuntime::ProtectionMap` 提供 R32F 纹理，采用与高度一致的端点节点、Nearest/ClampToEdge。没有有效印章时为空，消费方按全零保护解释。保护图在原印章 Dispatch 内合并，无新增 Dispatch；与高度/派生图一起发布，受控生成失败保留旧图，成功导入高度图清空引用。Runtime 引用对应已发布 GenerationVersion，配方 YAML 无新增字段，版本仍为 1。
+
+保护权重、合成与解析抑制由引擎拥有；游戏宿主负责决定哪些位置需要印章及其玩法含义。目前没有实际高频细节或侵蚀保护消费者，也没有编辑器遮罩预览或 CPU 地表快照。普通帧没有新增同步回读；数值验证复用 `GLIMMER_TERRAIN_RECIPE_VALIDATE=1`，编辑闭环复用 `GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`，两者分开运行。
+
+2026-10-06 的 VS2026 Debug x64 全解决方案构建与 255 条无窗口 PASS 输出通过，完全链接产物位于本地 `bin/P17-B1-review/`，原编辑器窗口保留。Intel Iris Xe 的 65×81/129×145 GPU Contract 覆盖 max 并集、重排、零高度增量、分数强度、解析正负残差、确定性与失败后引用/内容保留；保护权重最大差 `5.960464e-8`，高度最大差仍为 `6.258488e-7`。编辑闭环中的保护图 Resize/失败保留/导入清理通过；原采样/派生 Contract、表面哈希与空配方 Data v1/v2 逐字节图像基线保持。

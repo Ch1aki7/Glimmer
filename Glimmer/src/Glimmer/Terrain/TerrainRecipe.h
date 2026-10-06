@@ -2,7 +2,6 @@
 
 #include <glm/glm.hpp>
 #include <cstddef>
-#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -57,7 +56,17 @@ namespace gl {
 		TerrainRecipeValidationResult Validation;
 		float NormalizedHeight = 0.0f;
 		bool Clipped = false;
+		float ProtectionWeight = 0.0f; // max of enabled stamp weights; independent of height/clipping.
 	};
+
+	struct TerrainResidualEvaluationResult
+	{
+		TerrainRecipeValidationResult Validation;
+		float Residual = 0.0f;
+	};
+
+	// Reference attenuation only; does not modify static height or simulation state.
+	TerrainResidualEvaluationResult EvaluateProtectedTerrainResidual(float residual, float protectionWeight);
 
 	TerrainRecipeValidationResult ValidateTerrainRecipe(const TerrainRecipe& recipe,
 		float heightScale, uint32_t dataVersion = 2, bool procedural = true);

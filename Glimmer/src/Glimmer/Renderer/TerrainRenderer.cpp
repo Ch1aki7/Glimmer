@@ -323,6 +323,7 @@ namespace gl {
 			runtime.NormalSlopeMap = runtime.Generator->GetNormalSlopeMap();
 			runtime.AnalysisMap = runtime.Generator->GetAnalysisMap();
 			runtime.MaterialWeightMap = runtime.Generator->GetMaterialWeightMap();
+			runtime.ProtectionMap = runtime.Generator->GetProtectionMap();
 			if (!runtime.RecipeValidationComplete && ShouldValidateRecipe())
 			{
 				const auto contract = TerrainGenerator::ValidateRecipeContract(
@@ -348,6 +349,7 @@ namespace gl {
 				runtime.NormalSlopeMap = runtime.Generator->GetNormalSlopeMap();
 				runtime.AnalysisMap = runtime.Generator->GetAnalysisMap();
 				runtime.MaterialWeightMap = runtime.Generator->GetMaterialWeightMap();
+				runtime.ProtectionMap = runtime.Generator->GetProtectionMap();
 				runtime.LastGenerationDispatchCount =
 					runtime.Generator->GetLastDispatchCount();
 				++runtime.GenerationVersion;
@@ -388,6 +390,7 @@ namespace gl {
 			runtime.NormalSlopeMap.reset();
 			runtime.AnalysisMap.reset();
 			runtime.MaterialWeightMap.reset();
+			runtime.ProtectionMap.reset();
 			runtime.GPUEnvironment.reset();
 			runtime.GPUClimate.reset();
 			runtime.GPUHydrology.reset();

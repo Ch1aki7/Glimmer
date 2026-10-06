@@ -30,6 +30,7 @@ namespace gl {
 		const std::string& GetLastGenerationError() const { return m_LastGenerationError; }
 		bool HasGeneratedSurface() const { return m_HasGeneratedSurface; }
 		const Ref<Texture2D>& GetRecipeClipMask() const { return m_RecipeClipMask; }
+		const Ref<Texture2D>& GetProtectionMap() const { return m_ProtectionMap; }
 		uint64_t ReadRecipeClippedNodeCount() const; // Explicit diagnostic readback only.
 		void DeriveMapsFromHeight(const Ref<Texture2D>& heightMap,
 			float heightScale, float worldSize);
@@ -76,6 +77,7 @@ namespace gl {
 		std::string m_StampShaderPath;
 		std::string m_LastGenerationError;
 		Ref<Texture2D> m_RecipeClipMask;
+		Ref<Texture2D> m_ProtectionMap;
 		bool m_HasGeneratedSurface = false;
 		Ref<Texture2D> m_NormalSlopeMap;
 		Ref<Texture2D> m_AnalysisMap;

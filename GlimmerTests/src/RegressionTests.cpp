@@ -698,6 +698,65 @@ namespace {
 		}
 	}
 
+	void TestTerrainProtection(TestContext& context)
+	{
+		gl::TerrainRecipe recipe;
+		auto sample = [&](glm::vec2 position) { return gl::EvaluateTerrainRecipe(recipe, position, 0.2f, 100); };
+		context.Check(sample({ 0, 0 }).Validation.Valid() && sample({ 0, 0 }).ProtectionWeight == 0,
+			"empty recipe has zero protection without changing the base-height contract");
+		gl::TerrainStamp platform;
+		platform.ID = 1; platform.Shape = gl::TerrainStampShape::Rectangle;
+		platform.Size = { 10, 10 }; platform.TransitionWidth = 4;
+		platform.Height = 60; platform.Strength = 0.4f;
+		recipe.Stamps = { platform };
+		context.Check(Near(sample({ 0, 0 }).ProtectionWeight, 0.4f)
+			&& Near(sample({ 5, 0 }).ProtectionWeight, 0.4f)
+			&& Near(sample({ 7, 0 }).ProtectionWeight, 0.2f) && sample({ 9, 0 }).ProtectionWeight == 0,
+			"protection uses core, smooth outside transition and strength in local units");
+		recipe.Stamps[0].Shape = gl::TerrainStampShape::Ellipse;
+		context.Check(Near(sample({ 7, 0 }).ProtectionWeight, 0.2f) && sample({ 9, 0 }).ProtectionWeight == 0,
+			"ellipse protection reuses the radial weight contract");
+		recipe.Stamps[0] = platform;
+		recipe.Stamps[0].Size = { 10, 4 }; recipe.Stamps[0].RotationDegrees = 90;
+		recipe.Stamps[0].Center = { 8, -3 };
+		context.Check(Near(sample({ 8, 1 }).ProtectionWeight, 0.4f) && Near(sample({ 12, -3 }).ProtectionWeight, 0.2f),
+			"protection follows translated and rotated local stamp coordinates");
+		auto add = platform; add.ID = 2; add.Strength = 0.8f;
+		add.Operation = gl::TerrainStampOperation::Add; add.Height = 10;
+		recipe.Stamps = { platform, add };
+		const auto ordered = sample({ 0, 0 });
+		std::swap(recipe.Stamps[0], recipe.Stamps[1]);
+		const auto reversed = sample({ 0, 0 });
+		context.Check(Near(ordered.ProtectionWeight, 0.8f) && ordered.ProtectionWeight == reversed.ProtectionWeight
+			&& !Near(ordered.NormalizedHeight, reversed.NormalizedHeight),
+			"protection combines with max rather than sum and is order-independent while height remains ordered");
+		recipe.Stamps[0].Enabled = false; recipe.Stamps[1].Strength = 0;
+		context.Check(sample({ 0, 0 }).ProtectionWeight == 0, "disabled and zero-strength operations contribute no protection");
+		add.Strength = 1; add.Height = 0; recipe.Stamps = { add };
+		context.Check(sample({ 0, 0 }).ProtectionWeight == 1 && sample({ 0, 0 }).NormalizedHeight == 0.2f
+			&& !sample({ 0, 0 }).Clipped, "zero height delta protects a footprint independently of height changes and clipping");
+		recipe.Stamps[0].Height = std::numeric_limits<float>::max();
+		context.Check(sample({ 0, 0 }).ProtectionWeight == 1 && sample({ 0, 0 }).Clipped,
+			"height clipping does not change protection union semantics");
+		const auto core = gl::EvaluateProtectedTerrainResidual(12, 1);
+		const auto transition = gl::EvaluateProtectedTerrainResidual(-12, 0.25f);
+		const auto outside = gl::EvaluateProtectedTerrainResidual(12, 0);
+		context.Check(core.Validation.Valid() && core.Residual == 0 && transition.Validation.Valid()
+			&& transition.Residual == -9 && outside.Validation.Valid() && outside.Residual == 12,
+			"analytic residual suppression is zero in protected cores, partial in transitions and unchanged outside");
+		context.Check(gl::EvaluateProtectedTerrainResidual(std::numeric_limits<float>::max(), 0).Residual == std::numeric_limits<float>::max()
+			&& gl::EvaluateProtectedTerrainResidual(-std::numeric_limits<float>::max(), 0.5f).Validation.Valid(),
+			"finite extreme signed residuals remain finite under valid protection");
+		context.Check(!gl::EvaluateProtectedTerrainResidual(INFINITY, 0).Validation.Valid()
+			&& !gl::EvaluateProtectedTerrainResidual(1, NAN).Validation.Valid()
+			&& !gl::EvaluateProtectedTerrainResidual(1, -0.1f).Validation.Valid()
+			&& !gl::EvaluateProtectedTerrainResidual(1, 1.1f).Validation.Valid(),
+			"residual attenuation explicitly rejects non-finite input and out-of-range protection");
+		recipe.Version = 999;
+		context.Check(!sample({ 0, 0 }).Validation.Valid() && sample({ 0, 0 }).ProtectionWeight == 0,
+			"invalid recipe does not expose partially evaluated protection");
+	}
+
 	void TestTerrainRecipeEditor(TestContext& context)
 	{
 		gl::TerrainSpecification spec;
@@ -2139,6 +2198,7 @@ int main(int argc, char** argv)
 	std::cout << "[RUN] Terrain recipe contract and persistence\n";
 	TestTerrainRecipe(context, temporaryDirectory.Path());
 	TestTerrainRecipeEditor(context);
+	TestTerrainProtection(context);
 	std::cout << "[RUN] Terrain presets\n";
 	TestTerrainPresets(context);
 	std::cout << "[RUN] Terrain sampling contract\n";
