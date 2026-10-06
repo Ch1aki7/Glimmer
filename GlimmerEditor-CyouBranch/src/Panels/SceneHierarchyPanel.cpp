@@ -349,7 +349,7 @@ namespace gl {
 
 				TerrainComponent before = terrain;
 				if (ImGui::Checkbox("Procedural", &spec.Procedural))
-					terrain.Runtime.reset();
+					TerrainRenderer::Invalidate(terrain);
 				commit("Edit Terrain Procedural Mode", before);
 
 				if (spec.Procedural)
@@ -404,7 +404,7 @@ namespace gl {
 				if (ImGui::InputInt("Height Resolution", &heightResolution, 0))
 				{
 					spec.HeightMapResolution = static_cast<uint32_t>(std::clamp(heightResolution, 64, 2048));
-					terrain.Runtime.reset();
+					TerrainRenderer::Invalidate(terrain);
 				}
 				commit("Edit Terrain Height Resolution", before);
 
@@ -413,7 +413,7 @@ namespace gl {
 				if (ImGui::InputInt("Mesh Resolution", &meshResolution, 0))
 				{
 					spec.MeshResolution = static_cast<uint32_t>(std::clamp(meshResolution, 16, 512));
-					terrain.Runtime.reset();
+					TerrainRenderer::Invalidate(terrain);
 				}
 				commit("Edit Terrain Mesh Resolution", before);
 
@@ -589,6 +589,7 @@ namespace gl {
 						ImGui::EndDragDropTarget();
 					}
 				}
+				DrawTerrainRecipe(entity, terrain);
 				if (ImGui::Button("Regenerate"))
 					TerrainRenderer::Invalidate(terrain);
 				if (terrain.Runtime && terrain.Runtime->GenerationVersion > 0)

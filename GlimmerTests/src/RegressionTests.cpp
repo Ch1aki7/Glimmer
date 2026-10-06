@@ -20,6 +20,7 @@
 #include "Glimmer/Simulation/TerrainClimateRuntime.h"
 #include "Editor/EditorCommand.h"
 #include "Editor/EditorScenePreferences.h"
+#include "Editor/TerrainRecipeEditor.h"
 
 #include <cmath>
 #include <filesystem>
@@ -695,6 +696,50 @@ namespace {
 				&& Near(restoredLight.ShadowCascadeBlend, 0.18f),
 				"directional shadow settings survive scene round trip");
 		}
+	}
+
+	void TestTerrainRecipeEditor(TestContext& context)
+	{
+		gl::TerrainSpecification spec;
+		context.Check(gl::TerrainRecipeEditor::Add(spec, gl::TerrainStampShape::Rectangle, gl::TerrainStampOperation::SetHeight)
+			&& gl::TerrainRecipeEditor::Add(spec, gl::TerrainStampShape::Ellipse, gl::TerrainStampOperation::Add)
+			&& spec.Recipe.Stamps[0].ID != 0 && spec.Recipe.Stamps[0].ID != spec.Recipe.Stamps[1].ID,
+			"editor Add creates valid distinct stable IDs and neutral shape/operation defaults");
+		const auto first = spec.Recipe.Stamps[0].ID, second = spec.Recipe.Stamps[1].ID;
+		context.Check(gl::TerrainRecipeEditor::Move(spec.Recipe, 1, -1) && spec.Recipe.Stamps[0].ID == second
+			&& spec.Recipe.Stamps[1].ID == first && !gl::TerrainRecipeEditor::Move(spec.Recipe, 0, -1)
+			&& !gl::TerrainRecipeEditor::Move(spec.Recipe, 1, 1) && !gl::TerrainRecipeEditor::Move(spec.Recipe, 0, 0),
+			"editor reorder preserves IDs and rejects boundary or invalid directions");
+		context.Check(gl::TerrainRecipeEditor::Remove(spec.Recipe, 0) && spec.Recipe.Stamps[0].ID == first
+			&& !gl::TerrainRecipeEditor::Remove(spec.Recipe, 9), "editor removal preserves remaining IDs and rejects invalid indices");
+		while (spec.Recipe.Stamps.size() < gl::TerrainRecipe::MaximumStamps)
+			gl::TerrainRecipeEditor::Add(spec, gl::TerrainStampShape::Ellipse, gl::TerrainStampOperation::Add);
+		const auto full = spec.Recipe;
+		context.Check(!gl::TerrainRecipeEditor::Add(spec, gl::TerrainStampShape::Ellipse, gl::TerrainStampOperation::Add)
+			&& SameTerrainRecipe(full, spec.Recipe), "editor capacity rejection leaves the complete recipe untouched");
+		spec.Recipe.Stamps.clear(); spec.DataVersion = 1;
+		context.Check(!gl::TerrainRecipeEditor::Add(spec, gl::TerrainStampShape::Rectangle, gl::TerrainStampOperation::SetHeight)
+			&& spec.Recipe.Stamps.empty() && spec.DataVersion == 1, "editor Add does not silently migrate a legacy terrain");
+		spec.DataVersion = 2; spec.HeightScale = 0;
+		context.Check(!gl::TerrainRecipeEditor::Add(spec, gl::TerrainStampShape::Rectangle, gl::TerrainStampOperation::SetHeight),
+			"editor Add rejects a zero height scale before mutation");
+		gl::TerrainComponent terrain;
+		terrain.Runtime = gl::CreateRef<gl::TerrainRuntime>();
+		terrain.Runtime->Dirty = false;
+		const auto runtime = terrain.Runtime;
+		gl::TerrainRecipeEditor::Add(terrain.Specification, gl::TerrainStampShape::Rectangle, gl::TerrainStampOperation::SetHeight);
+		gl::EditorValueTransaction<gl::TerrainComponent> transaction;
+		transaction.Begin(terrain);
+		const float oldHeight = terrain.Specification.Recipe.Stamps[0].Height;
+		for (float value : { 20.0f, 25.0f, 30.0f }) terrain.Specification.Recipe.Stamps[0].Height = value;
+		gl::EditorCommandHistory history;
+		history.PushExecuted(std::make_unique<gl::ValueEditorCommand<gl::TerrainComponent>>("Drag Stamp", transaction.GetBefore(), terrain,
+			[&](const gl::TerrainComponent& value) { terrain.Specification = value.Specification; gl::TerrainRenderer::Invalidate(terrain); return true; }));
+		transaction.Reset();
+		context.Check(history.Undo() && !history.CanUndo() && terrain.Specification.Recipe.Stamps[0].Height == oldHeight
+			&& terrain.Runtime == runtime && runtime->Dirty, "one continuous stamp drag produces one Undo and retains the fallback Runtime");
+		context.Check(history.Redo() && terrain.Specification.Recipe.Stamps[0].Height == 30 && terrain.Runtime == runtime,
+			"stamp drag Redo restores the final parameters without replacing Runtime");
 	}
 
 	void TestTerrainRecipe(TestContext& context, const std::filesystem::path& directory)
@@ -2093,6 +2138,7 @@ int main(int argc, char** argv)
 	TestTerrainCopyAndTransactions(context);
 	std::cout << "[RUN] Terrain recipe contract and persistence\n";
 	TestTerrainRecipe(context, temporaryDirectory.Path());
+	TestTerrainRecipeEditor(context);
 	std::cout << "[RUN] Terrain presets\n";
 	TestTerrainPresets(context);
 	std::cout << "[RUN] Terrain sampling contract\n";

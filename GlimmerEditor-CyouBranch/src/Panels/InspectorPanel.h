@@ -2,6 +2,7 @@
 
 #include "Glimmer.h"
 #include "SelectionContext.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
 
 #include "../Editor/EditorCommand.h"
 #include <optional>
@@ -11,6 +12,7 @@ namespace gl
 {
 	class InspectorPanel
 	{
+		friend struct TerrainInspectorValidation;
 	public:
 		void SetContext(const Ref<Scene>& scene) { m_Context = scene; }
 		void SetSelectionContext(SelectionContext* selection) { m_Selection = selection; }
@@ -21,6 +23,7 @@ namespace gl
 	private:
 		void DrawAssetInspector(AssetHandle handle);
 		void DrawComponents(Entity entity);
+		void DrawTerrainRecipe(Entity entity, TerrainComponent& terrain);
 		void DrawAddComponentMenu(Entity entity);
 		void ExecuteMaterialComponentEdit(Entity entity, const char* name,
 			const MaterialComponent& before, const MaterialComponent& after);
@@ -45,7 +48,12 @@ namespace gl
 				Entity target = scene ? scene->FindEntityByUUID(uuid) : Entity{};
 				if (!target || !target.HasComponent<T>())
 					return false;
-				target.GetComponent<T>() = value;
+				if constexpr (std::is_same_v<T, TerrainComponent>)
+				{
+					target.GetComponent<T>().Specification = value.Specification;
+					TerrainRenderer::Invalidate(target.GetComponent<T>());
+				}
+				else target.GetComponent<T>() = value;
 				return true;
 			};
 
@@ -84,7 +92,12 @@ namespace gl
 				Entity target = scene->FindEntityByUUID(uuid);
 				if (!target || !target.HasComponent<T>())
 					return false;
-				target.GetComponent<T>() = value;
+				if constexpr (std::is_same_v<T, TerrainComponent>)
+				{
+					target.GetComponent<T>().Specification = value.Specification;
+					TerrainRenderer::Invalidate(target.GetComponent<T>());
+				}
+				else target.GetComponent<T>() = value;
 				return true;
 			};
 			m_CommandHistory->PushExecuted(

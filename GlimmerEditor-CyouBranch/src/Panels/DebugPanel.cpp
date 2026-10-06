@@ -124,6 +124,9 @@ namespace gl {
 				if (ImGui::Checkbox("Visualize Terrain LODs", &visualizeLODs))
 					TerrainRenderer::SetLODVisualizationEnabled(visualizeLODs);
 				ImGui::TextDisabled("LOD0 Red, LOD1 Green, LOD2 Blue");
+				bool grayPreview = TerrainRenderer::IsGrayPreviewEnabled();
+				if (ImGui::Checkbox("Terrain Gray Preview", &grayPreview))
+					TerrainRenderer::SetGrayPreviewEnabled(grayPreview);
 				auto water = WaterSurfaceRenderer::GetSettings();
 				bool waterChanged = ImGui::Checkbox("Water Surface", &water.Enabled);
 				waterChanged |= ImGui::SliderFloat("Water Absorption", &water.Absorption, 0.0f, 10.0f);

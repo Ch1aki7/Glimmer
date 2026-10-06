@@ -6,8 +6,222 @@
 #include "Glimmer/Scene/Entity.h"
 #include "Glimmer/Scene/Scene.h"
 #include "Glimmer/Terrain/Terrain.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
+#include "Glimmer/Scene/SceneSerializer.h"
+#include "../Editor/TerrainRecipeEditor.h"
+#include "../Editor/EditorCommand.h"
+#include "../Panels/InspectorPanel.h"
+#include <imgui_internal.h>
+#include <chrono>
+#include <filesystem>
+#include <stdexcept>
 
 namespace gl {
+	// Exercise the actual widgets in an isolated ImGui context; no native input or GPU resources.
+	struct TerrainInspectorValidation
+	{
+		static void Run()
+		{
+			struct ContextGuard {
+				ImGuiContext* Previous = ImGui::GetCurrentContext();
+				ImGuiContext* Test = ImGui::CreateContext();
+				~ContextGuard() { ImGui::DestroyContext(Test); ImGui::SetCurrentContext(Previous); }
+			} context;
+			ImGui::SetCurrentContext(context.Test);
+			auto& io = ImGui::GetIO();
+			io.DisplaySize = { 1100, 1800 }; io.DeltaTime = 1.0f / 60;
+			io.IniFilename = nullptr; io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+			unsigned char* pixels; int width, height;
+			io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+			const auto scene = CreateRef<Scene>();
+			Entity entity = scene->CreateEntity("Terrain Inspector Contract");
+			auto& terrain = entity.AddComponent<TerrainComponent>();
+			EditorCommandHistory history;
+			InspectorPanel panel; panel.SetContext(scene); panel.SetCommandHistory(&history);
+			auto require = [](bool condition, const char* message) { if (!condition) throw std::runtime_error(message); };
+			auto frame = [&](const char* activate = nullptr, uint64_t stampID = 0) {
+				ImGui::NewFrame();
+				ImGui::SetNextWindowSize({ 1100, 1800 });
+				ImGui::Begin("Inspector Contract", nullptr, ImGuiWindowFlags_NoSavedSettings);
+				if (activate)
+				{
+					if (stampID) { ImGui::PushID(int(stampID >> 32)); ImGui::PushID(int(stampID & 0xffffffffu)); ImGui::PushID("Stamp"); }
+					const ImGuiID id = ImGui::GetID(activate);
+					if (stampID) { ImGui::PopID(); ImGui::PopID(); ImGui::PopID(); }
+					auto& g = *ImGui::GetCurrentContext();
+					g.NavWindow = ImGui::GetCurrentWindow(); g.NavId = id; g.NavInputSource = ImGuiInputSource_Keyboard;
+					g.NavActivateId = id; g.NavActivatePressedId = id; g.NavActivateDownId = id;
+				}
+				panel.DrawTerrainRecipe(entity, terrain);
+				ImGui::End(); ImGui::Render();
+			};
+			frame(); frame();
+			frame("Add Rectangle");
+			require(terrain.Specification.Recipe.Stamps.size() == 1, "Inspector Add Rectangle widget failed.");
+			frame("Add Ellipse");
+			require(terrain.Specification.Recipe.Stamps.size() == 2 && history.Undo()
+				&& terrain.Specification.Recipe.Stamps.size() == 1 && history.Redo(), "Inspector Add Undo/Redo failed.");
+			const auto first = terrain.Specification.Recipe.Stamps[0].ID;
+			frame("Enabled", first);
+			require(!terrain.Specification.Recipe.Stamps[0].Enabled && history.Undo()
+				&& terrain.Specification.Recipe.Stamps[0].Enabled, "Inspector enable command failed.");
+			frame("Down", first);
+			require(terrain.Specification.Recipe.Stamps[1].ID == first && history.Undo(), "Inspector reorder widget failed.");
+			frame("Remove", first);
+			require(terrain.Specification.Recipe.Stamps.size() == 1 && history.Undo(), "Inspector remove widget failed.");
+			frame("Clear Stamps");
+			require(terrain.Specification.Recipe.Stamps.empty() && history.Undo(), "Inspector clear widget failed.");
+			const float initialHeight = terrain.Specification.Recipe.Stamps[0].Height;
+			frame("Target Height", first);
+			io.AddKeyEvent(ImGuiKey_RightArrow, true); frame();
+			io.AddKeyEvent(ImGuiKey_RightArrow, false); frame();
+			frame("Target Height", first); frame();
+			require(terrain.Specification.Recipe.Stamps[0].Height != initialHeight
+				&& std::string(history.GetUndoName()) == "Edit Terrain Stamp Height" && history.Undo()
+				&& terrain.Specification.Recipe.Stamps[0].Height == initialHeight && history.Redo(),
+				"Inspector continuous widget does not commit one reversible edit.");
+			GL_CORE_INFO("Terrain Inspector widgets PASS: Add, enable, reorder, remove, clear and continuous height activation/release Undo/Redo.");
+		}
+	};
+
+	static constexpr uint64_t TerrainFixtureID = 0x5445525241494eULL;
+	bool ValidateTerrainRecipeEditorIntegration(const Ref<Scene>& scene)
+	{
+		Entity entity = scene->FindEntityByUUID(UUID(TerrainFixtureID));
+		if (!entity) return false;
+		auto& terrain = entity.GetComponent<TerrainComponent>();
+		const auto original = terrain.Specification;
+		const auto temporaryScenePath = std::filesystem::temp_directory_path()
+			/ ("Glimmer-Recipe-Integration-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".glimmer");
+		bool passed = false;
+		try
+		{
+			TerrainInspectorValidation::Run();
+			auto require = [](bool condition, const char* message) { if (!condition) throw std::runtime_error(message); };
+			terrain.Specification.HeightMapResolution = 129;
+			terrain.Specification.MeshResolution = 96;
+			TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain), "Initial recipe Prepare failed.");
+			auto hash = [&]() { const auto result = terrain.Runtime->Generator->ValidateOutputs(); require(result.Valid, "Invalid composed maps."); return result.Hash; };
+			auto initialAndReset = [&]() {
+				const size_t count = size_t(terrain.Runtime->HeightMap->GetWidth()) * terrain.Runtime->HeightMap->GetHeight();
+				std::vector<float> height(count), simulated(count);
+				terrain.Runtime->Generator->GetHeightMap()->GetImageData(height.data(), uint32_t(count * sizeof(float)));
+				terrain.Runtime->GPUHydrology->GetHeightTexture()->GetImageData(simulated.data(), uint32_t(count * sizeof(float)));
+				require(height == simulated, "Prepare simulation initial surface differs.");
+				std::fill(simulated.begin(), simulated.end(), 0.0f);
+				terrain.Runtime->GPUHydrology->GetHeightTexture()->SetData(simulated.data(), uint32_t(count * sizeof(float)));
+				terrain.Runtime->GPUHydrology->Reset();
+				terrain.Runtime->GPUHydrology->GetHeightTexture()->GetImageData(simulated.data(), uint32_t(count * sizeof(float)));
+				require(height == simulated, "Reset simulation surface differs.");
+			};
+			const auto baselineHash = hash();
+			EditorCommandHistory history;
+			auto apply = [&](const TerrainComponent& value) { terrain.Specification = value.Specification; TerrainRenderer::Invalidate(terrain); return true; };
+			TerrainComponent before = terrain, after = terrain;
+			require(TerrainRecipeEditor::Add(after.Specification, TerrainStampShape::Ellipse, TerrainStampOperation::Add), "Editor Add rejected valid recipe.");
+			require(history.Execute(std::make_unique<ValueEditorCommand<TerrainComponent>>("Add Terrain Stamp", before, after, apply))
+				&& TerrainRenderer::Prepare(terrain), "Add command Prepare failed.");
+			const auto addedHash = hash();
+			require(addedHash != baselineHash, "Added stamp did not change height."); initialAndReset();
+			require(history.Undo() && TerrainRenderer::Prepare(terrain) && hash() == baselineHash, "Undo fails to rebuild original surface.");
+			require(history.Redo() && TerrainRenderer::Prepare(terrain) && hash() == addedHash, "Redo fails to rebuild added surface.");
+			EditorValueTransaction<TerrainComponent> drag;
+			drag.Begin(terrain);
+			terrain.Specification.Recipe.Stamps.back().Center.x = 10;
+			terrain.Specification.Recipe.Stamps.back().Center.x = 30;
+			terrain.Specification.Recipe.Stamps.back().Height = -25;
+			TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain), "Continuous edit Prepare failed.");
+			history.PushExecuted(std::make_unique<ValueEditorCommand<TerrainComponent>>("Drag Terrain Stamp", drag.GetBefore(), terrain, apply));
+			drag.Reset();
+			const auto draggedHash = hash();
+			require(history.Undo() && TerrainRenderer::Prepare(terrain) && hash() == addedHash, "One drag Undo does not restore full recipe.");
+			require(history.Redo() && TerrainRenderer::Prepare(terrain) && hash() == draggedHash, "Drag Redo differs.");
+			before = terrain; after = terrain;
+			const auto movedID = after.Specification.Recipe.Stamps.back().ID;
+			require(TerrainRecipeEditor::Move(after.Specification.Recipe, after.Specification.Recipe.Stamps.size() - 1, -1), "Editor Move failed.");
+			require(history.Execute(std::make_unique<ValueEditorCommand<TerrainComponent>>("Reorder Terrain Stamps", before, after, apply))
+				&& TerrainRenderer::Prepare(terrain), "Reorder Prepare failed.");
+			require(terrain.Specification.Recipe.Stamps[terrain.Specification.Recipe.Stamps.size() - 2].ID == movedID, "Reorder changes stable ID.");
+			const auto persistedHash = hash();
+			require(SceneSerializer(scene).Serialize(temporaryScenePath.string()), "Integration scene save failed.");
+			const auto restoredScene = CreateRef<Scene>();
+			require(SceneSerializer(restoredScene).Deserialize(temporaryScenePath.string()), "Integration scene reload failed.");
+			auto& restored = restoredScene->FindEntityByUUID(entity.GetUUID()).GetComponent<TerrainComponent>();
+			require(!restored.Runtime && TerrainRenderer::Prepare(restored) && restored.Runtime != terrain.Runtime
+				&& restored.Runtime->Generator->ValidateOutputs().Hash == persistedHash, "Reload surface or Runtime isolation differs.");
+			const auto playScene = Scene::Copy(scene);
+			auto& playTerrain = playScene->FindEntityByUUID(entity.GetUUID()).GetComponent<TerrainComponent>();
+			require(!playTerrain.Runtime && TerrainRenderer::Prepare(playTerrain)
+				&& playTerrain.Runtime->Generator->ValidateOutputs().Hash == persistedHash, "Play copy regeneration differs.");
+			terrain.Specification.HeightMapResolution = 145;
+			terrain.Specification.WorldSize = 1536;
+			TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->HeightMap->GetWidth() == 145
+				&& TerrainRenderer::GetSurfaceSpecification(terrain).WorldSize == 1536, "Resize publication failed."); initialAndReset();
+			const auto published = terrain.Specification;
+			const auto oldHeight = terrain.Runtime->HeightMap, oldNormal = terrain.Runtime->NormalSlopeMap,
+				oldAnalysis = terrain.Runtime->AnalysisMap, oldWeights = terrain.Runtime->MaterialWeightMap;
+			const auto oldMesh = terrain.Runtime->Mesh;
+			const auto oldHydrology = terrain.Runtime->GPUHydrology.get();
+			const auto oldVersion = terrain.Runtime->GenerationVersion;
+			for (int failure = 0; failure < 4; ++failure)
+			{
+				terrain.Specification = published;
+				terrain.Specification.HeightMapResolution = 161;
+				terrain.Specification.WorldSize = 2048;
+				if (failure == 0) terrain.Specification.Recipe.Version = 999;
+				if (failure == 1) terrain.Specification.HeightScale = 0;
+				if (failure == 2) terrain.Specification.GenerationShaderHandle = AssetHandle(0);
+				if (failure == 3) { terrain.Specification.Procedural = false; terrain.Specification.Recipe.Stamps.clear(); terrain.Specification.HeightMapHandle = AssetHandle(0); }
+				TerrainRenderer::Invalidate(terrain);
+				require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GenerationError.empty()
+					&& terrain.Runtime->HeightMap == oldHeight && terrain.Runtime->NormalSlopeMap == oldNormal
+					&& terrain.Runtime->AnalysisMap == oldAnalysis && terrain.Runtime->MaterialWeightMap == oldWeights
+					&& terrain.Runtime->Mesh == oldMesh && terrain.Runtime->GPUHydrology.get() == oldHydrology
+					&& terrain.Runtime->GenerationVersion == oldVersion
+					&& TerrainRenderer::GetSurfaceSpecification(terrain).WorldSize == 1536, "Failed edit changes published surface/state.");
+			}
+			TerrainComponent firstFailure;
+			firstFailure.Specification = published;
+			firstFailure.Specification.GenerationShaderHandle = AssetHandle(0);
+			require(!TerrainRenderer::Prepare(firstFailure) && !firstFailure.Runtime->HeightMap, "First failure draws uninitialized surface.");
+			terrain.Specification = published; TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GenerationError.empty(), "Generation does not recover.");
+			terrain.Specification.Procedural = false;
+			terrain.Specification.Recipe.Stamps.clear();
+			terrain.Specification.HeightMapHandle = AssetManager::ImportAsset("assets/textures/NoiseTex.png");
+			TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology && !terrain.Runtime->GPUClimate
+				&& !terrain.Runtime->GPUEnvironment && !terrain.Runtime->NormalSlopeMap
+				&& !TerrainRenderer::GetSurfaceSpecification(terrain).Procedural, "Successful imported source retains old procedural resources.");
+			terrain.Specification = published; TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GPUHydrology, "Procedural source cannot recover after import."); initialAndReset();
+			passed = true;
+			GL_CORE_INFO("Terrain recipe editor integration PASS: Add/drag/reorder Undo/Redo, save/reload, Play isolation, Resize, failed edits/first failure, procedural/imported recovery and simulation initial/Reset.");
+		}
+		catch (const std::exception& error) { GL_CORE_ERROR("Terrain recipe editor integration FAIL: {0}", error.what()); }
+		std::error_code ignored; std::filesystem::remove(temporaryScenePath, ignored);
+		terrain.Specification = original; TerrainRenderer::Invalidate(terrain);
+		return passed;
+	}
+
+	void SeedTerrainValidationWater(const Ref<Scene>& scene)
+	{
+		Entity entity = scene->FindEntityByUUID(UUID(TerrainFixtureID));
+		if (entity)
+		{
+			auto& terrain = entity.GetComponent<TerrainComponent>();
+			if (!TerrainRenderer::Prepare(terrain) || !terrain.Runtime->GPUHydrology) return;
+			const auto& height = terrain.Runtime->HeightMap;
+			std::vector<float> water(size_t(height->GetWidth()) * height->GetHeight());
+			height->GetImageData(water.data(), uint32_t(water.size() * sizeof(float)));
+			for (auto& value : water) value = std::max(0.0f, terrain.Specification.HeightScale * (0.42f - value));
+			terrain.Runtime->GPUHydrology->GetWaterTexture()->SetData(water.data(), uint32_t(water.size() * sizeof(float)));
+			GL_CORE_INFO("Terrain recipe water fixture seeded from composed height; simulation remains paused.");
+		}
+	}
 
 	Ref<Scene> CreateTerrainValidationScene(
 		AssetHandle skyboxHandle,
@@ -33,7 +247,7 @@ namespace gl {
 		scene->CreateEntity("Sky Light")
 			.AddComponent<SkyLightComponent>(skyboxHandle);
 
-		auto terrainEntity = scene->CreateEntity("Terrain");
+		auto terrainEntity = scene->CreateEntityWithUUID(UUID(TerrainFixtureID), "Terrain");
 		auto& terrain = terrainEntity.AddComponent<TerrainComponent>();
 		ApplyTerrainPreset(terrain.Specification, TerrainPreset::Alpine);
 		terrain.Specification.DataVersion = std::clamp(dataVersion, 1u, 2u);

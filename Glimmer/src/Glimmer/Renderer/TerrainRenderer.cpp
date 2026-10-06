@@ -19,6 +19,7 @@ namespace gl {
 	namespace {
 		struct TerrainRendererData
 		{
+			bool GrayPreview = false;
 			Ref<GPUTimer> Timer;
 			TerrainRenderer::Statistics Stats;
 			TerrainRenderer::SamplingMode Sampling =
@@ -377,13 +378,19 @@ namespace gl {
 				}
 			}
 		}
-		else if (runtime.LoadedHeightMapHandle != specification.HeightMapHandle || !runtime.HeightMap)
+		else if (runtime.LoadedHeightMapHandle != specification.HeightMapHandle || !runtime.HeightMap
+			|| (runtime.HasPublishedSpecification && runtime.PublishedSpecification.Procedural))
 		{
-			runtime.HeightMap = AssetManager::GetTexture2D(specification.HeightMapHandle);
+			const auto importedHeight = AssetManager::GetTexture2D(specification.HeightMapHandle);
+			if (!importedHeight) return generationFailed("Terrain height map asset is unavailable.");
+			runtime.HeightMap = importedHeight;
 			runtime.LoadedHeightMapHandle = specification.HeightMapHandle;
 			runtime.NormalSlopeMap.reset();
 			runtime.AnalysisMap.reset();
 			runtime.MaterialWeightMap.reset();
+			runtime.GPUEnvironment.reset();
+			runtime.GPUClimate.reset();
+			runtime.GPUHydrology.reset();
 		}
 
 		if (!runtime.HeightMap)
@@ -626,6 +633,7 @@ namespace gl {
 		shader->UploadUniformFloat("u_SkirtDepth", skirtDepth);
 		shader->UploadUniformInt("u_TerrainLODVisualization",
 			s_Data.VisualizeLODs ? 1 : 0);
+		shader->UploadUniformInt("u_TerrainGrayPreview", s_Data.GrayPreview ? 1 : 0);
 		const bool hasHydrology = runtime.GPUHydrology != nullptr;
 		const bool hasClimate = runtime.GPUClimate != nullptr;
 		shader->UploadUniformInt("u_HasHydrology", hasHydrology ? 1 : 0);
@@ -875,6 +883,9 @@ namespace gl {
 	{
 		return { s_Data.LODMiddleDistance, s_Data.LODFarDistance };
 	}
+
+	void TerrainRenderer::SetGrayPreviewEnabled(bool enabled) { s_Data.GrayPreview = enabled; }
+	bool TerrainRenderer::IsGrayPreviewEnabled() { return s_Data.GrayPreview; }
 
 	void TerrainRenderer::SetLODVisualizationEnabled(bool enabled)
 	{

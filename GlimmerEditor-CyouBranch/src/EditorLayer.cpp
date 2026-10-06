@@ -1,5 +1,7 @@
 #include "EditorLayer.h"
 #include "Debug/TerrainValidationScene.h"
+#include "Glimmer/Renderer/WaterSurfaceRenderer.h"
+#include "Glimmer/Renderer/ShadowRenderer.h"
 #include "Editor/EditorScenePreferences.h"
 #include "Glimmer/Scene/SceneSerializer.h"
 #include "Glimmer/Utils/FileDialog.h"
@@ -853,6 +855,7 @@ namespace gl {
 		SetEditorScene(CreateRef<Scene>());
 		m_UsesTerrainValidationScene =
 			ShouldAutorunTerrainSamplingBenchmark()
+			|| GetEnvironmentValue("GLIMMER_TERRAIN_RECIPE_FIXTURE") == "1"
 			|| terrainSamplingVisualMode >= 0
 			|| !m_TerrainCapturePath.empty()
 			|| ShouldVisualizeTerrainLODs();
@@ -942,6 +945,11 @@ namespace gl {
 		}
 		m_TerrainSamplingBenchmarkAutorun =
 			ShouldAutorunTerrainSamplingBenchmark();
+		TerrainRenderer::SetGrayPreviewEnabled(GetEnvironmentValue("GLIMMER_TERRAIN_GRAY_PREVIEW") == "1");
+		if (m_UsesTerrainValidationScene && GetEnvironmentValue("GLIMMER_TERRAIN_RECIPE_INTEGRATION") == "1")
+			ValidateTerrainRecipeEditorIntegration(m_EditorScene);
+		if (m_UsesTerrainValidationScene && GetEnvironmentValue("GLIMMER_TERRAIN_RECIPE_WATER_FIXTURE") == "1")
+			SeedTerrainValidationWater(m_EditorScene);
 		if (ShouldVisualizeTerrainLODs())
 		{
 			TerrainRenderer::SetLODVisualizationEnabled(true);
@@ -982,6 +990,10 @@ namespace gl {
 				650.0f, -30.0f, 35.0f);
 			GL_CORE_INFO("Terrain fixed-camera capture armed: synthesis v{0}, path={1}",
 				terrainSynthesisVersion, m_TerrainCapturePath.string());
+		}
+		else if (GetEnvironmentValue("GLIMMER_TERRAIN_RECIPE_FIXTURE") == "1")
+		{
+			m_EditorCamera.SetView({ 0.0f, 35.0f, 0.0f }, 650.0f, -30.0f, 35.0f);
 		}
 
 
@@ -1157,8 +1169,18 @@ namespace gl {
 				pixels, width, height)
 				&& WriteRgbaBmp(m_TerrainCapturePath, pixels, width, height);
 			if (captured)
+			{
 				GL_CORE_INFO("Terrain fixed-camera capture PASS: {0} ({1}x{2})",
 					m_TerrainCapturePath.string(), width, height);
+				const auto terrainStats = TerrainRenderer::GetStatistics();
+				const auto waterStats = WaterSurfaceRenderer::GetStatistics();
+				const auto shadowStats = ShadowRenderer::GetStatistics();
+				GL_CORE_INFO("Terrain capture passes: color chunks={0}, water draws={1}, water snapshot={2}, gray={3}",
+					terrainStats.SubmittedChunks, waterStats.DrawCalls, waterStats.SnapshotReady,
+					TerrainRenderer::IsGrayPreviewEnabled());
+				GL_CORE_INFO("Terrain capture shadow: enabled={0}, cascades={1}, draws={2}",
+					ShadowRenderer::IsEnabled(), shadowStats.CascadePasses, shadowStats.DrawCalls);
+			}
 			else
 				GL_CORE_ERROR("Terrain fixed-camera capture FAIL: {0}",
 					m_TerrainCapturePath.string());

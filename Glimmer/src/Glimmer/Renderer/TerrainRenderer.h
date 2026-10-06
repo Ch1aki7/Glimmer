@@ -73,6 +73,8 @@ namespace gl {
 		static glm::vec2 GetLODDistances();
 		static void SetLODVisualizationEnabled(bool enabled);
 		static bool IsLODVisualizationEnabled();
+		static void SetGrayPreviewEnabled(bool enabled);
+		static bool IsGrayPreviewEnabled();
 		static void SetHydrologyPlaying(bool playing);
 		static bool IsHydrologyPlaying();
 		static void RequestHydrologySingleStep();

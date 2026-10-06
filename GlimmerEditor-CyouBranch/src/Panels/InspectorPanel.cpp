@@ -4,8 +4,13 @@
 #include "Glimmer/Renderer/Material.h"
 #include "Glimmer/Renderer/Cubemap.h"
 #include "Glimmer/Terrain/TerrainMaterial.h"
+#include "Glimmer/Terrain/Terrain.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
+#include "../Editor/TerrainRecipeEditor.h"
 
 #include <glm/gtc/type_ptr.hpp>
+#include <cmath>
+#include <cfloat>
 
 namespace gl
 {
@@ -36,6 +41,108 @@ namespace gl
 			return left.ShaderHandle == right.ShaderHandle
 				&& SameMaterialProperties(left.Properties, right.Properties)
 				&& left.Passes == right.Passes;
+		}
+	}
+
+	void InspectorPanel::DrawTerrainRecipe(Entity entity, TerrainComponent& terrain)
+	{
+		ImGui::SeparatorText("Terrain Stamps");
+		auto& spec = terrain.Specification;
+		ImGui::TextDisabled("Ordered local X/Z operations | %zu / 64", spec.Recipe.Stamps.size());
+		ImGui::TextWrapped("Set Height uses absolute local Y; Add uses a height delta. Runtime erosion can change this surface.");
+		const auto validation = ValidateTerrainRecipe(spec.Recipe, spec.HeightScale, spec.DataVersion, spec.Procedural);
+		if (!validation.Valid()) ImGui::TextWrapped("Recipe rejected: %s", validation.Message.c_str());
+		if (terrain.Runtime && !terrain.Runtime->GenerationError.empty())
+			ImGui::TextWrapped("Generation failed: %s", terrain.Runtime->GenerationError.c_str());
+		const bool canAdd = spec.Procedural && spec.DataVersion == 2 && std::isfinite(spec.HeightScale)
+			&& spec.HeightScale > 0 && spec.Recipe.Stamps.size() < 64 && validation.Valid();
+		if (!canAdd) ImGui::TextDisabled("Adding requires procedural Data v2, positive Height Scale and fewer than 64 stamps.");
+		ImGui::BeginDisabled(!canAdd);
+		if (ImGui::Button("Add Rectangle"))
+		{
+			TerrainComponent after = terrain;
+			if (TerrainRecipeEditor::Add(after.Specification, TerrainStampShape::Rectangle, TerrainStampOperation::SetHeight))
+				ExecuteComponentEdit(entity, "Add Terrain Rectangle", terrain, after);
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Add Ellipse"))
+		{
+			TerrainComponent after = terrain;
+			if (TerrainRecipeEditor::Add(after.Specification, TerrainStampShape::Ellipse, TerrainStampOperation::Add))
+				ExecuteComponentEdit(entity, "Add Terrain Ellipse", terrain, after);
+		}
+		ImGui::EndDisabled();
+		ImGui::BeginDisabled(spec.Recipe.Stamps.empty());
+		if (ImGui::Button("Clear Stamps"))
+		{
+			TerrainComponent after = terrain;
+			after.Specification.Recipe.Stamps.clear();
+			ExecuteComponentEdit(entity, "Clear Terrain Stamps", terrain, after);
+		}
+		ImGui::EndDisabled();
+		for (size_t index = 0; index < spec.Recipe.Stamps.size(); ++index)
+		{
+			auto& stamp = spec.Recipe.Stamps[index];
+			// Both halves identify the widget independently of its position in the list.
+			ImGui::PushID(int(stamp.ID >> 32));
+			ImGui::PushID(int(stamp.ID & 0xffffffffu));
+			const bool open = ImGui::TreeNodeEx("Stamp", ImGuiTreeNodeFlags_DefaultOpen,
+				"%zu: %s / %s", index + 1, stamp.Shape == TerrainStampShape::Rectangle ? "Rectangle" : "Ellipse",
+				stamp.Operation == TerrainStampOperation::SetHeight ? "Set Height" : "Add");
+			if (open)
+			{
+				ImGui::TextDisabled("ID: %llu", static_cast<unsigned long long>(stamp.ID));
+				int action = 0;
+				ImGui::BeginDisabled(index == 0);
+				if (ImGui::SmallButton("Up")) action = -1;
+				ImGui::EndDisabled(); ImGui::SameLine();
+				ImGui::BeginDisabled(index + 1 == spec.Recipe.Stamps.size());
+				if (ImGui::SmallButton("Down")) action = 1;
+				ImGui::EndDisabled(); ImGui::SameLine();
+				if (ImGui::SmallButton("Remove")) action = 2;
+				if (action)
+				{
+					TerrainComponent after = terrain;
+					if (action == 2) TerrainRecipeEditor::Remove(after.Specification.Recipe, index);
+					else TerrainRecipeEditor::Move(after.Specification.Recipe, index, action);
+					ExecuteComponentEdit(entity, action == 2 ? "Remove Terrain Stamp" : "Reorder Terrain Stamps", terrain, after);
+					ImGui::TreePop(); ImGui::PopID(); ImGui::PopID();
+					break;
+				}
+				auto discrete = [&](const char* name, auto widget) {
+					const TerrainComponent before = terrain;
+					if (widget())
+					{
+						const TerrainComponent after = terrain;
+						ExecuteComponentEdit(entity, name, before, after);
+					}
+				};
+				// Discrete edits must not retain a reference invalidated by specification assignment.
+				discrete("Toggle Terrain Stamp", [&]() { return ImGui::Checkbox("Enabled", &spec.Recipe.Stamps[index].Enabled); });
+				int shape = int(spec.Recipe.Stamps[index].Shape);
+				discrete("Edit Terrain Stamp Shape", [&]() {
+					if (!ImGui::Combo("Shape", &shape, "Ellipse\0Rectangle\0")) return false;
+					spec.Recipe.Stamps[index].Shape = TerrainStampShape(shape); return true;
+				});
+				int operation = int(spec.Recipe.Stamps[index].Operation);
+				discrete("Edit Terrain Stamp Operation", [&]() {
+					if (!ImGui::Combo("Operation", &operation, "Add\0Set Height\0")) return false;
+					spec.Recipe.Stamps[index].Operation = TerrainStampOperation(operation); return true;
+				});
+				auto continuous = [&](const char* name, auto widget) {
+					const TerrainComponent before = terrain;
+					if (widget()) TerrainRenderer::Invalidate(terrain);
+					CommitComponentWidget(entity, name, m_TerrainEdit, before, terrain);
+				};
+				continuous("Move Terrain Stamp", [&]() { return ImGui::DragFloat2("Center (X/Z)", &spec.Recipe.Stamps[index].Center.x, 1); });
+				continuous("Resize Terrain Stamp", [&]() { return ImGui::DragFloat2("Core Size (X/Z)", &spec.Recipe.Stamps[index].Size.x, 1, 0.001f, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp); });
+				continuous("Rotate Terrain Stamp", [&]() { return ImGui::DragFloat("Rotation (degrees)", &spec.Recipe.Stamps[index].RotationDegrees, 0.5f, -180, 180, "%.1f", ImGuiSliderFlags_AlwaysClamp); });
+				continuous("Edit Terrain Stamp Transition", [&]() { return ImGui::DragFloat("Transition Width", &spec.Recipe.Stamps[index].TransitionWidth, 0.5f, 0, FLT_MAX, "%.3f", ImGuiSliderFlags_AlwaysClamp); });
+				continuous("Edit Terrain Stamp Strength", [&]() { return ImGui::SliderFloat("Strength", &spec.Recipe.Stamps[index].Strength, 0, 1); });
+				continuous("Edit Terrain Stamp Height", [&]() { return ImGui::DragFloat(spec.Recipe.Stamps[index].Operation == TerrainStampOperation::Add ? "Height Delta" : "Target Height", &spec.Recipe.Stamps[index].Height, 0.1f); });
+				ImGui::TreePop();
+			}
+			ImGui::PopID(); ImGui::PopID();
 		}
 	}
 

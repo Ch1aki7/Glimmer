@@ -124,6 +124,7 @@ uniform float u_MoistureInfluence;
 uniform int u_TerrainSamplingMode;
 uniform float u_TerrainDetailDistance;
 uniform int u_TerrainLODVisualization;
+uniform int u_TerrainGrayPreview;
 uniform int u_TerrainLODLevel;
 uniform sampler2D u_WaterDepthMap;
 uniform float u_ShoreWetness;
@@ -435,6 +436,14 @@ void main()
 		float wetness = smoothstep(0.001, 0.04, wetDepth) * u_ShoreWetness;
 		albedo *= 1.0 - 0.32 * wetness;
 		roughness = mix(roughness, 0.24, wetness);
+	}
+	if (u_TerrainGrayPreview != 0)
+	{
+		albedo = vec3(0.5);
+		metallic = 0.0;
+		roughness = 0.8;
+		ao = 1.0;
+		detailNormal = geometricNormal;
 	}
 	vec3 normal = normalize(detailNormal);
 	vec3 viewDirection = normalize(u_CameraPos - v_WorldPos);

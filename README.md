@@ -4642,7 +4642,7 @@ Data v2 的热侵蚀面板使用 **Stable Slope (degrees)**，默认 35°、范�
 
 ## Terrain 配方数据与 CPU 印章参考
 
-Terrain 规格现在可保存有序 `Recipe.Stamps`，配方版本独立于 DataVersion 和 Noise SynthesisVersion。基础地貌来源与 Seed 仍使用原有规格，配方不重复保存 Seed。此处提供引擎数据与 CPU 参考 API；GPU 生成链已消费印章，Inspector 尚无印章控件。
+Terrain 规格现在可保存有序 `Recipe.Stamps`，配方版本独立于 DataVersion 和 Noise SynthesisVersion。基础地貌来源与 Seed 仍使用原有规格，配方不重复保存 Seed。此处提供引擎数据与 CPU 参考 API；GPU 生成链与 Inspector 均已消费印章。
 
 印章支持 Ellipse、Rectangle 轮廓与 Add、SetHeight 操作。Center 为 Terrain 局部 XZ，Size 是不含过渡的完整核心宽/深，RotationDegrees 遵循局部 Y 轴旋转；Height 在 Add 中是局部高度增量，在 SetHeight 中是绝对局部 Y。Strength 为 0～1，外侧 TransitionWidth 为零时形成硬边，否则平滑衰减至零。矩形采用有符号距离；椭圆采用按短半轴缩放的径向度量，因此长椭圆外侧过渡不保证精确等距。
 
@@ -4665,7 +4665,7 @@ if (sample.Validation.Valid()) {
 
 参考评估按列表顺序合成；重排会改变重叠结果，禁用或零强度操作不改变高度。每个有贡献操作完成后限制高度到既有范围并报告 Clipped，输入不会被修改。非空列表要求程序化 Data v2、正且有限的 HeightScale，最多 64 个操作；`ValidateTerrainRecipe` 返回错误类型、操作索引与原因，拒绝重复 ID、未知版本/枚举、非有限值、非正尺寸、负过渡或越界强度。无效评估应先检查 Validation，不消费其高度字段。
 
-Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与 Stamps；空配方省略新字段，旧场景缺字段仍恢复空列表。保存前验证失败不会替换原文件；加载前预检全部 Terrain 配方，非法配方不会向目标场景添加任何实体。整体 TerrainComponent 快照携带列表，Scene Copy 与 Edit/Play 保持独立副本，既有组件命令可撤销/重做整份配方；当前尚无印章控件。
+Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与 Stamps；空配方省略新字段，旧场景缺字段仍恢复空列表。保存前验证失败不会替换原文件；加载前预检全部 Terrain 配方，非法配方不会向目标场景添加任何实体。整体 TerrainComponent 快照携带列表，Scene Copy 与 Edit/Play 保持独立副本，组件命令可撤销/重做整份配方。
 
 2026-10-06 的 VS2026 `Debug | x64` 全解决方案构建及无窗口回归通过，共 233 条 PASS 输出。解析平台/过渡、旋转、顺序、裁切和非法输入，以及配方保存/重载、版本拒绝、Scene Copy、预设保留与整份配方 Undo/Redo 均通过；本数据切片没有运行 GPU 数值或视觉验收。
 
@@ -4673,7 +4673,7 @@ Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与
 
 程序化 Data v2 现在按 `Recipe.Stamps` 顺序执行 GPU 印章。完整链路为 GenerateFBM → Thermal Erosion → ApplyTerrainStamp × 有效操作数 → DeriveTerrainMaps。空列表维持旧路径；禁用或零强度操作不 Dispatch，也不分配印章裁切图。每个有效操作独占一次 Height Ping-Pong，Barrier 后交换，最终高度统一派生法线/坡度、分析与四层材质权重，再作为水文初值。运行时侵蚀仍可改变印章结果，当前没有保护遮罩。
 
-宿主可写入 `terrain.Specification.Recipe.Stamps` 后调用 `TerrainRenderer::Invalidate(terrain)`；当前 Inspector 尚无印章属性入口。引擎只处理普通几何操作，平台的任务含义、地点选择与玩法规则由游戏宿主负责。印章 Shader 默认从生成 Shader 所在目录读取 `ApplyTerrainStamp.comp`，保持该文件与其他 Terrain Compute 一起部署。
+宿主可写入 `terrain.Specification.Recipe.Stamps` 后调用 `TerrainRenderer::Invalidate(terrain)`；编辑器可通过 Inspector 的 Terrain Stamps 编辑同一规格。引擎只处理普通几何操作，平台的任务含义、地点选择与玩法规则由游戏宿主负责。印章 Shader 默认从生成 Shader 所在目录读取 `ApplyTerrainStamp.comp`，保持该文件与其他 Terrain Compute 一起部署。
 
 `TerrainGenerator::Generate` 返回 bool，失败原因由 `GetLastGenerationError()` 提供。配方或 Shader 校验失败时保留整套已发布高度/派生资源；首次失败没有可绘制结果。Renderer 还保留已发布规格，Color/Shadow/Water 使用同一尺寸、高度与采样版本，防止失败的新参数重新解释旧纹理。`TerrainRuntime::GenerationError` 保留诊断，显式 Invalidate 或成功 Shader 热重载重试。此回退针对受控数据/Shader 失败，不包含设备丢失恢复。
 
@@ -4682,3 +4682,15 @@ Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与
 真实 GPU 验证使用现有固定视角 Fixture，设置 `GLIMMER_TERRAIN_CAPTURE_PATH` 后启动编辑器；`GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 加入中性平台/盆地，`GLIMMER_TERRAIN_RECIPE_VALIDATE=1` 运行 CPU/GPU 数值 Contract，`GLIMMER_TERRAIN_VALIDATE=1` 运行原采样/派生与重复生成验证。测试模式执行同步读回，普通编辑流程不执行这些 Contract。
 
 2026-10-06 的 VS2026 Debug x64 全解决方案构建与无窗口回归通过，235 条 PASS 输出。Intel Iris Xe GPU 上 65×81/129×145、1/3/64 操作、重叠顺序、旋转/过渡/边界、裁切、确定性、非法配方、缺失/编译失败 Shader 的保留/恢复及模拟初值/Reset 均通过；最大归一化高度差 `6.258488e-7`，小于 `1e-5`。512/1024/2048 原采样与派生 Contract 通过，合成表面重复生成/重新派生哈希一致。空配方 Data v1/v2 固定视角 BMP 与改动前逐字节一致；印章 Fixture 已渲染并检查，Inspector 和灰模/阴影/水面专项集成验收尚未完成。
+
+## Terrain 印章编辑与集成验证
+
+选中 Terrain，在 Inspector 的 Terrain Stamps 区域使用 Add Rectangle 或 Add Ellipse。新增要求程序化 Data v2、正 HeightScale 和少于 64 项；不会自动升级旧地形。每个操作可修改启用、形状、Add/Set Height、局部 XZ 中心、完整核心尺寸、绕 Y 旋转、外侧过渡、强度和高度。Up/Down 调整实际合成顺序，Remove 删除单项，Clear Stamps 清空列表；预设切换保留列表。
+
+增删、启用、形状/操作切换与重排各提交一条命令；连续参数从控件激活到释放合并为一条 Undo/Redo 命令。命令保存整份规格快照，应用时写回规格并 Invalidate，保留 Runtime 用于失败回退。修改 Height Resolution、Mesh Resolution 和 Procedural 也使用失效重建。Inspector 展示 Recipe rejected 或 Generation failed 的具体原因；修复参数后重新生成，Regenerate 可显式重试。导入高度图缺资产时保留旧表面，成功导入清理旧模拟资源。
+
+DebugPanel 的 Terrain Overview 提供 Terrain Gray Preview，使用中性材质与几何法线观察形状、过渡和阴影；它不修改配方、材质资产或模拟。普通材质、水面与 LOD 仍消费同一已发布地形规格。保护遮罩和持续动态保护尚未实现，静态创作检查保持模拟暂停。
+
+手动打开预置验证场景只需设置 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 后启动编辑器，无需设置截图或 Benchmark 参数，窗口会保持运行；从 Hierarchy 选择 Terrain 即可编辑。`GLIMMER_TERRAIN_GRAY_PREVIEW=1` 可默认启用灰模。`GLIMMER_TERRAIN_RECIPE_WATER_FIXTURE=1` 为该验证场景注入与组合高度匹配的静止水深，属于编辑器验证数据；配方重建会重置这些水量。`GLIMMER_TERRAIN_RECIPE_INTEGRATION=1` 执行隔离 ImGui 实际控件及 GPU 编辑闭环测试；配合 `GLIMMER_TERRAIN_CAPTURE_PATH` 捕获五帧后退出，测试包含显式同步读回，普通编辑流程不执行。集成测试与 `GLIMMER_TERRAIN_VALIDATE` / `GLIMMER_TERRAIN_RECIPE_VALIDATE` 分开运行，避免每次编辑重复整套数值 Contract。
+
+2026-10-06 的 VS2026 Debug x64 全解决方案构建与 243 条无窗口 PASS 输出通过。由于旧编辑器占用标准 exe，本次构建位于本地 `bin/P17-A3-review/`，保留原窗口；测试使用完全链接产物。隔离 ImGui 上下文直接激活实际 Add/Enable/Up-Down/Remove/Clear 和连续高度控件，Undo/Redo 通过；GPU 编辑闭环覆盖新增/拖动/重排、保存重载、Play 副本、129→145 分辨率与 WorldSize 修改、非法规格/缺 Shader/首次失败、旧资源/版本/模拟状态保留与恢复，以及从静态组合高度初始化和修改模拟高度后的 Reset。固定视角灰模、材质和静止水面已捕获并检查；空配方 Data v1/v2 图像与 A2 基线逐字节一致。
