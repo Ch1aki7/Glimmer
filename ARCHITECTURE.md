@@ -351,6 +351,8 @@ flowchart LR
 
 静态 FBX 导入会三角化、合并重复顶点、生成缺失法线/切线、改善索引局部性，并通过 `aiProcess_PreTransformVertices` 把节点变换烘焙到顶点。当前不保留节点层级、骨骼、动画、Morph Target 或嵌入纹理，也没有额外执行单位归一化；导入结果使用 Assimp 输出的坐标与单位。`MeshMaterialSource` 可描述 BaseColor、Normal、Metallic、Roughness、AO、Emissive 路径与基础因子。若 FBX 只引用 BaseColor，importer 会在模型相邻、`Textures` 和 `Textures/Raw` 目录内按受限的 `_N/_M/_R/_AO` 约定补全外部贴图。
 
+当前 `MeshVertex` 不包含 Joint/Weight、切线 Handedness 或 Morph 数据，AssetType 没有骨架/动作/重定向/Animator 资产，Scene 没有骨骼动画组件与实例姿态更新链。既有 Color/Shadow/拾取/法线与 Toon 多 Pass 消费静态网格；CPU Mesh Bounds 也是静态范围，后处理 Camera Velocity 不含骨骼或 Morph 形变。PMX/VMD 尚未接入：固定版 Assimp 的 MMDImporter 实际注册 PMX，仓库虽有 VMD parser 源文件，却没有将其接到现有 ModelImporter 或动画播放。上述缺失功能的方案及 P15 依赖由 `Documents/PROJECT_STATUS.md` 的 P18 单独管理，不属于当前架构实现。
+
 `Model` 只消费有效 MeshSource，为各 Submesh 创建 GPU `Mesh`，并按 MaterialIndex 共享解码后的导入纹理。Renderer3D 先使用实体 `.glmat`/MaterialInstance 的 BaseColor、Normal、AO、Emissive 通道，缺失时回退到 Mesh 导入通道；导入 Metallic/Roughness 使用独立采样器。材质纹理占 0～3，CSM 占 4～7，IBL 占 8～10，导入 Metallic/Roughness 固定占 11～12，避免 sampler 类型或用途冲突。导入纹理目前仍是 Model 持有的运行时 Texture2D，不是 AssetHandle，也不会自动生成 `.glmat`，属于后续 `.glmesh`/材质烘焙要收口的边界。
 
 官方 Assimp `v6.0.5` 以 `Glimmer/vendor/assimp` Git 子模块存在，不作为 Premake 源码项目编译。`scripts/Win-BuildAssimp-vs2026.bat` 通过 `vswhere` 限定选择 VS 18.x/2026 和 v145，并使用上游 CMake 在 x64 开发者环境中生成独立 `/MT` 静态库，只启用 OBJ、FBX 和 glTF importer；MSVC 构建显式禁用 Assimp 的 ccache。生成的 `config.h`、静态库、CMake Cache 与 Glimmer 构建指纹都位于被忽略的 `vendor/assimp-build/vs2026-<Configuration>`。Premake 的 Debug 链接 Debug 产物，Release/Dist 链接 Release 产物；基于 `$(ProjectDir)` 的 Glimmer PreBuildEvent 调用快速 Ensure，按产物、配置 Schema、Assimp 子模块提交和 ccache 状态判断是否重建，因此解决方案与单项目构建共用同一依赖边界。AssetManager 当前注册 `.obj` 与 `.fbx` 为 Model；`.gltf`、`.glb` 和内部 `.glmesh` 尚未开放。

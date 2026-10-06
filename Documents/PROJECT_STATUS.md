@@ -210,7 +210,7 @@ A 的完整完成记录见里程碑；首版限制 64 个操作，超限明确�
 
 ### P15：统一图像导入与内部纹理资产
 
-**依赖**：P13/P14 主线完成。若水材质、专业材质或跨格式资源需求提前成为阻塞，可在不扩散主线的前提下单独提升优先级。
+**排序与技术依赖**：现有排期仍在 P13/P14 后；图像解码本身不依赖气候算法。若跨格式模型资源成为实际阻塞，可单独提升需要的切片。P18 骨骼/动作核心不依赖完整 P15；模型纹理资产化与无导入库发布依赖 P15 的解码/纹理烘焙契约，不要求先完成 EXR/Cubemap 全链路。
 
 **目标**
 
@@ -229,6 +229,98 @@ A 的完整完成记录见里程碑；首版限制 64 个操作，超限明确�
 - 发布运行时可在不携带 OpenImageIO/plugin DLL 的情况下加载内部纹理资产；
 - 无窗口回归覆盖 UInt8/Half/Float、1～4 通道、方向、颜色空间和 EXR 高亮值保持。
 
+**供模型动作建设复用的切片（均未开始）**
+
+| 切片 | 交付与边界 | 对 P18 的影响 |
+| --- | --- | --- |
+| P15-A 图像解码契约 | 后端无关 ImageData/ImageDecoder，方向/像素类型/显式语义；最小 OpenImageIO 构建与现有 LDR 回归 | P18-A～H 可先用现有 PNG/JPEG/TGA/BMP 路径；图像能力不足时按实际资产触发此项 |
+| P15-B 内部 Texture2D 资产 | 版本化导入设置/烘焙、AssetHandle/依赖、颜色空间/Normal/通道映射、嵌入图像到资产转换 | P18-I 模型材质收口与 J 无源文件发布的硬依赖；不另写模型专属解码器 |
+| P15-C HDR/EXR 与 Cubemap 迁移 | 接入等距柱状与六面导入、环境派生兼容 | 不阻塞骨骼、VMD、重定向；仍计入 P15 完整验收 |
+| P15-D 发布与旧路径清理 | 验证无 OpenImageIO/plugin DLL 的内部纹理加载，兼容完成后移除 stb_image | P18-J 联合发布验收需要无导入依赖的纹理加载；全局旧路径清理不阻塞开发预览 |
+
+### P18：通用模型、骨骼动画与动作适配系统
+
+**状态**：方案完成，代码未开始；A 为首个可实施切片，其余按依赖验收推进。2026-10-06 用户要求加入引擎建设，仅完善文档；当前唯一主线仍为 P17-B3，不自动切换优先级。
+
+**目标与排序建议**
+
+- 建立“模型/骨架”和“动作片段”分开导入、显式绑定、统一播放的通用能力；支持 glTF/GLB、FBX 与 PMX/VMD，不把动画系统绑定到某种模型格式。静态 OBJ/FBX 及现有材质、场景和渲染继续兼容。
+- 先完成 A～D 的通用骨骼动画闭环，再接 E/F 的 MMD 核心、G 的跨骨架重定向、H 的物理和 I/J 的创作/发布。不同模型的骨架不兼容时不假定“同名即可播放”。
+- 技术上不依赖 P17-D/E 的地形缓存/资产印章，也不依赖 P14 植被。若用户后续将角色优先级提升，可在 P17-B3/C 和已有地形成本复核后切入 P18-A；这只是候选交付顺序，不把未完成 P17/P14/P15 记为完成或撤销。
+- 不先完成整个 P15。A～H 的骨骼、动作与几何测试可用程序生成网格及现有 LDR 贴图；I/J 的依赖收口与运行时发布需要 P15-A/B 及内部纹理运行时验收。EXR/Cubemap 不成为播放动作的前置。
+
+#### 当前基线与迁移
+
+- ModelImporter 仅注册 OBJ/FBX，AssimpModelImporter 使用 PreTransformVertices；MeshSource/MeshVertex 只有静态位置、法线、vec3 切线与 UV，无骨骼、蒙皮权重、层级或 Morph。AssetType 无 Skeleton/AnimationClip/RetargetProfile/AnimatorGraph；Scene 无动画组件/Runtime。
+- Assimp v6.0.5 构建仅启用 OBJ/FBX/GLTF，glTF/GLB 未向资产层开放，MMD 未启用。本地 MMDImporter 实际入口只有 PMX；存在 VMD parser 源码不等于已接入 VMD 动画。其 PMX 适配输出网格、骨骼及部分材质，不能代替完整 Morph/IK/SDEF/QDEF/物理适配。
+- Model 直接持有导入纹理，尚未转换为 AssetHandle；这部分由 P15/P18-I 收口。已有 Model Shader ABI、多 Pass/Toon 法线外扩、Opaque/Mask/Transparent、Shadow Instancing 可复用，但当前没有形变输入和实例独立姿态。Camera Velocity 只表示相机运动，不能代替角色蒙皮/Morph 速度。
+- 保留现有静态导入配置；新增显式 Static/Animated 导入配置。Animated 路径禁止 PreTransformVertices 丢失层级，完成兼容前不删除旧 ModelImporter/Model/Mesh，不把 Assimp 类型引入公共引擎 API。
+
+#### 职责、资产与实例边界（目标设计，尚未实现）
+
+| 层 | 职责 | 边界 |
+| --- | --- | --- |
+| Asset/Importer | 格式解析、CPU ModelSource/SkeletonSource/AnimationSource、坐标与单位转换、依赖/诊断/内部烘焙 | 无 GPU 上传，不播放、不修改 Scene；第三方类型私有 |
+| Animation 核心 | 层级姿态、曲线采样、绑定、混合、重定向、约束/IK、事件及 RootMotionDelta | 不写渲染资源，不决定走路/攻击/死亡等玩法规则 |
+| Scene | 每实例 AnimatorRuntime、一次更新的时序、根运动交付与骨骼附件 | 只保存资产 Handle/设置，运行姿态不进入 YAML；Edit/Play/复制独立 |
+| Renderer | 只读帧内已发布姿态/Morph、蒙皮和形变 Bounds、Color/Shadow/拾取/法线/速度一致性 | 不在 Draw 或每级 Shadow 内推进动作；不按模型材质合并不同姿态 |
+| Physics/Constraint | 通用刚体/关节、固定步、骨骼与刚体转换；MMD adapter 解释 PMX 约束 | 当前物理系统未实现，不拿地形水文模拟替代角色物理 |
+| 编辑器 | 导入设置、骨骼/Morph/轨道预览、时间轴与映射、诊断、Undo/Redo | 不把格式解析和求解器写入 EditorLayer/Inspector |
+| 游戏宿主 | Animator 参数/状态驱动、动作事件处理、移动/碰撞与角色行为 | 不直接改骨骼缓存/GPU palette，不把示例动作状态当引擎固定规则 |
+
+- 拟用不可变 ModelAsset（网格/节点/Skin/Morph/材质依赖）、SkeletonAsset（拓扑/稳定节点 ID/参考姿态）、AnimationClipAsset（曲线与源绑定描述）、RetargetProfileAsset（源/目标骨架版本与映射）及后续 AnimatorGraphAsset。模型/动作从同一 FBX/glTF 拆出时用稳定子资产身份，不能仅靠导入序号；Skeleton 可共享，但 Skin 的 inverse-bind 与 mesh-to-skeleton 变换属于具体模型。
+- AnimatorComponent 保存 Model/Skeleton/Clip/Graph/Profile Handle 与播放/根运动设置，旧 YAML 缺组件仍走静态路径；运行游标、当前/前帧姿态、Morph 权重和物理状态只在独立 Runtime。缺资产/未知版本/不兼容骨架拒绝发布半套依赖，保留旧完整实例并给出原因，首次失败显示参考姿态或明确不绘制。
+- 骨架签名覆盖稳定节点 ID/父索引/参考局部变换与版本；动作绑定记录目标签名、映射及算法版本。重导入骨架、动作或 Profile 时失效绑定和 GPU palette；同名重复骨骼必须显式路径/ID 消歧。原始名称保留，编码转换不偷偷改名；VMD 名称截断碰撞必须报告。
+- 内部模型/骨架/动作/映射与纹理均采用版本、导入器/算法版本、源与依赖哈希、设置和稳定 Handle；未知 schema 拒绝静默降级。派生缓存可重建，资产事务保存/依赖发布与 Undo 要保留旧结果；发布运行时读取内部资产，不依赖 Assimp、PMX/VMD parser 或 OpenImageIO。
+
+#### 数学、采样与更新契约
+
+- 导入阶段将坐标、手性、单位、UV、绕序和切线 Handedness 转为同一引擎约定，模型/骨架/动作/物理同步转换且只转换一次；默认单位未确定前必须显式保存源到引擎缩放。非均匀/负缩放、shear 与不可逆参考矩阵必须有支持或拒绝策略，禁止仅缩放顶点而漏掉骨架/动画/刚体。
+- 父索引/拓扑合法且无环；参考局部 TRS、全局参考矩阵、Skin inverse-bind 与网格空间变换分开。列向量约定下，网格局部蒙皮矩阵采用 inverse(meshGlobal) × jointGlobal(t) × inverseBind；参考姿态重现作为首项验收，不能一律忽略 mesh node 或额外重复乘 Entity Transform。
+- 保留原始影响集合；首版 GPU LBS 使用四影响配置并报告裁剪/归一化，超过上限默认拒绝，只有显式导入选项才允许误差受控的简化。无影响顶点明确绑定参考节点，非法 joint/负权重/NaN/零权重和诊断；后续八影响、palette 分段与 SDEF/QDEF 各自声明版本，不静默用 LBS 替代。
+- 动作时间统一秒；glTF 原插值 STEP/LINEAR/CUBICSPLINE 保留语义，旋转处理四元数单位化/符号和正确插值。VMD 帧号按声明帧率换算（MMD 基线 30 fps），保存每轴位移/旋转的 Bezier；曲线输入时间单调、有界，Bezier 求解有误差与迭代上限，不能把所有关键帧变成线性。重复时刻/空轨道/缺通道、循环端点、负速率和跳转有确定策略。
+- FBX/glTF 通道解释为源节点局部变换，VMD 位移/旋转按模型参考骨骼语义转换；缺通道回参考姿态，不把 VMD 位移当世界绝对位置。同骨架直接绑定与跨骨架重定向是两条显式路径。
+- Scene 更新一次动画时钟并发布 FramePoseVersion，Renderer 各 Pass 只读同版姿态。普通动画可按帧采样，IK/物理使用固定步及有限补步；Seek/Reset/循环越界重置前帧历史，物理 Seek 从确定快照重演或返回待计算状态，不声称只跳时钟即可得到正确物理。
+- 通用顶点/UV Morph 先在参考网格空间组合再蒙皮；Bone Morph 进入姿态，Material Morph 进入实例材质，不修改共享资产。MMD 的变形层级、追加旋转/平移、轴约束、IK、物理前/后骨骼由 adapter 构造有依赖的求解阶段，不能用一个无条件“所有 IK 后全部物理”顺序覆盖全部 PMX。
+- Root Motion 单独提取位移/旋转增量，由宿主显式选择原地、交付或应用；动画系统不同时移动 Entity 和重复移动根骨。游戏碰撞/角色控制器可消费增量但不作为预览前置；动作事件遵循时间穿越、循环与 Seek 策略，仅交付事件，不直接发起伤害或其他玩法。
+
+#### 格式支持与适配范围
+
+| 来源/能力 | 目标 | 不隐含的能力 |
+| --- | --- | --- |
+| OBJ、旧静态 FBX | 维持静态网格行为、场景和 Shader 兼容 | OBJ 不自带骨骼；不因动画引入强制膨胀所有静态顶点 |
+| glTF 2.0/GLB | 首个通用动画基准：节点/Skin、inverse-bind、TRS 曲线及 Morph；显式处理材质/嵌入图依赖 | 未支持 required extension 必须拒绝；不因 Assimp 能读就承诺保留全部 glTF 语义 |
+| 动画 FBX | Animated 导入保留层级、Skin 与动作片段、明确 take/时间和单位转换 | pivot/pre/post rotation 等无法表示为目标 TRS 时须按带版本/误差的规则烘焙或拒绝 |
+| PMX 2.0 与声明的 2.1 子集 | 独立 adapter 保留骨骼/Morph/材质/约束/刚体；BDEF1/2/4，随后 SDEF/QDEF 精确路径 | 当前 Assimp 输出不足以成为完整适配层；2.1 Soft Body 暂列长期扩展，检测并报告，不能宣称完整 PMX 2.1 |
+| VMD 动作 | 独立动画资产，骨骼/Morph/IK 启停/模型显示轨道；编码、帧率与 Bezier | 首版版本范围需在 E 开始时固定；相机/光照/自阴影轨道保存但必须显式绑定场景对象后消费，不自动改变编辑器相机或灯光 |
+| VMD → FBX/glTF/其他骨架 | 通过参考骨架及 RetargetProfile 映射参考姿态/轴向/长度与根运动 | 仅相同名称不能保证兼容；Morph 需另配目标映射，MMD IK 控制骨不等同目标角色 deform bone |
+
+#### 分步实施与验收
+
+| 阶段 | 交付 | 依赖与验收 |
+| --- | --- | --- |
+| P18-A 数据与资产契约 | 定义 Model/Skeleton/Skin/Clip 的纯 CPU 数据、导入配置、坐标/版本/依赖与校验，保留静态入口 | 无需 P15；生成两骨/非根 mesh node/矩形网格等小样本，参考姿态、权重/拓扑/非法输入和稳定子资产往返；先不称动画可用 |
+| P18-B CPU 姿态与 Scene 生命周期 | 通道采样、参考姿态回退、游标/暂停/循环/Seek、初版组件/Runtime/Root Motion；单次更新发布 | 依赖 A；解析平移/旋转/尺度及不同帧划分结果、Scene Copy/Edit/Play 隔离、保存重载只保存配置、错误依赖保留 |
+| P18-C GPU 蒙皮与全部绘制通道 | LBS palette/顶点 ABI、形变法线/切线、动态 Bounds；Color/Shadow/拾取/法线/Toon 外扩共用形变 | 依赖 B；CPU/GPU 参考姿态及两骨运动比对，跨 Pass 同版，移出静态 Bounds 不消失，不同姿态不误实例化；初版蒙皮可不参与静态 Instancing |
+| P18-D 通用真实资产闭环 | glTF/GLB 与动画 FBX 导入、稳定 Clip 子资产，最小播放/骨骼诊断 UI | 依赖 A～C；分别验证层级/Skin/动画语义，静态 OBJ/FBX 不退化，播放/暂停/Seek/重载和资产缺失；使用现有 LDR 或无纹理样本，不依赖完整 P15 |
+| P18-E PMX/VMD 骨骼核心 | 选择并固定 parser 版本/许可，PMX adapter、VMD Clip/名称绑定/Bezier；兼容矩阵与未支持项反馈 | 依赖 D；启用 Assimp MMD 时更新 Build/Ensure Schema，专用 parser 不越界；中文/日文路径与名称、截断/重复名、坐标/参考姿态、VMD 核心采样比对；不得称 MMD 完整还原 |
+| P18-F Morph、MMD 蒙皮与 IK | Vertex/UV/Bone/Material/Group Morph、SDEF/QDEF、追加骨骼/轴约束/变形顺序、IK 限制/启停；MMD Toon/球面贴图/透明/双面/描边适配 | 依赖 E；Morph 组合/组循环拒绝、扭转变形与 CPU/GPU 对比、脚部/膝关节限制、材质实例隔离及遮罩阴影一致性；Flip 等 2.1 项在本阶段按声明范围实现或明确拒绝，Impulse 留给 H |
+| P18-G 重定向与通用 Animator | 参考姿态/骨名映射、轴向/比例/根运动、骨骼附件与 Morph 映射；交叉淡入淡出、层/遮罩、加法、Blend Tree/状态图和事件 | 依赖 D/F；同名异层级拒绝、VMD→至少一种非 MMD 骨架、不同体型、循环/切换根运动、附件与多实例无串姿态；可复用通用 IK 做脚部约束，玩法阈值由宿主给定 |
+| P18-H MMD 物理适配 | 通用 Physics 最小刚体/关节能力、固定步/碰撞组/骨骼耦合、物理前后求解、Impulse Morph 支持边界 | 依赖 F 和独立 Physics 后端验收；选择后端/单位契约再实现，不假设已有；Reset/Seek/帧划分、骨骼驱动与物理驱动、切场景/复制销毁/发散诊断；Soft Body 不作为首版前置 |
+| P18-I 编辑器与资源收口 | 完整时间轴/骨骼/Morph/IK/映射诊断、Graph/Profile Undo/保存；显式相机/灯光轨道绑定、依赖热重载与纹理 Handle/内部资产烘焙 | 依赖 A～H、P15-A/B；不把运行姿态保存为资源；模型/动作/图像导入与发布一致，不复制解码器；材质、Morph、姿态错误有可定位反馈 |
+| P18-J 性能、动态速度与发布总验收 | 角色形变 Motion Vector/前帧姿态历史、蒙皮/Morph/物理与动画 LOD 预算、内部资产发布、旧资产回归 | 依赖 I 和 P15 内部纹理运行时验收；无源模型/动作、Assimp/parser/OpenImageIO 也能加载；测目标设备 CPU/GPU/显存与多角色，切换/Seek/首帧速度清零；完成支持矩阵后才验收 P18 |
+
+#### 验证、预算与完成边界
+
+- 各切片先无窗口数据/数学/持久化测试，再真实 GPU 和编辑器流程；采用自有小型样本：单骨/两骨、非根 mesh、不同长度/参考姿态/命名的两骨架、带 Morph 的网格、简化腿部 IK/刚体关节。真实 glTF/FBX/PMX/VMD 样本必须能说明来源、预期与格式范围，不以截图正常代替采样/求解验收。
+- 候选门槛：CPU/GPU 顶点误差 ≤1e-4×max(模型包围盒对角线,1)，单位法线角差 ≤0.1°；曲线/重定向/IK 另用解析与固定参考数据定门槛。实施阶段在目标设备确认，不提前登记 PASS；非法骨架、超限、失配/缺依赖、未知枚举和复杂格式降级必须可见。
+- 预算单列每实例当前/前帧姿态、palette、Morph 稀疏/密集数据、Bounds 和物理状态，不与共享网格/贴图混算。候选 32/128/256 骨、1/16/64 角色分别测 CPU 求值与 GPU Color/Shadow/形变成本，普通帧禁止 GPU 读回驱动动画；首版不承诺任意骨数或角色数量。
+- Color/Shadow/拾取/法线与透明/Mask/Toon 多 Pass 采样同一姿态/Morph；不能沿用静态 Bounds 或相机 Velocity 声称完整动态结果。没有蒙皮 ABI 的自定义 Shader 要拒绝/诊断，不让蒙皮模型被静态 Shader 无声绘制。
+- 重定向并不使所有 VMD 兼容所有模型；非人形动画、复杂 MMD 扩展/PMX 2.1 Soft Body、PMD、BVH、USD、布料、完整 DCC 图编辑与物理网络同步列为后续扩展，不隐含于首版。支持矩阵逐项记录解析/绑定/运行/渲染/发布五层能力；“可解析”不代表“可播放”或“与 MMD 一致”。
+- P18 只建设通用动画与格式适配，不内置战斗/移动 AI/任务状态；示例 Animator 状态图属于测试资产。Root Motion 的碰撞处理、游戏规则、角色选择与行为由宿主实现。
+
+**参考与核验依据**：当前源码 ModelImporter/AssimpModelImporter/MeshSource、AssetType、Renderer3D/ShadowRenderer、Scene/SceneSerializer 与 Shader ABI；本地固定版 Assimp MMDImporter/MMDPmxParser/MMDVmdParser 和 Build/Ensure 配置。[glTF 2.0 官方规范](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html)用于节点/Skin/动画插值契约，[Khronos 蒙皮示例](https://github.khronos.org/glTF-Tutorials/gltfTutorial/gltfTutorial_020_Skins.html)用于参考空间校验；[MMDFormats 源实现](https://github.com/oguna/MMDFormats)仅作为 parser 候选与行为参考，不自动引入依赖，实施时审查版本、覆盖范围和许可。
+
 ### 长期候选
 
 - Vulkan 后端实际实现，而不只是接口预埋：先统一 RendererAPI/Buffer/VertexArray/Texture/Shader 后端创建入口，再建立 Context、Surface、Swapchain 与帧同步，以及 Render Pass/Pipeline/Descriptor/Command Buffer 映射；定义 GLSL→SPIR-V 编译、反射布局、版本化缓存与热重载失败回退。该候选尚未开始，不改变当前 OpenGL 主线；
@@ -239,6 +331,12 @@ A 的完整完成记录见里程碑；首版限制 64 个操作，超限明确�
 - 发布构建、资源打包与项目模板。
 
 ## 已完成里程碑
+
+### 2026-10-06：P18 模型/动作完整适配方案与 P15 依赖拆分
+
+- 用户要求仅完善文档；新增通用骨骼/动作、glTF/FBX、PMX/VMD、Morph/IK、重定向、Animator、物理、编辑器及内部资产发布的 A～J 实施/验收方案。确认 P15 全量不是动画核心前置，模型纹理收口与发布复用其最小解码/烘焙能力，EXR/Cubemap 不阻塞动作播放。
+- 核验现有静态导入与 Renderer/Scene 边界、Assimp 固定版 PMX 实际入口/VMD parser 状态，并对照 glTF 官方节点/Skin/动画契约。三份文档已复核：本文件保存设计与依赖，ARCHITECTURE/README 只补当前已实现与缺失边界，不将计划记为架构事实。
+- 验证为源码/依赖与文档静态检查、阶段/依赖/状态去重及 git diff --check；无代码修改，未运行构建/GPU。只完成方案，P18-A～J 与 P15 切片均未实施；唯一当前主线仍为 P17-B3；提交：待提交。
 
 ### 2026-10-06：P17-B2 显式 CPU 静态地表快照与版本化查询
 
@@ -769,7 +867,7 @@ A 的完整完成记录见里程碑；首版限制 64 个操作，超限明确�
 - Assimp 是独立生成且不提交产物的静态依赖；Glimmer 的 PreBuildEvent 与 `Verify-Windows.ps1` 会检查产物、构建 Schema、配置、子模块提交和 ccache 状态，过期时自动调用 Ensure/Build 脚本。仍可手动运行 `scripts/Win-BuildAssimp-vs2026.bat Debug|Release` 强制重新配置依赖。
 - `assets/models/Cerberus` 已提交约 175 MiB 的 FBX/TGA 测试资源，但仓库缺少原许可说明；公开分发或商业使用前必须补齐明确的再分发许可，否则应从发布资产与版本化回归中替换为自有小型样本。
 - Model 资源已恢复 Cube、Plane、UV Sphere、bunny、planet、spacecraft、suzanne；注册表中的 `models/New Folder/Cube.obj`、`models/dragon.obj`、`models/UV Sphere.obj` 仍缺少源文件，需要从原设备恢复或移除失效条目。
-- FBX 当前仅支持静态网格并把节点变换烘焙到顶点；尚无单位归一化、保留层级、骨骼/动画、Morph Target、嵌入纹理、自动 `.glmat`/`.glmesh` 烘焙或 glTF/GLB 注册。
+- FBX 当前仅支持静态网格并把节点变换烘焙到顶点；尚无单位归一化、保留层级、骨骼/动画、Morph Target、嵌入纹理、自动 `.glmat`/`.glmesh` 烘焙或 glTF/GLB 注册。PMX/VMD、通用骨骼/蒙皮/Animator、跨骨架重定向与角色物理均未实现，建设范围/依赖/格式支持矩阵集中在 P18；模型纹理资产化复用 P15，不因新增计划宣称任一能力已可用。
 
 ### 编辑器
 
