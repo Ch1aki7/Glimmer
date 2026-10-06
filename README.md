@@ -4642,7 +4642,7 @@ Data v2 的热侵蚀面板使用 **Stable Slope (degrees)**，默认 35°、范�
 
 ## Terrain 配方数据与 CPU 印章参考
 
-Terrain 规格现在可保存有序 `Recipe.Stamps`，配方版本独立于 DataVersion 和 Noise SynthesisVersion。基础地貌来源与 Seed 仍使用原有规格，配方不重复保存 Seed。此处提供引擎数据与 CPU 参考 API；当前 GPU 生成器和 Inspector 尚未消费印章，设置配方不会改变视口地形。
+Terrain 规格现在可保存有序 `Recipe.Stamps`，配方版本独立于 DataVersion 和 Noise SynthesisVersion。基础地貌来源与 Seed 仍使用原有规格，配方不重复保存 Seed。此处提供引擎数据与 CPU 参考 API；GPU 生成链已消费印章，Inspector 尚无印章控件。
 
 印章支持 Ellipse、Rectangle 轮廓与 Add、SetHeight 操作。Center 为 Terrain 局部 XZ，Size 是不含过渡的完整核心宽/深，RotationDegrees 遵循局部 Y 轴旋转；Height 在 Add 中是局部高度增量，在 SetHeight 中是绝对局部 Y。Strength 为 0～1，外侧 TransitionWidth 为零时形成硬边，否则平滑衰减至零。矩形采用有符号距离；椭圆采用按短半轴缩放的径向度量，因此长椭圆外侧过渡不保证精确等距。
 
@@ -4668,3 +4668,17 @@ if (sample.Validation.Valid()) {
 Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与 Stamps；空配方省略新字段，旧场景缺字段仍恢复空列表。保存前验证失败不会替换原文件；加载前预检全部 Terrain 配方，非法配方不会向目标场景添加任何实体。整体 TerrainComponent 快照携带列表，Scene Copy 与 Edit/Play 保持独立副本，既有组件命令可撤销/重做整份配方；当前尚无印章控件。
 
 2026-10-06 的 VS2026 `Debug | x64` 全解决方案构建及无窗口回归通过，共 233 条 PASS 输出。解析平台/过渡、旋转、顺序、裁切和非法输入，以及配方保存/重载、版本拒绝、Scene Copy、预设保留与整份配方 Undo/Redo 均通过；本数据切片没有运行 GPU 数值或视觉验收。
+
+## Terrain GPU 印章合成与失败回退
+
+程序化 Data v2 现在按 `Recipe.Stamps` 顺序执行 GPU 印章。完整链路为 GenerateFBM → Thermal Erosion → ApplyTerrainStamp × 有效操作数 → DeriveTerrainMaps。空列表维持旧路径；禁用或零强度操作不 Dispatch，也不分配印章裁切图。每个有效操作独占一次 Height Ping-Pong，Barrier 后交换，最终高度统一派生法线/坡度、分析与四层材质权重，再作为水文初值。运行时侵蚀仍可改变印章结果，当前没有保护遮罩。
+
+宿主可写入 `terrain.Specification.Recipe.Stamps` 后调用 `TerrainRenderer::Invalidate(terrain)`；当前 Inspector 尚无印章属性入口。引擎只处理普通几何操作，平台的任务含义、地点选择与玩法规则由游戏宿主负责。印章 Shader 默认从生成 Shader 所在目录读取 `ApplyTerrainStamp.comp`，保持该文件与其他 Terrain Compute 一起部署。
+
+`TerrainGenerator::Generate` 返回 bool，失败原因由 `GetLastGenerationError()` 提供。配方或 Shader 校验失败时保留整套已发布高度/派生资源；首次失败没有可绘制结果。Renderer 还保留已发布规格，Color/Shadow/Water 使用同一尺寸、高度与采样版本，防止失败的新参数重新解释旧纹理。`TerrainRuntime::GenerationError` 保留诊断，显式 Invalidate 或成功 Shader 热重载重试。此回退针对受控数据/Shader 失败，不包含设备丢失恢复。
+
+`GetRecipeClipMask()` 返回 R32F 裁切标记，节点值 1 表示任意操作曾越过合法高度范围。普通帧不读回；`ReadRecipeClippedNodeCount()` 是显式同步诊断，会等待 GPU。完整候选发布在重建时额外分配 Height 双缓冲与三张派生图（约 32 字节/节点），有效印章额外增加 4 字节/节点裁切图；分辨率/Shader 更换期间还可能同时保留待发布生成器。当前没有局部脏区或印章批量优化，64 操作上限不代表性能预算已验收。
+
+真实 GPU 验证使用现有固定视角 Fixture，设置 `GLIMMER_TERRAIN_CAPTURE_PATH` 后启动编辑器；`GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 加入中性平台/盆地，`GLIMMER_TERRAIN_RECIPE_VALIDATE=1` 运行 CPU/GPU 数值 Contract，`GLIMMER_TERRAIN_VALIDATE=1` 运行原采样/派生与重复生成验证。测试模式执行同步读回，普通编辑流程不执行这些 Contract。
+
+2026-10-06 的 VS2026 Debug x64 全解决方案构建与无窗口回归通过，235 条 PASS 输出。Intel Iris Xe GPU 上 65×81/129×145、1/3/64 操作、重叠顺序、旋转/过渡/边界、裁切、确定性、非法配方、缺失/编译失败 Shader 的保留/恢复及模拟初值/Reset 均通过；最大归一化高度差 `6.258488e-7`，小于 `1e-5`。512/1024/2048 原采样与派生 Contract 通过，合成表面重复生成/重新派生哈希一致。空配方 Data v1/v2 固定视角 BMP 与改动前逐字节一致；印章 Fixture 已渲染并检查，Inspector 和灰模/阴影/水面专项集成验收尚未完成。

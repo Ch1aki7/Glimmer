@@ -1,0 +1,116 @@
+Scene: Untitled
+Version: 6
+Entities:
+  - Entity: 7051386637414525226
+    Components:
+      TagComponent: Sun
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [-50, 30, 0]
+        Scale: [1, 1, 1]
+      DirectionalLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 1
+        AmbientIntensity: 0.05
+        Enabled: true
+        CastShadows: true
+        ShadowMapResolution: 2048
+        ShadowCascadeCount: 4
+        ShadowDistance: 80
+        ShadowBias: 0.0015
+        ShadowSplitLambda: 0.65
+        ShadowCascadeBlend: 0.1
+  - Entity: 4287994393832218456
+    Components:
+      TagComponent: Point Light
+      TransformComponent:
+        Translation: [0, 12, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      PointLightComponent:
+        Color: [1, 1, 1]
+        Intensity: 80
+        Range: 40
+        Enabled: true
+  - Entity: 690207612799852510
+    Components:
+      TagComponent: Sky Light
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      SkyLightComponent:
+        Cubemap: 1626385373724971314
+        Intensity: 1
+        Enabled: true
+  - Entity: 6727678901245221636
+    Components:
+      TagComponent: Terrain
+      TransformComponent:
+        Translation: [0, 0, 0]
+        Rotation: [0, 0, 0]
+        Scale: [1, 1, 1]
+      TerrainComponent:
+        Procedural: true
+        DataVersion: 2
+        Preset: Alpine
+        HeightMapResolution: 1024
+        MeshResolution: 256
+        WorldSize: 1024
+        HeightScale: 168
+        HeightMap: 0
+        RenderShader: 13614654561704837220
+        GenerationShader: 7633283146183385932
+        ErosionShader: 7633283146183385933
+        DerivationShader: 7633283146183385934
+        TerrainMaterial: 0
+        Noise:
+          SynthesisVersion: 2
+          WorldSpaceFrequency: true
+          Seed: 11
+          Octaves: 7
+          Frequency: 2.4
+          Lacunarity: 2
+          Persistence: 0.48
+          DomainWarp: 0.82
+          RidgeStrength: 0.82
+          ContinentScale: 0.3
+          ErosionStrength: 0.16
+          DetailStrength: 0.08
+          MountainDirection: 0.35
+          MountainWidth: 0.24
+          PlateauStrength: 0
+          GeologyBlend: 0.72
+          GeologyScale: 3.4
+          RiftStrength: 0.08
+          TrendStrength: 0.12
+          Offset: [0, 0]
+        Authoring:
+          EnableThermalErosion: true
+          ThermalIterations: 28
+          Talus: 0.01
+          StableSlopeDegrees: 35
+          ThermalStrength: 0.3
+        Recipe:
+          Version: 1
+          Stamps:
+            - ID: 1
+              Enabled: true
+              Shape: Rectangle
+              Operation: SetHeight
+              Center: [0, 0]
+              Size: [256, 160]
+              RotationDegrees: 23
+              TransitionWidth: 64
+              Strength: 1
+              Height: 67.200005
+            - ID: 2
+              Enabled: true
+              Shape: Ellipse
+              Operation: Add
+              Center: [180, -70]
+              Size: [200, 80]
+              RotationDegrees: 23
+              TransitionWidth: 64
+              Strength: 1
+              Height: -16

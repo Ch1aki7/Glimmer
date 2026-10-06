@@ -8,7 +8,7 @@ namespace gl {
 
 	class OpenGLComputeShader : public ComputeShader {
 	public:
-		explicit OpenGLComputeShader(const std::string& filepath);
+		explicit OpenGLComputeShader(const std::string& filepath, bool assertOnFailure = true);
 		~OpenGLComputeShader() override;
 
 		void Bind() const override;

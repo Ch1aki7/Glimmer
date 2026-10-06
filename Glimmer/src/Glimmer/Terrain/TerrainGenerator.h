@@ -22,9 +22,15 @@ namespace gl {
 			const SimulationGridSpecification& gridSpecification,
 			const std::string& generationShaderPath,
 			const std::string& erosionShaderPath,
-			const std::string& derivationShaderPath);
+			const std::string& derivationShaderPath,
+			const std::string& stampShaderPath = {});
 
-		void Generate(const TerrainSpecification& specification, float worldSize);
+		// Publish complete Height/derived resources only on success.
+		bool Generate(const TerrainSpecification& specification, float worldSize);
+		const std::string& GetLastGenerationError() const { return m_LastGenerationError; }
+		bool HasGeneratedSurface() const { return m_HasGeneratedSurface; }
+		const Ref<Texture2D>& GetRecipeClipMask() const { return m_RecipeClipMask; }
+		uint64_t ReadRecipeClippedNodeCount() const; // Explicit diagnostic readback only.
 		void DeriveMapsFromHeight(const Ref<Texture2D>& heightMap,
 			float heightScale, float worldSize);
 		void Resize(uint32_t width, uint32_t height);
@@ -39,12 +45,20 @@ namespace gl {
 		static TerrainValidationResult ValidateSamplingContract(
 			const std::string& generationShaderPath, const std::string& erosionShaderPath,
 			const std::string& derivationShaderPath);
+		static TerrainValidationResult ValidateRecipeContract(
+			const std::string& generationShaderPath, const std::string& erosionShaderPath,
+			const std::string& derivationShaderPath);
 		const SimulationGridSpecification& GetGridSpecification() const
 		{
 			return m_HeightGrid.GetSpecification();
 		}
 
 	private:
+		TerrainGenerator(const SimulationGridSpecification& grid,
+			const Ref<ComputeShader>& generation, const Ref<ComputeShader>& erosion,
+			const Ref<ComputeShader>& derivation, const Ref<ComputeShader>& stamp);
+		void GenerateCandidate(const TerrainSpecification& specification, float worldSize);
+		void ApplyRecipe(const TerrainSpecification& specification, float worldSize);
 		void CreateDerivedTextures();
 		void Dispatch2D(const Ref<ComputeShader>& shader,
 			bool countGenerationDispatch = true);
@@ -58,6 +72,11 @@ namespace gl {
 		Ref<ComputeShader> m_GenerationShader;
 		Ref<ComputeShader> m_ErosionShader;
 		Ref<ComputeShader> m_DerivationShader;
+		Ref<ComputeShader> m_StampShader;
+		std::string m_StampShaderPath;
+		std::string m_LastGenerationError;
+		Ref<Texture2D> m_RecipeClipMask;
+		bool m_HasGeneratedSurface = false;
 		Ref<Texture2D> m_NormalSlopeMap;
 		Ref<Texture2D> m_AnalysisMap;
 		Ref<Texture2D> m_MaterialWeightMap;

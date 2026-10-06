@@ -45,6 +45,30 @@ namespace gl {
 		terrain.Specification.DerivationShaderHandle = derivationShaderHandle;
 		terrain.Specification.TerrainMaterialHandle = AssetManager::ImportAsset(
 			"assets/materials/DefaultTerrain.glterrainmat");
+		char* recipeFixture = nullptr;
+		size_t recipeFixtureLength = 0;
+		const bool enableRecipeFixture = _dupenv_s(&recipeFixture, &recipeFixtureLength,
+			"GLIMMER_TERRAIN_RECIPE_FIXTURE") == 0 && recipeFixture && std::string(recipeFixture) == "1";
+		std::free(recipeFixture);
+		if (enableRecipeFixture)
+		{
+			terrain.Specification.DataVersion = 2;
+			TerrainStamp platform;
+			platform.ID = 1;
+			platform.Shape = TerrainStampShape::Rectangle;
+			platform.Size = { 256, 160 };
+			platform.Height = terrain.Specification.HeightScale * 0.4f;
+			platform.TransitionWidth = 64;
+			platform.RotationDegrees = 23;
+			TerrainStamp basin = platform;
+			basin.ID = 2;
+			basin.Shape = TerrainStampShape::Ellipse;
+			basin.Operation = TerrainStampOperation::Add;
+			basin.Center = { 180, -70 };
+			basin.Size = { 200, 80 };
+			basin.Height = -16;
+			terrain.Specification.Recipe.Stamps = { platform, basin };
+		}
 		return scene;
 	}
 

@@ -1,8 +1,12 @@
 ﻿#include "glpch.h"
 #include "TerrainGenerator.h"
 #include "Glimmer/Terrain/TerrainSampling.h"
+#include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 
 #include <cmath>
+#include <chrono>
+#include <fstream>
+#include <sstream>
 
 namespace gl {
 
@@ -10,18 +14,70 @@ namespace gl {
 		const SimulationGridSpecification& gridSpecification,
 		const std::string& generationShaderPath,
 		const std::string& erosionShaderPath,
-		const std::string& derivationShaderPath)
+		const std::string& derivationShaderPath, const std::string& stampShaderPath)
 		: m_HeightGrid(gridSpecification),
-		  m_GenerationShader(ComputeShader::Create(generationShaderPath)),
-		  m_ErosionShader(ComputeShader::Create(erosionShaderPath)),
-		  m_DerivationShader(ComputeShader::Create(derivationShaderPath))
+		  m_GenerationShader(ComputeShader::Create(generationShaderPath, false)),
+		  m_ErosionShader(ComputeShader::Create(erosionShaderPath, false)),
+		  m_DerivationShader(ComputeShader::Create(derivationShaderPath, false)),
+		  m_StampShaderPath(stampShaderPath.empty()
+			? (std::filesystem::path(generationShaderPath).parent_path() / "ApplyTerrainStamp.comp").string()
+			: stampShaderPath)
 	{
 		GL_CORE_ASSERT(gridSpecification.Format == TextureFormat::R32F,
 			"TerrainGenerator currently requires an R32F height grid.");
 		CreateDerivedTextures();
 	}
 
-	void TerrainGenerator::Generate(
+	TerrainGenerator::TerrainGenerator(const SimulationGridSpecification& grid,
+		const Ref<ComputeShader>& generation, const Ref<ComputeShader>& erosion,
+		const Ref<ComputeShader>& derivation, const Ref<ComputeShader>& stamp)
+		: m_HeightGrid(grid), m_GenerationShader(generation), m_ErosionShader(erosion),
+		m_DerivationShader(derivation), m_StampShader(stamp)
+	{
+		CreateDerivedTextures();
+	}
+
+	bool TerrainGenerator::Generate(const TerrainSpecification& specification, float worldSize)
+	{
+		const auto validation = ValidateTerrainRecipe(specification.Recipe,
+			specification.HeightScale, specification.DataVersion, specification.Procedural);
+		if (!validation.Valid()) { m_LastGenerationError = validation.Message; return false; }
+		const bool needsStamp = std::any_of(specification.Recipe.Stamps.begin(), specification.Recipe.Stamps.end(),
+			[](const TerrainStamp& stamp) { return stamp.Enabled && stamp.Strength > 0.0f; });
+		if (needsStamp && (m_HeightGrid.GetSpecification().Width < 2 || m_HeightGrid.GetSpecification().Height < 2
+			|| !std::isfinite(worldSize) || worldSize <= 0.0f))
+		{ m_LastGenerationError = "Stamp generation requires a finite positive range and endpoint grid."; return false; }
+		if (needsStamp && !m_StampShader)
+			m_StampShader = ComputeShader::Create(m_StampShaderPath, false);
+		for (const auto& shader : { m_GenerationShader, m_ErosionShader, m_DerivationShader,
+			needsStamp ? m_StampShader : m_GenerationShader })
+		{
+			if (!shader || shader->GetVersion() == 0 || !shader->GetLastReloadResult().Success)
+			{
+				m_LastGenerationError = shader ? shader->GetLastReloadResult().Message : "Compute Shader unavailable.";
+				return false;
+			}
+		}
+		try
+		{
+			TerrainGenerator candidate(m_HeightGrid.GetSpecification(), m_GenerationShader,
+				m_ErosionShader, m_DerivationShader, m_StampShader);
+			candidate.GenerateCandidate(specification, worldSize);
+			std::swap(m_HeightGrid, candidate.m_HeightGrid);
+			m_NormalSlopeMap.swap(candidate.m_NormalSlopeMap);
+			m_AnalysisMap.swap(candidate.m_AnalysisMap);
+			m_MaterialWeightMap.swap(candidate.m_MaterialWeightMap);
+			m_RecipeClipMask.swap(candidate.m_RecipeClipMask);
+			m_LastDispatchCount = candidate.m_LastDispatchCount;
+			m_DataVersion = candidate.m_DataVersion;
+			m_HasGeneratedSurface = true;
+			m_LastGenerationError.clear();
+			return true;
+		}
+		catch (const std::exception& error) { m_LastGenerationError = error.what(); return false; }
+	}
+
+	void TerrainGenerator::GenerateCandidate(
 		const TerrainSpecification& specification,
 		float worldSize)
 	{
@@ -71,13 +127,62 @@ namespace gl {
 		m_HeightGrid.Swap();
 
 		RunThermalErosion(specification.Authoring, specification.HeightScale, worldSize);
+		ApplyRecipe(specification, worldSize);
 		DeriveMaps(specification.HeightScale, worldSize);
+	}
+
+	void TerrainGenerator::ApplyRecipe(const TerrainSpecification& specification, float worldSize)
+	{
+		for (const auto& stamp : specification.Recipe.Stamps)
+		{
+			if (!stamp.Enabled || stamp.Strength == 0.0f) continue;
+			if (!m_RecipeClipMask)
+			{
+				TextureSpecification mask;
+				mask.Width = m_HeightGrid.GetSpecification().Width;
+				mask.Height = m_HeightGrid.GetSpecification().Height;
+				mask.Format = TextureFormat::R32F;
+				mask.MinFilter = mask.MagFilter = TextureFilter::Nearest;
+				mask.WrapS = mask.WrapT = TextureWrap::ClampToEdge;
+				mask.Usage = TextureUsage::Sampled | TextureUsage::Storage | TextureUsage::Readback;
+				m_RecipeClipMask = Texture2D::Create(mask);
+				m_RecipeClipMask->Clear(glm::vec4(0));
+			}
+			const double angle = std::remainder(double(stamp.RotationDegrees), 360.0) * 0.017453292519943295;
+			m_StampShader->Bind();
+			m_StampShader->UploadUniformInt("u_Shape", static_cast<int>(stamp.Shape));
+			m_StampShader->UploadUniformInt("u_Operation", static_cast<int>(stamp.Operation));
+			m_StampShader->UploadUniformFloat2("u_Center", stamp.Center);
+			m_StampShader->UploadUniformFloat2("u_Size", stamp.Size);
+			m_StampShader->UploadUniformFloat2("u_Rotation", { float(std::cos(angle)), float(std::sin(angle)) });
+			m_StampShader->UploadUniformFloat("u_TransitionWidth", stamp.TransitionWidth);
+			m_StampShader->UploadUniformFloat("u_Strength", stamp.Strength);
+			m_StampShader->UploadUniformFloat("u_Height", stamp.Height);
+			m_StampShader->UploadUniformFloat("u_HeightScale", specification.HeightScale);
+			m_StampShader->UploadUniformFloat("u_WorldSize", ClampTerrainWorldSize(worldSize));
+			m_StampShader->BindImageTexture(0, m_HeightGrid.ReadTexture()->GetRendererID(), 0, ImageAccess::Read, ImageFormat::R32F);
+			m_StampShader->BindImageTexture(1, m_HeightGrid.WriteTexture()->GetRendererID(), 0, ImageAccess::Write, ImageFormat::R32F);
+			m_StampShader->BindImageTexture(2, m_RecipeClipMask->GetRendererID(), 0, ImageAccess::ReadWrite, ImageFormat::R32F);
+			Dispatch2D(m_StampShader);
+			ComputeShader::Barrier();
+			m_HeightGrid.Swap();
+		}
+	}
+
+	uint64_t TerrainGenerator::ReadRecipeClippedNodeCount() const
+	{
+		if (!m_RecipeClipMask) return 0;
+		std::vector<float> flags(size_t(m_RecipeClipMask->GetWidth()) * m_RecipeClipMask->GetHeight());
+		m_RecipeClipMask->GetImageData(flags.data(), uint32_t(flags.size() * sizeof(float)));
+		return std::count(flags.begin(), flags.end(), 1.0f);
 	}
 
 	void TerrainGenerator::Resize(uint32_t width, uint32_t height)
 	{
 		m_HeightGrid.Resize(width, height);
 		CreateDerivedTextures();
+		m_RecipeClipMask.reset();
+		m_HasGeneratedSurface = false;
 	}
 
 	void TerrainGenerator::DeriveMapsFromHeight(
@@ -90,8 +195,9 @@ namespace gl {
 	{
 		bool changed = false;
 		for (const Ref<ComputeShader>& shader : {
-			m_GenerationShader, m_ErosionShader, m_DerivationShader })
+			m_GenerationShader, m_ErosionShader, m_DerivationShader, m_StampShader })
 		{
+			if (!shader) continue;
 			const ShaderReloadResult result = shader->ReloadIfChanged();
 			changed |= result.Attempted && result.Success;
 		}
@@ -299,6 +405,133 @@ namespace gl {
 			require(generator.ValidateOutputs().Valid, "Zero height scale maps are not finite.");
 			result.Valid = true;
 			result.Message = "512/1024/2048 planar slope/endpoints, quadratic curvature/soil, stable slope and thermal corner mass PASS";
+		}
+		catch (const std::exception& error) { result.Message = error.what(); }
+		return result;
+	}
+
+	TerrainValidationResult TerrainGenerator::ValidateRecipeContract(
+		const std::string& generationPath, const std::string& erosionPath,
+		const std::string& derivationPath)
+	{
+		TerrainValidationResult result;
+		try
+		{
+			auto require = [](bool condition, const char* message) {
+				if (!condition) throw std::runtime_error(message);
+			};
+			float maximumDifference = 0;
+			for (uint32_t resolution : { 65u, 129u })
+			{
+				SimulationGridSpecification grid;
+				grid.Width = resolution; grid.Height = resolution + 16u;
+				TerrainGenerator generator(grid, generationPath, erosionPath, derivationPath);
+				TerrainSpecification spec;
+				spec.Authoring.EnableThermalErosion = false;
+				require(generator.Generate(spec, spec.WorldSize), "Empty recipe generation failed.");
+				const auto baseHash = generator.ValidateOutputs().Hash;
+				const auto baseDispatches = generator.GetLastDispatchCount();
+				std::vector<float> base(size_t(grid.Width) * grid.Height), actual(base.size());
+				generator.GetHeightMap()->GetImageData(base.data(), uint32_t(base.size() * sizeof(float)));
+				TerrainStamp platform;
+				platform.ID = 1; platform.Shape = TerrainStampShape::Rectangle;
+				platform.Size = { 256, 160 }; platform.Height = spec.HeightScale * 0.4f;
+				platform.TransitionWidth = 64; platform.RotationDegrees = 23;
+				TerrainStamp crater = platform;
+				crater.ID = 2; crater.Shape = TerrainStampShape::Ellipse;
+				crater.Center = { 120, -70 }; crater.Size = { 200, 80 };
+				crater.Operation = TerrainStampOperation::Add; crater.Height = -20;
+				TerrainStamp clip = platform;
+				clip.ID = 3; clip.Center = { spec.WorldSize * 0.5f, -spec.WorldSize * 0.5f };
+				clip.Size = { 128, 128 }; clip.Height = std::numeric_limits<float>::max();
+				clip.TransitionWidth = 0; clip.RotationDegrees = 0;
+				TerrainStamp disabled = platform;
+				disabled.ID = 4; disabled.Enabled = false;
+				TerrainStamp zero = platform; zero.ID = 5; zero.Strength = 0;
+				for (int scenario = 0; scenario < 5; ++scenario)
+				{
+					if (scenario == 0) spec.Recipe.Stamps = { platform };
+					if (scenario == 1) spec.Recipe.Stamps = { platform, crater, clip, disabled, zero };
+					if (scenario == 2) spec.Recipe.Stamps = { crater, platform };
+					if (scenario == 3) spec.Recipe.Stamps = { disabled, zero };
+					if (scenario == 4)
+					{
+						spec.Recipe.Stamps.clear();
+						for (uint64_t i = 0; i < 64; ++i)
+						{
+							auto stamp = crater; stamp.ID = i + 100;
+							stamp.Height = i % 2 ? 0.5f : -0.25f;
+							stamp.Center += glm::vec2(float(i), -float(i));
+							spec.Recipe.Stamps.push_back(stamp);
+						}
+					}
+					require(generator.Generate(spec, spec.WorldSize), "Stamp candidate generation failed.");
+					const auto generated = generator.ValidateOutputs();
+					require(generated.Valid, "Stamp height/derived maps are invalid.");
+					generator.GetHeightMap()->GetImageData(actual.data(), uint32_t(actual.size() * sizeof(float)));
+					uint64_t expectedClipped = 0;
+					TerrainSamplingGrid xGrid(grid.Width, spec.WorldSize, TerrainSampleLayout::EndpointNodes);
+					TerrainSamplingGrid zGrid(grid.Height, spec.WorldSize, TerrainSampleLayout::EndpointNodes);
+					for (uint32_t z = 0; z < grid.Height; ++z)
+						for (uint32_t x = 0; x < grid.Width; ++x)
+						{
+							const size_t index = size_t(z) * grid.Width + x;
+							const auto expected = EvaluateTerrainRecipe(spec.Recipe, { xGrid.Position(x), zGrid.Position(z) }, base[index], spec.HeightScale);
+							require(expected.Validation.Valid(), "CPU stamp reference failed.");
+							expectedClipped += expected.Clipped;
+							maximumDifference = std::max(maximumDifference, std::abs(actual[index] - expected.NormalizedHeight));
+						}
+					require(maximumDifference <= 1e-5f, "CPU/GPU stamp height exceeds normalized tolerance 1e-5.");
+					require(generator.ReadRecipeClippedNodeCount() == expectedClipped, "GPU clipping diagnostic differs from CPU.");
+					if (scenario == 3)
+						require(generated.Hash == baseHash && generator.GetLastDispatchCount() == baseDispatches
+							&& !generator.GetRecipeClipMask(), "Disabled/zero-strength stamps alter the old path.");
+					require(generator.Generate(spec, spec.WorldSize) && generator.ValidateOutputs().Hash == generated.Hash,
+						"Stamp generation is not deterministic.");
+					const auto publishedHeight = generator.GetHeightMap();
+					const auto publishedNormal = generator.GetNormalSlopeMap();
+					const auto publishedMask = generator.GetRecipeClipMask();
+					spec.Recipe.Version = 999;
+					require(!generator.Generate(spec, spec.WorldSize) && generator.GetHeightMap() == publishedHeight
+						&& generator.GetNormalSlopeMap() == publishedNormal && generator.GetRecipeClipMask() == publishedMask
+						&& generator.ValidateOutputs().Hash == generated.Hash, "Rejected recipe changes the published surface.");
+					spec.Recipe.Version = TerrainRecipe::CurrentVersion;
+				}
+				const auto publishedHash = generator.ValidateOutputs().Hash;
+				const auto originalStampShader = generator.m_StampShader;
+				generator.m_StampShader = ComputeShader::Create((std::filesystem::temp_directory_path()
+					/ "Glimmer-Missing-Stamp-Shader.comp").string(), false);
+				require(!generator.Generate(spec, spec.WorldSize) && generator.ValidateOutputs().Hash == publishedHash,
+					"Missing stamp shader modifies the published surface.");
+				generator.m_StampShader = originalStampShader;
+				const auto invalidShaderPath = std::filesystem::temp_directory_path()
+					/ ("Glimmer-Invalid-Stamp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".comp");
+				{ std::ofstream invalidShader(invalidShaderPath); invalidShader << "#version 450 core\ninvalid shader syntax\n"; }
+				generator.m_StampShader = ComputeShader::Create(invalidShaderPath.string(), false);
+				std::filesystem::remove(invalidShaderPath);
+				require(!generator.Generate(spec, spec.WorldSize) && generator.ValidateOutputs().Hash == publishedHash,
+					"Invalid stamp shader modifies the published surface.");
+				generator.m_StampShader = originalStampShader;
+				require(generator.Generate(spec, spec.WorldSize), "Generation cannot recover after shader failure.");
+				// Simulation consumes the composed static height and resets to that initial surface.
+				const auto folder = std::filesystem::path(generationPath).parent_path();
+				TerrainHydrologyGPU hydrology(grid.Width, grid.Height, folder / "HydrologyFlux.comp",
+					folder / "HydrologyUpdate.comp", folder / "SedimentTransport.comp",
+					folder / "SedimentCapacity.comp", folder / "ErosionDeposition.comp");
+				hydrology.SetInitialHeightMap(generator.GetHeightMap(), spec.HeightScale, spec.WorldSize);
+				hydrology.GetHeightTexture()->GetImageData(actual.data(), uint32_t(actual.size() * sizeof(float)));
+				std::vector<float> composed(actual.size());
+				generator.GetHeightMap()->GetImageData(composed.data(), uint32_t(composed.size() * sizeof(float)));
+				require(actual == composed, "Simulation initial height does not use stamp output.");
+				hydrology.Reset();
+				hydrology.GetHeightTexture()->GetImageData(actual.data(), uint32_t(actual.size() * sizeof(float)));
+				require(actual == composed, "Simulation Reset does not restore stamp output.");
+			}
+			result.Valid = true;
+			std::ostringstream message;
+			message << "65x81/129x145 CPU/GPU, 1/3/64 stamps, order, clipping, determinism, failure retention and simulation initial/Reset PASS; max normalized difference="
+				<< std::scientific << maximumDifference;
+			result.Message = message.str();
 		}
 		catch (const std::exception& error) { result.Message = error.what(); }
 		return result;

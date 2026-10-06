@@ -841,6 +841,19 @@ namespace {
 		runtimeTerrain.Specification.Recipe.Stamps[0].Height = 31;
 		context.Check(!runtimeTerrain.Runtime && Near(spec.Recipe.Stamps[0].Height, 60),
 			"Play scene recipe edits do not contaminate the editor recipe");
+		gl::TerrainComponent published;
+		published.Runtime = gl::CreateRef<gl::TerrainRuntime>();
+		published.Runtime->PublishedSpecification = published.Specification;
+		published.Runtime->HasPublishedSpecification = true;
+		published.Specification.HeightScale = 777;
+		published.Specification.WorldSize = 2048;
+		published.Specification.DataVersion = 1;
+		const auto& surface = gl::TerrainRenderer::GetSurfaceSpecification(published);
+		context.Check(surface.HeightScale != 777 && surface.WorldSize != 2048 && surface.DataVersion == 2,
+			"render consumers retain published scale, extent and sampling version until regeneration succeeds");
+		const gl::TerrainComponent copiedPublished = published;
+		context.Check(!copiedPublished.Runtime && gl::TerrainRenderer::GetSurfaceSpecification(copiedPublished).HeightScale == 777,
+			"copied terrain drops publication state and starts from its own desired specification");
 		gl::TerrainComponent before = entity.GetComponent<gl::TerrainComponent>();
 		gl::TerrainComponent after = before;
 		std::swap(after.Specification.Recipe.Stamps[0], after.Specification.Recipe.Stamps[1]);

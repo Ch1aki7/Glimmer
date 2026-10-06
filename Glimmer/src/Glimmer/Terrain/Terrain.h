@@ -15,6 +15,11 @@ namespace gl {
 	struct TerrainRuntime
 	{
 		Scope<TerrainGenerator> Generator;
+		Scope<TerrainGenerator> PendingGenerator;
+		TerrainSpecification PendingSpecification;
+		TerrainSpecification PublishedSpecification;
+		bool HasPublishedSpecification = false;
+		std::string GenerationError;
 		Scope<TerrainHydrologyRuntime> Hydrology;
 		Scope<TerrainHydrologyGPU> GPUHydrology;
 		Scope<TerrainClimateGPU> GPUClimate;
@@ -45,6 +50,7 @@ namespace gl {
 		uint32_t LastGenerationDispatchCount = 0;
 		uint64_t GenerationVersion = 0;
 		bool ValidationComplete = false;
+		bool RecipeValidationComplete = false;
 		bool Dirty = true;
 	};
 }

@@ -6,12 +6,12 @@
 
 namespace gl {
 
-	Ref<ComputeShader> ComputeShader::Create(const std::string& filepath)
+	Ref<ComputeShader> ComputeShader::Create(const std::string& filepath, bool assertOnFailure)
 	{
 		switch (Renderer::GetAPI())
 		{
 		case RendererAPI::API::None:   GL_CORE_ASSERT(false, "RendererAPI::None not supported!"); return nullptr;
-		case RendererAPI::API::OpenGL: return CreateRef<OpenGLComputeShader>(filepath);
+		case RendererAPI::API::OpenGL: return CreateRef<OpenGLComputeShader>(filepath, assertOnFailure);
 		case RendererAPI::API::Vulkan: GL_CORE_ASSERT(false, "Vulkan backend not yet implemented!"); return nullptr;
 		}
 		return nullptr;

@@ -1,0 +1,56 @@
+#version 450 core
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(r32f, binding = 0) readonly uniform image2D u_InputHeight;
+layout(r32f, binding = 1) writeonly uniform image2D u_OutputHeight;
+// One invocation owns one flag; Dispatch barriers preserve prior clipping marks.
+layout(r32f, binding = 2) uniform image2D u_ClipMask;
+uniform int u_Shape;
+uniform int u_Operation;
+uniform vec2 u_Center;
+uniform vec2 u_Size;
+uniform vec2 u_Rotation;
+uniform float u_TransitionWidth;
+uniform float u_Strength;
+uniform float u_Height;
+uniform float u_HeightScale;
+uniform float u_WorldSize;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(u_InputHeight);
+    if (any(greaterThanEqual(pixel, size))) return;
+    float source = imageLoad(u_InputHeight, pixel).r;
+    // Match TerrainSamplingGrid endpoint positions, then use double arithmetic.
+    vec2 position = vec2(-u_WorldSize * 0.5) + vec2(pixel) * (vec2(u_WorldSize) / vec2(size - 1));
+    dvec2 delta = dvec2(position) - dvec2(u_Center);
+    dvec2 p = dvec2(double(u_Rotation.x) * delta.x - double(u_Rotation.y) * delta.y,
+                   double(u_Rotation.y) * delta.x + double(u_Rotation.x) * delta.y);
+    dvec2 halfSize = dvec2(u_Size) * 0.5lf;
+    double distance;
+    if (u_Shape == 0)
+        distance = (length(p / halfSize) - 1.0lf) * min(halfSize.x, halfSize.y);
+    else
+    {
+        dvec2 q = abs(p) - halfSize;
+        distance = length(max(q, dvec2(0))) + min(max(q.x, q.y), 0.0lf);
+    }
+    double weight = distance <= 0.0lf ? 1.0lf : 0.0lf;
+    if (distance > 0.0lf && u_TransitionWidth > 0.0)
+    {
+        double t = clamp(distance / double(u_TransitionWidth), 0.0lf, 1.0lf);
+        weight = 1.0lf - t * t * (3.0lf - 2.0lf * t);
+    }
+    weight *= double(u_Strength);
+    float result = source;
+    if (weight > 0.0lf)
+    {
+        double height = double(source) * double(u_HeightScale);
+        double composed = u_Operation == 0 ? height + weight * double(u_Height)
+            : height + weight * (double(u_Height) - height);
+        double bounded = clamp(composed, 0.0lf, double(u_HeightScale));
+        if (bounded != composed) imageStore(u_ClipMask, pixel, vec4(1.0));
+        result = float(bounded / double(u_HeightScale));
+    }
+    imageStore(u_OutputHeight, pixel, vec4(result));
+}

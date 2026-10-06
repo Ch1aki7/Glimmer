@@ -1,4 +1,5 @@
 #include "glpch.h"
+#include "Glimmer/Renderer/TerrainRenderer.h"
 #include "ShadowRenderer.h"
 
 #include "Glimmer/Asset/AssetManager.h"
@@ -558,22 +559,23 @@ namespace gl {
 		if (!s_Data.PassActive || !terrain.Runtime || !terrain.Runtime->Mesh
 			|| !terrain.Runtime->HeightMap)
 			return;
-		const float minimumHeight = std::min(0.0f, terrain.Specification.HeightScale);
-		const float maximumHeight = std::max(0.0f, terrain.Specification.HeightScale);
+		const auto& specification = TerrainRenderer::GetSurfaceSpecification(terrain);
+		const float minimumHeight = std::min(0.0f, specification.HeightScale);
+		const float maximumHeight = std::max(0.0f, specification.HeightScale);
 		s_Data.DepthShader->UploadUniformInt("u_IsTerrain", 1);
 		s_Data.DepthShader->UploadUniformInt("u_AlphaMaskEnabled", 0);
 		s_Data.DepthShader->UploadUniformInt("u_UseInstancing", 0);
 		s_Data.DepthShader->UploadUniformMat4("u_Transform", transform);
 		s_Data.DepthShader->UploadUniformFloat(
-			"u_MaxHeight", terrain.Specification.HeightScale);
+			"u_MaxHeight", specification.HeightScale);
 		s_Data.DepthShader->UploadUniformInt("u_TerrainDataVersion",
-			terrain.Specification.Procedural
-				? std::clamp(terrain.Specification.DataVersion, 1u, 2u) : 1u);
+			specification.Procedural
+				? std::clamp(specification.DataVersion, 1u, 2u) : 1u);
 		s_Data.DepthShader->UploadUniformFloat("u_SkirtDepth", std::max(
-			2.0f, std::abs(terrain.Specification.HeightScale) * 0.08f));
+			2.0f, std::abs(specification.HeightScale) * 0.08f));
 		terrain.Runtime->HeightMap->Bind(0);
 		const float terrainWorldSize = ClampTerrainWorldSize(
-			terrain.Specification.WorldSize);
+			specification.WorldSize);
 		const auto chunks = TerrainChunkLayout::Build(
 			terrainWorldSize, terrain.Runtime->Mesh->GetGridSize());
 		for (const TerrainChunkRegion& chunk : chunks)

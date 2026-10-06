@@ -95,6 +95,21 @@ namespace gl {
 			return generationPath.parent_path() / fallbackFileName;
 		}
 
+		bool ShouldValidateRecipe()
+		{
+#ifdef GL_PLATFORM_WINDOWS
+			char* value = nullptr;
+			size_t length = 0;
+			const bool enabled = _dupenv_s(&value, &length, "GLIMMER_TERRAIN_RECIPE_VALIDATE") == 0
+				&& value && std::string(value) == "1";
+			std::free(value);
+			return enabled;
+#else
+			const char* value = std::getenv("GLIMMER_TERRAIN_RECIPE_VALIDATE");
+			return value && std::string(value) == "1";
+#endif
+		}
+
 		bool ShouldValidateTerrain()
 		{
 #ifdef GL_PLATFORM_WINDOWS
@@ -230,6 +245,12 @@ namespace gl {
 		}
 	}
 
+	const TerrainSpecification& TerrainRenderer::GetSurfaceSpecification(const TerrainComponent& component)
+	{
+		return component.Runtime && component.Runtime->HasPublishedSpecification
+			? component.Runtime->PublishedSpecification : component.Specification;
+	}
+
 	bool TerrainRenderer::Prepare(TerrainComponent& component)
 	{
 		auto& specification = component.Specification;
@@ -239,60 +260,76 @@ namespace gl {
 			component.Runtime = CreateRef<TerrainRuntime>();
 		auto& runtime = *component.Runtime;
 
-		const uint32_t sharedMeshResolution =
-			TerrainChunkLayout::CalculateSharedMeshResolution(
-				specification.MeshResolution);
-		if (!runtime.Mesh
-			|| runtime.LoadedMeshResolution != sharedMeshResolution)
-		{
-			const auto resolutions =
-				TerrainChunkLayout::CalculateLODResolutions(sharedMeshResolution);
-			for (size_t level = 0; level < runtime.LODMeshes.size(); ++level)
-				runtime.LODMeshes[level] = CreateRef<TerrainMesh>(resolutions[level]);
-			runtime.Mesh = runtime.LODMeshes[0];
-			runtime.LoadedMeshResolution = sharedMeshResolution;
-		}
+		auto generationFailed = [&runtime](const std::string& message) {
+			if (runtime.GenerationError != message) GL_CORE_ERROR("Terrain generation rejected: {0}", message);
+			runtime.GenerationError = message;
+			return runtime.HasPublishedSpecification && runtime.HeightMap != nullptr;
+		};
+		const auto recipeValidation = ValidateTerrainRecipe(specification.Recipe,
+			specification.HeightScale, specification.DataVersion, specification.Procedural);
+		if (!recipeValidation.Valid()) return generationFailed(recipeValidation.Message);
+
+		auto sameConfiguration = [](const TerrainSpecification& a, const TerrainSpecification& b) {
+			return a.GenerationShaderHandle == b.GenerationShaderHandle && a.ErosionShaderHandle == b.ErosionShaderHandle
+				&& a.DerivationShaderHandle == b.DerivationShaderHandle && a.HeightMapResolution == b.HeightMapResolution;
+		};
 
 		if (specification.Procedural)
 		{
 			const auto generationPath = AssetManager::GetFileSystemPath(specification.GenerationShaderHandle);
 			if (generationPath.empty())
-				return false;
+				return generationFailed("Terrain generation Shader path is unavailable.");
 			const auto erosionPath = ResolveComputePath(
 				specification.ErosionShaderHandle, generationPath,
 				"ThermalErosion.comp");
 			const auto derivationPath = ResolveComputePath(
 				specification.DerivationShaderHandle, generationPath,
 				"DeriveTerrainMaps.comp");
-			if (!runtime.Generator
-				|| runtime.LoadedGenerationShaderHandle != specification.GenerationShaderHandle
-				|| runtime.LoadedErosionShaderHandle != specification.ErosionShaderHandle
-				|| runtime.LoadedDerivationShaderHandle != specification.DerivationShaderHandle
-				|| runtime.LoadedHeightMapResolution != specification.HeightMapResolution)
+			const bool needsGenerator = !runtime.Generator
+				|| !sameConfiguration(runtime.PublishedSpecification, specification);
+			if (needsGenerator && (!runtime.PendingGenerator || !sameConfiguration(runtime.PendingSpecification, specification)))
 			{
-				runtime.Generator = CreateScope<TerrainGenerator>(
+				runtime.PendingGenerator = CreateScope<TerrainGenerator>(
 					CreateGridSpecification(std::max(specification.HeightMapResolution, 1u)),
 					generationPath.string(), erosionPath.string(), derivationPath.string());
+				runtime.PendingSpecification = specification;
+				runtime.Dirty = true;
+			}
+			TerrainGenerator* generator = needsGenerator ? runtime.PendingGenerator.get() : runtime.Generator.get();
+			if (generator->ReloadShadersIfChanged())
+				runtime.Dirty = true;
+			if (runtime.Dirty)
+			{
+				runtime.Dirty = false; // Retry only on explicit invalidation or a successful shader reload.
+				if (!generator->Generate(specification, terrainWorldSize))
+					return generationFailed(generator->GetLastGenerationError());
+				if (needsGenerator) runtime.Generator = std::move(runtime.PendingGenerator);
+				else runtime.PendingGenerator.reset();
+				runtime.PublishedSpecification = specification;
+				runtime.HasPublishedSpecification = true;
+				runtime.GenerationError.clear();
 				runtime.LoadedGenerationShaderHandle = specification.GenerationShaderHandle;
 				runtime.LoadedErosionShaderHandle = specification.ErosionShaderHandle;
 				runtime.LoadedDerivationShaderHandle = specification.DerivationShaderHandle;
 				runtime.LoadedHeightMapResolution = specification.HeightMapResolution;
-				runtime.Dirty = true;
-			}
-			if (runtime.Generator->ReloadShadersIfChanged())
-				runtime.Dirty = true;
-			if (runtime.Dirty)
-			{
-				runtime.Generator->Generate(specification, terrainWorldSize);
 				runtime.LastGenerationDispatchCount =
 					runtime.Generator->GetLastDispatchCount();
 				++runtime.GenerationVersion;
 				runtime.Dirty = false;
 			}
+			if (!runtime.GenerationError.empty()) return generationFailed(runtime.GenerationError);
 			runtime.HeightMap = runtime.Generator->GetHeightMap();
 			runtime.NormalSlopeMap = runtime.Generator->GetNormalSlopeMap();
 			runtime.AnalysisMap = runtime.Generator->GetAnalysisMap();
 			runtime.MaterialWeightMap = runtime.Generator->GetMaterialWeightMap();
+			if (!runtime.RecipeValidationComplete && ShouldValidateRecipe())
+			{
+				const auto contract = TerrainGenerator::ValidateRecipeContract(
+					generationPath.string(), erosionPath.string(), derivationPath.string());
+				runtime.RecipeValidationComplete = true;
+				if (contract.Valid) GL_CORE_INFO("Terrain recipe GPU contract PASS: {0}", contract.Message);
+				else GL_CORE_ERROR("Terrain recipe GPU contract FAIL: {0}", contract.Message);
+			}
 
 			if (!runtime.ValidationComplete && ShouldValidateTerrain())
 			{
@@ -351,6 +388,21 @@ namespace gl {
 
 		if (!runtime.HeightMap)
 			return false;
+		if (!specification.Procedural)
+		{
+			runtime.PublishedSpecification = specification;
+			runtime.HasPublishedSpecification = true;
+			runtime.GenerationError.clear();
+		}
+		const uint32_t sharedMeshResolution = TerrainChunkLayout::CalculateSharedMeshResolution(specification.MeshResolution);
+		if (!runtime.Mesh || runtime.LoadedMeshResolution != sharedMeshResolution)
+		{
+			const auto resolutions = TerrainChunkLayout::CalculateLODResolutions(sharedMeshResolution);
+			for (size_t level = 0; level < runtime.LODMeshes.size(); ++level)
+				runtime.LODMeshes[level] = CreateRef<TerrainMesh>(resolutions[level]);
+			runtime.Mesh = runtime.LODMeshes[0];
+			runtime.LoadedMeshResolution = sharedMeshResolution;
+		}
 
 		if (specification.Procedural
 			&& runtime.HeightMap->GetFormat() == TextureFormat::R32F)
@@ -539,7 +591,7 @@ namespace gl {
 	{
 		if (!Prepare(component))
 			return;
-		auto& specification = component.Specification;
+		const auto& specification = GetSurfaceSpecification(component);
 		auto& runtime = *component.Runtime;
 		const Ref<Shader> shader = AssetManager::GetShader(specification.RenderShaderHandle);
 		if (!shader)
@@ -788,6 +840,7 @@ namespace gl {
 		{
 			component.Runtime->Dirty = true;
 			component.Runtime->ValidationComplete = false;
+			component.Runtime->RecipeValidationComplete = false;
 		}
 	}
 

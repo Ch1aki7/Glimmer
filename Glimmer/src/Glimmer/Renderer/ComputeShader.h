@@ -35,7 +35,8 @@ namespace gl {
 		virtual ShaderReloadResult ReloadIfChanged() = 0;
 
 		static void Barrier();
-		static Ref<ComputeShader> Create(const std::string& filepath);
+		// Optional passes can report compilation failure without terminating the host.
+		static Ref<ComputeShader> Create(const std::string& filepath, bool assertOnFailure = true);
 	};
 
 }

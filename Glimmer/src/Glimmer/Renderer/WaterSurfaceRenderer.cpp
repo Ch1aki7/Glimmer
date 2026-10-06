@@ -96,7 +96,7 @@ namespace gl {
 			if (!instance.Terrain || !instance.Terrain->Runtime) continue;
 			const auto& runtime = *instance.Terrain->Runtime;
 			if (!runtime.GPUHydrology || !runtime.HeightMap || !runtime.Mesh) continue;
-			const auto& terrain = instance.Terrain->Specification;
+			const auto& terrain = TerrainRenderer::GetSurfaceSpecification(*instance.Terrain);
 			if (!std::isfinite(terrain.HeightScale)) continue;
 			const float worldSize = ClampTerrainWorldSize(terrain.WorldSize);
 			if (!std::isfinite(glm::determinant(instance.Transform))

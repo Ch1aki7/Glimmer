@@ -9,6 +9,7 @@ namespace gl {
 	class TerrainRenderer
 	{
 	public:
+		static const TerrainSpecification& GetSurfaceSpecification(const TerrainComponent& component);
 		enum class SamplingMode : int
 		{
 			FullFourLayers = 0,

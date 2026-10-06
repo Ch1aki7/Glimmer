@@ -8,13 +8,14 @@
 
 namespace gl {
 
-	OpenGLComputeShader::OpenGLComputeShader(const std::string& filepath)
+	OpenGLComputeShader::OpenGLComputeShader(const std::string& filepath, bool assertOnFailure)
 		: m_Name(std::filesystem::path(filepath).stem().string()),
 		  m_FilePath(filepath),
 		  m_FileWatcher(std::make_unique<FileWatcher>(m_FilePath))
 	{
 		const ShaderReloadResult result = Reload();
-		GL_CORE_ASSERT(result.Success, "Initial compute shader compilation failed: {0}", result.Message);
+		if (assertOnFailure)
+			GL_CORE_ASSERT(result.Success, "Initial compute shader compilation failed: {0}", result.Message);
 	}
 
 	OpenGLComputeShader::~OpenGLComputeShader()
