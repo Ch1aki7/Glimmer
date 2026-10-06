@@ -698,6 +698,54 @@ namespace {
 		}
 	}
 
+	void TestTerrainSurfaceSnapshot(TestContext& context)
+	{
+		using Status = gl::TerrainQueryStatus;
+		gl::TerrainSurfaceSnapshot snapshot;
+		const gl::TerrainSurfaceVersion version{ 41, 7 };
+		context.Check(snapshot.Query({ 0, 0 }, version).Status == Status::NotReady, "uninitialized surface snapshot reports not ready");
+		std::vector<float> heights;
+		for (int z = 0; z < 3; ++z) for (int x = 0; x < 5; ++x)
+			heights.push_back(float(0.5 + 0.02 * (-10 + 5 * x) + 0.01 * (-10 + 10 * z)));
+		context.Check(snapshot.Initialize(5, 3, 20, 100, version, heights) == Status::Ready, "rectangular endpoint snapshot validates nodes and version");
+		const auto plane = snapshot.Query({ 2.5f, -3 }, version);
+		context.Check(plane.Status == Status::Ready && Near(plane.Height, 52)
+			&& Near(plane.SlopeDegrees, float(std::atan(std::sqrt(5.0)) * 57.29577951308232))
+			&& glm::length(plane.Normal - glm::normalize(glm::vec3(-2, 1, -1))) < 1e-5,
+			"physical bilinear query matches analytic plane height, normal and slope");
+		context.Check(Near(snapshot.Query({ -10, -10 }, version).Height, 20) && Near(snapshot.Query({ 10, 10 }, version).Height, 80),
+			"both terrain endpoints remain queryable without extrapolation");
+		context.Check(snapshot.Query({ 10.01f, 0 }, version).Status == Status::OutOfBounds
+			&& snapshot.Query({ 0, -10.01f }, version).Status == Status::OutOfBounds, "surface query rejects bounds instead of clamping");
+		context.Check(snapshot.Query({ NAN, 0 }, version).Status == Status::InvalidPosition
+			&& snapshot.Query({ 0, INFINITY }, version).Status == Status::InvalidPosition, "surface query rejects non-finite coordinates");
+		context.Check(snapshot.Query({ 0, 0 }, { 41, 8 }).Status == Status::StaleVersion
+			&& snapshot.Query({ 0, 0 }, { 42, 7 }).Status == Status::StaleVersion && snapshot.Query({ 0, 0 }, {}).Status == Status::NotReady,
+			"query checks generation, Runtime identity and unavailable publication");
+		heights[0] = NAN;
+		context.Check(snapshot.Initialize(5, 3, 20, 100, version, heights) == Status::InvalidData
+			&& snapshot.Query({ 0, 0 }, version).Status == Status::Ready, "invalid replacement preserves complete CPU snapshot");
+		context.Check(snapshot.Initialize(1, 2, 20, 100, version, { 0, 0 }) == Status::InvalidData
+			&& snapshot.Initialize(2, 2, 0, 100, version, { 0, 0, 0, 0 }) == Status::InvalidData
+			&& snapshot.Initialize(2, 2, 20, -1, version, { 0, 0, 0, 0 }) == Status::InvalidData
+			&& snapshot.Initialize(2, 2, 20, 100, {}, { 0, 0, 0, 0 }) == Status::InvalidData
+			&& snapshot.Initialize(2, 2, INFINITY, 100, version, { 0, 0, 0, 0 }) == Status::InvalidData
+			&& snapshot.Initialize(2, 2, 20, INFINITY, version, { 0, 0, 0, 0 }) == Status::InvalidData
+			&& snapshot.Initialize(2, 2, 20, 100, version, { 0, 0, 0 }) == Status::InvalidData
+			&& snapshot.Initialize(2, 2, 20, 100, version, { 0, 0, 1.1f, 0 }) == Status::InvalidData,
+			"snapshot rejects invalid dimensions, scales, version and storage range");
+		snapshot.Initialize(2, 2, 2, 10, version, { 0, 0, 0, 1 });
+		const auto saddle = snapshot.Query({ 0, 0 }, version);
+		context.Check(Near(saddle.Height, 2.5f) && Near(saddle.SlopeDegrees, float(std::atan(std::sqrt(12.5)) * 57.29577951308232)),
+			"nonplanar cell uses bilinear heightfield rather than mesh triangulation");
+		snapshot.Initialize(2, 2, 2, 0, version, { 0, 1, 1, 0 });
+		context.Check(snapshot.Query({ 0, 0 }, version).Height == 0 && snapshot.Query({ 0, 0 }, version).SlopeDegrees == 0,
+			"zero height scale produces a flat physical query surface");
+		gl::TerrainComponent unprepared;
+		context.Check(gl::TerrainRenderer::CaptureSurfaceSnapshot(unprepared, snapshot) == Status::NotReady && !unprepared.Runtime,
+			"explicit capture does not prepare or allocate unavailable Terrain Runtime");
+	}
+
 	void TestTerrainProtection(TestContext& context)
 	{
 		gl::TerrainRecipe recipe;
@@ -2199,6 +2247,7 @@ int main(int argc, char** argv)
 	TestTerrainRecipe(context, temporaryDirectory.Path());
 	TestTerrainRecipeEditor(context);
 	TestTerrainProtection(context);
+	TestTerrainSurfaceSnapshot(context);
 	std::cout << "[RUN] Terrain presets\n";
 	TestTerrainPresets(context);
 	std::cout << "[RUN] Terrain sampling contract\n";

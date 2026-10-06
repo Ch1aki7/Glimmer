@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Glimmer/Scene/Components.h"
+#include "Glimmer/Terrain/TerrainSurfaceSnapshot.h"
 #include "Glimmer/Simulation/TerrainHydrologyGPU.h"
 #include "Glimmer/Simulation/TerrainClimateGPU.h"
 #include "Glimmer/Simulation/TerrainEnvironmentGPU.h"
@@ -10,6 +11,9 @@ namespace gl {
 	{
 	public:
 		static const TerrainSpecification& GetSurfaceSpecification(const TerrainComponent& component);
+		static TerrainSurfaceVersion GetSurfaceVersion(const TerrainComponent& component);
+		// Explicit synchronous GPU readback on the render/context thread; never calls Prepare.
+		static TerrainQueryStatus CaptureSurfaceSnapshot(const TerrainComponent& component, TerrainSurfaceSnapshot& snapshot);
 		enum class SamplingMode : int
 		{
 			FullFourLayers = 0,

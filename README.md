@@ -4711,6 +4711,32 @@ if (sample.Validation.Valid()) {
 
 GPU `TerrainGenerator::GetProtectionMap()` 与 `TerrainRuntime::ProtectionMap` 提供 R32F 纹理，采用与高度一致的端点节点、Nearest/ClampToEdge。没有有效印章时为空，消费方按全零保护解释。保护图在原印章 Dispatch 内合并，无新增 Dispatch；与高度/派生图一起发布，受控生成失败保留旧图，成功导入高度图清空引用。Runtime 引用对应已发布 GenerationVersion，配方 YAML 无新增字段，版本仍为 1。
 
-保护权重、合成与解析抑制由引擎拥有；游戏宿主负责决定哪些位置需要印章及其玩法含义。目前没有实际高频细节或侵蚀保护消费者，也没有编辑器遮罩预览或 CPU 地表快照。普通帧没有新增同步回读；数值验证复用 `GLIMMER_TERRAIN_RECIPE_VALIDATE=1`，编辑闭环复用 `GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`，两者分开运行。
+保护权重、合成与解析抑制由引擎拥有；游戏宿主负责决定哪些位置需要印章及其玩法含义。目前没有实际高频细节或侵蚀保护消费者，也没有编辑器遮罩预览；CPU 静态地表快照见下节。普通帧没有新增同步回读；数值验证复用 `GLIMMER_TERRAIN_RECIPE_VALIDATE=1`，编辑闭环复用 `GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`，两者分开运行。
 
 2026-10-06 的 VS2026 Debug x64 全解决方案构建与 255 条无窗口 PASS 输出通过，完全链接产物位于本地 `bin/P17-B1-review/`，原编辑器窗口保留。Intel Iris Xe 的 65×81/129×145 GPU Contract 覆盖 max 并集、重排、零高度增量、分数强度、解析正负残差、确定性与失败后引用/内容保留；保护权重最大差 `5.960464e-8`，高度最大差仍为 `6.258488e-7`。编辑闭环中的保护图 Resize/失败保留/导入清理通过；原采样/派生 Contract、表面哈希与空配方 Data v1/v2 逐字节图像基线保持。
+
+## Terrain 显式静态地表快照与查询
+
+已发布的 Data v2 程序化地形可以显式捕获 CPU 高度快照。捕获必须在有 GL Context 的线程执行，会同步读回整张静态高度图；不调用 Prepare、不自动生成地形、不在普通帧刷新。每张快照存储约 4 字节/节点的 CPU 高度数据，1024² 约 4 MiB；重复捕获或复制的成本由调用方管理。
+
+```cpp
+gl::TerrainSurfaceSnapshot snapshot;
+auto status = gl::TerrainRenderer::CaptureSurfaceSnapshot(terrain, snapshot);
+if (status == gl::TerrainQueryStatus::Ready) {
+    // 每次查询传入此 Terrain 当前已发布的身份与生成版本。
+    auto sample = snapshot.Query(localXZ, gl::TerrainRenderer::GetSurfaceVersion(terrain));
+    if (sample.Status == gl::TerrainQueryStatus::Ready) {
+        float localHeight = sample.Height;
+        float slopeDegrees = sample.SlopeDegrees;
+        // sample.Normal 是 Terrain 局部空间法线。
+    }
+}
+```
+
+查询范围为局部 XZ 的闭区间 [-WorldSize/2,+WorldSize/2]。高度使用端点网格的双线性插值，法线和坡度取同一插值面的解析梯度；内节点选正向单元，外端点选最后单元，跨单元导数可能不连续。它与当前 LOD 网格的三角形表面、GPU 派生法线插值及碰撞面存在区别；不自动转换世界坐标或应用实体 Transform。
+
+未发布表面返回 NotReady；旧运行时身份或生成版本返回 StaleVersion；非有限坐标返回 InvalidPosition，越界返回 OutOfBounds，不进行夹取。捕获只支持 Data v2 程序化 R32F 静态高度，旧 Data 和导入图返回 UnsupportedSurface，非法网格/值返回 InvalidData。失败捕获保留输出参数中的旧快照，应先检查返回状态；成功重建后需重新捕获。重载/Play 副本有独立 Runtime 身份；生成失败保留旧表面时，原快照仍有效。
+
+该快照读取 Generator 的组合后静态高度，运行时侵蚀不会刷新或使其失效，因此开启模拟后不能用它代表当前动态表面。快照与查询属于引擎通用能力；地点选择、实体布置及坡度通行标准由游戏宿主决定，碰撞与导航接入另行实现。目前编辑器没有快照或查询显示面板。
+
+2026-10-06 的 VS2026 Debug x64 全解决方案构建与 267 条无窗口 PASS 输出通过，完全链接产物位于本地 `bin/P17-B2-review/`，原编辑器窗口保留。解析斜面/非平面、版本/身份、端点/越界和非法输入通过；Intel Iris Xe GPU 验证平台核心、145×145 全节点查询（最大归一化差 `1.7881393e-7`）、Resize、失败保留、重载/Play 隔离、模拟高度隔离及旧 Data/导入拒绝。原编辑闭环与空配方 Data v1/v2 逐字节图像基线保持。

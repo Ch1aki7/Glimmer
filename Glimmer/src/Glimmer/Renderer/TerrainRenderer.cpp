@@ -252,6 +252,30 @@ namespace gl {
 			? component.Runtime->PublishedSpecification : component.Specification;
 	}
 
+	TerrainSurfaceVersion TerrainRenderer::GetSurfaceVersion(const TerrainComponent& component)
+	{
+		if (!component.Runtime || !component.Runtime->HasPublishedSpecification) return {};
+		return { component.Runtime->SurfaceIdentity, component.Runtime->GenerationVersion };
+	}
+
+	TerrainQueryStatus TerrainRenderer::CaptureSurfaceSnapshot(const TerrainComponent& component, TerrainSurfaceSnapshot& snapshot)
+	{
+		const auto version = GetSurfaceVersion(component);
+		if (!version.Generation) return TerrainQueryStatus::NotReady;
+		const auto& specification = component.Runtime->PublishedSpecification;
+		if (!specification.Procedural || specification.DataVersion != 2) return TerrainQueryStatus::UnsupportedSurface;
+		if (!component.Runtime->Generator) return TerrainQueryStatus::NotReady;
+		const auto& height = component.Runtime->Generator->GetHeightMap();
+		if (!height) return TerrainQueryStatus::NotReady;
+		const auto width = height->GetWidth(), rows = height->GetHeight();
+		if (height->GetFormat() != TextureFormat::R32F || width < 2 || rows < 2 || width > 8192 || rows > 8192)
+			return TerrainQueryStatus::InvalidData;
+		std::vector<float> values(size_t(width) * rows);
+		height->GetImageData(values.data(), uint32_t(values.size() * sizeof(float)));
+		return snapshot.Initialize(width, rows, ClampTerrainWorldSize(specification.WorldSize), specification.HeightScale,
+			version, std::move(values));
+	}
+
 	bool TerrainRenderer::Prepare(TerrainComponent& component)
 	{
 		auto& specification = component.Specification;
@@ -385,6 +409,7 @@ namespace gl {
 		{
 			const auto importedHeight = AssetManager::GetTexture2D(specification.HeightMapHandle);
 			if (!importedHeight) return generationFailed("Terrain height map asset is unavailable.");
+			runtime.Dirty = true; // A newly resolved imported source is also a new surface publication.
 			runtime.HeightMap = importedHeight;
 			runtime.LoadedHeightMapHandle = specification.HeightMapHandle;
 			runtime.NormalSlopeMap.reset();
@@ -400,6 +425,9 @@ namespace gl {
 			return false;
 		if (!specification.Procedural)
 		{
+			if (runtime.Dirty || !runtime.HasPublishedSpecification || runtime.PublishedSpecification.Procedural)
+				++runtime.GenerationVersion;
+			runtime.Dirty = false;
 			runtime.PublishedSpecification = specification;
 			runtime.HasPublishedSpecification = true;
 			runtime.GenerationError.clear();

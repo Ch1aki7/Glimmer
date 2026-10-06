@@ -116,6 +116,17 @@ namespace gl {
 				require(height == simulated, "Reset simulation surface differs.");
 			};
 			const auto baselineHash = hash();
+			using QueryStatus = TerrainQueryStatus;
+			TerrainSurfaceSnapshot baselineSnapshot;
+			require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, baselineSnapshot) == QueryStatus::Ready,
+				"Explicit static snapshot capture failed.");
+			// The ellipse transition overlaps the origin; choose an unaffected platform core cell.
+			const auto baselineSample = baselineSnapshot.Query({ -96, 0 }, TerrainRenderer::GetSurfaceVersion(terrain));
+			GL_CORE_INFO("Terrain snapshot platform diagnostic: height={0}, target={1}, slope={2}, status={3}",
+				baselineSample.Height, terrain.Specification.Recipe.Stamps[0].Height, baselineSample.SlopeDegrees, int(baselineSample.Status));
+			require(baselineSample.Status == QueryStatus::Ready
+				&& std::abs(baselineSample.Height - terrain.Specification.Recipe.Stamps[0].Height) < 1e-3f
+				&& baselineSample.SlopeDegrees < 1e-3f, "Snapshot platform query differs from composed GPU height.");
 			EditorCommandHistory history;
 			auto apply = [&](const TerrainComponent& value) { terrain.Specification = value.Specification; TerrainRenderer::Invalidate(terrain); return true; };
 			TerrainComponent before = terrain, after = terrain;
@@ -123,6 +134,8 @@ namespace gl {
 			require(history.Execute(std::make_unique<ValueEditorCommand<TerrainComponent>>("Add Terrain Stamp", before, after, apply))
 				&& TerrainRenderer::Prepare(terrain), "Add command Prepare failed.");
 			const auto addedHash = hash();
+			require(baselineSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == QueryStatus::StaleVersion,
+				"A rebuilt terrain accepts an old snapshot.");
 			require(addedHash != baselineHash, "Added stamp did not change height."); initialAndReset();
 			require(history.Undo() && TerrainRenderer::Prepare(terrain) && hash() == baselineHash, "Undo fails to rebuild original surface.");
 			require(history.Redo() && TerrainRenderer::Prepare(terrain) && hash() == addedHash, "Redo fails to rebuild added surface.");
@@ -155,12 +168,41 @@ namespace gl {
 			auto& playTerrain = playScene->FindEntityByUUID(entity.GetUUID()).GetComponent<TerrainComponent>();
 			require(!playTerrain.Runtime && TerrainRenderer::Prepare(playTerrain)
 				&& playTerrain.Runtime->Generator->ValidateOutputs().Hash == persistedHash, "Play copy regeneration differs.");
+			TerrainSurfaceSnapshot persistedSnapshot;
+			require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, persistedSnapshot) == QueryStatus::Ready
+				&& persistedSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(restored)).Status == QueryStatus::StaleVersion
+				&& persistedSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(playTerrain)).Status == QueryStatus::StaleVersion,
+				"Reload or Play copy reuses another Runtime snapshot identity.");
 			terrain.Specification.HeightMapResolution = 145;
 			terrain.Specification.WorldSize = 1536;
 			TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->HeightMap->GetWidth() == 145
 				&& TerrainRenderer::GetSurfaceSpecification(terrain).WorldSize == 1536, "Resize publication failed."); initialAndReset();
 			const auto published = terrain.Specification;
+			TerrainSurfaceSnapshot resizedSnapshot;
+			require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, resizedSnapshot) == QueryStatus::Ready
+				&& resizedSnapshot.GetWidth() == 145 && resizedSnapshot.GetWorldSize() == 1536,
+				"Resize snapshot dimensions or published range differ.");
+			std::vector<float> queryHeight(145 * 145);
+			terrain.Runtime->Generator->GetHeightMap()->GetImageData(queryHeight.data(), uint32_t(queryHeight.size() * sizeof(float)));
+			float maxQueryDifference = 0;
+			for (uint32_t z = 0; z < 145; ++z) for (uint32_t x = 0; x < 145; ++x)
+			{
+				const auto sample = resizedSnapshot.Query({ float(-768.0 + x * (1536.0 / 144)), float(-768.0 + z * (1536.0 / 144)) },
+					TerrainRenderer::GetSurfaceVersion(terrain));
+				require(sample.Status == QueryStatus::Ready && std::isfinite(sample.SlopeDegrees) && sample.SlopeDegrees <= 90
+					&& std::abs(glm::length(sample.Normal) - 1) < 1e-5f, "Snapshot query normal/slope is invalid.");
+				maxQueryDifference = std::max(maxQueryDifference, std::abs(sample.Height / published.HeightScale - queryHeight[size_t(z) * 145 + x]));
+			}
+			require(maxQueryDifference <= 1e-5f, "Snapshot endpoints differ from GPU static height.");
+			// Mutating simulation must not change the static authoring snapshot source.
+			terrain.Runtime->GPUHydrology->GetHeightTexture()->Clear(glm::vec4(0));
+			TerrainSurfaceSnapshot whileSimulated;
+			require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, whileSimulated) == QueryStatus::Ready
+				&& whileSimulated.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Height
+				== resizedSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Height,
+				"Static snapshot accidentally reads simulated Runtime height.");
+			terrain.Runtime->GPUHydrology->Reset();
 			const auto oldHeight = terrain.Runtime->HeightMap, oldNormal = terrain.Runtime->NormalSlopeMap,
 				oldAnalysis = terrain.Runtime->AnalysisMap, oldWeights = terrain.Runtime->MaterialWeightMap;
 			const auto oldMesh = terrain.Runtime->Mesh;
@@ -186,11 +228,15 @@ namespace gl {
 					&& terrain.Runtime->Mesh == oldMesh && terrain.Runtime->GPUHydrology.get() == oldHydrology
 					&& terrain.Runtime->GenerationVersion == oldVersion
 					&& TerrainRenderer::GetSurfaceSpecification(terrain).WorldSize == 1536, "Failed edit changes published surface/state.");
+				require(resizedSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == QueryStatus::Ready,
+					"Rejected edit invalidates a snapshot of the retained publication.");
 			}
 			TerrainComponent firstFailure;
 			firstFailure.Specification = published;
 			firstFailure.Specification.GenerationShaderHandle = AssetHandle(0);
 			require(!TerrainRenderer::Prepare(firstFailure) && !firstFailure.Runtime->HeightMap, "First failure draws uninitialized surface.");
+			require(TerrainRenderer::CaptureSurfaceSnapshot(firstFailure, whileSimulated) == QueryStatus::NotReady,
+				"Failed first publication returns a query snapshot.");
 			terrain.Specification = published; TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GenerationError.empty(), "Generation does not recover.");
 			terrain.Specification.Procedural = false;
@@ -201,9 +247,17 @@ namespace gl {
 				&& !terrain.Runtime->GPUEnvironment && !terrain.Runtime->NormalSlopeMap
 				&& !terrain.Runtime->ProtectionMap
 				&& !TerrainRenderer::GetSurfaceSpecification(terrain).Procedural, "Successful imported source retains old procedural resources.");
+			require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, whileSimulated) == QueryStatus::UnsupportedSurface
+				&& resizedSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == QueryStatus::StaleVersion,
+				"Imported surface silently reuses a static endpoint snapshot.");
 			terrain.Specification = published; TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GPUHydrology, "Procedural source cannot recover after import."); initialAndReset();
+			terrain.Specification.DataVersion = 1; terrain.Specification.Recipe.Stamps.clear(); TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain)
+				&& TerrainRenderer::CaptureSurfaceSnapshot(terrain, whileSimulated) == QueryStatus::UnsupportedSurface,
+				"Legacy cell-centered data is silently queried as endpoint nodes.");
 			passed = true;
+			GL_CORE_INFO("Terrain surface snapshot PASS: static platform, GPU nodes, version/identity, Resize, rejection retention, import and simulation isolation; max normalized query difference={0}", maxQueryDifference);
 			GL_CORE_INFO("Terrain recipe editor integration PASS: Add/drag/reorder Undo/Redo, save/reload, Play isolation, Resize, failed edits/first failure, procedural/imported recovery and simulation initial/Reset.");
 		}
 		catch (const std::exception& error) { GL_CORE_ERROR("Terrain recipe editor integration FAIL: {0}", error.what()); }

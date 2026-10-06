@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Glimmer/Core/Core.h"
+#include "Glimmer/Core/UUID.h"
 #include "Glimmer/Renderer/TerrainMesh.h"
 #include "Glimmer/Terrain/TerrainGenerator.h"
 #include "Glimmer/Simulation/TerrainHydrologyRuntime.h"
@@ -14,6 +15,7 @@
 namespace gl {
 	struct TerrainRuntime
 	{
+		uint64_t SurfaceIdentity = UUID(); // New Runtime (including scene copies) has a distinct query identity.
 		Scope<TerrainGenerator> Generator;
 		Scope<TerrainGenerator> PendingGenerator;
 		TerrainSpecification PendingSpecification;
