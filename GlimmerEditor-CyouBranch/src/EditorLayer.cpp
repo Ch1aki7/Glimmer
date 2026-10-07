@@ -1176,7 +1176,18 @@ namespace gl {
             const auto cost=WaterSurfaceRenderer::GetStatistics();
             if(cost.GpuTimingAvailable) {++m_WaterCostSamples;m_WaterCopyTotal+=cost.CopyMilliseconds;m_WaterDrawTotal+=cost.DrawMilliseconds;m_WaterDrawMaximum=std::max(m_WaterDrawMaximum,double(cost.DrawMilliseconds));}
         }
-        if (!m_TerrainCapturePath.empty() && ++m_TerrainCaptureFrames >= (waterBenchmark?(m_WaterCostSamples>=30?45u:180u):5u))
+        const bool renderBenchmark=GetEnvironmentValue("GLIMMER_TERRAIN_RENDER_BENCHMARK")=="1";
+        if(renderBenchmark&&!m_TerrainCapturePath.empty()&&m_TerrainCaptureFrames>=10) {
+            const auto color=TerrainRenderer::GetStatistics(); const auto shadow=ShadowRenderer::GetStatistics();
+            if(color.GpuTimingAvailable&&color.GpuTimingSample!=m_LastColorCostSample) {
+                m_LastColorCostSample=color.GpuTimingSample;++m_ColorCostSamples;m_ColorCostTotal+=color.GpuMilliseconds;
+            }
+            if(shadow.GpuTimingAvailable&&shadow.GpuTimingSample!=m_LastShadowCostSample) {
+                m_LastShadowCostSample=shadow.GpuTimingSample;++m_ShadowCostSamples;m_ShadowCostTotal+=shadow.GpuMilliseconds;
+            }
+        }
+        const bool costsReady=(!waterBenchmark||m_WaterCostSamples>=30)&&(!renderBenchmark||(m_ColorCostSamples>=30&&m_ShadowCostSamples>=30));
+        if (!m_TerrainCapturePath.empty() && ++m_TerrainCaptureFrames >= ((waterBenchmark||renderBenchmark)?(costsReady?45u:180u):5u))
 		{
 			std::vector<uint8_t> pixels;
 			uint32_t width = 0;
@@ -1190,6 +1201,11 @@ namespace gl {
 					m_TerrainCapturePath.string(), width, height);
                 if(m_WaterCostSamples) GL_CORE_INFO("Water benchmark PASS: {0} samples, mean copy={1}ms, mean draw={2}ms, max draw={3}ms",
                     m_WaterCostSamples,m_WaterCopyTotal/m_WaterCostSamples,m_WaterDrawTotal/m_WaterCostSamples,m_WaterDrawMaximum);
+                if(renderBenchmark) {
+                    if(m_ColorCostSamples>=30&&m_ShadowCostSamples>=30) GL_CORE_INFO("Terrain render benchmark PASS: color {0} samples mean={1}ms, shadow {2} samples mean={3}ms",
+                        m_ColorCostSamples,m_ColorCostTotal/m_ColorCostSamples,m_ShadowCostSamples,m_ShadowCostTotal/m_ShadowCostSamples);
+                    else GL_CORE_ERROR("Terrain render benchmark FAIL: insufficient unique completed samples.");
+                }
 				const auto terrainStats = TerrainRenderer::GetStatistics();
 				const auto waterStats = WaterSurfaceRenderer::GetStatistics();
 				const auto shadowStats = ShadowRenderer::GetStatistics();

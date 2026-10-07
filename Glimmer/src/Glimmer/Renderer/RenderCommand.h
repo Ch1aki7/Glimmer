@@ -11,6 +11,9 @@ namespace gl {
 			s_RendererAPI->Init();
 		}
 
+		// Submit queued commands without waiting for completion (context thread).
+		inline static void Flush() { s_RendererAPI->Flush(); }
+
 		inline static void SetClearColor(const glm::vec4& color)
 		{
 			s_RendererAPI->SetClearColor(color);

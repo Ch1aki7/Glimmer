@@ -95,6 +95,14 @@ namespace gl
 			ImGui::Text("CPU Prepare / last Generate: %.3f / %.3f ms", preparation.CPUPrepareMilliseconds, preparation.LastCPUGenerationMilliseconds);
 			ImGui::Text("CPU Environment / derived subset: %.3f / %.3f ms", preparation.CPUEnvironmentMilliseconds, preparation.CPUDerivedMilliseconds);
 			ImGui::TextDisabled("CPU wall time; Generate includes static derivation, Environment includes runtime derivation. Do not add subsets.");
+			auto showGPU = [](const char* label, const TerrainGPUStageStatistics& stage) {
+				if (stage.Samples) ImGui::Text("GPU %s: %.3f ms | samples %llu", label, stage.Milliseconds, (unsigned long long)stage.Samples);
+				else ImGui::Text("GPU %s: pending / no work", label);
+			};
+			showGPU("Generate (includes static derive)", preparation.GenerationGPU);
+			showGPU("Simulation (Reset/Step)", preparation.SimulationGPU);
+			showGPU("Runtime derive", preparation.DerivedGPU);
+			ImGui::TextDisabled("Last completed GPU intervals, asynchronous; not whole-frame FPS. Paused stages retain their last result.");
 		}
 		if (ImGui::Button("Capture Static Snapshot"))
 			m_TerrainCaptureStatus = TerrainRenderer::CaptureSurfaceSnapshot(terrain, m_TerrainSnapshot);

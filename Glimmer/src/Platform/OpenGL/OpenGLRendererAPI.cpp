@@ -3,6 +3,8 @@
 #include <glad/glad.h>
 
 namespace gl {
+	void OpenGLRendererAPI::Flush() { glFlush(); }
+
 	void OpenGLRendererAPI::Init()
 	{
 		GL_PROFILE_FUNCTION();

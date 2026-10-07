@@ -13,7 +13,8 @@ namespace gl {
 		virtual void End() = 0;
 		virtual bool TryGetElapsedMilliseconds(float& milliseconds) = 0;
 
-		static Ref<GPUTimer> Create();
+		// Timestamp pairs support nested intervals; default retains GL_TIME_ELAPSED.
+		static Ref<GPUTimer> Create(bool timestampPairs = false);
 	};
 
 }

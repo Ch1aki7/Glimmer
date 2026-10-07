@@ -12,6 +12,7 @@
 #include <array>
 #include <vector>
 #include <unordered_set>
+#include "Glimmer/Renderer/GPUTimer.h"
 
 namespace gl {
 	struct TerrainResourceUsage
@@ -22,11 +23,20 @@ namespace gl {
 		uint64_t TextureBytes() const { return GeneratorBytes + PendingGeneratorBytes + HydrologyBytes + ClimateBytes + OtherReferencedTextureBytes; }
 	};
 
+	struct TerrainGPUStageStatistics
+	{
+		Ref<GPUTimer> Timer;
+		float Milliseconds = 0;
+		uint64_t Samples = 0;
+		void Poll() { float elapsed = 0; while (Timer && Timer->TryGetElapsedMilliseconds(elapsed)) { Milliseconds = elapsed; ++Samples; } }
+	};
+
 	struct TerrainPreparationStatistics
 	{
 		TextureAllocationStatistics Textures;
 		uint64_t LifetimePeakTextureBytes = 0, TotalTextureAllocations = 0, PrepareCount = 0;
 		double LastCPUGenerationMilliseconds = 0;
+		TerrainGPUStageStatistics GenerationGPU, SimulationGPU, DerivedGPU;
 		double CPUPrepareMilliseconds = 0, CPUGenerationMilliseconds = 0;
 		double CPUEnvironmentMilliseconds = 0, CPUDerivedMilliseconds = 0;
 	};

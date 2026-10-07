@@ -4806,11 +4806,25 @@ Reset 和 Step 同帧请求时，先恢复模拟初值，再执行 Seed/Step；�
 
 峰值按进入时当前去重纹理引用与创建/释放事件跟踪，包含 Generate 内部候选及旧/新模拟共存。1024² 正常印章 Fixture 冷 Static 为 72 MiB、12 次创建，冷 Simulation 为 156 MiB、37 次，无印章 Simulation 为 148 MiB、35 次。65² 实际重建验证中，Static 为每节点 80 字节，Simulation 为 236 字节；后者包含替换水文前新旧共存和旧初始 Height 的借用，最终回到每节点 156 字节驻留。该小网格案例不是 1024² 重建压力基准。
 
-它是 Prepare 作用域的逻辑 Texture2D 峰值，非驱动显存或全场景独占峰值；共享源按引用计，Mesh、FBO/Cubemap、水面共享资源和 CPU 堆另算。显式 GPU Contract 在作用域里创建的验证纹理也计入，成本采样应关闭这些验证；不同账本的历史峰值不代表同一时刻，不能直接相加。统计没有新增 GPU 查询或同步读回。
+它是 Prepare 作用域的逻辑 Texture2D 峰值，非驱动显存或全场景独占峰值；共享源按引用计，Mesh、FBO/Cubemap、水面共享资源和 CPU 堆另算。显式 GPU Contract 在作用域里创建的验证纹理也计入，成本采样应关闭这些验证；不同账本的历史峰值不代表同一时刻，不能直接相加。纹理与 CPU 统计本身没有新增 GPU 查询或同步读回。
 
 `CPU Prepare / last Generate`、`CPU Environment / derived subset` 使用墙钟时间。Generate 含静态派生；Environment 含模拟初始化、Shader 轮询、Reset/推进、运行时派生和显式读回；Derived 是其子集，不能重复相加。最近 Generate 耗时保留，失败调用也会记录，请结合 Generation Error。CPU 可能等待驱动，不能用这些时间替代 GPU 毫秒或判断帧率。
 
 2026-10-07 完整 Debug 构建、285 条回归 PASS、实际 GPU 创建/释放平衡及冷启动/静态重建/模拟重建峰值验证通过；原编辑/模式/生命周期/查询、水文和气候 Contract 保持通过，空配方 v1/v2 图像与 A2 基线逐字节一致。本轮验证峰值与 CPU 诊断，未完成 GPU 分项压力基准、目标设备性能预算或 C3 总验收。
+
+## Terrain GPU 准备计时与压力验证
+
+选中 Terrain，在 Inspector 的 `Terrain Authoring Diagnostics` 查看 `GPU Generate`、`GPU Simulation` 和 `GPU runtime derive`。每项显示最近完成毫秒和累计样本数；尚无结果显示 pending / no work，暂停后保留最近样本。修改印章触发重建，稍后普通帧轮询更新 Generate；Simulation 的 Reset/Single Step 会更新模拟计时。无新增同步读取按钮，普通诊断不等待 GPU。
+
+Generate 包括候选纹理、印章合成和静态派生；Simulation 包括 Play 调度、Reset/Step/Seed，初始化资源不在该项内；运行时派生单独计时。时间戳区间可包含驱动/CPU 提交间隙，不能解释为纯 GPU 忙碌时间。Color/Shadow/Water 沿用各自绘制统计，Shadow 在重建帧可能包含 Prepare；这些区间不能直接相加推导整帧 FPS。
+
+自动压力入口为 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1`、`GLIMMER_TERRAIN_RECIPE_INTEGRATION=1` 与 `GLIMMER_TERRAIN_COST_VALIDATE=1`，配合捕获路径运行后退出。它在独立 1024² Terrain 上顺序测试 Static/Simulation × 0/1/16/64 印章，各排除一次冷生成后采集 30 次重建；模拟另采集 30 次 Reset+Step 与运行时派生，检查逻辑纹理峰值、事件平衡和暂停不提交模拟样本。该显式验证会 Flush 并限时等待，普通渲染没有此等待；应关闭其他 GPU Contract，按顺序运行，64 操作可能耗时数分钟。
+
+`GLIMMER_TERRAIN_RENDER_BENCHMARK=1` 配合 Recipe Fixture 与捕获路径，预热后分别收集至少 30 个唯一完成的 Color/Shadow 样本，不重复计入保留值；水面场景可同时设置既有 `GLIMMER_WATER_BENCHMARK=1`。这些环境变量仅控制隔离验证，不保存到场景。
+
+2026-10-07 的 Intel Iris Xe / OpenGL 4.6、Debug x64 压力测试：Static 的 0/1/16/64 印章生成平均 58.347/141.827/1647.640/7693.725 ms，Simulation 为 58.663/148.294/1588.194/6807.860 ms，各 30 个完成样本。1024² 重建峰值分别为空/非空 Static 64/80 MiB、Simulation 228/236 MiB，均通过事件与驻留核对。各档 Reset+Step 平均约 2.7～2.9 ms、运行时派生约 0.86～0.88 ms，暂停不追加模拟样本，Reset/Step 无重新分配。这些数据说明高印章数量会造成明显编辑重建等待。
+
+固定 558×353 视角的 Static Color/Shadow 各 35 个唯一样本平均 10.443/0.198 ms；水面 Fixture 为 10.551/0.165 ms，Water Copy/Draw 35 样本平均 0.076/2.767 ms。这是本机小视口的分项观测，未验收目标设备预算或 C3 整体。完整 Debug 构建、285 条无窗口回归、八档压力、编辑/生命周期集成、印章/采样和原水文/气候 GPU Contract 均通过；空配方 Data v1/v2 BMP 与 A2 基线逐字节一致。
 
 ## Terrain 创作诊断与手动验证
 

@@ -18,11 +18,79 @@
 #include <fstream>
 #include <sstream>
 #include <thread>
+#include "Glimmer/Renderer/RenderCommand.h"
+#include <algorithm>
 
 namespace gl {
 	// Exercise actual widgets in an isolated ImGui context; diagnostics require the caller's GL context.
 	struct TerrainInspectorValidation
 	{
+		static void RunGPUCosts(const TerrainSpecification& fixture)
+		{
+			auto require = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
+			struct SettingsGuard {
+				bool Hydro = TerrainRenderer::IsHydrologyPlaying(), Climate = TerrainRenderer::IsClimatePlaying();
+				float Change = TerrainRenderer::GetHydrologyMaximumHeightChange();
+				~SettingsGuard() { TerrainRenderer::SetHydrologyPlaying(Hydro); TerrainRenderer::SetClimatePlaying(Climate); TerrainRenderer::SetHydrologyMaximumHeightChange(Change); }
+			} settings;
+			TerrainRenderer::SetHydrologyPlaying(false); TerrainRenderer::SetClimatePlaying(false); TerrainRenderer::SetHydrologyMaximumHeightChange(0);
+			auto prepare = [&](TerrainComponent& terrain) {
+				TerrainRenderer::BeginScene(0);
+				const bool ready = TerrainRenderer::Prepare(terrain);
+				TerrainRenderer::EndScene();
+				require(ready, "Cost fixture failed to publish.");
+			};
+			auto awaitStage = [&](TerrainGPUStageStatistics& stage, uint64_t expected) {
+				RenderCommand::Flush(); // Test-only bounded waiting; ordinary Prepare only polls available results.
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+				while (stage.Samples < expected && std::chrono::steady_clock::now() < deadline) {
+					stage.Poll(); if (stage.Samples < expected) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+				if(stage.Samples != expected) GL_CORE_ERROR("GPU wait: samples={0}, expected={1}, timer={2}", stage.Samples,expected, bool(stage.Timer));
+			require(stage.Samples == expected && std::isfinite(stage.Milliseconds) && stage.Milliseconds >= 0,
+					"GPU stage timed out, lost a sample, or returned invalid timing.");
+				return stage.Milliseconds;
+			};
+			for (auto mode : { TerrainExecutionMode::Static, TerrainExecutionMode::Simulation })
+				for (uint32_t count : { 0u, 1u, 16u, 64u }) {
+					TerrainComponent terrain; terrain.Specification = fixture;
+					terrain.Specification.ExecutionMode = mode; terrain.Specification.HeightMapResolution = 1024;
+					terrain.Specification.MeshResolution = 24; terrain.Specification.Recipe.Stamps.clear();
+					for (uint32_t i = 0; i < count; ++i) {
+						TerrainStamp stamp; stamp.ID = i + 1; stamp.Operation = TerrainStampOperation::Add;
+						stamp.Center = { float(i % 8) * 100 - 350, float(i / 8) * 100 - 350 };
+						stamp.Size = { 100, 80 }; stamp.TransitionWidth = 20; stamp.Height = 1;
+						terrain.Specification.Recipe.Stamps.push_back(stamp);
+					}
+					prepare(terrain); auto& stats = terrain.Runtime->Preparation;
+					awaitStage(stats.GenerationGPU, 1); // Warm shaders, textures and the command queue.
+					double sum = 0; float maximum = 0; uint64_t peak = 0;
+					for (uint32_t sample = 0; sample < 30; ++sample) {
+						const auto next = stats.GenerationGPU.Samples + 1;
+						TerrainRenderer::Invalidate(terrain); prepare(terrain);
+						const float elapsed = awaitStage(stats.GenerationGPU, next); sum += elapsed; maximum = std::max(maximum, elapsed);
+						peak = std::max(peak, stats.Textures.PeakBytes);
+						const uint64_t expectedPeakPerNode = mode == TerrainExecutionMode::Static ? (count ? 80 : 64) : (count ? 236 : 228);
+						require(stats.Textures.PeakBytes == expectedPeakPerNode * 1024 * 1024
+							&& stats.Textures.CurrentBytes == terrain.Runtime->GetResourceUsage().TextureBytes(), "1024 rebuild peak or event balance differs.");
+					}
+					GL_CORE_INFO("Terrain GPU cost PASS: mode={0}, stamps={1}, samples=30, generation mean={2}ms, max={3}ms, rebuild peak={4} bytes",
+						mode == TerrainExecutionMode::Static ? "Static" : "Simulation", count, sum / 30, maximum, peak);
+					if (mode == TerrainExecutionMode::Simulation) {
+						double simulation = 0, derived = 0;
+						for (uint32_t sample = 0; sample < 30; ++sample) {
+							const auto simNext = stats.SimulationGPU.Samples + 1, derivedNext = stats.DerivedGPU.Samples + 1;
+							TerrainRenderer::RequestHydrologyReset(); TerrainRenderer::RequestHydrologySingleStep(); prepare(terrain);
+							simulation += awaitStage(stats.SimulationGPU, simNext); derived += awaitStage(stats.DerivedGPU, derivedNext);
+							require(stats.Textures.Allocations == 0 && stats.Textures.Releases == 0, "Reset/Step timing reallocates textures.");
+						}
+						const auto simSamples = stats.SimulationGPU.Samples; prepare(terrain); stats.SimulationGPU.Poll();
+						require(stats.SimulationGPU.Samples == simSamples, "Paused frame emits a simulation timing sample.");
+						GL_CORE_INFO("Terrain GPU simulation cost PASS: stamps={0}, samples=30, Reset+Step mean={1}ms, runtime derive mean={2}ms", count, simulation / 30, derived / 30);
+					}
+				}
+		}
+
 		static void RunLifecycle(const TerrainSpecification& fixture, const std::filesystem::path& scenePath)
 		{
 			auto require = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
@@ -409,6 +477,8 @@ namespace gl {
 		try
 		{
 			TerrainInspectorValidation::Run();
+			if (const char* cost = std::getenv("GLIMMER_TERRAIN_COST_VALIDATE"); cost && std::string(cost) == "1")
+				TerrainInspectorValidation::RunGPUCosts(original);
 			auto require = [](bool condition, const char* message) { if (!condition) throw std::runtime_error(message); };
 			terrain.Specification.HeightMapResolution = 129;
 			terrain.Specification.MeshResolution = 96;

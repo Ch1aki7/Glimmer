@@ -285,7 +285,9 @@ Simulation 模式下的 GPU 路径由同一 `TerrainRuntime` 独占一个 `Terra
 
 `TextureAllocationScope` 在渲染线程接收 OpenGLTexture2D 存储创建/析构事件，含选择的 Mip；嵌套作用域将事件传给祖先。Prepare 越过本帧重复准备检查后，以当前去重纹理引用字节建立作用域，在所有正常/失败返回路径记录峰值、事件次数和 CPU 墙钟耗时；Runtime.Preparation 保存最近记录、历史最高峰值与累计创建次数。候选内部纹理和旧/新模拟共存也在作用域内，但未覆盖 Mesh、FBO/Cubemap、CPU 堆或水面 Renderer 共享资源。共享源以引用基线计入，显式验证/资产加载在该作用域创建的 Texture2D 也计入，因此它是 Prepare 逻辑纹理作用域峰值，不是独占驱动显存或全场景峰值；事件余量不代替当前资源引用清单。
 
-CPU 诊断的 Generate 包含静态派生，Environment 包含初始化、轮询、Reset/模拟、运行时派生和显式读回，Derived 为其子集；Prepare 主体计时从纹理基线建立后开始。最近 Generate 时间保留到下一次调用，CPU 时间可能含驱动等待，不代表 GPU 工作耗时。诊断不增加 GPU Query/同步读回，不保存/进入 Undo，不改变生成版本；其他 Color/Shadow/Water 既有 GPU 计时不由该 CPU 记录替代。
+CPU 诊断的 Generate 包含静态派生，Environment 包含初始化、轮询、Reset/模拟、运行时派生和显式读回，Derived 为其子集；Prepare 主体计时从纹理基线建立后开始。最近 Generate 时间保留到下一次调用，CPU 时间可能含驱动等待，不代表 GPU 工作耗时。CPU 诊断本身不增加 GPU Query/同步读回，不保存/进入 Undo，不改变生成版本；其他 Color/Shadow/Water 既有 GPU 计时不由该 CPU 记录替代。
+
+GPU 准备诊断保存在 Runtime.Preparation 的 GenerationGPU、SimulationGPU、DerivedGPU 中。Generate 区间包含候选资源建立、印章和静态派生；Simulation 区间覆盖 Play 调度、Reset/SingleStep/Seed，结束后才开始运行时 Derived，模拟初始资源建立不在该区间。暂停且无请求不提交模拟计时。GPUTimer 的可选 timestampPairs 模式使用四组 GL_TIMESTAMP 起止查询和提交序号，按 FIFO 非阻塞读取完成结果，槽位占满时跳过采样；既有 Color/Shadow/Water 默认 GL_TIME_ELAPSED 行为保持。Prepare 轮询后保留最近完成毫秒与样本数，Inspector 只读显示；不进入持久化/Undo，也不改变生成版本。普通轮询不 Flush 或等待，RenderCommand::Flush 仅由可选压力验证提交队列并限时等待。时间戳区间表示 GPU 执行时间线的跨度，可包含 CPU 提交间隙，不是纯 GPU 忙碌时间。Scene 的 Shadow 计时包围首次 Terrain Prepare，重建帧与准备阶段重叠，不能直接相加为整帧耗时。
 
 成功解析导入 Height 资产后，Prepare 清理旧 Generator/PendingGenerator 和旧生成 Dispatch 计数，并清理模拟、派生与保护引用；资产解析失败继续保留旧发布资源。返回未变的已发布导入源也清理失败遗留的 PendingGenerator；重新切回程序化路径通过新生成器重建，不复用已释放资源。
 

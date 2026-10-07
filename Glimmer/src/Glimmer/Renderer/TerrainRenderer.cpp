@@ -82,6 +82,19 @@ namespace gl {
 			~CPUInterval() { Milliseconds += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - Start).count(); }
 		};
 
+		struct GPUInterval
+		{
+			Ref<GPUTimer> Timer;
+			explicit GPUInterval(TerrainGPUStageStatistics& stage, bool active = true)
+			{
+				if (!active) return;
+				if (!stage.Timer) stage.Timer = GPUTimer::Create(true);
+				Timer = stage.Timer; if (Timer) Timer->Begin();
+			}
+			void End() { if (Timer) { Timer->End(); Timer.reset(); } }
+			~GPUInterval() { End(); }
+		};
+
 		struct PreparationTrace
 		{
 			TerrainRuntime& Runtime;
@@ -90,6 +103,7 @@ namespace gl {
 			explicit PreparationTrace(TerrainRuntime& runtime) : Runtime(runtime), Textures(runtime.GetResourceUsage().TextureBytes())
 			{
 				auto& stats = Runtime.Preparation;
+				stats.GenerationGPU.Poll(); stats.SimulationGPU.Poll(); stats.DerivedGPU.Poll();
 				stats.CPUGenerationMilliseconds = stats.CPUEnvironmentMilliseconds = stats.CPUDerivedMilliseconds = 0;
 			}
 			~PreparationTrace()
@@ -377,6 +391,7 @@ namespace gl {
 				bool generated = false;
 				{
 					CPUInterval generationInterval{ runtime.Preparation.CPUGenerationMilliseconds };
+					GPUInterval generationGPU(runtime.Preparation.GenerationGPU);
 					generated = generator->Generate(specification, terrainWorldSize);
 				}
 				if (!generated) return generationFailed(generator->GetLastGenerationError());
@@ -618,6 +633,11 @@ namespace gl {
 				&& runtime.ClimateFrameSerial != s_Data.FrameSerial)
 			{
 				auto& environment = *runtime.GPUEnvironment;
+				const bool simulationWork = s_Data.ClimatePlaying || s_Data.HydrologyPlaying
+					|| runtime.ClimateResetRequest != s_Data.ClimateResetRequest || runtime.HydrologyResetRequest != s_Data.HydrologyResetRequest
+					|| runtime.ClimateSingleStepRequest != s_Data.ClimateSingleStepRequest || runtime.HydrologySingleStepRequest != s_Data.HydrologySingleStepRequest
+					|| runtime.HydrologySedimentSeedRequest != s_Data.HydrologySedimentSeedRequest;
+				GPUInterval simulationGPU(runtime.Preparation.SimulationGPU, simulationWork);
 				bool resetApplied = false;
 				bool environmentStepped = false;
 				if (runtime.ClimateResetRequest != s_Data.ClimateResetRequest
@@ -655,6 +675,7 @@ namespace gl {
 						specification.HeightScale, worldSize) != 0
 						|| environmentStepped;
 				}
+				simulationGPU.End();
 				runtime.HeightMap = hydrology.GetHeightTexture();
 				bool refreshDerivedMaps = resetApplied;
 				if (environmentStepped)
@@ -668,6 +689,7 @@ namespace gl {
 				if (refreshDerivedMaps)
 				{
 					CPUInterval derivedInterval{ runtime.Preparation.CPUDerivedMilliseconds };
+					GPUInterval derivedGPU(runtime.Preparation.DerivedGPU);
 					runtime.Generator->DeriveMapsFromHeight(runtime.HeightMap,
 						specification.HeightScale, worldSize);
 					runtime.NormalSlopeMap = runtime.Generator->GetNormalSlopeMap();

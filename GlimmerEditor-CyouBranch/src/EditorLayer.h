@@ -109,6 +109,9 @@ namespace gl {
 		std::filesystem::path m_TerrainCapturePath;
 		uint32_t m_TerrainCaptureFrames = 0;
 		uint32_t m_WaterCostSamples = 0;
+		uint32_t m_ColorCostSamples = 0, m_ShadowCostSamples = 0;
+		uint64_t m_LastColorCostSample = 0, m_LastShadowCostSample = 0;
+		double m_ColorCostTotal = 0, m_ShadowCostTotal = 0;
 		double m_WaterCopyTotal = 0, m_WaterDrawTotal = 0, m_WaterDrawMaximum = 0;
 
 

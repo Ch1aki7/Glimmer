@@ -6,14 +6,14 @@
 
 namespace gl {
 
-	Ref<GPUTimer> GPUTimer::Create()
+	Ref<GPUTimer> GPUTimer::Create(bool timestampPairs)
 	{
 		switch (Renderer::GetAPI())
 		{
 		case RendererAPI::API::None:
 			return nullptr;
 		case RendererAPI::API::OpenGL:
-			return CreateRef<OpenGLGPUTimer>();
+			return CreateRef<OpenGLGPUTimer>(timestampPairs);
 		case RendererAPI::API::Vulkan:
 			return nullptr;
 		}
