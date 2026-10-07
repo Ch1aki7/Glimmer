@@ -44,6 +44,7 @@ namespace gl {
 		s_Statistics = {};
 		if (!s_Settings.Enabled || !target || instances.empty()
 			|| TerrainRenderer::IsLODVisualizationEnabled()
+			|| TerrainRenderer::GetAuthoringVisualizationMode() != TerrainRenderer::AuthoringVisualizationMode::None
 			|| TerrainRenderer::GetHydrologyVisualizationMode() != TerrainRenderer::HydrologyVisualizationMode::None
 			|| TerrainRenderer::GetClimateVisualizationMode() != TerrainRenderer::ClimateVisualizationMode::None)
 			return;

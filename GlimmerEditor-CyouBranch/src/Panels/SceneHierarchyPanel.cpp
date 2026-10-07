@@ -589,6 +589,7 @@ namespace gl {
 						ImGui::EndDragDropTarget();
 					}
 				}
+				DrawTerrainDiagnostics(entity, terrain);
 				DrawTerrainRecipe(entity, terrain);
 				if (ImGui::Button("Regenerate"))
 					TerrainRenderer::Invalidate(terrain);

@@ -44,6 +44,69 @@ namespace gl
 		}
 	}
 
+	void InspectorPanel::ResetTerrainDiagnostics()
+	{
+		m_TerrainSnapshot = {}; m_TerrainCaptureStatus = TerrainQueryStatus::NotReady;
+		m_TerrainDiagnosticEntity = m_TerrainDiagnosticIdentity = 0;
+		m_TerrainQueryXZ = {}; m_TerrainClippedCount.reset(); m_TerrainClipVersion = {};
+	}
+
+	void InspectorPanel::DrawTerrainDiagnostics(Entity entity, TerrainComponent& terrain)
+	{
+		const auto version = TerrainRenderer::GetSurfaceVersion(terrain);
+		const uint64_t entityID = entity.GetUUID();
+		if (m_TerrainDiagnosticEntity != entityID || m_TerrainDiagnosticIdentity != version.Identity)
+		{
+			ResetTerrainDiagnostics();
+			m_TerrainDiagnosticEntity = entityID; m_TerrainDiagnosticIdentity = version.Identity;
+		}
+		auto statusName = [](TerrainQueryStatus status) {
+			switch (status) {
+			case TerrainQueryStatus::Ready: return "Ready";
+			case TerrainQueryStatus::InvalidData: return "InvalidData";
+			case TerrainQueryStatus::InvalidPosition: return "InvalidPosition";
+			case TerrainQueryStatus::OutOfBounds: return "OutOfBounds";
+			case TerrainQueryStatus::StaleVersion: return "StaleVersion - capture again";
+			case TerrainQueryStatus::UnsupportedSurface: return "UnsupportedSurface - procedural Data v2 required";
+			default: return "NotReady";
+			}
+		};
+		ImGui::SeparatorText("Terrain Authoring Diagnostics");
+		int view = int(TerrainRenderer::GetAuthoringVisualizationMode());
+		if (ImGui::Combo("Authoring View", &view, "None\0Protection\0Clipping\0"))
+			TerrainRenderer::SetAuthoringVisualizationMode(TerrainRenderer::AuthoringVisualizationMode(view));
+		ImGui::TextWrapped("Global view: Protection dark=0, cyan=0.5, yellow=1; Clipping magenta=clipped. Water is hidden in these views.");
+		ImGui::TextWrapped("Static authoring data only; runtime erosion does not consume protection or update the snapshot.");
+		ImGui::Text("Published identity / generation: %llu / %llu", (unsigned long long)version.Identity, (unsigned long long)version.Generation);
+		ImGui::Text("Protection map: %s", terrain.Runtime && terrain.Runtime->ProtectionMap ? "published" : "absent (zero)");
+		if (ImGui::Button("Capture Static Snapshot"))
+			m_TerrainCaptureStatus = TerrainRenderer::CaptureSurfaceSnapshot(terrain, m_TerrainSnapshot);
+		ImGui::TextWrapped("Last capture: %s", statusName(m_TerrainCaptureStatus));
+		const auto captured = m_TerrainSnapshot.GetVersion();
+		ImGui::Text("Snapshot identity / generation: %llu / %llu", (unsigned long long)captured.Identity, (unsigned long long)captured.Generation);
+		if (m_TerrainSnapshot.GetWidth())
+			ImGui::Text("%u x %u | World %.2f | Height %.2f", m_TerrainSnapshot.GetWidth(), m_TerrainSnapshot.GetHeight(), m_TerrainSnapshot.GetWorldSize(), m_TerrainSnapshot.GetHeightScale());
+		ImGui::InputFloat2("Query Local XZ", glm::value_ptr(m_TerrainQueryXZ));
+		const auto sample = m_TerrainSnapshot.Query(m_TerrainQueryXZ, version);
+		ImGui::TextWrapped("Query: %s", statusName(sample.Status));
+		if (sample.Status == TerrainQueryStatus::Ready)
+		{
+			ImGui::Text("Local height: %.4f | Slope: %.4f degrees", sample.Height, sample.SlopeDegrees);
+			ImGui::Text("Local normal: %.4f, %.4f, %.4f", sample.Normal.x, sample.Normal.y, sample.Normal.z);
+		}
+		const bool canRead = version.Generation && terrain.Runtime && terrain.Runtime->PublishedSpecification.Procedural && terrain.Runtime->Generator;
+		ImGui::BeginDisabled(!canRead);
+		if (ImGui::Button("Read Clipping Count"))
+		{
+			m_TerrainClippedCount = terrain.Runtime->Generator->ReadRecipeClippedNodeCount();
+			m_TerrainClipVersion = version;
+		}
+		ImGui::EndDisabled();
+		if (m_TerrainClippedCount)
+			ImGui::Text("Clipped nodes: %llu (%s)", (unsigned long long)*m_TerrainClippedCount, m_TerrainClipVersion == version ? "current" : "stale - read again");
+		ImGui::TextDisabled("Capture / count buttons synchronously read GPU data; queries reuse CPU values.");
+	}
+
 	void InspectorPanel::DrawTerrainRecipe(Entity entity, TerrainComponent& terrain)
 	{
 		ImGui::SeparatorText("Terrain Stamps");

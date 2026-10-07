@@ -1,6 +1,6 @@
 # Glimmer 项目架构说明
 
-> 本文最近于 2026-10-06 对照当前源码同步，只描述已经落地的结构与数据流。
+> 本文最近于 2026-10-07 对照当前源码同步，只描述已经落地的结构与数据流。
 > 当前工作优先级、验收条件和技术债以 `Documents/PROJECT_STATUS.md` 为准；功能演进和实现笔记参见 `README.md`。
 
 ## 1. 项目定位与当前边界
@@ -236,7 +236,9 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 - `TerrainGenerator::Generate` 返回成功状态和错误消息；先验证配方与 Shader，再生成完整候选 Height/三张派生图/印章遮罩，成功后统一交换资源。印章首次使用时延迟加载，GPU R32F ClipMask 记录任意操作发生裁切的节点，与 ProtectionMap 分开。只有显式 `ReadRecipeClippedNodeCount` 或验证模式同步读回，普通帧不读回。生成时增加一套全局候选纹理，尚未做局部更新或性能优化；
 - `TerrainRuntime` 保存 PendingGenerator、已发布规格与 GenerationError。Prepare 对分辨率/生成 Shader 变化先建立候选生成器，受控校验/编译失败保留旧表面、规格、版本和模拟状态；首次失败无表面可绘制。Color/Shadow/Water 通过 `GetSurfaceSpecification` 使用已发布的尺寸、高度和采样版本，避免旧纹理按失败的新规格渲染。ComputeShader 创建默认仍断言首次编译失败，Terrain 通过可选非断言创建取得错误结果。此边界不保证 GPU 设备丢失或驱动分配错误下的恢复；
 - Inspector 的 Terrain Stamps 提供 Ellipse/Rectangle、Add/SetHeight 参数及增删、重排、启用和清空；稳定 ID 用于控件身份，不随列表位置变化。编辑器 TerrainRecipeEditor 只操作规格，验证/合成仍由引擎 Terrain 拥有。离散动作提交整份 TerrainComponent 规格快照，连续参数在激活/释放间合并为一条命令；Execute/Undo/Redo 写回 Specification 并 Invalidate，保留 Runtime 供生成失败回退；
-- Terrain 属性的 Procedural/分辨率修改也使用 Invalidate。导入高度图切换先解析候选资产，缺资产保留旧已发布结果；成功导入清理旧 GPU 模拟对象和 Runtime.ProtectionMap，并推进生成版本。Renderer 将生成器的保护图引用随表面发布到 Runtime，不由水文模拟写入；受控失败保留旧引用。Inspector 展示配方校验与 Runtime.GenerationError；保护遮罩显示、实际细节及侵蚀保护消费者仍未实现。配方与生成器不拥有任务布局、出生/撤离或其他游戏规则；
+- Terrain 属性的 Procedural/分辨率修改也使用 Invalidate。导入高度图切换先解析候选资产，缺资产保留旧已发布结果；成功导入清理旧 GPU 模拟对象和 Runtime.ProtectionMap，并推进生成版本。Renderer 将生成器的保护图引用随表面发布到 Runtime，不由水文模拟写入；受控失败保留旧引用。Inspector 展示配方校验与 Runtime.GenerationError；实际细节及侵蚀保护消费者仍未实现。配方与生成器不拥有任务布局、出生/撤离或其他游戏规则；
+- TerrainRenderer 的 AuthoringVisualizationMode 为会话级 None/Protection/Clipping；Terrain 片元 Shader 读取已发布 R32F 遮罩，使用端点纹素 UV 与 Nearest 过滤，不改变高度、生成版本或 Dispatch。片元提前输出颜色/EntityID/几何法线，诊断期间复用水深采样槽 23，WaterSurfaceRenderer 跳过水面；None 恢复原绘制路径与水面设置。保护图缺失解释为全零，裁切仅表示任意印章曾发生范围夹取，不等于保护权重；
+- Inspector 独立拥有一份 CPU TerrainSurfaceSnapshot、查询位置及带表面版本的裁切计数；Capture Static Snapshot/Read Clipping Count 按钮才同步回读，逐帧查询只读 CPU 值。重建显示 StaleVersion，失败保留旧已发布版本时仍可查询；实体/Runtime 身份或 Scene Context 改变清空诊断缓存。这些状态不持久化、不进入 Undo，也不形成引擎全局 CPU 快照缓存；
 - `TerrainSurfaceSnapshot.h` 在引擎 Terrain 层保存独立 CPU 高度值及局部范围/HeightScale/端点网格/表面版本，不依赖 Scene、编辑器、GPU 或模拟。Query 以双线性高度场及其解析导数返回局部 Height、Normal、SlopeDegrees；内节点采用正向单元，外端点采用最后单元，不保证跨单元导数连续，不对应当前 LOD Mesh 三角化或派生法线插值。显式返回 NotReady、StaleVersion、InvalidPosition、OutOfBounds；Initialize 拒绝非法数据且保留旧快照；
 - `TerrainRenderer::CaptureSurfaceSnapshot` 在有 GL Context 的线程显式同步读回已发布 Data v2 程序化 Generator 的静态 R32F Height，不调用 Prepare，不缓存或自动刷新快照；旧 Data/导入图返回 UnsupportedSurface。每份 Runtime 创建独立非持久 SurfaceIdentity，GetSurfaceVersion 返回身份与 GenerationVersion；查询要求调用方传入当前版本，拒绝重建/重载/Play 副本的旧数据，受控生成失败仍查询旧已发布表面。GPUHydrology 的当前高度不参与该静态快照；普通帧不增加读回。碰撞、导航、世界 Transform 和动态模拟查询不由此实现；
 - TerrainRenderer 的 GrayPreview 是会话级诊断开关；Terrain Shader 以中性 Albedo/PBR 与派生几何法线替换材质细节，仍保留光照与阴影，不改变高度、LOD、Scene YAML 或水面。DebugPanel 提供开关；

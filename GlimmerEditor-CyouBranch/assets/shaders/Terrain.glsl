@@ -125,6 +125,9 @@ uniform int u_TerrainSamplingMode;
 uniform float u_TerrainDetailDistance;
 uniform int u_TerrainLODVisualization;
 uniform int u_TerrainGrayPreview;
+uniform int u_TerrainAuthoringView;
+uniform int u_HasAuthoringMask;
+uniform sampler2D u_AuthoringMask;
 uniform int u_TerrainLODLevel;
 uniform sampler2D u_WaterDepthMap;
 uniform float u_ShoreWetness;
@@ -347,6 +350,18 @@ vec3 ResolveCascadeDebugColor(vec3 worldPosition)
 void main()
 {
 	vec3 geometricNormal = normalize(v_Normal);
+	if (u_TerrainAuthoringView != 0)
+	{
+		float weight = u_HasAuthoringMask != 0 ? clamp(texture(u_AuthoringMask, v_TerrainUV).r, 0.0, 1.0) : 0.0;
+		vec3 diagnostic = u_TerrainAuthoringView == 1
+			? (weight <= 0.5 ? mix(vec3(0.03), vec3(0.0, 0.6, 0.8), weight * 2.0)
+				: mix(vec3(0.0, 0.6, 0.8), vec3(1.0, 0.8, 0.05), (weight - 0.5) * 2.0))
+			: mix(vec3(0.03), vec3(1.0, 0.05, 0.6), step(0.5, weight));
+		o_Color = vec4(diagnostic, 1.0);
+		o_EntityID = v_EntityID;
+		o_Normal = vec4(geometricNormal * 0.5 + 0.5, 1.0);
+		return;
+	}
 	vec3 projection = ProjectionWeights(geometricNormal);
 	vec4 layerWeights = ResolveMaterialWeights(geometricNormal);
 	int primaryLayer = 0;

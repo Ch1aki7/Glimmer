@@ -14,6 +14,9 @@ namespace gl {
 		static TerrainSurfaceVersion GetSurfaceVersion(const TerrainComponent& component);
 		// Explicit synchronous GPU readback on the render/context thread; never calls Prepare.
 		static TerrainQueryStatus CaptureSurfaceSnapshot(const TerrainComponent& component, TerrainSurfaceSnapshot& snapshot);
+		enum class AuthoringVisualizationMode { None, Protection, Clipping };
+		static void SetAuthoringVisualizationMode(AuthoringVisualizationMode mode);
+		static AuthoringVisualizationMode GetAuthoringVisualizationMode();
 		enum class SamplingMode : int
 		{
 			FullFourLayers = 0,

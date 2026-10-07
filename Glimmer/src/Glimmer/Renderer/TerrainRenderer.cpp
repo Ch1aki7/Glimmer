@@ -20,6 +20,7 @@ namespace gl {
 		struct TerrainRendererData
 		{
 			bool GrayPreview = false;
+			TerrainRenderer::AuthoringVisualizationMode AuthoringVisualization = TerrainRenderer::AuthoringVisualizationMode::None;
 			Ref<GPUTimer> Timer;
 			TerrainRenderer::Statistics Stats;
 			TerrainRenderer::SamplingMode Sampling =
@@ -721,6 +722,14 @@ namespace gl {
 			shader->UploadUniformInt("u_MaterialWeightMap", 3);
 		}
 
+		// Authoring view exclusively reuses the water sampler unit; the fragment diagnostic exits before water sampling.
+		const auto mask = s_Data.AuthoringVisualization == AuthoringVisualizationMode::Protection ? runtime.ProtectionMap
+			: (specification.Procedural && runtime.Generator ? runtime.Generator->GetRecipeClipMask() : nullptr);
+		shader->UploadUniformInt("u_TerrainAuthoringView", int(s_Data.AuthoringVisualization));
+		shader->UploadUniformInt("u_HasAuthoringMask", mask ? 1 : 0);
+		shader->UploadUniformInt("u_AuthoringMask", 23);
+		if (s_Data.AuthoringVisualization != AuthoringVisualizationMode::None && mask) mask->Bind(23);
+
 		TerrainMaterialProperties materialProperties =
 			TerrainMaterial::CreateDefaultProperties();
 		if (const Ref<TerrainMaterial> terrainMaterial =
@@ -917,6 +926,12 @@ namespace gl {
 
 	void TerrainRenderer::SetGrayPreviewEnabled(bool enabled) { s_Data.GrayPreview = enabled; }
 	bool TerrainRenderer::IsGrayPreviewEnabled() { return s_Data.GrayPreview; }
+	void TerrainRenderer::SetAuthoringVisualizationMode(AuthoringVisualizationMode mode)
+	{
+		s_Data.AuthoringVisualization = mode == AuthoringVisualizationMode::Protection || mode == AuthoringVisualizationMode::Clipping
+			? mode : AuthoringVisualizationMode::None;
+	}
+	TerrainRenderer::AuthoringVisualizationMode TerrainRenderer::GetAuthoringVisualizationMode() { return s_Data.AuthoringVisualization; }
 
 	void TerrainRenderer::SetLODVisualizationEnabled(bool enabled)
 	{

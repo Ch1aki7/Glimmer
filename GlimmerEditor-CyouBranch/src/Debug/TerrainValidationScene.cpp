@@ -17,9 +17,65 @@
 #include <stdexcept>
 
 namespace gl {
-	// Exercise the actual widgets in an isolated ImGui context; no native input or GPU resources.
+	// Exercise actual widgets in an isolated ImGui context; diagnostics require the caller's GL context.
 	struct TerrainInspectorValidation
 	{
+		static void RunDiagnostics(const Ref<Scene>& scene, Entity entity)
+		{
+			struct Guard {
+				ImGuiContext* Previous = ImGui::GetCurrentContext();
+				ImGuiContext* Test = ImGui::CreateContext();
+				~Guard() { ImGui::DestroyContext(Test); ImGui::SetCurrentContext(Previous); }
+			} context;
+			ImGui::SetCurrentContext(context.Test);
+			auto& io = ImGui::GetIO(); io.DisplaySize = { 1100, 1800 }; io.DeltaTime = 1.0f / 60;
+			io.IniFilename = nullptr; io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+			unsigned char* pixels; int width, height; io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+			InspectorPanel panel; panel.SetContext(scene);
+			auto& terrain = entity.GetComponent<TerrainComponent>();
+			auto require = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
+			auto frame = [&](const char* activate = nullptr) {
+				ImGui::NewFrame(); ImGui::SetNextWindowSize({ 1100, 1800 });
+				ImGui::Begin("Diagnostic Contract", nullptr, ImGuiWindowFlags_NoSavedSettings);
+				if (activate) {
+					const auto id = ImGui::GetID(activate); auto& g = *ImGui::GetCurrentContext();
+					g.NavWindow = ImGui::GetCurrentWindow(); g.NavId = id; g.NavInputSource = ImGuiInputSource_Keyboard;
+					g.NavActivateId = g.NavActivatePressedId = g.NavActivateDownId = id;
+				}
+				panel.DrawTerrainDiagnostics(entity, terrain); ImGui::End(); ImGui::Render();
+			};
+			frame(); frame();
+			require(panel.m_TerrainSnapshot.GetWidth() == 0 && !panel.m_TerrainClippedCount, "Diagnostics read back without a button.");
+			frame("Capture Static Snapshot"); frame("Read Clipping Count");
+			const auto version = TerrainRenderer::GetSurfaceVersion(terrain);
+			require(panel.m_TerrainCaptureStatus == TerrainQueryStatus::Ready && panel.m_TerrainSnapshot.GetVersion() == version
+				&& panel.m_TerrainClippedCount.has_value(), "Diagnostic capture/count widgets failed.");
+			panel.m_TerrainQueryXZ = { -96, 0 }; frame();
+			require(panel.m_TerrainSnapshot.Query(panel.m_TerrainQueryXZ, version).Status == TerrainQueryStatus::Ready, "Diagnostic query failed.");
+			TerrainRenderer::Invalidate(terrain); require(TerrainRenderer::Prepare(terrain), "Diagnostic rebuild failed."); frame();
+			require(panel.m_TerrainSnapshot.Query(panel.m_TerrainQueryXZ, TerrainRenderer::GetSurfaceVersion(terrain)).Status == TerrainQueryStatus::StaleVersion
+				&& !(panel.m_TerrainClipVersion == TerrainRenderer::GetSurfaceVersion(terrain)), "Diagnostics silently refreshed a stale capture/count.");
+			frame("Capture Static Snapshot");
+			panel.m_TerrainQueryXZ = { terrain.Specification.WorldSize, 0 }; frame();
+			require(panel.m_TerrainSnapshot.Query(panel.m_TerrainQueryXZ, TerrainRenderer::GetSurfaceVersion(terrain)).Status == TerrainQueryStatus::OutOfBounds, "Diagnostic query clamps coordinates.");
+			const auto spec = terrain.Specification;
+			terrain.Specification.Recipe.Version = 999; TerrainRenderer::Invalidate(terrain);
+			TerrainRenderer::Prepare(terrain); frame();
+			require(panel.m_TerrainSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == TerrainQueryStatus::Ready, "Diagnostic failure discarded published snapshot.");
+			terrain.Specification = spec; TerrainRenderer::Invalidate(terrain); require(TerrainRenderer::Prepare(terrain), "Diagnostic recovery failed.");
+			panel.SetContext(CreateRef<Scene>());
+			require(panel.m_TerrainSnapshot.GetWidth() == 0 && !panel.m_TerrainClippedCount, "Diagnostic scene switch retains CPU cache.");
+			const auto view = TerrainRenderer::GetAuthoringVisualizationMode();
+			const auto published = TerrainRenderer::GetSurfaceVersion(terrain); const auto protection = terrain.Runtime->ProtectionMap;
+			for (const auto mode : { TerrainRenderer::AuthoringVisualizationMode::Protection, TerrainRenderer::AuthoringVisualizationMode::Clipping, TerrainRenderer::AuthoringVisualizationMode::None }) {
+				TerrainRenderer::SetAuthoringVisualizationMode(mode);
+				require(TerrainRenderer::GetAuthoringVisualizationMode() == mode && TerrainRenderer::GetSurfaceVersion(terrain) == published
+					&& terrain.Runtime->ProtectionMap == protection, "Diagnostic view mutates published resources.");
+			}
+			TerrainRenderer::SetAuthoringVisualizationMode(view);
+			GL_CORE_INFO("Terrain authoring diagnostics PASS: actual capture/count widgets, no automatic capture, stale rebuild, bounds, failed publication retention, context reset and view isolation.");
+		}
+
 		static void Run()
 		{
 			struct ContextGuard {
@@ -102,7 +158,15 @@ namespace gl {
 			terrain.Specification.MeshResolution = 96;
 			TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain), "Initial recipe Prepare failed.");
+			TerrainInspectorValidation::RunDiagnostics(scene, entity);
 			auto hash = [&]() { const auto result = terrain.Runtime->Generator->ValidateOutputs(); require(result.Valid, "Invalid composed maps."); return result.Hash; };
+			auto protectionValues = [&](const TerrainComponent& target) {
+				const auto map = target.Runtime->ProtectionMap;
+				require(bool(map), "Expected published protection map.");
+				std::vector<float> values(size_t(map->GetWidth()) * map->GetHeight());
+				map->GetImageData(values.data(), uint32_t(values.size() * sizeof(float))); return values;
+			};
+			const auto baselineProtection = protectionValues(terrain);
 			auto initialAndReset = [&]() {
 				const size_t count = size_t(terrain.Runtime->HeightMap->GetWidth()) * terrain.Runtime->HeightMap->GetHeight();
 				std::vector<float> height(count), simulated(count);
@@ -138,6 +202,7 @@ namespace gl {
 				"A rebuilt terrain accepts an old snapshot.");
 			require(addedHash != baselineHash, "Added stamp did not change height."); initialAndReset();
 			require(history.Undo() && TerrainRenderer::Prepare(terrain) && hash() == baselineHash, "Undo fails to rebuild original surface.");
+			require(protectionValues(terrain) == baselineProtection, "Undo protection differs from original surface.");
 			require(history.Redo() && TerrainRenderer::Prepare(terrain) && hash() == addedHash, "Redo fails to rebuild added surface.");
 			EditorValueTransaction<TerrainComponent> drag;
 			drag.Begin(terrain);
@@ -158,16 +223,19 @@ namespace gl {
 				&& TerrainRenderer::Prepare(terrain), "Reorder Prepare failed.");
 			require(terrain.Specification.Recipe.Stamps[terrain.Specification.Recipe.Stamps.size() - 2].ID == movedID, "Reorder changes stable ID.");
 			const auto persistedHash = hash();
+			const auto persistedProtection = protectionValues(terrain);
 			require(SceneSerializer(scene).Serialize(temporaryScenePath.string()), "Integration scene save failed.");
 			const auto restoredScene = CreateRef<Scene>();
 			require(SceneSerializer(restoredScene).Deserialize(temporaryScenePath.string()), "Integration scene reload failed.");
 			auto& restored = restoredScene->FindEntityByUUID(entity.GetUUID()).GetComponent<TerrainComponent>();
 			require(!restored.Runtime && TerrainRenderer::Prepare(restored) && restored.Runtime != terrain.Runtime
 				&& restored.Runtime->Generator->ValidateOutputs().Hash == persistedHash, "Reload surface or Runtime isolation differs.");
+			require(protectionValues(restored) == persistedProtection, "Reload protection differs from saved recipe.");
 			const auto playScene = Scene::Copy(scene);
 			auto& playTerrain = playScene->FindEntityByUUID(entity.GetUUID()).GetComponent<TerrainComponent>();
 			require(!playTerrain.Runtime && TerrainRenderer::Prepare(playTerrain)
 				&& playTerrain.Runtime->Generator->ValidateOutputs().Hash == persistedHash, "Play copy regeneration differs.");
+			require(protectionValues(playTerrain) == persistedProtection, "Play protection differs from saved recipe.");
 			TerrainSurfaceSnapshot persistedSnapshot;
 			require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, persistedSnapshot) == QueryStatus::Ready
 				&& persistedSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(restored)).Status == QueryStatus::StaleVersion
@@ -184,6 +252,7 @@ namespace gl {
 				&& resizedSnapshot.GetWidth() == 145 && resizedSnapshot.GetWorldSize() == 1536,
 				"Resize snapshot dimensions or published range differ.");
 			std::vector<float> queryHeight(145 * 145);
+			const auto resizedProtection = protectionValues(terrain);
 			terrain.Runtime->Generator->GetHeightMap()->GetImageData(queryHeight.data(), uint32_t(queryHeight.size() * sizeof(float)));
 			float maxQueryDifference = 0;
 			for (uint32_t z = 0; z < 145; ++z) for (uint32_t x = 0; x < 145; ++x)
@@ -193,6 +262,9 @@ namespace gl {
 				require(sample.Status == QueryStatus::Ready && std::isfinite(sample.SlopeDegrees) && sample.SlopeDegrees <= 90
 					&& std::abs(glm::length(sample.Normal) - 1) < 1e-5f, "Snapshot query normal/slope is invalid.");
 				maxQueryDifference = std::max(maxQueryDifference, std::abs(sample.Height / published.HeightScale - queryHeight[size_t(z) * 145 + x]));
+				const auto protection = EvaluateTerrainRecipe(published.Recipe, { float(-768.0 + x * (1536.0 / 144)), float(-768.0 + z * (1536.0 / 144)) }, 0, published.HeightScale);
+				require(protection.Validation.Valid() && std::abs(protection.ProtectionWeight - resizedProtection[size_t(z) * 145 + x]) < 1e-5f,
+					"Resized GPU protection differs from CPU authoring coordinates.");
 			}
 			require(maxQueryDifference <= 1e-5f, "Snapshot endpoints differ from GPU static height.");
 			// Mutating simulation must not change the static authoring snapshot source.
@@ -230,6 +302,7 @@ namespace gl {
 					&& TerrainRenderer::GetSurfaceSpecification(terrain).WorldSize == 1536, "Failed edit changes published surface/state.");
 				require(resizedSnapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == QueryStatus::Ready,
 					"Rejected edit invalidates a snapshot of the retained publication.");
+				require(protectionValues(terrain) == resizedProtection, "Rejected edit mutates retained protection bytes.");
 			}
 			TerrainComponent firstFailure;
 			firstFailure.Specification = published;
@@ -341,6 +414,12 @@ namespace gl {
 			basin.Size = { 200, 80 };
 			basin.Height = -16;
 			terrain.Specification.Recipe.Stamps = { platform, basin };
+			if (const char* clip = std::getenv("GLIMMER_TERRAIN_RECIPE_CLIP_FIXTURE"); clip && std::string(clip) == "1") {
+				TerrainStamp clipped = platform;
+				clipped.ID = 3; clipped.Operation = TerrainStampOperation::Add;
+				clipped.Center = { -80, 0 }; clipped.Size = { 80, 80 }; clipped.TransitionWidth = 16; clipped.Height = -1000;
+				terrain.Specification.Recipe.Stamps.push_back(clipped);
+			}
 		}
 		return scene;
 	}

@@ -946,6 +946,9 @@ namespace gl {
 		m_TerrainSamplingBenchmarkAutorun =
 			ShouldAutorunTerrainSamplingBenchmark();
 		TerrainRenderer::SetGrayPreviewEnabled(GetEnvironmentValue("GLIMMER_TERRAIN_GRAY_PREVIEW") == "1");
+		const auto authoringView = GetEnvironmentValue("GLIMMER_TERRAIN_AUTHORING_VIEW");
+		TerrainRenderer::SetAuthoringVisualizationMode(authoringView == "protection" ? TerrainRenderer::AuthoringVisualizationMode::Protection
+			: authoringView == "clipping" ? TerrainRenderer::AuthoringVisualizationMode::Clipping : TerrainRenderer::AuthoringVisualizationMode::None);
 		if (m_UsesTerrainValidationScene && GetEnvironmentValue("GLIMMER_TERRAIN_RECIPE_INTEGRATION") == "1")
 			ValidateTerrainRecipeEditorIntegration(m_EditorScene);
 		if (m_UsesTerrainValidationScene && GetEnvironmentValue("GLIMMER_TERRAIN_RECIPE_WATER_FIXTURE") == "1")

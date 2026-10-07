@@ -14,7 +14,7 @@ namespace gl
 	{
 		friend struct TerrainInspectorValidation;
 	public:
-		void SetContext(const Ref<Scene>& scene) { m_Context = scene; }
+		void SetContext(const Ref<Scene>& scene) { if (m_Context != scene) ResetTerrainDiagnostics(); m_Context = scene; }
 		void SetSelectionContext(SelectionContext* selection) { m_Selection = selection; }
 		void SetCommandHistory(EditorCommandHistory* history) { m_CommandHistory = history; }
 
@@ -24,6 +24,8 @@ namespace gl
 		void DrawAssetInspector(AssetHandle handle);
 		void DrawComponents(Entity entity);
 		void DrawTerrainRecipe(Entity entity, TerrainComponent& terrain);
+		void DrawTerrainDiagnostics(Entity entity, TerrainComponent& terrain);
+		void ResetTerrainDiagnostics();
 		void DrawAddComponentMenu(Entity entity);
 		void ExecuteMaterialComponentEdit(Entity entity, const char* name,
 			const MaterialComponent& before, const MaterialComponent& after);
@@ -223,6 +225,12 @@ namespace gl
 
 	private:
 		Ref<Scene> m_Context;
+		TerrainSurfaceSnapshot m_TerrainSnapshot;
+		TerrainQueryStatus m_TerrainCaptureStatus = TerrainQueryStatus::NotReady;
+		uint64_t m_TerrainDiagnosticEntity = 0, m_TerrainDiagnosticIdentity = 0;
+		glm::vec2 m_TerrainQueryXZ{ 0 };
+		std::optional<uint64_t> m_TerrainClippedCount;
+		TerrainSurfaceVersion m_TerrainClipVersion;
 		SelectionContext* m_Selection = nullptr;
 		EditorCommandHistory* m_CommandHistory = nullptr;
 		EditorValueTransaction<TransformComponent> m_TransformEdit;

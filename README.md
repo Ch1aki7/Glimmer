@@ -4689,7 +4689,7 @@ Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与
 
 增删、启用、形状/操作切换与重排各提交一条命令；连续参数从控件激活到释放合并为一条 Undo/Redo 命令。命令保存整份规格快照，应用时写回规格并 Invalidate，保留 Runtime 用于失败回退。修改 Height Resolution、Mesh Resolution 和 Procedural 也使用失效重建。Inspector 展示 Recipe rejected 或 Generation failed 的具体原因；修复参数后重新生成，Regenerate 可显式重试。导入高度图缺资产时保留旧表面，成功导入清理旧模拟资源。
 
-DebugPanel 的 Terrain Overview 提供 Terrain Gray Preview，使用中性材质与几何法线观察形状、过渡和阴影；它不修改配方、材质资产或模拟。普通材质、水面与 LOD 仍消费同一已发布地形规格。保护遮罩显示和持续动态保护尚未实现，静态创作检查保持模拟暂停。
+DebugPanel 的 Terrain Overview 提供 Terrain Gray Preview，使用中性材质与几何法线观察形状、过渡和阴影；它不修改配方、材质资产或模拟。普通材质、水面与 LOD 仍消费同一已发布地形规格。保护遮罩显示见后面的创作诊断章节；持续动态保护尚未实现，静态创作检查保持模拟暂停。
 
 手动打开预置验证场景只需设置 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 后启动编辑器，无需设置截图或 Benchmark 参数，窗口会保持运行；从 Hierarchy 选择 Terrain 即可编辑。`GLIMMER_TERRAIN_GRAY_PREVIEW=1` 可默认启用灰模。`GLIMMER_TERRAIN_RECIPE_WATER_FIXTURE=1` 为该验证场景注入与组合高度匹配的静止水深，属于编辑器验证数据；配方重建会重置这些水量。`GLIMMER_TERRAIN_RECIPE_INTEGRATION=1` 执行隔离 ImGui 实际控件及 GPU 编辑闭环测试；配合 `GLIMMER_TERRAIN_CAPTURE_PATH` 捕获五帧后退出，测试包含显式同步读回，普通编辑流程不执行。集成测试与 `GLIMMER_TERRAIN_VALIDATE` / `GLIMMER_TERRAIN_RECIPE_VALIDATE` 分开运行，避免每次编辑重复整套数值 Contract。
 
@@ -4711,7 +4711,7 @@ if (sample.Validation.Valid()) {
 
 GPU `TerrainGenerator::GetProtectionMap()` 与 `TerrainRuntime::ProtectionMap` 提供 R32F 纹理，采用与高度一致的端点节点、Nearest/ClampToEdge。没有有效印章时为空，消费方按全零保护解释。保护图在原印章 Dispatch 内合并，无新增 Dispatch；与高度/派生图一起发布，受控生成失败保留旧图，成功导入高度图清空引用。Runtime 引用对应已发布 GenerationVersion，配方 YAML 无新增字段，版本仍为 1。
 
-保护权重、合成与解析抑制由引擎拥有；游戏宿主负责决定哪些位置需要印章及其玩法含义。目前没有实际高频细节或侵蚀保护消费者，也没有编辑器遮罩预览；CPU 静态地表快照见下节。普通帧没有新增同步回读；数值验证复用 `GLIMMER_TERRAIN_RECIPE_VALIDATE=1`，编辑闭环复用 `GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`，两者分开运行。
+保护权重、合成与解析抑制由引擎拥有；游戏宿主负责决定哪些位置需要印章及其玩法含义。目前没有实际高频细节或侵蚀保护消费者；编辑器遮罩预览见后面的创作诊断章节，CPU 静态地表快照见下节。普通帧没有新增同步回读；数值验证复用 `GLIMMER_TERRAIN_RECIPE_VALIDATE=1`，编辑闭环复用 `GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`，两者分开运行。
 
 2026-10-06 的 VS2026 Debug x64 全解决方案构建与 255 条无窗口 PASS 输出通过，完全链接产物位于本地 `bin/P17-B1-review/`，原编辑器窗口保留。Intel Iris Xe 的 65×81/129×145 GPU Contract 覆盖 max 并集、重排、零高度增量、分数强度、解析正负残差、确定性与失败后引用/内容保留；保护权重最大差 `5.960464e-8`，高度最大差仍为 `6.258488e-7`。编辑闭环中的保护图 Resize/失败保留/导入清理通过；原采样/派生 Contract、表面哈希与空配方 Data v1/v2 逐字节图像基线保持。
 
@@ -4737,9 +4737,23 @@ if (status == gl::TerrainQueryStatus::Ready) {
 
 未发布表面返回 NotReady；旧运行时身份或生成版本返回 StaleVersion；非有限坐标返回 InvalidPosition，越界返回 OutOfBounds，不进行夹取。捕获只支持 Data v2 程序化 R32F 静态高度，旧 Data 和导入图返回 UnsupportedSurface，非法网格/值返回 InvalidData。失败捕获保留输出参数中的旧快照，应先检查返回状态；成功重建后需重新捕获。重载/Play 副本有独立 Runtime 身份；生成失败保留旧表面时，原快照仍有效。
 
-该快照读取 Generator 的组合后静态高度，运行时侵蚀不会刷新或使其失效，因此开启模拟后不能用它代表当前动态表面。快照与查询属于引擎通用能力；地点选择、实体布置及坡度通行标准由游戏宿主决定，碰撞与导航接入另行实现。目前编辑器没有快照或查询显示面板。
+该快照读取 Generator 的组合后静态高度，运行时侵蚀不会刷新或使其失效，因此开启模拟后不能用它代表当前动态表面。快照与查询属于引擎通用能力；地点选择、实体布置及坡度通行标准由游戏宿主决定，碰撞与导航接入另行实现。编辑器通过下节创作诊断面板显式捕获和查询。
 
 2026-10-06 的 VS2026 Debug x64 全解决方案构建与 267 条无窗口 PASS 输出通过，完全链接产物位于本地 `bin/P17-B2-review/`，原编辑器窗口保留。解析斜面/非平面、版本/身份、端点/越界和非法输入通过；Intel Iris Xe GPU 验证平台核心、145×145 全节点查询（最大归一化差 `1.7881393e-7`）、Resize、失败保留、重载/Play 隔离、模拟高度隔离及旧 Data/导入拒绝。原编辑闭环与空配方 Data v1/v2 逐字节图像基线保持。
+
+## Terrain 创作诊断与手动验证
+
+选中含 Terrain 组件的实体，在 Inspector 展开 Terrain 并滚动到 `Terrain Authoring Diagnostics`（位于 Terrain Stamps 上方）。`Authoring View` 是全局会话开关：Protection 用暗色/青色/黄色显示 0/0.5/1 权重，Clipping 用洋红色显示任意印章曾被 [0,HeightScale] 夹取的节点；缺图按零显示。预览读取当前已发布纹理，不重新生成或读回 GPU，保留地形拾取与法线输出；诊断时隐藏水面，切回 None 恢复原材质和水面设置。遮罩颜色不包含材质光照，仍经过视口后处理与当前 LOD 几何。
+
+手动检查可以先用强度 1 的 Set Height 矩形查看黄色核心和外侧渐变，再修改过渡宽度或强度；Clipping 需要目标高度超出 [0,HeightScale] 或 Add 将高度推到范围外才会出现洋红色。`Read Clipping Count` 显式同步读取裁切节点数；普通配方没有裁切时为 0，修改配方重建后原计数标为 stale，需再次点击更新。
+
+点击 `Capture Static Snapshot`，确认 Last capture 和 Query 为 Ready；在 `Query Local XZ` 输入局部 XZ，查看高度、单位法线与坡度。坐标超出快照 WorldSize/2 返回 OutOfBounds；修改印章或尺寸并重建后返回 StaleVersion，重新捕获后恢复 Ready。快照记录身份、生成版本和尺寸，场景或 Terrain 身份切换清空缓存；受控生成失败保留旧表面时，旧查询仍可用。只在 Ready 时显示查询数值，Last capture 表示最近按钮结果，Query 表示当前缓存状态。旧 Data/导入表面捕获返回 UnsupportedSurface。Capture 和 Count 均有同步回读成本，不会每帧自动刷新，也不进入 Scene 保存或 Undo。
+
+快照和遮罩属于静态创作数据；当前运行时侵蚀不消费保护图，快照也不跟随模拟更新。暂停模拟后查看平台可避免将静态查询误当作动态表面；静态模式资源分离尚未实现。
+
+自动验证沿用 `GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`，新增真实 ImGui Capture/Count 控件与过期/失败/上下文重置检查。验证场景中 `GLIMMER_TERRAIN_AUTHORING_VIEW=protection` 或 `clipping` 指定启动视图，搭配 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1`；`GLIMMER_TERRAIN_RECIPE_CLIP_FIXTURE=1` 仅为此场景增加越界 Add 印章。`GLIMMER_TERRAIN_CAPTURE_PATH` 保存五帧固定视角结果并退出；不设置捕获路径可停留进行手动检查。
+
+2026-10-07 的 VS2026 Debug x64 全解决方案完全链接构建与 267 条无窗口 PASS 输出通过；本地可执行产物位于 `bin/P17-B3-review/`。Intel Iris Xe 上实际诊断控件、Undo/重载/Play 保护内容一致、145×145 Resize 全节点 CPU/GPU 保护对照及失败后内容保留通过；静态查询最大归一化差 1.7881393e-7。原印章 Contract 高度/保护最大差仍为 6.258488e-7 / 5.960464e-8，采样/派生 Contract 与哈希 12094008686276857432 保持。保护/裁切 BMP 已检查，诊断 Water 0 Draw、None 视图 Water 16 Draw，Shadow 4 Cascade/3 Draw；空配方 Data v1/v2 与 A2 图像基线逐字节一致。日志/图像仅保留本地 bin。
 
 ## 模型与动作当前支持边界
 
