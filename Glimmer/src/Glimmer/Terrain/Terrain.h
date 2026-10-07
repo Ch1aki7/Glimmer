@@ -11,8 +11,17 @@
 
 #include <array>
 #include <vector>
+#include <unordered_set>
 
 namespace gl {
+	struct TerrainResourceUsage
+	{
+		uint64_t GeneratorBytes = 0, PendingGeneratorBytes = 0, HydrologyBytes = 0, ClimateBytes = 0;
+		uint64_t OtherReferencedTextureBytes = 0, MeshBytes = 0, InitialHeightCPUBytes = 0;
+		uint32_t TextureCount = 0;
+		uint64_t TextureBytes() const { return GeneratorBytes + PendingGeneratorBytes + HydrologyBytes + ClimateBytes + OtherReferencedTextureBytes; }
+	};
+
 	struct TerrainRuntime
 	{
 		uint64_t SurfaceIdentity = UUID(); // New Runtime (including scene copies) has a distinct query identity.
@@ -56,5 +65,36 @@ namespace gl {
 		bool ValidationComplete = false;
 		bool RecipeValidationComplete = false;
 		bool Dirty = true;
+
+		// Read-only census of actual references. Aliases and Ping-Pong reads are counted once.
+		// OtherReferencedTextureBytes includes shared imported/retained source assets, not exclusive ownership.
+		TerrainResourceUsage GetResourceUsage() const
+		{
+			TerrainResourceUsage usage; std::unordered_set<uint32_t> textures;
+			auto add = [&](const std::vector<Ref<Texture2D>>& resources, uint64_t& category) {
+				for (const auto& texture : resources)
+					if (texture && texture->GetRendererID() && textures.insert(texture->GetRendererID()).second) {
+						category += texture->GetStorageByteSize(); ++usage.TextureCount;
+					}
+			};
+			if (Generator) add(Generator->GetTextureResources(), usage.GeneratorBytes);
+			if (PendingGenerator) add(PendingGenerator->GetTextureResources(), usage.PendingGeneratorBytes);
+			if (GPUHydrology) {
+				add(GPUHydrology->GetTextureResources(), usage.HydrologyBytes);
+				usage.InitialHeightCPUBytes = GPUHydrology->GetInitialHeightCPUBytes();
+			}
+			if (GPUClimate) add(GPUClimate->GetTextureResources(), usage.ClimateBytes);
+			add({ HeightMap, NormalSlopeMap, AnalysisMap, MaterialWeightMap, ProtectionMap,
+				GPUHydrology ? GPUHydrology->GetInitialHeightTexture() : nullptr }, usage.OtherReferencedTextureBytes);
+			std::unordered_set<const TerrainMesh*> meshes;
+			auto addMesh = [&](const Ref<TerrainMesh>& mesh) {
+				if (mesh && meshes.insert(mesh.get()).second) {
+					const uint64_t side = uint64_t(mesh->GetGridSize()) + 1;
+					usage.MeshBytes += (side * side + 4 * side) * 6 * sizeof(float) + uint64_t(mesh->GetIndexCount()) * sizeof(uint32_t);
+				}
+			};
+			for (const auto& mesh : LODMeshes) addMesh(mesh); addMesh(Mesh);
+			return usage;
+		}
 	};
 }

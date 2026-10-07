@@ -79,6 +79,16 @@ namespace gl
 		ImGui::TextWrapped("Static authoring data only; runtime erosion does not consume protection or update the snapshot.");
 		ImGui::Text("Published identity / generation: %llu / %llu", (unsigned long long)version.Identity, (unsigned long long)version.Generation);
 		ImGui::Text("Protection map: %s", terrain.Runtime && terrain.Runtime->ProtectionMap ? "published" : "absent (zero)");
+		if (terrain.Runtime) {
+			const auto resources = terrain.Runtime->GetResourceUsage();
+			constexpr double mib = 1024.0 * 1024.0;
+			ImGui::Text("Terrain resources: %u textures | %.3f MiB", resources.TextureCount, resources.TextureBytes() / mib);
+			ImGui::Text("Generator / pending: %.3f / %.3f MiB", resources.GeneratorBytes / mib, resources.PendingGeneratorBytes / mib);
+			ImGui::Text("Hydrology / climate: %.3f / %.3f MiB", resources.HydrologyBytes / mib, resources.ClimateBytes / mib);
+			ImGui::Text("Other referenced / meshes: %.3f / %.3f MiB", resources.OtherReferencedTextureBytes / mib, resources.MeshBytes / mib);
+			ImGui::Text("Initial height CPU: %.3f MiB", resources.InitialHeightCPUBytes / mib);
+			ImGui::TextDisabled("Logical resident storage, not driver VRAM or rebuild peak; shared assets are referenced bytes.");
+		}
 		if (ImGui::Button("Capture Static Snapshot"))
 			m_TerrainCaptureStatus = TerrainRenderer::CaptureSurfaceSnapshot(terrain, m_TerrainSnapshot);
 		ImGui::TextWrapped("Last capture: %s", statusName(m_TerrainCaptureStatus));

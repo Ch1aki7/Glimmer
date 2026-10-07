@@ -442,6 +442,9 @@ namespace gl {
 			return false;
 		if (!specification.Procedural)
 		{
+			// Also discard a failed procedural candidate when returning to an unchanged imported source.
+			runtime.Generator.reset(); runtime.PendingGenerator.reset();
+			runtime.LastGenerationDispatchCount = 0;
 			if (runtime.Dirty || !runtime.HasPublishedSpecification || runtime.PublishedSpecification.Procedural)
 				++runtime.GenerationVersion;
 			runtime.Dirty = false;

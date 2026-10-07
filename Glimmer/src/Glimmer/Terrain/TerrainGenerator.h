@@ -3,6 +3,7 @@
 #include "Glimmer/Renderer/ComputeShader.h"
 #include "Glimmer/Simulation/SimulationGrid.h"
 #include "Glimmer/Terrain/TerrainSettings.h"
+#include <vector>
 
 namespace gl {
 	struct TerrainValidationResult
@@ -42,6 +43,11 @@ namespace gl {
 		const Ref<Texture2D>& GetAnalysisMap() const { return m_AnalysisMap; }
 		const Ref<Texture2D>& GetMaterialWeightMap() const { return m_MaterialWeightMap; }
 		uint32_t GetLastDispatchCount() const { return m_LastDispatchCount; }
+		std::vector<Ref<Texture2D>> GetTextureResources() const
+		{
+			return { m_HeightGrid.ReadTexture(), m_HeightGrid.WriteTexture(), m_NormalSlopeMap,
+				m_AnalysisMap, m_MaterialWeightMap, m_RecipeClipMask, m_ProtectionMap };
+		}
 		TerrainValidationResult ValidateOutputs() const;
 		static TerrainValidationResult ValidateSamplingContract(
 			const std::string& generationShaderPath, const std::string& erosionShaderPath,

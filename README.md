@@ -4790,6 +4790,16 @@ Reset 和 Step 同帧请求时，先恢复模拟初值，再执行 Seed/Step；�
 
 2026-10-07 的 C2 标准 Debug x64 全解决方案完全链接构建和 273 条无窗口回归通过。Intel Iris Xe 的真实阴影准备→颜色准备时序、重复 Prepare、帧内修改延迟、排队请求隔离、两模式 Resize/保存重载/导入/Copy、Reset+Step 派生一致性及成功/失败/修复热重载均 PASS。原印章/采样/派生及水文/气候 Contract 保持，空配方 Data v1/v2 图像仍与 A2 基线逐字节一致；静态/模拟固定视角已检查。生命周期已完成此项验证，完整资源、峰值及分项性能预算尚未验收。
 
+## Terrain 驻留资源诊断
+
+选中 Terrain，在 Inspector 的 `Terrain Authoring Diagnostics` 查看 `Terrain resources`：分别显示生成器、待发布生成器、水文、气候、其他引用纹理、地形网格及模拟初始高度 CPU 容量。按实际纹理身份去重，Height/派生引用、模拟借用初始 Height 和 Mesh 别名不会重复累计；读取不触发 GPU 同步回读，不改变模拟、规格或 Undo。
+
+1024² 有印章场景，Static 是 7 张纹理、40 MiB；Simulation 是 32 张、156 MiB，其中水文 76 MiB、气候 40 MiB。无有效印章则没有裁切/保护图，分别为 5 张/32 MiB 和 30 张/148 MiB。暂停保留模拟资源，切换 Static 后水文/气候和 CPU 初值归零。成功切换导入高度图会释放旧程序化生成器及待发布生成器，只留下导入纹理引用；加载失败继续保留旧表面，切回程序化模式可重新生成。
+
+数值是当前逻辑驻留存储，含纹理 Mip，不是驱动显存或候选重建峰值；其他引用纹理可能由 AssetManager 共享，多个 Terrain 不能直接相加当作全场景独占显存。网格和 CPU 初值单列，不含材质纹理、水面共享资源、Inspector 快照、临时 CPU 数组及 Shader；水面统计仍在 Debug Overview。失败后保留的 PendingGenerator 按实际存在资源显示，其候选重建峰值不由此统计。
+
+2026-10-07 验证：标准 VS2026 Debug x64 全解决方案完全链接、285 条无窗口 PASS；实际 GPU 核对 65² 两模式清单/去重、重复暂停 Prepare、两模式导入释放及重新生成，原模式/生命周期/查询与水文/气候 Contract 通过。1024² 清单与上述数值一致，三档地形网格合计 503,592 字节，模拟 CPU 初值容量 4 MiB；空配方 Data v1/v2 固定视角 BMP 与 A2 基线逐字节一致，Static 保持 Water 0 Draw，截图已检查。该结果验证驻留清单和释放修复，不构成重建峰值、分项性能或完整 C3 总验收。
+
 ## Terrain 创作诊断与手动验证
 
 选中含 Terrain 组件的实体，在 Inspector 展开 Terrain 并滚动到 `Terrain Authoring Diagnostics`（位于 Terrain Stamps 上方）。`Authoring View` 是全局会话开关：Protection 用暗色/青色/黄色显示 0/0.5/1 权重，Clipping 用洋红色显示任意印章曾被 [0,HeightScale] 夹取的节点；缺图按零显示。预览读取当前已发布纹理，不重新生成或读回 GPU，保留地形拾取与法线输出；诊断时隐藏水面，切回 None 恢复原材质和水面设置。遮罩颜色不包含材质光照，仍经过视口后处理与当前 LOD 几何。

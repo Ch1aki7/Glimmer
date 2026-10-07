@@ -1199,6 +1199,7 @@ namespace gl {
                 GL_CORE_INFO("Water capture cost: triangles={0}, copy={1}ms, draw={2}ms, timing={3}, background={4}, detail={5}, mesh={6}, tracked peak={7} bytes",
                     waterStats.Triangles,waterStats.CopyMilliseconds,waterStats.DrawMilliseconds,waterStats.GpuTimingAvailable,
                     waterStats.BackgroundBytes,waterStats.DetailBytes,waterStats.MeshBytes,waterStats.PeakOwnedBytes);
+				LogTerrainValidationResources(m_ActiveScene);
 				GL_CORE_INFO("Terrain capture shadow: enabled={0}, cascades={1}, draws={2}",
 					ShadowRenderer::IsEnabled(), shadowStats.CascadePasses, shadowStats.DrawCalls);
 			}

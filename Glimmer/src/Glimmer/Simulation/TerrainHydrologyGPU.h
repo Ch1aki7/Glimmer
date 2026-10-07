@@ -152,6 +152,15 @@ namespace gl {
 		{
 			return m_SedimentSaturation;
 		}
+		std::vector<Ref<Texture2D>> GetTextureResources() const
+		{
+			return { m_Height.ReadTexture(), m_Height.WriteTexture(), m_Water.ReadTexture(), m_Water.WriteTexture(),
+				m_Flux.ReadTexture(), m_Flux.WriteTexture(), m_Velocity.ReadTexture(), m_Velocity.WriteTexture(),
+				m_Sediment.ReadTexture(), m_Sediment.WriteTexture(), m_WaterSourceBudget.ReadTexture(), m_WaterSourceBudget.WriteTexture(),
+				m_ZeroWaterSource, m_SedimentCapacity, m_SedimentSaturation };
+		}
+		const Ref<Texture2D>& GetInitialHeightTexture() const { return m_InitialHeightTexture; }
+		uint64_t GetInitialHeightCPUBytes() const { return uint64_t(m_InitialHeightData.capacity()) * sizeof(float); }
 		TerrainHydrologyGPUSettings& GetSettings() { return m_Settings; }
 		const TerrainHydrologyGPUStatistics& GetStatistics() const
 		{

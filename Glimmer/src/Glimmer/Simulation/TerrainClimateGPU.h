@@ -117,6 +117,12 @@ namespace gl {
 		{
 			return m_VegetationPotential.ReadTexture();
 		}
+		std::vector<Ref<Texture2D>> GetTextureResources() const
+		{
+			return { m_Temperature.ReadTexture(), m_Temperature.WriteTexture(), m_AtmosphericMoisture.ReadTexture(),
+				m_AtmosphericMoisture.WriteTexture(), m_VegetationPotential.ReadTexture(), m_VegetationPotential.WriteTexture(),
+				m_Rainfall, m_Evaporation, m_WaterSource, m_ZeroSurfaceWater };
+		}
 		TerrainClimateGPUSettings& GetSettings() { return m_Settings; }
 		const TerrainClimateGPUStatistics& GetStatistics() const
 		{

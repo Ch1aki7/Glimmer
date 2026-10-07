@@ -69,6 +69,29 @@ namespace gl {
 
 		virtual bool operator==(const Texture& other) const = 0;
 		virtual uint32_t GetRendererID() const = 0;
+
+		// Logical immutable storage, including opt-in Mips; excludes driver overhead.
+		uint64_t GetStorageByteSize() const
+		{
+			if (!GetRendererID()) return 0;
+			const auto& spec = GetSpecification();
+			uint64_t bytesPerTexel = 0;
+			switch (spec.Format) {
+			case TextureFormat::R8: bytesPerTexel = 1; break;
+			case TextureFormat::RGB8: bytesPerTexel = 3; break;
+			case TextureFormat::RGBA8: case TextureFormat::RG16F: case TextureFormat::R32F: bytesPerTexel = 4; break;
+			case TextureFormat::R16F: bytesPerTexel = 2; break;
+			case TextureFormat::RGBA16F: bytesPerTexel = 8; break;
+			default: return 0;
+			}
+			uint32_t width = spec.Width, height = spec.Height; uint64_t bytes = 0;
+			while (width && height) {
+				bytes += uint64_t(width) * height * bytesPerTexel;
+				if (spec.MinFilter != TextureFilter::LinearMipmapLinear || (width == 1 && height == 1)) break;
+				width = width > 1 ? width / 2 : 1; height = height > 1 ? height / 2 : 1;
+			}
+			return bytes;
+		}
 	};
 
 	class Texture2D : public Texture {

@@ -55,6 +55,17 @@ namespace gl {
 				const auto sediment = values(terrain.Runtime->GPUHydrology->GetSedimentTexture());
 				require(std::all_of(sediment.begin(), sediment.end(), [](float v) { return v == 0; }), "Simulation replays Static sediment seed.");
 			});
+			const auto simulationUsage = terrain.Runtime->GetResourceUsage();
+			require(simulationUsage.GeneratorBytes == uint64_t(65) * 65 * 40
+				&& simulationUsage.HydrologyBytes == uint64_t(65) * 65 * 76
+				&& simulationUsage.ClimateBytes == uint64_t(65) * 65 * 40
+				&& simulationUsage.TextureCount == 32 && simulationUsage.OtherReferencedTextureBytes == 0
+				&& simulationUsage.PendingGeneratorBytes == 0 && simulationUsage.InitialHeightCPUBytes >= uint64_t(65) * 65 * 4,
+				"Simulation resource census misses allocation or double counts aliases.");
+			const auto hydroIdentity = terrain.Runtime->GPUHydrology.get();
+			for (int i = 0; i < 3; ++i) frame([&] { require(TerrainRenderer::Prepare(terrain), "Repeated resource Prepare failed."); });
+			require(terrain.Runtime->GPUHydrology.get() == hydroIdentity && terrain.Runtime->GetResourceUsage().TextureBytes() == simulationUsage.TextureBytes(),
+				"Paused Prepare reallocates simulation resources.");
 			TerrainRenderer::RequestHydrologySingleStep();
 			{
 				struct ShadowFrameGuard { ShadowFrameGuard() { TerrainRenderer::BeginFrame(0); } ~ShadowFrameGuard() { TerrainRenderer::EndScene(); } } guard;
@@ -67,6 +78,11 @@ namespace gl {
 					&& terrain.Runtime->GPUEnvironment->GetStatistics().StepCount == 1, "Frame passes change publication or repeat Step.");
 			}
 			frame([&] { require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology, "Deferred mode switch not applied next frame."); });
+			const auto staticUsage = terrain.Runtime->GetResourceUsage();
+			require(staticUsage.GeneratorBytes == uint64_t(65) * 65 * 40 && staticUsage.TextureCount == 7
+				&& staticUsage.HydrologyBytes == 0 && staticUsage.ClimateBytes == 0 && staticUsage.InitialHeightCPUBytes == 0,
+				"Static resource census retains simulation allocations.");
+			GL_CORE_INFO("Terrain resource census PASS: Static 40 bytes/node, Simulation 156 bytes/node; 7/32 textures, no alias duplication or paused reallocations.");
 			for (auto mode : { TerrainExecutionMode::Static, TerrainExecutionMode::Simulation }) {
 				terrain.Specification = original; terrain.Specification.ExecutionMode = mode;
 				terrain.Specification.HeightMapResolution = mode == TerrainExecutionMode::Static ? 81 : 97;
@@ -102,8 +118,23 @@ namespace gl {
 				terrain.Specification.Procedural = false; terrain.Specification.Recipe.Stamps.clear();
 				terrain.Specification.HeightMapHandle = AssetManager::ImportAsset("assets/textures/NoiseTex.png"); TerrainRenderer::Invalidate(terrain);
 				frame([&] { require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology && !terrain.Runtime->GPUClimate
-					&& !terrain.Runtime->GPUEnvironment && !terrain.Runtime->ProtectionMap, "Mode import retains simulation/authoring resources."); });
+					&& !terrain.Runtime->GPUEnvironment && !terrain.Runtime->ProtectionMap && !terrain.Runtime->Generator
+					&& !terrain.Runtime->PendingGenerator, "Mode import retains simulation/authoring resources."); });
+				const auto importedUsage = terrain.Runtime->GetResourceUsage();
+				require(importedUsage.TextureCount == 1 && importedUsage.GeneratorBytes == 0
+					&& importedUsage.PendingGeneratorBytes == 0 && importedUsage.HydrologyBytes == 0 && importedUsage.ClimateBytes == 0
+					&& importedUsage.OtherReferencedTextureBytes == terrain.Runtime->HeightMap->GetStorageByteSize(),
+					"Imported surface retains procedural texture storage.");
 				require(snapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == TerrainQueryStatus::StaleVersion, "Import retains query version.");
+				// Emulate a retained failed procedural candidate while the published source remains imported.
+				const auto sourcePath = AssetManager::GetFileSystemPath(original.GenerationShaderHandle);
+				SimulationGridSpecification pendingGrid; pendingGrid.Width = pendingGrid.Height = 17;
+				terrain.Runtime->PendingGenerator = CreateScope<TerrainGenerator>(pendingGrid, sourcePath.string(),
+					(sourcePath.parent_path() / "ThermalErosion.comp").string(), (sourcePath.parent_path() / "DeriveTerrainMaps.comp").string());
+				require(terrain.Runtime->GetResourceUsage().PendingGeneratorBytes == uint64_t(17) * 17 * 32,
+					"Pending candidate is omitted from resident census.");
+				frame([&] { require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->PendingGenerator
+					&& terrain.Runtime->GetResourceUsage().TextureCount == 1, "Unchanged imported source retains failed procedural candidate."); });
 				terrain.Specification = original; terrain.Specification.ExecutionMode = mode; TerrainRenderer::Invalidate(terrain);
 				frame([&] { require(TerrainRenderer::Prepare(terrain) && (bool(terrain.Runtime->GPUHydrology) == (mode == TerrainExecutionMode::Simulation)), "Mode import recovery failed."); });
 			}
@@ -541,6 +572,18 @@ namespace gl {
 		std::error_code ignored; std::filesystem::remove(temporaryScenePath, ignored);
 		terrain.Specification = original; TerrainRenderer::Invalidate(terrain);
 		return passed;
+	}
+
+	void LogTerrainValidationResources(const Ref<Scene>& scene)
+	{
+		Entity entity = scene ? scene->FindEntityByUUID(UUID(TerrainFixtureID)) : Entity{};
+		if (!entity || !entity.HasComponent<TerrainComponent>()) return;
+		const auto& terrain = entity.GetComponent<TerrainComponent>();
+		if (!terrain.Runtime) return;
+		const auto resources = terrain.Runtime->GetResourceUsage();
+		GL_CORE_INFO("Terrain resource capture: textures={0}, total={1}, generator={2}, pending={3}, hydrology={4}, climate={5}, other={6}, meshes={7}, initial CPU={8} bytes",
+			resources.TextureCount, resources.TextureBytes(), resources.GeneratorBytes, resources.PendingGeneratorBytes,
+			resources.HydrologyBytes, resources.ClimateBytes, resources.OtherReferencedTextureBytes, resources.MeshBytes, resources.InitialHeightCPUBytes);
 	}
 
 	void SeedTerrainValidationWater(const Ref<Scene>& scene)

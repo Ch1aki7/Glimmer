@@ -8,6 +8,7 @@ namespace gl {
 	class Scene;
 	bool ValidateTerrainRecipeEditorIntegration(const Ref<Scene>& scene);
 	void SeedTerrainValidationWater(const Ref<Scene>& scene);
+	void LogTerrainValidationResources(const Ref<Scene>& scene);
 
 	Ref<Scene> CreateTerrainValidationScene(
 		AssetHandle skyboxHandle,
