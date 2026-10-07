@@ -230,6 +230,8 @@ PBRModel 与 Terrain 对 Irradiance 使用相同的 Fresnel-Schlick-Roughness �
 
 - `TerrainSpecification::ExecutionMode` 为 Static/Simulation，新规格默认 Static；Scene YAML 保存数值 0/1，旧 YAML 缺字段读为 Simulation，未知模式在保存或加载预检时拒绝。预设切换保留模式，复制仍只复制规格并清空 Runtime。Inspector 顶部 Execution Mode 使用整份规格命令进行 Undo/Redo；Debug 模拟设置仍为全局会话设置，只影响已发布 Simulation 地形；
 - Static Prepare 直接消费 Generator 静态 Height/派生/遮罩，不创建水文、气候或环境模拟对象；成功切入 Static 后释放这些对象及其版本标记。Simulation 仅支持程序化 R32F，导入图仍不创建模拟。模式变化推进重建/发布，成功进入 Simulation 从组合后静态高度创建独立初值；切换会清空不兼容模拟状态，初始化时消费既有请求序号，避免补执行 Static 期间的 Step/Seed。受控生成失败提前返回，保留旧已发布模式、表面及模拟对象；模拟 Shader 首次加载/设备错误不属于此恢复保证；
+- Scene 的 Runtime/Editor 更新在阴影前调用 TerrainRenderer::BeginFrame；第一次 Prepare 执行生成/模拟更新并以 Runtime.PreparedFrameSerial 固定本帧结果，后续阴影/颜色 Prepare 直接消费同套已发布高度/规格。帧内 Invalidate 保留到下帧处理。颜色阶段 BeginScene 复用既有帧序号并开始原地形颜色计时，EndScene 关闭帧；水面消费已准备的 Runtime，不重新 Prepare。独立宿主仅调用 BeginScene/EndScene 时仍隐式建立一帧；帧外显式 Prepare 不受缓存限制；
+- Reset 与 Step 同帧排队时按 Reset→Seed→Step 顺序处理，Reset 对派生图刷新的要求不会被不改变高度的 Step 覆盖。生成 Shader 的热重载成功或失败尝试均触发发布校验；失败报告 GenerationError 并保留完整旧资源/版本，修复后成功重载会清除错误并发布新版本；
 
 - `TerrainGenerator` 依次执行 GenerateFBM、有限次 Thermal Erosion、有序解析印章与 Derive Maps；序列化的 Noise SynthesisVersion 选择旧版合成或新版条件分形。新版先形成低频陆地区域与定向山带，再在山地区域叠加抗混叠 Ridged 细节、Worley 地质扰动、裂谷、趋势和条件谷地；旧 YAML 缺版本时固定走 v1；
 - `TerrainSpecification::Recipe` 保存版本 1 的有序解析印章数据；`TerrainRecipe.h/.cpp` 位于引擎 Terrain 层，只依赖纯数据/数学，不持有 Scene、编辑器、纹理或模拟对象。印章具有非零唯一 uint64 ID、Ellipse/Rectangle、Add/SetHeight、启用、局部 XZ/完整核心尺寸、绕 Y 旋转、外侧过渡宽度、强度及局部高度参数。基础来源与 Seed 继续由既有 Specification/Noise 保存，没有第二份 Seed；

@@ -66,6 +66,7 @@ namespace gl {
 
 		static void Init();
 		static void Shutdown();
+		static void BeginFrame(float deltaSeconds = 0.0f); // Before shadow preparation; BeginScene starts the color timer.
 		static void BeginScene(float deltaSeconds = 0.0f);
 		static void EndScene();
 		static bool Prepare(TerrainComponent& component);

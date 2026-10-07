@@ -302,6 +302,7 @@ namespace gl {
 						sceneCamera->GetOrthographicFarClip());
 				}
 			}
+			TerrainRenderer::BeginFrame(ts.GetSeconds());
 			RenderDirectionalShadowMap(
 				cameraView, cameraProjection, cameraNear, cameraFar);
 			Renderer3D::BeginScene(viewProjection, cameraPosition);
@@ -352,6 +353,7 @@ namespace gl {
 		GL_CORE_ASSERT(!m_SpritePassPending,
 			"Previous Scene sprite pass was not flushed by the render host.");
 		UploadLightEnvironment();
+		TerrainRenderer::BeginFrame(ts.GetSeconds());
 		RenderDirectionalShadowMap(view, projection, cameraNear, cameraFar);
 		const glm::mat4 viewProjection = projection * view;
 		Renderer3D::BeginScene(viewProjection, cameraPosition);

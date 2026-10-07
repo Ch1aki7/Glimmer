@@ -4751,9 +4751,15 @@ if (status == gl::TerrainQueryStatus::Ready) {
 
 DebugPanel 的模拟 Play/Step/Reset 是全局会话控制，仅对 Simulation 地形生效；Static 忽略这些请求，重新启用 Simulation 时不会补执行此前的 Step/Seed。静态快照始终查询创作表面，保护图尚不约束运行时侵蚀。
 
+Scene 在阴影绘制前准备本帧地形；阴影、颜色和水面消费同一套更新后的高度，重复 Prepare 不重复 Step 或发布。帧内再次改规格/Invalidate 会延后到下一帧，帧外显式 Prepare 仍可立即处理。自定义宿主有阴影通道时先调用 `TerrainRenderer::BeginFrame(deltaSeconds)`，准备和绘制阴影，再调用 `BeginScene`/绘制颜色/`EndScene`；仅使用 BeginScene/EndScene 的宿主保留原用法。地形 GPU 计时仍由颜色阶段 BeginScene/EndScene 包围；模拟已提前准备，分项成本不能只用这一个读数判断。
+
+Reset 和 Step 同帧请求时，先恢复模拟初值，再执行 Seed/Step；即使关闭侵蚀，Reset 后法线和材质派生图仍刷新。生成 Shader 热重载失败会在 Inspector 报错并继续使用旧表面/模式/模拟资源；修复后自动重新发布，旧静态快照随新版本过期。该恢复仍限受控生成失败，不覆盖模拟 Shader 首次加载或设备故障。
+
 手动验证：通过标准 Debug 程序或 Visual Studio F5 启动，选中 Terrain，在顶部将 Execution Mode 设为 Static，确认 Published mode 更新；编辑印章后捕获快照查询。切为 Simulation 后使用 Debug 水文/气候控制，再 Undo/Redo 检查模式恢复。已有验证场景默认 Simulation 以保持图像基线；设置 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 与 `GLIMMER_TERRAIN_EXECUTION_MODE=static` 可直接打开静态案例。
 
 2026-10-07 标准目录的 VS2026 Debug x64 全解决方案完全链接构建及 273 条无窗口 PASS 通过。Intel Iris Xe GPU 验证静态冷启动/反复 Prepare 无模拟对象、模式命令 Undo/Redo、两方向失败切换保留、初值/Reset、快照过期和 Scene Copy 隔离；原编辑闭环、保护/查询检查通过。静态固定视角已检查：Color 16 Chunk、Water 0 Draw、Shadow 4 Cascade/3 Draw；原水文/气候 GPU Contract PASS，旧 Data v1/v2 图像与 A2 基线逐字节一致。模拟纹理清单、峰值及性能成本的完整复核尚未验收。
+
+2026-10-07 的 C2 标准 Debug x64 全解决方案完全链接构建和 273 条无窗口回归通过。Intel Iris Xe 的真实阴影准备→颜色准备时序、重复 Prepare、帧内修改延迟、排队请求隔离、两模式 Resize/保存重载/导入/Copy、Reset+Step 派生一致性及成功/失败/修复热重载均 PASS。原印章/采样/派生及水文/气候 Contract 保持，空配方 Data v1/v2 图像仍与 A2 基线逐字节一致；静态/模拟固定视角已检查。生命周期已完成此项验证，完整资源、峰值及分项性能预算尚未验收。
 
 ## Terrain 创作诊断与手动验证
 

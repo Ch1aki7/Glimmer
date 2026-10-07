@@ -52,6 +52,7 @@ namespace gl {
 		uint32_t LoadedMeshResolution = 0;
 		uint32_t LastGenerationDispatchCount = 0;
 		uint64_t GenerationVersion = 0;
+		uint64_t PreparedFrameSerial = 0; // Pin one complete publication/update across frame passes.
 		bool ValidationComplete = false;
 		bool RecipeValidationComplete = false;
 		bool Dirty = true;

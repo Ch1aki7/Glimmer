@@ -204,7 +204,8 @@ namespace gl {
 		{
 			if (!shader) continue;
 			const ShaderReloadResult result = shader->ReloadIfChanged();
-			changed |= result.Attempted && result.Success;
+			// Failed reloads also need publication validation and visible diagnostics.
+			changed |= result.Attempted;
 		}
 		return changed;
 	}

@@ -15,11 +15,129 @@
 #include <chrono>
 #include <filesystem>
 #include <stdexcept>
+#include <fstream>
+#include <sstream>
+#include <thread>
 
 namespace gl {
 	// Exercise actual widgets in an isolated ImGui context; diagnostics require the caller's GL context.
 	struct TerrainInspectorValidation
 	{
+		static void RunLifecycle(const TerrainSpecification& fixture, const std::filesystem::path& scenePath)
+		{
+			auto require = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
+			struct SettingsGuard {
+				bool Hydro = TerrainRenderer::IsHydrologyPlaying(), Climate = TerrainRenderer::IsClimatePlaying();
+				float Change = TerrainRenderer::GetHydrologyMaximumHeightChange();
+				~SettingsGuard() { TerrainRenderer::SetHydrologyPlaying(Hydro); TerrainRenderer::SetClimatePlaying(Climate); TerrainRenderer::SetHydrologyMaximumHeightChange(Change); }
+			} settings;
+			TerrainRenderer::SetHydrologyPlaying(false); TerrainRenderer::SetClimatePlaying(false);
+			const auto scene = CreateRef<Scene>(); auto entity = scene->CreateEntity("Lifecycle Contract");
+			auto& terrain = entity.AddComponent<TerrainComponent>(); terrain.Specification = fixture;
+			terrain.Specification.HeightMapResolution = 65; terrain.Specification.MeshResolution = 24;
+			terrain.Specification.ExecutionMode = TerrainExecutionMode::Static;
+			const auto original = terrain.Specification;
+			auto frame = [&](auto action) {
+				struct FrameGuard { FrameGuard() { TerrainRenderer::BeginScene(0); } ~FrameGuard() { TerrainRenderer::EndScene(); } } guard;
+				action();
+			};
+			auto values = [](const Ref<Texture2D>& map, uint32_t channels = 1) {
+				std::vector<float> result(size_t(map->GetWidth()) * map->GetHeight() * channels);
+				map->GetImageData(result.data(), uint32_t(result.size() * sizeof(float))); return result;
+			};
+			frame([&] { require(TerrainRenderer::Prepare(terrain), "Cold lifecycle Static failed."); });
+			TerrainRenderer::RequestHydrologySingleStep(); TerrainRenderer::RequestClimateSingleStep();
+			TerrainRenderer::RequestHydrologyReset(); TerrainRenderer::RequestClimateReset(); TerrainRenderer::RequestHydrologySedimentSeed();
+			terrain.Specification.ExecutionMode = TerrainExecutionMode::Simulation; TerrainRenderer::Invalidate(terrain);
+			frame([&] {
+				require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GPUEnvironment->GetStatistics().StepCount == 0,
+					"Simulation replays requests queued while Static.");
+				const auto sediment = values(terrain.Runtime->GPUHydrology->GetSedimentTexture());
+				require(std::all_of(sediment.begin(), sediment.end(), [](float v) { return v == 0; }), "Simulation replays Static sediment seed.");
+			});
+			TerrainRenderer::RequestHydrologySingleStep();
+			{
+				struct ShadowFrameGuard { ShadowFrameGuard() { TerrainRenderer::BeginFrame(0); } ~ShadowFrameGuard() { TerrainRenderer::EndScene(); } } guard;
+				require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GPUEnvironment->GetStatistics().StepCount == 1, "Queued Step not applied.");
+				const auto version = TerrainRenderer::GetSurfaceVersion(terrain); const auto height = terrain.Runtime->HeightMap;
+				TerrainRenderer::BeginScene(0); // Color follows the shadow Prepare in the same terrain frame.
+				terrain.Specification.ExecutionMode = TerrainExecutionMode::Static; TerrainRenderer::Invalidate(terrain);
+				for (int pass = 0; pass < 5; ++pass) require(TerrainRenderer::Prepare(terrain) && TerrainRenderer::GetSurfaceVersion(terrain) == version
+					&& terrain.Runtime->HeightMap == height && TerrainRenderer::GetSurfaceSpecification(terrain).ExecutionMode == TerrainExecutionMode::Simulation
+					&& terrain.Runtime->GPUEnvironment->GetStatistics().StepCount == 1, "Frame passes change publication or repeat Step.");
+			}
+			frame([&] { require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology, "Deferred mode switch not applied next frame."); });
+			for (auto mode : { TerrainExecutionMode::Static, TerrainExecutionMode::Simulation }) {
+				terrain.Specification = original; terrain.Specification.ExecutionMode = mode;
+				terrain.Specification.HeightMapResolution = mode == TerrainExecutionMode::Static ? 81 : 97;
+				terrain.Specification.WorldSize = 1536; TerrainRenderer::Invalidate(terrain);
+				frame([&] { require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->HeightMap->GetWidth() == terrain.Specification.HeightMapResolution,
+					"Mode Resize fails to publish matching dimensions."); });
+				require((mode == TerrainExecutionMode::Static) == !bool(terrain.Runtime->GPUHydrology), "Resize has wrong simulation ownership.");
+				TerrainSurfaceSnapshot snapshot; require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, snapshot) == TerrainQueryStatus::Ready, "Resize capture failed.");
+				require(SceneSerializer(scene).Serialize(scenePath.string()), "Resized mode serialization failed.");
+				const auto reloadedScene = CreateRef<Scene>(); require(SceneSerializer(reloadedScene).Deserialize(scenePath.string()), "Resized mode reload failed.");
+				auto reloadedEntity = reloadedScene->FindEntityByUUID(entity.GetUUID()); auto& reloaded = reloadedEntity.GetComponent<TerrainComponent>();
+				require(!reloaded.Runtime && reloaded.Specification.ExecutionMode == mode && reloaded.Specification.WorldSize == 1536,
+					"Resize reload loses mode/range or serializes Runtime.");
+				frame([&] { require(TerrainRenderer::Prepare(reloaded), "Resized reloaded mode Prepare failed."); });
+				require(values(reloaded.Runtime->HeightMap) == values(terrain.Runtime->HeightMap)
+					&& snapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(reloaded)).Status == TerrainQueryStatus::StaleVersion, "Reload surface or identity differs.");
+				if (mode == TerrainExecutionMode::Simulation) {
+					const auto expectedNormal = values(terrain.Runtime->NormalSlopeMap, 4);
+					terrain.Runtime->GPUHydrology->GetHeightTexture()->Clear(glm::vec4(0));
+					terrain.Runtime->Generator->DeriveMapsFromHeight(terrain.Runtime->GPUHydrology->GetHeightTexture(), terrain.Specification.HeightScale, 1536);
+					TerrainRenderer::SetHydrologyMaximumHeightChange(0);
+					TerrainRenderer::RequestHydrologyReset(); TerrainRenderer::RequestHydrologySingleStep();
+					frame([&] { require(TerrainRenderer::Prepare(terrain) && TerrainRenderer::GetStatistics().RuntimeDerivedMapRefreshes == 1,
+						"Reset followed by non-eroding Step skips derived refresh."); });
+					require(values(terrain.Runtime->NormalSlopeMap, 4) == expectedNormal
+						&& values(terrain.Runtime->HeightMap) == values(terrain.Runtime->Generator->GetHeightMap()), "Reset restores inconsistent height/derived maps.");
+				}
+				const auto copiedScene = Scene::Copy(scene); auto copied = copiedScene->FindEntityByUUID(entity.GetUUID());
+				auto& copyTerrain = copied.GetComponent<TerrainComponent>(); require(!copyTerrain.Runtime, "Scene Copy carries lifecycle resources.");
+				frame([&] { require(TerrainRenderer::Prepare(copyTerrain), "Copied mode Prepare failed."); });
+				require(copyTerrain.Runtime != terrain.Runtime && snapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(copyTerrain)).Status == TerrainQueryStatus::StaleVersion,
+					"Edit/Play copy shares identity or resources.");
+				terrain.Specification.Procedural = false; terrain.Specification.Recipe.Stamps.clear();
+				terrain.Specification.HeightMapHandle = AssetManager::ImportAsset("assets/textures/NoiseTex.png"); TerrainRenderer::Invalidate(terrain);
+				frame([&] { require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology && !terrain.Runtime->GPUClimate
+					&& !terrain.Runtime->GPUEnvironment && !terrain.Runtime->ProtectionMap, "Mode import retains simulation/authoring resources."); });
+				require(snapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == TerrainQueryStatus::StaleVersion, "Import retains query version.");
+				terrain.Specification = original; terrain.Specification.ExecutionMode = mode; TerrainRenderer::Invalidate(terrain);
+				frame([&] { require(TerrainRenderer::Prepare(terrain) && (bool(terrain.Runtime->GPUHydrology) == (mode == TerrainExecutionMode::Simulation)), "Mode import recovery failed."); });
+			}
+			const auto generationPath = AssetManager::GetFileSystemPath(original.GenerationShaderHandle);
+			std::ifstream sourceFile(generationPath); std::stringstream sourceStream; sourceStream << sourceFile.rdbuf();
+			const auto source = sourceStream.str(); require(!source.empty(), "Cannot read reload fixture source.");
+			struct TemporaryShader {
+				std::filesystem::path Path = std::filesystem::temp_directory_path() / ("Glimmer-C2-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".comp");
+				~TemporaryShader() { std::error_code ignored; std::filesystem::remove(Path, ignored); }
+			} temporary;
+			auto writeShader = [&](const std::string& text) { std::ofstream out(temporary.Path); out << text; out.close();
+				std::filesystem::last_write_time(temporary.Path, std::filesystem::file_time_type::clock::now() + std::chrono::seconds(1)); };
+			for (auto mode : { TerrainExecutionMode::Static, TerrainExecutionMode::Simulation }) {
+				writeShader(source);
+				terrain.Specification = original; terrain.Specification.ExecutionMode = mode;
+				SimulationGridSpecification grid; grid.Width = grid.Height = 65;
+				terrain.Runtime->Generator = CreateScope<TerrainGenerator>(grid, temporary.Path.string(),
+					(generationPath.parent_path() / "ThermalErosion.comp").string(), (generationPath.parent_path() / "DeriveTerrainMaps.comp").string(),
+					(generationPath.parent_path() / "ApplyTerrainStamp.comp").string());
+				TerrainRenderer::Invalidate(terrain); require(TerrainRenderer::Prepare(terrain), "Reload fixture initialization failed.");
+				auto reload = [&](const std::string& text) { writeShader(text); TerrainRenderer::Prepare(terrain);
+					std::this_thread::sleep_for(std::chrono::milliseconds(240)); return TerrainRenderer::Prepare(terrain); };
+				const auto before = TerrainRenderer::GetSurfaceVersion(terrain);
+				require(reload(source + "\n// C2 successful reload\n") && !(before == TerrainRenderer::GetSurfaceVersion(terrain)), "Successful shader reload does not publish new mode surface.");
+				const auto published = TerrainRenderer::GetSurfaceVersion(terrain); const auto height = terrain.Runtime->HeightMap;
+				const auto protection = terrain.Runtime->ProtectionMap; const auto hydrology = terrain.Runtime->GPUHydrology.get();
+				require(reload("#version 450\ninvalid shader\n") && !terrain.Runtime->GenerationError.empty()
+					&& published == TerrainRenderer::GetSurfaceVersion(terrain) && height == terrain.Runtime->HeightMap
+					&& protection == terrain.Runtime->ProtectionMap && hydrology == terrain.Runtime->GPUHydrology.get(), "Failed reload loses resources/version or diagnostic.");
+				require(reload(source) && terrain.Runtime->GenerationError.empty() && !(published == TerrainRenderer::GetSurfaceVersion(terrain)), "Shader repair does not recover publication.");
+			}
+			GL_CORE_INFO("Terrain lifecycle PASS: frame publication pin, one Step per frame, Static queued requests, both-mode Resize/import/copy, Reset+Step derived refresh and successful/failed/repaired shader hot reload.");
+		}
+
 		static void RunExecutionModes(const Ref<Scene>& scene, Entity entity)
 		{
 			auto& terrain = entity.GetComponent<TerrainComponent>();
@@ -209,6 +327,7 @@ namespace gl {
 			require(TerrainRenderer::Prepare(terrain), "Initial recipe Prepare failed.");
 			TerrainInspectorValidation::RunDiagnostics(scene, entity);
 			TerrainInspectorValidation::RunExecutionModes(scene, entity);
+			TerrainInspectorValidation::RunLifecycle(terrain.Specification, temporaryScenePath);
 			auto hash = [&]() { const auto result = terrain.Runtime->Generator->ValidateOutputs(); require(result.Valid, "Invalid composed maps."); return result.Hash; };
 			auto protectionValues = [&](const TerrainComponent& target) {
 				const auto map = target.Runtime->ProtectionMap;

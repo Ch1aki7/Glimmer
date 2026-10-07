@@ -188,7 +188,7 @@ namespace gl {
 		s_Data.GpuTimingSample = 0;
 	}
 
-	void TerrainRenderer::BeginScene(float deltaSeconds)
+	void TerrainRenderer::BeginFrame(float deltaSeconds)
 	{
 		if (!s_Data.HydrologyEnvironmentValidationChecked)
 		{
@@ -203,6 +203,14 @@ namespace gl {
 		s_Data.DeltaSeconds = std::max(deltaSeconds, 0.0f);
 		++s_Data.FrameSerial;
 		s_Data.HydrologyFrameActive = true;
+		s_Data.Stats = {};
+		s_Data.Stats.Mode = s_Data.Sampling;
+		s_Data.Stats.DetailDistance = s_Data.DetailDistance;
+	}
+
+	void TerrainRenderer::BeginScene(float deltaSeconds)
+	{
+		if (!s_Data.HydrologyFrameActive) BeginFrame(deltaSeconds);
 		if (!s_Data.Timer)
 			s_Data.Timer = GPUTimer::Create();
 		float elapsedMilliseconds = 0.0f;
@@ -213,7 +221,6 @@ namespace gl {
 			s_Data.HasGpuTiming = true;
 			++s_Data.GpuTimingSample;
 		}
-		s_Data.Stats = {};
 		s_Data.Stats.GpuMilliseconds = s_Data.LastGpuMilliseconds;
 		s_Data.Stats.GpuTimingAvailable = s_Data.HasGpuTiming;
 		s_Data.Stats.GpuTimingSample = s_Data.GpuTimingSample;
@@ -285,6 +292,12 @@ namespace gl {
 		if (!component.Runtime)
 			component.Runtime = CreateRef<TerrainRuntime>();
 		auto& runtime = *component.Runtime;
+		if (s_Data.HydrologyFrameActive)
+		{
+			if (runtime.PreparedFrameSerial == s_Data.FrameSerial)
+				return runtime.HasPublishedSpecification && runtime.HeightMap != nullptr;
+			runtime.PreparedFrameSerial = s_Data.FrameSerial;
+		}
 
 		auto generationFailed = [&runtime](const std::string& message) {
 			if (runtime.GenerationError != message) GL_CORE_ERROR("Terrain generation rejected: {0}", message);
@@ -608,7 +621,7 @@ namespace gl {
 				if (environmentStepped)
 				{
 					const auto& settings = hydrology.GetSettings();
-					refreshDerivedMaps = settings.MaximumHeightChangePerStep > 0.0f
+					refreshDerivedMaps |= settings.MaximumHeightChangePerStep > 0.0f
 						&& (settings.DepositionRate > 0.0f
 							|| (settings.ErosionRate > 0.0f
 								&& settings.MaximumErosionDepth > 0.0f));
