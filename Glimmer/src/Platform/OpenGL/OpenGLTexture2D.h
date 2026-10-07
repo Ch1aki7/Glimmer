@@ -8,7 +8,8 @@ namespace gl {
 	class OpenGLTexture2D : public Texture2D {
 	public:
 		OpenGLTexture2D(const std::string& path,
-			TextureColorSpace colorSpace = TextureColorSpace::SRGB);
+			TextureColorSpace colorSpace = TextureColorSpace::SRGB,
+			TextureFilter minFilter = TextureFilter::Linear, TextureFilter magFilter = TextureFilter::Nearest);
 		explicit OpenGLTexture2D(const TextureSpecification& specification);
 		~OpenGLTexture2D() override;
 

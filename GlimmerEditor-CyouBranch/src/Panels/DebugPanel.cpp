@@ -129,6 +129,11 @@ namespace gl {
 					TerrainRenderer::SetGrayPreviewEnabled(grayPreview);
 				auto water = WaterSurfaceRenderer::GetSettings();
 				bool waterChanged = ImGui::Checkbox("Water Surface", &water.Enabled);
+                waterChanged |= ImGui::Checkbox("Water Continuous Sampling",&water.SmoothSampling);
+                waterChanged |= ImGui::Checkbox("Water Detail Normals",&water.DetailNormals);
+                waterChanged |= ImGui::Checkbox("Water Shore Foam Preview",&water.ShoreFoam);
+                waterChanged |= ImGui::Checkbox("Water Independent Mesh",&water.IndependentMesh);
+                ImGui::TextDisabled("Global preview controls; saved appearance is in Terrain Inspector.");
 				waterChanged |= ImGui::SliderFloat("Water Absorption", &water.Absorption, 0.0f, 10.0f);
 				waterChanged |= ImGui::SliderFloat("Refraction Pixels", &water.RefractionPixels, 0.0f, 32.0f);
 				waterChanged |= ImGui::SliderFloat("Flow Foam", &water.FoamStrength, 0.0f, 1.0f);
@@ -138,6 +143,11 @@ namespace gl {
 				const auto waterStats = WaterSurfaceRenderer::GetStatistics();
 				ImGui::Text("Water: %u draws, snapshot %s", waterStats.DrawCalls,
 					waterStats.SnapshotReady ? "ready" : "inactive");
+                ImGui::Text("Water triangles: %llu | mesh caches: %u",(unsigned long long)waterStats.Triangles,waterStats.CachedMeshes);
+                ImGui::Text("Water owned MiB: background %.2f, detail %.2f, mesh %.2f",waterStats.BackgroundBytes/1048576.0,waterStats.DetailBytes/1048576.0,waterStats.MeshBytes/1048576.0);
+                ImGui::Text("Water tracked peak MiB: %.2f",waterStats.PeakOwnedBytes/1048576.0);
+                if(waterStats.GpuTimingAvailable) ImGui::Text("Water GPU: copy %.3f / draw %.3f ms",waterStats.CopyMilliseconds,waterStats.DrawMilliseconds);
+                if(!waterStats.ResourceWarning.empty()) ImGui::TextWrapped("Water resource: %s",waterStats.ResourceWarning.c_str());
 				ImGui::Text("Bound Material Textures: %u",
 					terrainStatistics.BoundMaterialTextures);
 				if (terrainStatistics.GpuTimingAvailable)

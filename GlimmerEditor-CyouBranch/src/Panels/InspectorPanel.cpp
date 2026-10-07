@@ -107,6 +107,78 @@ namespace gl
 		ImGui::TextDisabled("Capture / count buttons synchronously read GPU data; queries reuse CPU values.");
 	}
 
+    void InspectorPanel::DrawWaterSurface(Entity entity, TerrainComponent& terrain)
+    {
+        if(m_WaterEditEntity!=uint64_t(entity.GetUUID())) {m_WaterEdit.Reset();m_WaterEditEntity=entity.GetUUID();m_WaterTextureError.clear();}
+        if(!ImGui::TreeNodeEx("Water Surface Appearance",ImGuiTreeNodeFlags_DefaultOpen)) {m_WaterEdit.Reset();return;}
+        auto& water=terrain.Specification.Water;
+        ImGui::TextWrapped("Saved per terrain. Requires Simulation and water depth. Appearance edits preserve simulation.");
+        const auto scene=m_Context; const UUID uuid=entity.GetUUID();
+        auto apply=[scene,uuid](const WaterSurfaceAppearance& value) {
+            Entity target=scene?scene->FindEntityByUUID(uuid):Entity{};
+            if(!target||!target.HasComponent<TerrainComponent>()) return false;
+            target.GetComponent<TerrainComponent>().Specification.Water=value;return true;
+        };
+        auto discrete=[&](const char* label,auto widget) {
+            const auto before=water;
+            if(widget()&&water!=before&&m_CommandHistory)
+                m_CommandHistory->PushExecuted(std::make_unique<ValueEditorCommand<WaterSurfaceAppearance>>(label,before,water,apply));
+        };
+        auto continuous=[&](const char* label,float& value,float lo,float hi) {
+            const auto before=water;
+            ImGui::SliderFloat(label,&value,lo,hi,"%.3f",ImGuiSliderFlags_AlwaysClamp);
+            if(ImGui::IsItemActivated()) m_WaterEdit.Begin(before);
+            if(ImGui::IsItemDeactivatedAfterEdit()&&m_WaterEdit.IsActive()) {
+                auto initial=m_WaterEdit.GetBefore();m_WaterEdit.Reset();
+                if(m_CommandHistory&&initial!=water)
+                    m_CommandHistory->PushExecuted(std::make_unique<ValueEditorCommand<WaterSurfaceAppearance>>(label,initial,water,apply));
+            }
+        };
+        discrete("Toggle Water Appearance",[&](){return ImGui::Checkbox("Water Enabled",&water.Enabled);});
+        int quality=int(water.MeshQuality);
+        discrete("Edit Water Mesh Quality",[&](){if(!ImGui::Combo("Water Mesh Quality",&quality,"Low (32)\0Balanced (64)\0High (128)\0")) return false;water.MeshQuality=uint32_t(quality);return true;});
+        continuous("Water Normal Strength",water.NormalStrength,0,2);
+        continuous("Water Wave Length",water.WaveLength,0.25f,256);
+        continuous("Water Flow Strength",water.FlowStrength,0,2);
+        continuous("Water Surface Roughness",water.Roughness,0.04f,1);
+        continuous("Water Depth Absorption",water.Absorption,0,10);
+        continuous("Water Refraction",water.RefractionPixels,0,32);
+        continuous("Water Sediment Color",water.SedimentTint,0,4);
+        continuous("Water Flow Foam",water.FoamStrength,0,1);
+        continuous("Water Shore Foam",water.ShoreFoam,0,1);
+        continuous("Water Shore Width",water.ShoreWidth,0.005f,4);
+        continuous("Water Shore Wetness",water.ShoreWetness,0,1);
+        discrete("Edit Water Normal Convention",[&](){return ImGui::Checkbox("Water Normal DirectX",&water.NormalDirectX);});
+        auto texture=[&](const char* label,AssetHandle& handle,TextureSemantic semantic) {
+            ImGui::PushID(label);
+            const auto meta=AssetManager::GetMetadata(handle);
+            ImGui::Text("%s: %s",label,uint64_t(handle)==0?"Built-in (periodic)":meta.IsValid()?meta.FilePath.filename().string().c_str():"Missing asset");
+            if(ImGui::BeginDragDropTarget()) {
+                if(const auto* payload=ImGui::AcceptDragDropPayload("SCENE_FILE")) {
+                    if(payload->DataSize>1) {
+                        const std::string path(static_cast<const char*>(payload->Data),payload->DataSize-1);
+                        const auto candidate=AssetManager::ImportAsset(path);
+                        const auto candidateMeta=AssetManager::GetMetadata(candidate);
+                        if(candidateMeta.Type==AssetType::Texture2D&&candidateMeta.ColorSpace==TextureColorSpace::Linear&&candidateMeta.Semantic==semantic)
+                        {
+                            discrete("Set Water Texture",[&](){handle=candidate;return true;});m_WaterTextureError.clear();
+                        } else m_WaterTextureError=semantic==TextureSemantic::Normal?"Wave Normal requires a Linear/Normal texture asset.":"Foam Noise requires a Linear/Data texture asset.";
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if(uint64_t(handle)!=0) discrete("Clear Water Texture",[&](){if(!ImGui::SmallButton("Use Built-in")) return false;handle=AssetHandle(0);return true;});
+            ImGui::PopID();
+        };
+        texture("Wave Normal",water.NormalTexture,TextureSemantic::Normal);
+        texture("Foam Noise",water.FoamTexture,TextureSemantic::Data);
+        ImGui::TextDisabled("Drag Linear/Normal or Linear/Data textures from Content Browser.");
+        if(!m_WaterTextureError.empty()) ImGui::TextWrapped("Texture rejected: %s",m_WaterTextureError.c_str());
+        const auto error=ValidateWaterSurfaceAppearance(water);
+        if(!error.empty()) ImGui::TextWrapped("Water rejected: %s",error.c_str());
+        ImGui::TreePop();
+    }
+
 	void InspectorPanel::DrawTerrainRecipe(Entity entity, TerrainComponent& terrain)
 	{
 		ImGui::SeparatorText("Terrain Stamps");

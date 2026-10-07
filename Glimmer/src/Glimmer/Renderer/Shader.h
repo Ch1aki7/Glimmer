@@ -37,7 +37,8 @@ namespace gl {
 		virtual ShaderReloadResult Reload() = 0;
 		virtual ShaderReloadResult ReloadIfChanged() = 0;
 
-		static Ref<Shader> Create(const std::string& filepath);
+		// Optional passes may reject initial compilation without terminating the host.
+		static Ref<Shader> Create(const std::string& filepath, bool assertOnFailure = true);
 		static Ref<Shader> Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc);
 		static Ref<Shader> CreateFromBinary(const std::string& name, const std::vector<uint32_t>& vertSPV, const std::vector<uint32_t>& fragSPV);
 	};

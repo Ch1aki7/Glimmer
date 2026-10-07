@@ -73,7 +73,7 @@ void main()
 
 #type fragment
 #version 450 core
-#include <Glimmer/TerrainSampling.glslinc>
+#include <Glimmer/WaterSampling.glslinc>
 
 layout(location = 0) out vec4 o_Color;
 layout(location = 1) out int o_EntityID;
@@ -443,8 +443,8 @@ void main()
 		float wetDepth = 0.0;
 		for (int axis = -1; axis <= 1; ++axis)
 		{
-			float a = texture(u_WaterDepthMap, clamp(v_TerrainUV + vec2(axis, 0) * texel, vec2(0), vec2(1))).r;
-			float b = texture(u_WaterDepthMap, clamp(v_TerrainUV + vec2(0, axis) * texel, vec2(0), vec2(1))).r;
+			float a = waterTexelField(u_WaterDepthMap, clamp(v_TerrainUV + vec2(axis, 0) * texel, vec2(0), vec2(1))).r;
+			float b = waterTexelField(u_WaterDepthMap, clamp(v_TerrainUV + vec2(0, axis) * texel, vec2(0), vec2(1))).r;
 			if (!isnan(a) && !isinf(a)) wetDepth = max(wetDepth, a);
 			if (!isnan(b) && !isinf(b)) wetDepth = max(wetDepth, b);
 		}

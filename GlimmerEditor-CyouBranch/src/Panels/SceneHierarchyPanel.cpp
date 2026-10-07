@@ -598,6 +598,7 @@ namespace gl {
 						ImGui::EndDragDropTarget();
 					}
 				}
+				DrawWaterSurface(entity, terrain);
 				DrawTerrainDiagnostics(entity, terrain);
 				DrawTerrainRecipe(entity, terrain);
 				if (ImGui::Button("Regenerate"))

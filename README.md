@@ -4598,23 +4598,52 @@ Scene RGBA16F
 
 ## 独立 Water Surface 与水文视觉反馈
 
-正常 Terrain 现在能显示已有水文场产生的水面。先在 `Debug → Overview → Runtime Hydrology / Climate` 推进环境模拟，再关闭水文和气候诊断着色即可观察；无水时不显示水面。`Water Surface` 开关及 Absorption、Refraction Pixels、Flow Foam、Sediment Tint、Shore Wetness 控制属于编辑器会话，不保存到场景。
+地形使用 Simulation 且水文场有水时显示水面；Static 不创建水文或水面。水面读取已发布 Height、Water、Velocity、Sediment 和固定步模拟时间，顶点高度为地形高度加水深，视觉处理不改变模拟水量、侵蚀或生成版本。
 
-水面复用 Terrain Chunk 网格并按水深抬升，读取 Height、Water、Velocity 和 Sediment，实现深度吸收、颜色变化、屏幕空间折射、环境反射、流速泡沫与泥沙染色。Terrain 同时根据邻近水深暗化岸线、降低湿润表面的粗糙度；这是一种瞬时响应，没有另建湿润模拟。气候通过现有降雨/蒸发改变 Water，水面和岸线仅观察结果，不改写模拟、不重新运行 Terrain Authoring。
+选中 Terrain，在 Inspector 展开 **Water Surface Appearance**：外观参数保存到 Scene，连续拖动合并为一条 Undo/Redo；修改外观不会重置已有水量或使静态快照过期。可调整波纹强度/波长、流动、粗糙度、吸收/折射、流速与岸线泡沫、岸线宽度/湿润和泥沙色。Water Mesh Quality 的 Low/Balanced/High 分别为每块 32/64/128 格，默认 Balanced；同一地形各块保持相同细分，不随地形 LOD 跳变。它仍是有限网格，High 改善岸线轮廓但会增加三角形。
 
-渲染顺序为 Opaque/Terrain → Skybox → Water Surface → Sprite/透明模型 → 后处理。水面先复制 Scene HDR Color 与 Depth 到独立快照，随后采样快照并写回 Scene，避免读写同一附件。深度检测会拒绝从折射偏移位置拉入前景；水面写入有效法线、深度和 Terrain EntityID，点击水面仍选中对应地形。关闭开关或进入水文/气候/LOD 诊断时跳过水面，Reset 后使用重置后的 Water，Resize 自动适配快照。
+Height/Water/Velocity/Sediment 在视觉侧显式双线性采样，水面法线按纹理长宽各自的物理间距求导。模拟纹理仍为 Nearest，诊断读取原场。Terrain 岸线湿润也使用连续采样，是即时显示响应，没有持续湿润历史。
 
-首版水面将水深小于等于 .002 的格点视为干格，速度分量限制在 ±20，并对 NaN/Inf 回退；泥沙按 `Sediment / max(WaterDepth, .02)` 得到受限浓度。波纹和泡沫相位使用固定步模拟时间，暂停后保持静止。这些是视觉侧的稳定性保护，不代表已经修复水文近干格的速度极值。
+默认无需下载贴图：引擎生成可重复平铺的 256² 法线与泡沫噪声，使用 Repeat、完整 Mip 和三线性过滤。波纹以两个有界流动相位混合，再叠加旋转的第二尺度；暂停静止、Reset 恢复相位，远距和浅水减弱细节。泡沫由受限速度/浅水和噪声驱动，浅水覆盖抗锯齿且干格仍剔除；法线贴图不会改变几何轮廓。
 
-验证在本地完成：VS2026 `Debug | x64` 完整解决方案和无窗口回归通过；Intel Iris Xe / OpenGL 4.6 的受控 GPU 验证覆盖干格、吸收/折射/泥沙响应、前景遮挡、拾取/法线、速度极值与 NaN/Inf、Resize、快照绑定保持、重叠水面顺序、诊断/关闭绕过及 Reset，Water 纹理绘制前后相同。完整编辑器隔离 Terrain Fixture 正常退出，原水文/气候 GPU Contract 保持 PASS。验证程序和日志仅留在本地 `bin`，不新增项目验证脚本、独立报告或图片。
+替换贴图时，先在纹理资产 Inspector 将法线设为 **Linear / Normal**，泡沫噪声设为 **Linear / Data**，然后从 Content Browser 拖到 Wave Normal 或 Foam Noise。法线支持 RGB/RGBA，泡沫读取红通道；DirectX 法线勾选 Water Normal DirectX，GL 不勾选。Use Built-in 清除引用。缺文件、错误语义、损坏图片或重载失败会报告错误，保留上一可用贴图或使用内置；修复后自动恢复。纹理以稳定 Handle 保存，GPU 缓存不保存。
 
-当前折射背景只包含不透明物体和天空；水下透明模型与多层水体透射、SSR、投影阴影、独立水体 LOD/逐块水量剔除及持续岸线湿润尚未实现。现有网格的细分和 LOD 仍限制浅水边缘精度；场景 Camera Velocity 也不表示水流运动。动态生态材质权重和植被实例化尚未实现。
+`Debug → Overview` 中 Water Surface 是全局预览总开关，Water Continuous Sampling、Water Detail Normals、Water Shore Foam Preview、Water Independent Mesh 用于逐项对照；Independent Mesh 关闭时沿用旧地形 LOD。原吸收、折射、泡沫、泥沙和湿润滑条为会话预览倍率（旧默认值为中性），不保存。下方显示水面三角形、背景/细节/网格驻留和保守跟踪峰值，GPU Copy/Draw 分开计时；pending 表示异步结果未就绪。驻留不因暂停或关闭绘制而消失，退出渲染器时释放。
+
+渲染顺序保持 Opaque/Terrain → Skybox → Water → Sprite/透明模型 → 后处理。先复制 HDR/Depth 到独立快照，再显式合成，拒绝折射位置的前景遮挡；水面写入 EntityID、单位世界法线和深度，点击仍选择地形。诊断绕过水面。首次水面 Shader 编译失败跳过可选 Pass 并显示错误，后续编译失败使用旧 Program，修复自动恢复。
+
+手动打开静止水面示例（在项目根目录执行，程序保持运行）：
+
+```powershell
+$env:GLIMMER_TERRAIN_RECIPE_FIXTURE = "1"
+$env:GLIMMER_TERRAIN_RECIPE_WATER_FIXTURE = "1"
+$env:GLIMMER_TERRAIN_EXECUTION_MODE = "simulation"
+$env:GLIMMER_WATER_VISUAL = "1"
+Remove-Item Env:GLIMMER_TERRAIN_CAPTURE_PATH -ErrorAction SilentlyContinue
+Start-Process "$PWD/bin/Debug-windows-x86_64/GlimmerEditor-CyouBranch/GlimmerEditor-CyouBranch.exe" -WorkingDirectory "$PWD/GlimmerEditor-CyouBranch"
+```
+
+查看近景反射/波纹、倾斜岸线和跨块边缘；调节 Normal Strength/Wave Length，再切换 Mesh Quality 并移动相机。用 Debug 分项开关比较采样、法线和网格，Undo/Redo 确认水量不变。保存/重载保留外观，运行时水量仍按模拟规则重建；示例注入的静止水深不保存，Reset/配方重建会清除，重新启动示例或推进模拟再观察。
+
+2026-10-07 本轮验收：VS2026 Debug x64 完整构建与 285 条无窗口 PASS、真实 ImGui 连续参数/开关 Undo/Redo、水面 GPU Contract 和原水文/气候/地形 Contract 通过。解析 5×7 平面高度最大误差 `2.98023e-8`，法线误差 `6.15871e-8`；贴图/Shader 的失败保留及修复、固定步相位/暂停/Reset/帧划分、三档网格/边界、非均匀镜像 Transform、Mip/奇数行、背景/遮挡/拾取/重叠/Resize 通过。空配方 Data v1/v2 截图与 A2 基线逐字节一致，远近水面及分项对照已检查。
+
+Intel Iris Xe、WorldSize 1024、1024² 水文、16 块、558×353 视口，预热后至少 30 个异步样本：
+
+| 质量 | 三角形 | Copy 均值 | Draw 均值 | 背景＋内置＋单档网格驻留 |
+| --- | ---: | ---: | ---: | ---: |
+| Low | 32,768 | 0.078 ms | 1.407 ms | 2.642 MiB |
+| Balanced | 131,072 | 0.078 ms | 2.475 ms | 2.790 MiB |
+| High | 524,288 | 0.073 ms | 3.924 ms | 3.367 MiB |
+
+Balanced/High 复制＋绘制均值分别 2.553/3.997 ms，通过本 Fixture 的 3/5 ms 门槛；单档驻留通过 3/4 MiB 门槛。启动 Resize 保守跟踪峰值约 20.75/21.33 MiB，通过 24 MiB 门槛；统计含旧＋新附件记账，非驱动显存实测，且不含模拟、CPU 或 Shader。更大视口/范围需另测；这些结果不代表整帧 FPS 或 P17-C3/F 地形总验收。图片/日志仅留本地 bin。
+
+当前只渲染已有 Terrain GPU 水文，不支持静态地形上的独立水体、FFT 海洋、三维流体、SSR、水下透明折射、多层水体透射、水面投影阴影或持续湿润历史；水流也不写 Motion Vector。独立统一细分解决水面跨地形 LOD 的边界问题，不代表已实现屏幕误差 LOD/Morph 或完成大视距地形总验收。
 
 ## 大尺度 Terrain 分块与世界尺度地貌
 
 新建 Terrain 默认 WorldSize=1024、HeightMapResolution=1024、HeightScale=96。预设可调整高度幅度；旧场景保留序列化数值。Inspector 的 World-space Noise Frequency 控制 FBM 尺度：开启时以 256 世界单位为频率基准，扩大地形范围会增加可见地貌数量，而非把同一座山直接拉宽。新地形默认开启；旧场景 YAML 缺少该字段时按原归一化 UV 频率读取。切换地形预设不会改变此模式。
 
-TerrainChunkLayout 按世界长宽选择每轴 3～16 块，以 256 为目标块宽；1024 为 4×4，2048 为 8×8。所有块仍共用一张 HeightMap、三份 LOD 网格和材质。Color LOD 使用相机到块水平范围的最近距离，保留迟滞与相邻级差约束；Shadow 继续使用 LOD0。水面沿用地形块和 LOD，并以视觉水深上限构造保守 AABB 做视锥剔除。编辑器相机默认远裁剪面为 4096，聚焦和缩放时扩展可见距离与移动速度。
+TerrainChunkLayout 按世界长宽选择每轴 3～16 块，以 256 为目标块宽；1024 为 4×4，2048 为 8×8。所有块仍共用一张 HeightMap、三份 LOD 网格和材质。Color LOD 使用相机到块水平范围的最近距离，保留迟滞与相邻级差约束；Shadow 继续使用 LOD0。水面沿用地形块布局，默认使用独立统一细分网格，并以视觉水深上限构造保守 AABB 做视锥剔除。编辑器相机默认远裁剪面为 4096，聚焦和缩放时扩展可见距离与移动速度。
 
 Windows Debug x64 全量验证与回归通过，覆盖旧 YAML 兼容、2048 地形 8×8 覆盖和相邻 LOD。Intel Iris Xe / OpenGL 4.6.0 的现有 Terrain Sampling Benchmark 三档各 30 样本通过，GPU 平均分别为 Full-4 43.168 ms、Top-2 23.008 ms、Top-2 + Dominant Normal/AO 15.566 ms。该基准使用独立 Fixture，未构成新地貌的固定相机视觉验收。当前仍是单张高度图与离散三级网格 LOD，尚无连续几何过渡；该阶段没有完成目标显卡的大视距性能验收。
 

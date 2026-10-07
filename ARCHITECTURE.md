@@ -281,7 +281,7 @@ P14 GPU 路径由 `TerrainRuntime::GPUClimate` 独占。Temperature、Atmospheri
 
 Simulation 模式下的 GPU 路径由同一 `TerrainRuntime` 独占一个 `TerrainHydrologyGPU`。Water、Sediment、Runtime Height 和累计 WaterSourceBudget 分别使用 `R32F` Ping-Pong，四向 Flux 与二维 Velocity 分别使用 `RGBA16F` Ping-Pong；程序化 Terrain 的生成器 Height 保持不可变，只在运行时创建或生成版本变化时读回一次作为两张 Runtime Height 的初始数据和侵蚀下界。每步接受可选的有符号空间 WaterSource：Flux 以应用源项后的水面计算出流，Update 将负源项限制为不超过当前水深并成为 Water 的唯一写入者，同时把实际应用深度累加到 WaterSourceBudget；SedimentTransport 使用同一应用后水量计算浓度。其余 Capacity、Erosion/Deposition、Barrier 与 Ping-Pong 规则不变。显式 Readback 从预算场重建 ExpectedWaterVolume；受控 GPU Contract 额外验证 `+0.10` 后 `-0.04` 得到 `0.06` 水深且预算误差为零。Terrain 生成版本改变时整个 GPU 水文状态重建，Reset 从缓存的初始 Height 恢复并清空所有模拟和预算状态；TerrainComponent 复制和 Scene YAML 均不携带这些纹理。
 
-`Scene` 将帧 `Timestep` 传给 `TerrainRenderer::BeginScene`。Shadow Pass 可以调用 `Prepare` 创建资源，但只有 BeginScene/EndScene 之间的 Color Pass 首次 Prepare 会消费请求，避免同一帧因阴影和多个 Chunk 重复推进。`TerrainRuntime::GPUEnvironment` 是 Climate/Hydrology 的统一固定步协调器；两个既有 Play 和 SingleStep 入口都消费同一累加器，每个子步严格执行 Climate → 全局图像 Barrier → Hydrology，禁止两个 Runtime 各自按帧积累并重复推进。任一 Reset 请求在耦合模式下共同恢复气候、水文和总量预算。显式 Readback 同时读取两侧统计，并以 AtmosphericWater + SurfaceWater 对比 InitialTotal + 外部标量 Rainfall，普通帧不做同步读回。Terrain Color/Shadow 顶点阶段继续统一读取 Runtime Height；派生图只在本帧环境步确实改变 Height 且侵蚀/沉积启用时刷新，所有运行时纹理与预算均不进入 Scene YAML。
+`Scene` 在 Shadow Pass 前调用 `TerrainRenderer::BeginFrame(Timestep)`；本帧第一次 Prepare 消费请求并固定表面，Shadow/Color 的后续 Prepare 与 Water 只读同版结果。BeginScene 开始颜色计时，EndScene 结束地形帧和颜色计时，水面随后独立计时。`TerrainRuntime::GPUEnvironment` 是 Climate/Hydrology 的统一固定步协调器；两个既有 Play 和 SingleStep 入口都消费同一累加器，每个子步严格执行 Climate → 全局图像 Barrier → Hydrology，禁止两个 Runtime 各自按帧积累并重复推进。任一 Reset 请求在耦合模式下共同恢复气候、水文和总量预算。显式 Readback 同时读取两侧统计，并以 AtmosphericWater + SurfaceWater 对比 InitialTotal + 外部标量 Rainfall，普通帧不做同步读回。Terrain Color/Shadow 顶点阶段继续统一读取 Runtime Height；派生图只在本帧环境步确实改变 Height 且侵蚀/沉积启用时刷新，所有运行时纹理与预算均不进入 Scene YAML。
 
 `.glterrainmat` 与普通 `.glmat` 是两个注册表类型和两套 YAML 根。TerrainMaterial 固定拥有 Grass、Soil、Rock、Snow 四层；每层保存颜色、Albedo/Normal/AO Handle、Tiling、Metallic、Roughness、NormalScale 和 AOStrength，资产级参数控制三平面锐度与高度/坡度/曲率/湿度混合强度。缺失纹理时使用层颜色、几何法线和 AO=1；存在纹理必须分别满足 sRGB Color、Linear Normal、Linear Data 语义。TerrainMaterial 保存也采用临时文件替换，但不进入 MaterialInstance 或实体 MaterialOverrides 链路。
 
@@ -289,9 +289,21 @@ Simulation 模式下的 GPU 路径由同一 `TerrainRuntime` 独占一个 `Terra
 
 `Framebuffer::CopyColorAndDepthTo` 提供等尺寸、单采样 Color0/Depth 的 GPU 快照；OpenGL 使用 `glCopyImageSubData`，拒绝自身、附件格式或尺寸不兼容的复制，保持 FBO 绑定不变。WaterSurfaceRenderer 复用一份 HDR+Depth 快照，Resize 时重建附件、每次渲染前完整覆盖，Shutdown 在 GL Context 销毁前释放。水面向原 Scene FBO 写入显式背景合成颜色、Terrain EntityID、有效世界法线和水面深度，关闭固定功能混合，避免附件反馈，并让近水面通过深度测试胜出；不复制或采样目标正在写入的附件。
 
-水面复用 Terrain 的动态 Chunk 布局与选定 LOD Mesh，仅绘制表面索引、不绘制 Skirt；顶点沿局部 Y 增加水深。视锥剔除使用地形高度界与视觉水深上限 1000 的保守 AABB；尚无逐块水体高度上界统计。独立 Shader 实现 Beer–Lambert 吸收、受场景深度约束的屏幕空间折射、SkyLight Prefilter/Fresnel、简化方向光高光、速度驱动的泡沫与泥沙浓度染色；Terrain 正常 PBR 读取邻域 Water 作瞬时岸线暗化/粗糙度反馈。无效水深/速度/泥沙输入在视觉层回退，水深视觉上限 1000、近干格阈值 .002、速度分量限幅 ±20，均不回写模拟。波纹相位读取固定步模拟时间，暂停/Reset 不依赖墙钟。
+水面共享 Terrain 的动态 Chunk 布局，默认使用 Renderer 独占的统一 32/64/128 格网格缓存，单个 Terrain 全部块采用同一 MeshQuality，不随相机切换 Terrain LOD。复用 TerrainMesh 的顶点/索引格式但只提交表面索引，不绘 Skirt；质量切换最多保留三份共享网格，Shutdown 释放。跨块使用相同全局局部 UV 与边顶点间距，规避水面跨级裂缝和跳变；它不是屏幕误差自适应 LOD/Morph。会话开关 IndependentMesh=false 仍可对照旧地形 LOD 路径。视锥界继续为 HeightScale 与视觉最大水深 1000，尚无逐块水量/高度统计或干块剔除。
 
-`WaterSurfaceSettings` 和 Draw/Snapshot 统计为会话状态，Debug Overview 提供开关、吸收、折射像素偏移、泡沫、泥沙色与岸线湿润控制；不写 TerrainComponent 或 Scene YAML。水文/气候/LOD 诊断绕过水面和湿润反馈。首版没有水下透明物体折射、多层水体透射、SSR、波面几何动画、独立于 Terrain 的水体 LOD 或持续湿润历史；水面不投射阴影，方向光高光尚不采样 CSM。当前 Camera Velocity 不表示水流运动，时间后处理仍受既有缺少 Reactive Mask 的限制。
+`WaterSampling.glslinc` 在渲染侧用四邻域 texelFetch 显式双线性重建并逐节点处理 NaN/Inf；不更改 SimulationGrid 的 Nearest/Clamp 或 Compute。顶点和片元传递 normalized local XZ，各纹理独立完成 Data v2 端点映射；v1 保留旧纹素坐标语义。片元以 X/Z 各自节点数和局部 WorldSize 计算中央/边界差分，法线经 inverse-transpose Transform，镜像 Transform 仍关闭剔除。Terrain 的瞬时岸线湿润复用纹素坐标版本的插值工具；模拟诊断继续读取原场。
+
+`TerrainSpecification::Water` 保存纯值 `WaterSurfaceAppearance` v1：Enabled、MeshQuality、Normal/Foam AssetHandle、NormalDirectX，以及波纹、流动、粗糙度、吸收、折射、泡沫/岸线、泥沙与湿润参数。Scene YAML 的 WaterSurface 缺失时使用确定默认值，未知版本/档位和非有限/越界值在保存及加载预检拒绝；复制只复制规格，Runtime 不随 Scene 保存。Inspector 的水面命令只更新 Water 子规格，连续控件合并提交，Undo/Redo 不 Invalidate/Advance/Reset，不改变地形生成身份或静态快照；Renderer 消费当前 Water 值和已发布地形表面。外观不赋予 Static Terrain 水文资源或水面。
+
+Renderer 共享两张 256²、Repeat/线性 Mip 的内置纹理（RGB8 周期法线、R8 泡沫噪声），按固定整数 Fourier 模式生成一次，不读取模拟、不依赖联网或第三方贴图。Handle=0 使用内置；非零通过 AssetManager 身份/路径和 Linear Normal/Data 元数据验证，分别按 Handle+用途缓存采样纹理。文件/元数据每 250ms 轮询，成功解码后整张替换，失败保留该用途上一可用纹理或内置回退并报告；有效渲染结束后移除不再使用的自定义缓存。内置、网格和背景快照为 Renderer 驻留资源，暂停/关闭绘制不等于释放，Shutdown 在 GL Context 销毁前统一清理。
+
+波纹使用固定环境模拟时间、两个有界流动相位交叉混合和旋转的第二尺度，在宏观法线正交基底组合；DirectX Y 在旋转前转换，近干格与像素覆盖大的远景衰减。只改变法线，不产生波面几何位移。流速泡沫与浅水岸线泡沫采用噪声调制，覆盖用像素导数抗锯齿且干格仍 discard，不模糊或回写 Water。Shader 保留 Beer–Lambert 吸收、场景深度约束折射、Prefilter/Fresnel、方向光高光、泥沙染色与完整 MRT；速度分量 ±20、水深视觉上限 1000/干格 .002 和浓度限幅仅为视觉保护。
+
+Water Shader 使用可选初次编译路径：首次失败不终止宿主，跳过水面并显示错误，未有有效 Program 时按秒重试；后续失败保留旧 Program，修复后清除错误。`Shader::Create(filepath, assertOnFailure)` 的默认仍为 true，其他既有调用保持行为。Texture2D 文件工厂解码失败返回空引用且 AssetManager 不缓存失败；水面明确选择 LinearMipmapLinear，OpenGL 分配完整链并在上传/Clear 后生成 Mip。默认两参数文件加载保持原过滤；RGB/R8 奇数行上传/回读临时使用 alignment=1 并恢复状态。
+
+`WaterSurfaceSettings` 是会话预览：总开关、连续采样/细节法线/岸线泡沫/独立网格及原有参数，吸收等以旧默认值为中性倍率并限幅；不写 Scene。保存的湿润响应由 Terrain Shader 只读，仍无历史湿润场。Debug Overview 显示 Draw/三角形、缓存驻留字节和保守跟踪峰值，以及顺序 Copy/Draw 两个异步 GPU 计时；预算只覆盖 Renderer 拥有的背景/贴图/网格和候选替换，不含模拟、CPU、Shader Program 或驱动分配，Resize 峰值按旧+新附件保守记账。诊断/总开关绕过绘制，驻留统计仍报告已缓存资源。
+
+水面仍只属于已有 Terrain GPU 水文的高度场表现；没有独立任意 Mesh 水体、FFT/三维流体、水下透明折射、多层透射、SSR、几何波浪、持续湿润历史或水流 Motion Vector。水面不投射阴影，方向光高光不读取 CSM；时间后处理仍缺 Reactive Mask。大范围自适应几何与全地形/模拟成本不属于本轮水面验收。
 
 ### 5.5 Shader、Compute 与数据读回
 

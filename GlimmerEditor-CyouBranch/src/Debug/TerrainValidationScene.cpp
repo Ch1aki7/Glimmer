@@ -187,6 +187,40 @@ namespace gl {
 			GL_CORE_INFO("Terrain execution modes PASS: static resource absence, repeated Prepare, Undo/Redo, both failed switches, snapshot staleness, simulation initialization/Reset and scene copy isolation.");
 		}
 
+        static void RunWaterAppearance(const Ref<Scene>& scene,Entity entity) {
+            struct Guard {ImGuiContext* Previous=ImGui::GetCurrentContext();ImGuiContext* Test=ImGui::CreateContext();
+                ~Guard(){ImGui::DestroyContext(Test);ImGui::SetCurrentContext(Previous);}} guard;
+            ImGui::SetCurrentContext(guard.Test);auto& io=ImGui::GetIO();io.DisplaySize={1100,1800};io.DeltaTime=1.0f/60;
+            io.IniFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NavEnableKeyboard;
+            unsigned char* pixels;int width,height;io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+            InspectorPanel panel;panel.SetContext(scene);EditorCommandHistory history;panel.SetCommandHistory(&history);
+            auto& terrain=entity.GetComponent<TerrainComponent>();const auto original=terrain.Specification.Water;
+            const auto version=TerrainRenderer::GetSurfaceVersion(terrain);const auto map=terrain.Runtime->HeightMap;
+            auto require=[](bool ok,const char* message){if(!ok) throw std::runtime_error(message);};
+            auto frame=[&](const char* activate=nullptr) {
+                ImGui::NewFrame();ImGui::SetNextWindowSize({1100,1800});ImGui::Begin("Water Appearance Contract",nullptr,ImGuiWindowFlags_NoSavedSettings);
+                if(activate) {
+                    ImGui::PushID("Water Surface Appearance");auto id=ImGui::GetID(activate);ImGui::PopID();auto& g=*ImGui::GetCurrentContext();
+                    g.NavWindow=ImGui::GetCurrentWindow();g.NavId=id;g.NavInputSource=ImGuiInputSource_Keyboard;
+                    g.NavActivateId=g.NavActivatePressedId=g.NavActivateDownId=id;
+                }
+                panel.DrawWaterSurface(entity,terrain);ImGui::End();ImGui::Render();
+            };
+            frame();frame("Water Enabled");require(terrain.Specification.Water.Enabled!=original.Enabled,"Water checkbox did not apply.");
+            require(history.Undo()&&terrain.Specification.Water==original,"Water appearance Undo failed.");
+            require(history.Redo()&&terrain.Specification.Water.Enabled!=original.Enabled,"Water appearance Redo failed.");history.Undo();
+            frame("Water Normal DirectX");require(terrain.Specification.Water.NormalDirectX!=original.NormalDirectX,"Water normal convention widget failed.");
+            require(history.Undo()&&terrain.Specification.Water==original,"Water normal convention Undo failed.");
+            frame("Water Normal Strength");io.AddKeyEvent(ImGuiKey_RightArrow,true);frame();
+            io.AddKeyEvent(ImGuiKey_RightArrow,false);frame();frame("Water Normal Strength");frame();
+            require(terrain.Specification.Water.NormalStrength!=original.NormalStrength
+                && std::string(history.GetUndoName())=="Water Normal Strength" && history.Undo()
+                && terrain.Specification.Water==original && history.Redo(),"Water continuous slider Undo/Redo failed.");history.Undo();
+            require(TerrainRenderer::GetSurfaceVersion(terrain)==version&&terrain.Runtime->HeightMap==map&&!terrain.Runtime->Dirty,
+                "Water appearance editing invalidated the terrain or reset simulation.");
+            GL_CORE_INFO("Water appearance widgets PASS: actual toggles/continuous slider, Undo/Redo and preserved terrain publication/simulation.");
+        }
+
 		static void RunDiagnostics(const Ref<Scene>& scene, Entity entity)
 		{
 			struct Guard {
@@ -325,6 +359,7 @@ namespace gl {
 			terrain.Specification.MeshResolution = 96;
 			TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain), "Initial recipe Prepare failed.");
+			TerrainInspectorValidation::RunWaterAppearance(scene, entity);
 			TerrainInspectorValidation::RunDiagnostics(scene, entity);
 			TerrainInspectorValidation::RunExecutionModes(scene, entity);
 			TerrainInspectorValidation::RunLifecycle(terrain.Specification, temporaryScenePath);
@@ -556,6 +591,13 @@ namespace gl {
 		if (_dupenv_s(&modeValue, &modeLength, "GLIMMER_TERRAIN_EXECUTION_MODE") == 0
 			&& modeValue && std::string(modeValue) == "static") terrain.Specification.ExecutionMode = TerrainExecutionMode::Static;
 		std::free(modeValue);
+        char* qualityValue=nullptr;size_t qualityLength=0;
+        if(_dupenv_s(&qualityValue,&qualityLength,"GLIMMER_WATER_MESH_QUALITY")==0&&qualityValue) {
+            if(std::string(qualityValue)=="low") terrain.Specification.Water.MeshQuality=0;
+            else if(std::string(qualityValue)=="high") terrain.Specification.Water.MeshQuality=2;
+        }
+        std::free(qualityValue);
+
 		ApplyTerrainPreset(terrain.Specification, TerrainPreset::Alpine);
 		terrain.Specification.DataVersion = std::clamp(dataVersion, 1u, 2u);
 		terrain.Specification.Noise.SynthesisVersion =

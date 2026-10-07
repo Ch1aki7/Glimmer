@@ -202,6 +202,7 @@ namespace {
 		const auto& rightNoise = right.Noise;
 		return left.Procedural == right.Procedural
 			&& left.ExecutionMode == right.ExecutionMode
+			&& left.Water == right.Water
 			&& SameTerrainRecipe(left.Recipe, right.Recipe)
 			&& left.DataVersion == right.DataVersion
 			&& left.Preset == right.Preset
@@ -851,6 +852,43 @@ namespace {
 		context.Check(history.Redo() && terrain.Specification.Recipe.Stamps[0].Height == 30 && terrain.Runtime == runtime,
 			"stamp drag Redo restores the final parameters without replacing Runtime");
 	}
+
+    void TestWaterAppearance(TestContext& context,const std::filesystem::path& directory) {
+        auto scene=gl::CreateRef<gl::Scene>();auto entity=scene->CreateEntity("Water Contract");
+        auto& terrain=entity.AddComponent<gl::TerrainComponent>();auto& water=terrain.Specification.Water;
+        context.Check(gl::ValidateWaterSurfaceAppearance(water).empty(),"water defaults are valid without assets");
+        water.NormalTexture=gl::AssetHandle(101);water.FoamTexture=gl::AssetHandle(102);
+        water.NormalDirectX=true;water.MeshQuality=2;water.NormalStrength=0.57f;water.WaveLength=9.5f;
+        water.ShoreWetness=0.77f;water.FlowStrength=0.75f;water.ShoreFoam=0.42f;water.ShoreWidth=0.28f;water.Roughness=0.3f;
+        std::string yaml;context.Check(gl::SceneSerializer(scene).SerializeToString(yaml),"water appearance saves in Scene YAML");
+        auto file=directory/"Water.glimmer";{std::ofstream out(file);out<<yaml;}
+        auto loaded=gl::CreateRef<gl::Scene>();const bool ok=gl::SceneSerializer(loaded).Deserialize(file.string());
+        context.Check(ok&&loaded->FindEntityByUUID(entity.GetUUID()).GetComponent<gl::TerrainComponent>().Specification.Water==water,
+            "water appearance, handles and normal convention survive round trip");
+        auto copy=gl::Scene::Copy(scene);auto& copied=copy->FindEntityByUUID(entity.GetUUID()).GetComponent<gl::TerrainComponent>();
+        context.Check(copied.Specification.Water==water&&!copied.Runtime,"water appearance copies without runtime resources");
+        copied.Specification.Water.NormalStrength=0.1f;
+        context.Check(water.NormalStrength==0.57f,"water appearance edits are isolated between copies");
+        auto preset=terrain.Specification;gl::ApplyTerrainPreset(preset,gl::TerrainPreset::Alpine);
+        context.Check(preset.Water==water,"terrain preset preserves water appearance");
+        auto bad=water;bad.Version=99;context.Check(!gl::ValidateWaterSurfaceAppearance(bad).empty(),"unknown water schema rejected");
+        bad=water;bad.MeshQuality=3;context.Check(!gl::ValidateWaterSurfaceAppearance(bad).empty(),"invalid water quality rejected");
+        bad=water;bad.WaveLength=std::numeric_limits<float>::quiet_NaN();context.Check(!gl::ValidateWaterSurfaceAppearance(bad).empty(),"nonfinite water scale rejected");
+        const auto saved=water;water=bad;std::string ignored;
+        context.Check(!gl::SceneSerializer(scene).SerializeToString(ignored),"invalid water appearance rejected before saving");water=saved;
+        auto unknown=yaml;auto v=unknown.find("Version: 1",unknown.find("WaterSurface:"));unknown.replace(v,10,"Version: 9");
+        {std::ofstream out(file);out<<unknown;}
+        auto existing=gl::CreateRef<gl::Scene>();auto kept=existing->CreateEntity("Kept");
+        context.Check(!gl::SceneSerializer(existing).Deserialize(file.string())&&existing->FindEntityByUUID(kept.GetUUID())&&!existing->FindEntityByUUID(entity.GetUUID()),
+            "unsupported water schema fails without adding entities");
+        auto legacy=yaml;auto begin=legacy.find("    WaterSurface:");auto end=legacy.find("    Recipe:",begin);
+        // Locate the actual indentation emitted by the serializer.
+        if(begin==std::string::npos) {begin=legacy.find("WaterSurface:");begin=legacy.rfind('\n',begin)+1;end=legacy.rfind('\n',legacy.find("Recipe:",begin))+1;}
+        legacy.erase(begin,end-begin);{std::ofstream out(file);out<<legacy;}
+        auto oldScene=gl::CreateRef<gl::Scene>();
+        context.Check(gl::SceneSerializer(oldScene).Deserialize(file.string())&&oldScene->FindEntityByUUID(entity.GetUUID()).GetComponent<gl::TerrainComponent>().Specification.Water==gl::WaterSurfaceAppearance{},
+            "legacy scene without water appearance uses deterministic defaults");
+    }
 
 	void TestTerrainRecipe(TestContext& context, const std::filesystem::path& directory)
 	{
@@ -2258,6 +2296,7 @@ int main(int argc, char** argv)
 	std::cout << "[RUN] Terrain copy and transactions\n";
 	TestTerrainCopyAndTransactions(context);
 	std::cout << "[RUN] Terrain recipe contract and persistence\n";
+	TestWaterAppearance(context, temporaryDirectory.Path());
 	TestTerrainRecipe(context, temporaryDirectory.Path());
 	TestTerrainRecipeEditor(context);
 	TestTerrainProtection(context);

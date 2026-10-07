@@ -14,7 +14,7 @@ namespace gl
 	{
 		friend struct TerrainInspectorValidation;
 	public:
-		void SetContext(const Ref<Scene>& scene) { if (m_Context != scene) ResetTerrainDiagnostics(); m_Context = scene; }
+		void SetContext(const Ref<Scene>& scene) { if (m_Context != scene) { ResetTerrainDiagnostics(); m_WaterEdit.Reset(); m_WaterEditEntity=0; m_WaterTextureError.clear(); } m_Context = scene; }
 		void SetSelectionContext(SelectionContext* selection) { m_Selection = selection; }
 		void SetCommandHistory(EditorCommandHistory* history) { m_CommandHistory = history; }
 
@@ -24,6 +24,7 @@ namespace gl
 		void DrawAssetInspector(AssetHandle handle);
 		void DrawComponents(Entity entity);
 		void DrawTerrainRecipe(Entity entity, TerrainComponent& terrain);
+		void DrawWaterSurface(Entity entity, TerrainComponent& terrain);
 		void DrawTerrainDiagnostics(Entity entity, TerrainComponent& terrain);
 		void ResetTerrainDiagnostics();
 		void DrawAddComponentMenu(Entity entity);
@@ -235,6 +236,9 @@ namespace gl
 		EditorCommandHistory* m_CommandHistory = nullptr;
 		EditorValueTransaction<TransformComponent> m_TransformEdit;
 		EditorValueTransaction<TerrainComponent> m_TerrainEdit;
+		EditorValueTransaction<WaterSurfaceAppearance> m_WaterEdit;
+		uint64_t m_WaterEditEntity = 0;
+		std::string m_WaterTextureError;
 		EditorValueTransaction<DirectionalLightComponent> m_DirectionalLightEdit;
 		EditorValueTransaction<PointLightComponent> m_PointLightEdit;
 		EditorValueTransaction<SkyLightComponent> m_SkyLightEdit;

@@ -74,6 +74,7 @@ namespace gl {
 
 		GLenum ToFilter(TextureFilter filter)
 		{
+			if (filter == TextureFilter::LinearMipmapLinear) return GL_LINEAR_MIPMAP_LINEAR;
 			return filter == TextureFilter::Nearest ? GL_NEAREST : GL_LINEAR;
 		}
 
@@ -91,18 +92,19 @@ namespace gl {
 	}
 
 	OpenGLTexture2D::OpenGLTexture2D(
-		const std::string& path, TextureColorSpace colorSpace)
+		const std::string& path, TextureColorSpace colorSpace, TextureFilter minFilter, TextureFilter magFilter)
 		: m_Path(path)
 	{
 		GL_PROFILE_FUNCTION();
 
 		stbi_set_flip_vertically_on_load(1);
 		m_Specification.ColorSpace = colorSpace;
+		m_Specification.MinFilter = minFilter; m_Specification.MagFilter = magFilter;
 		int width = 0;
 		int height = 0;
 		int channels = 0;
 		stbi_uc* data = stbi_load(path.c_str(), &width, &height, &channels, 0);
-		GL_CORE_ASSERT(data, "Failed to load texture: {0}", path);
+		if (!data) { GL_CORE_ERROR("Failed to decode texture: {0}", path); return; }
 
 		m_Specification.Width = static_cast<uint32_t>(width);
 		m_Specification.Height = static_cast<uint32_t>(height);
@@ -111,8 +113,9 @@ namespace gl {
 			: channels == 3 ? TextureFormat::RGB8
 			: channels == 1 ? TextureFormat::R8
 			: TextureFormat::None;
-		GL_CORE_ASSERT(m_Specification.Format != TextureFormat::None,
-			"Unsupported texture channel count: {0}", channels);
+		if (m_Specification.Format == TextureFormat::None) {
+			stbi_image_free(data); GL_CORE_ERROR("Unsupported texture channels: {0}", channels); return;
+		}
 
 		CreateStorage();
 		SetData(data, GetTransferSize());
@@ -156,12 +159,13 @@ namespace gl {
 		glCreateTextures(GL_TEXTURE_2D, 1, &m_RendererID);
 		glTextureStorage2D(
 			m_RendererID,
-			1,
+			m_Specification.MinFilter == TextureFilter::LinearMipmapLinear
+				? 1 + static_cast<int>(std::floor(std::log2(std::max(m_Specification.Width, m_Specification.Height)))) : 1,
 			m_InternalFormat,
 			static_cast<GLsizei>(m_Specification.Width),
 			static_cast<GLsizei>(m_Specification.Height));
 		glTextureParameteri(m_RendererID, GL_TEXTURE_MIN_FILTER, ToFilter(m_Specification.MinFilter));
-		glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, ToFilter(m_Specification.MagFilter));
+		glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, m_Specification.MagFilter == TextureFilter::Nearest ? GL_NEAREST : GL_LINEAR);
 		glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_S, ToWrap(m_Specification.WrapS));
 		glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_T, ToWrap(m_Specification.WrapT));
 	}
@@ -177,6 +181,7 @@ namespace gl {
 	{
 		GL_CORE_ASSERT(data, "Texture data cannot be null.");
 		GL_CORE_ASSERT(size == GetTransferSize(), "Texture upload size does not match specification.");
+		GLint alignment=4;glGetIntegerv(GL_UNPACK_ALIGNMENT,&alignment);glPixelStorei(GL_UNPACK_ALIGNMENT,1);
 		glTextureSubImage2D(
 			m_RendererID,
 			0,
@@ -187,13 +192,17 @@ namespace gl {
 			m_DataFormat,
 			m_DataType,
 			data);
+		glPixelStorei(GL_UNPACK_ALIGNMENT,alignment);
+		if (m_Specification.MinFilter == TextureFilter::LinearMipmapLinear) glGenerateTextureMipmap(m_RendererID);
 	}
 
 	void OpenGLTexture2D::GetImageData(void* buffer, uint32_t size) const
 	{
 		GL_CORE_ASSERT(buffer, "Texture readback buffer cannot be null.");
 		GL_CORE_ASSERT(size >= GetTransferSize(), "Texture readback buffer is too small.");
+		GLint alignment=4;glGetIntegerv(GL_PACK_ALIGNMENT,&alignment);glPixelStorei(GL_PACK_ALIGNMENT,1);
 		glGetTextureImage(m_RendererID, 0, m_DataFormat, m_DataType, size, buffer);
+		glPixelStorei(GL_PACK_ALIGNMENT,alignment);
 	}
 
 	void OpenGLTexture2D::Clear(const glm::vec4& value)
@@ -213,6 +222,7 @@ namespace gl {
 			};
 			glClearTexImage(m_RendererID, 0, m_DataFormat, GL_UNSIGNED_BYTE, clearValue.data());
 		}
+		if (m_Specification.MinFilter == TextureFilter::LinearMipmapLinear) glGenerateTextureMipmap(m_RendererID);
 	}
 
 	void OpenGLTexture2D::Bind(uint32_t slot) const

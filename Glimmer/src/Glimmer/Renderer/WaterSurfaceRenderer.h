@@ -7,6 +7,7 @@ namespace gl {
 	struct WaterSurfaceSettings
 	{
 		bool Enabled = true;
+		bool SmoothSampling = true, DetailNormals = true, ShoreFoam = true, IndependentMesh = true;
 		float Absorption = 1.0f;
 		float RefractionPixels = 5.0f;
 		float FoamStrength = 0.35f;
@@ -29,6 +30,11 @@ namespace gl {
 			uint32_t DrawCalls = 0;
 			uint64_t Triangles = 0;
 			bool SnapshotReady = false;
+            bool GpuTimingAvailable = false;
+            float CopyMilliseconds = 0, DrawMilliseconds = 0;
+            uint64_t BackgroundBytes = 0, DetailBytes = 0, MeshBytes = 0, PeakOwnedBytes = 0;
+            uint32_t CachedMeshes = 0, TextureFallbacks = 0;
+            std::string ResourceWarning;
 		};
 		static void Render(const Ref<Framebuffer>& target,
 			const std::vector<WaterSurfaceInstance>& instances,

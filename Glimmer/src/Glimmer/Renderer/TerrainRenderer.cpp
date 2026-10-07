@@ -697,11 +697,13 @@ namespace gl {
 		const bool hasClimate = runtime.GPUClimate != nullptr;
 		shader->UploadUniformInt("u_HasHydrology", hasHydrology ? 1 : 0);
 		const auto& waterSettings = WaterSurfaceRenderer::GetSettings();
-		shader->UploadUniformFloat("u_ShoreWetness", waterSettings.Enabled
+		shader->UploadUniformInt("u_SmoothSampling",waterSettings.SmoothSampling?1:0);
+		const auto& appearance=component.Specification.Water;
+		shader->UploadUniformFloat("u_ShoreWetness", waterSettings.Enabled && appearance.Enabled && ValidateWaterSurfaceAppearance(appearance).empty()
 			&& !s_Data.VisualizeLODs
 			&& s_Data.HydrologyVisualization == HydrologyVisualizationMode::None
 			&& s_Data.ClimateVisualization == ClimateVisualizationMode::None
-			? waterSettings.ShoreWetness : 0.0f);
+			? std::clamp(appearance.ShoreWetness*waterSettings.ShoreWetness/0.6f,0.0f,1.0f) : 0.0f);
 		shader->UploadUniformInt("u_HydrologyVisualization",
 			hasHydrology
 				? static_cast<int>(s_Data.HydrologyVisualization) : 0);

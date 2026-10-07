@@ -12,7 +12,7 @@ namespace gl {
 
 	class OpenGLShader : public Shader {
 	public:
-		explicit OpenGLShader(const std::string& filepath);
+		explicit OpenGLShader(const std::string& filepath, bool assertOnFailure = true);
 		OpenGLShader(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc);
 		~OpenGLShader() override;
 

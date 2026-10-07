@@ -5,9 +5,9 @@
 
 namespace gl {
 
-	Ref<Shader> Shader::Create(const std::string& filepath)
+	Ref<Shader> Shader::Create(const std::string& filepath, bool assertOnFailure)
 	{
-		return CreateRef<OpenGLShader>(filepath);
+		return CreateRef<OpenGLShader>(filepath, assertOnFailure);
 	}
 
 	Ref<Shader> Shader::Create(const std::string& name, const std::string& vertexSrc, const std::string& fragmentSrc)

@@ -301,7 +301,7 @@ namespace gl {
 
 		Ref<Texture2D> texture = Texture2D::Create(
 			path.string(), metadata->second.ColorSpace);
-		s_Data.TextureCache.emplace(handle, texture);
+		if (texture) s_Data.TextureCache.emplace(handle, texture);
 		return texture;
 	}
 

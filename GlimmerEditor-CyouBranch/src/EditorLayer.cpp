@@ -1000,6 +1000,14 @@ namespace gl {
 		}
 
 
+        if(GetEnvironmentValue("GLIMMER_WATER_VISUAL") == "1") {
+            m_EditorCamera.SetView({0,35,0},220.0f,-18.0f,35.0f);
+        }
+        if(GetEnvironmentValue("GLIMMER_WATER_COARSE_PREVIEW") == "1") {
+            auto water=WaterSurfaceRenderer::GetSettings();water.SmoothSampling=false;water.DetailNormals=false;water.ShoreFoam=false;water.IndependentMesh=false;
+            WaterSurfaceRenderer::SetSettings(water);
+        }
+
 	}
 	void EditorLayer::OnDetach() {
 		GL_PROFILE_FUNCTION();
@@ -1163,7 +1171,12 @@ namespace gl {
 			}
 		}
 		m_PostProcessRenderer.Execute(postProcessInput);
-		if (!m_TerrainCapturePath.empty() && ++m_TerrainCaptureFrames >= 5)
+        const bool waterBenchmark=GetEnvironmentValue("GLIMMER_WATER_BENCHMARK")=="1";
+        if(waterBenchmark&&!m_TerrainCapturePath.empty()&&m_TerrainCaptureFrames>=10) {
+            const auto cost=WaterSurfaceRenderer::GetStatistics();
+            if(cost.GpuTimingAvailable) {++m_WaterCostSamples;m_WaterCopyTotal+=cost.CopyMilliseconds;m_WaterDrawTotal+=cost.DrawMilliseconds;m_WaterDrawMaximum=std::max(m_WaterDrawMaximum,double(cost.DrawMilliseconds));}
+        }
+        if (!m_TerrainCapturePath.empty() && ++m_TerrainCaptureFrames >= (waterBenchmark?(m_WaterCostSamples>=30?45u:180u):5u))
 		{
 			std::vector<uint8_t> pixels;
 			uint32_t width = 0;
@@ -1175,12 +1188,17 @@ namespace gl {
 			{
 				GL_CORE_INFO("Terrain fixed-camera capture PASS: {0} ({1}x{2})",
 					m_TerrainCapturePath.string(), width, height);
+                if(m_WaterCostSamples) GL_CORE_INFO("Water benchmark PASS: {0} samples, mean copy={1}ms, mean draw={2}ms, max draw={3}ms",
+                    m_WaterCostSamples,m_WaterCopyTotal/m_WaterCostSamples,m_WaterDrawTotal/m_WaterCostSamples,m_WaterDrawMaximum);
 				const auto terrainStats = TerrainRenderer::GetStatistics();
 				const auto waterStats = WaterSurfaceRenderer::GetStatistics();
 				const auto shadowStats = ShadowRenderer::GetStatistics();
 				GL_CORE_INFO("Terrain capture passes: color chunks={0}, water draws={1}, water snapshot={2}, gray={3}",
 					terrainStats.SubmittedChunks, waterStats.DrawCalls, waterStats.SnapshotReady,
 					TerrainRenderer::IsGrayPreviewEnabled());
+                GL_CORE_INFO("Water capture cost: triangles={0}, copy={1}ms, draw={2}ms, timing={3}, background={4}, detail={5}, mesh={6}, tracked peak={7} bytes",
+                    waterStats.Triangles,waterStats.CopyMilliseconds,waterStats.DrawMilliseconds,waterStats.GpuTimingAvailable,
+                    waterStats.BackgroundBytes,waterStats.DetailBytes,waterStats.MeshBytes,waterStats.PeakOwnedBytes);
 				GL_CORE_INFO("Terrain capture shadow: enabled={0}, cascades={1}, draws={2}",
 					ShadowRenderer::IsEnabled(), shadowStats.CascadePasses, shadowStats.DrawCalls);
 			}

@@ -74,7 +74,8 @@ namespace gl {
 	class Texture2D : public Texture {
 	public:
 		static Ref<Texture2D> Create(const std::string& path,
-			TextureColorSpace colorSpace = TextureColorSpace::SRGB);
+			TextureColorSpace colorSpace = TextureColorSpace::SRGB,
+			TextureFilter minFilter = TextureFilter::Linear, TextureFilter magFilter = TextureFilter::Nearest);
 		static Ref<Texture2D> Create(uint32_t width, uint32_t height);
 		static Ref<Texture2D> Create(const TextureSpecification& specification);
 	};

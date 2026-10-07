@@ -2,6 +2,7 @@
 
 #include "Glimmer/Asset/Asset.h"
 #include "Glimmer/Terrain/TerrainRecipe.h"
+#include "Glimmer/Terrain/WaterSurfaceAppearance.h"
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <cmath>
@@ -80,6 +81,7 @@ namespace gl {
 		TerrainNoiseSettings Noise;
 		TerrainAuthoringSettings Authoring;
 		TerrainRecipe Recipe;
+		WaterSurfaceAppearance Water;
 	};
 
 	inline float ClampTerrainWorldSize(float worldSize)

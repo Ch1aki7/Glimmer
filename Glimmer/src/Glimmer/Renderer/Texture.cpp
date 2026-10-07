@@ -7,9 +7,10 @@
 namespace gl {
 
 	Ref<Texture2D> Texture2D::Create(
-		const std::string& path, TextureColorSpace colorSpace)
+		const std::string& path, TextureColorSpace colorSpace, TextureFilter minFilter, TextureFilter magFilter)
 	{
-		return CreateRef<OpenGLTexture2D>(path, colorSpace);
+		auto texture = CreateRef<OpenGLTexture2D>(path, colorSpace, minFilter, magFilter);
+		return texture->GetRendererID() ? texture : nullptr;
 	}
 
 	Ref<Texture2D> Texture2D::Create(uint32_t width, uint32_t height)

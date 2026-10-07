@@ -293,6 +293,55 @@ namespace gl {
 		return recipe;
 	}
 
+	static void SerializeWater(YAML::Emitter& out, const WaterSurfaceAppearance& a)
+	{
+		out << YAML::Key << "WaterSurface" << YAML::Value << YAML::BeginMap;
+		out << YAML::Key << "Version" << YAML::Value << a.Version;
+		out << YAML::Key << "Enabled" << YAML::Value << a.Enabled;
+		out << YAML::Key << "NormalDirectX" << YAML::Value << a.NormalDirectX;
+		out << YAML::Key << "MeshQuality" << YAML::Value << a.MeshQuality;
+		out << YAML::Key << "Absorption" << YAML::Value << a.Absorption;
+		out << YAML::Key << "RefractionPixels" << YAML::Value << a.RefractionPixels;
+		out << YAML::Key << "SedimentTint" << YAML::Value << a.SedimentTint;
+		out << YAML::Key << "NormalStrength" << YAML::Value << a.NormalStrength;
+		out << YAML::Key << "WaveLength" << YAML::Value << a.WaveLength;
+		out << YAML::Key << "FlowStrength" << YAML::Value << a.FlowStrength;
+		out << YAML::Key << "FoamStrength" << YAML::Value << a.FoamStrength;
+		out << YAML::Key << "ShoreFoam" << YAML::Value << a.ShoreFoam;
+		out << YAML::Key << "ShoreWidth" << YAML::Value << a.ShoreWidth;
+		out << YAML::Key << "Roughness" << YAML::Value << a.Roughness;
+		out << YAML::Key << "ShoreWetness" << YAML::Value << a.ShoreWetness;
+		out << YAML::Key << "NormalTexture" << YAML::Value << uint64_t(a.NormalTexture);
+		out << YAML::Key << "FoamTexture" << YAML::Value << uint64_t(a.FoamTexture);
+		out << YAML::EndMap;
+	}
+	static WaterSurfaceAppearance DeserializeWater(const YAML::Node& node)
+	{
+		WaterSurfaceAppearance a;
+		if (!node) return a;
+		if (!node.IsMap()) throw YAML::RepresentationException(node.Mark(), "WaterSurface must be a map.");
+		if (node["Version"]) a.Version = node["Version"].as<uint32_t>();
+		if (node["Enabled"]) a.Enabled = node["Enabled"].as<bool>();
+		if (node["NormalDirectX"]) a.NormalDirectX = node["NormalDirectX"].as<bool>();
+		if (node["MeshQuality"]) a.MeshQuality = node["MeshQuality"].as<uint32_t>();
+		if (node["Absorption"]) a.Absorption = node["Absorption"].as<float>();
+		if (node["RefractionPixels"]) a.RefractionPixels = node["RefractionPixels"].as<float>();
+		if (node["SedimentTint"]) a.SedimentTint = node["SedimentTint"].as<float>();
+		if (node["NormalStrength"]) a.NormalStrength = node["NormalStrength"].as<float>();
+		if (node["WaveLength"]) a.WaveLength = node["WaveLength"].as<float>();
+		if (node["FlowStrength"]) a.FlowStrength = node["FlowStrength"].as<float>();
+		if (node["FoamStrength"]) a.FoamStrength = node["FoamStrength"].as<float>();
+		if (node["ShoreFoam"]) a.ShoreFoam = node["ShoreFoam"].as<float>();
+		if (node["ShoreWidth"]) a.ShoreWidth = node["ShoreWidth"].as<float>();
+		if (node["Roughness"]) a.Roughness = node["Roughness"].as<float>();
+		if (node["ShoreWetness"]) a.ShoreWetness = node["ShoreWetness"].as<float>();
+		if (node["NormalTexture"]) a.NormalTexture = AssetHandle(node["NormalTexture"].as<uint64_t>());
+		if (node["FoamTexture"]) a.FoamTexture = AssetHandle(node["FoamTexture"].as<uint64_t>());
+		const auto error = ValidateWaterSurfaceAppearance(a);
+		if (!error.empty()) throw YAML::RepresentationException(node.Mark(), error);
+		return a;
+	}
+
 	static void SerializeComponent(YAML::Emitter& out, const TerrainComponent& comp)
 	{
 		const auto& spec = comp.Specification;
@@ -349,6 +398,7 @@ namespace gl {
 		out << YAML::Key << "ThermalStrength" << YAML::Value
 			<< spec.Authoring.ThermalStrength;
 		out << YAML::EndMap;
+		SerializeWater(out, spec.Water);
 		SerializeTerrainRecipe(out, spec.Recipe);
 		out << YAML::EndMap;
 	}
@@ -439,6 +489,7 @@ namespace gl {
 				authoring.ThermalStrength = glm::clamp(
 					authoringNode["ThermalStrength"].as<float>(), 0.0f, 0.5f);
 		}
+		spec.Water = DeserializeWater(node["WaterSurface"]);
 		spec.Recipe = DeserializeTerrainRecipe(node["Recipe"]);
 		const auto validation = ValidateTerrainRecipe(spec.Recipe,
 			spec.HeightScale, spec.DataVersion, spec.Procedural);
@@ -572,6 +623,8 @@ namespace gl {
 			if (!IsValidTerrainExecutionMode(spec.ExecutionMode)) {
 				GL_CORE_ERROR("Could not save unsupported Terrain ExecutionMode."); return false;
 			}
+			const auto waterError = ValidateWaterSurfaceAppearance(spec.Water);
+			if (!waterError.empty()) { GL_CORE_ERROR("Could not save water appearance: {0}", waterError); return false; }
 			const auto validation = ValidateTerrainRecipe(spec.Recipe,
 				spec.HeightScale, spec.DataVersion, spec.Procedural);
 			if (!validation.Valid())
