@@ -201,6 +201,7 @@ namespace {
 		const auto& leftNoise = left.Noise;
 		const auto& rightNoise = right.Noise;
 		return left.Procedural == right.Procedural
+			&& left.ExecutionMode == right.ExecutionMode
 			&& SameTerrainRecipe(left.Recipe, right.Recipe)
 			&& left.DataVersion == right.DataVersion
 			&& left.Preset == right.Preset
@@ -611,7 +612,7 @@ namespace {
 				"terrain runtime is not serialized");
 		}
 		std::string legacyTerrainSnapshot = savedSnapshot;
-		for (const char* key : { "DataVersion:", "StableSlopeDegrees:" })
+		for (const char* key : { "DataVersion:", "StableSlopeDegrees:", "ExecutionMode:" })
 		{
 			const size_t keyPosition = legacyTerrainSnapshot.find(key);
 			context.Check(keyPosition != std::string::npos, "terrain snapshot records data contract fields");
@@ -676,6 +677,8 @@ namespace {
 			auto legacySpecification = legacyTerrainEntity
 				.GetComponent<gl::TerrainComponent>().Specification;
 			gl::ApplyTerrainPreset(legacySpecification, gl::TerrainPreset::Alpine);
+			context.Check(legacySpecification.ExecutionMode == gl::TerrainExecutionMode::Simulation,
+				"missing execution mode and preset changes preserve legacy simulation behavior");
 			context.Check(legacySpecification.DataVersion == 1,
 				"missing data version and preset changes retain legacy sampling and erosion");
 			context.Check(legacySpecification.Noise.SynthesisVersion == 1,
@@ -969,6 +972,7 @@ namespace {
 		const auto uuid = entity.GetUUID();
 		auto& spec = entity.AddComponent<gl::TerrainComponent>().Specification;
 		spec.HeightScale = 100;
+		context.Check(spec.ExecutionMode == gl::TerrainExecutionMode::Static, "new terrain defaults to resource-free static mode");
 		spec.Recipe = recipe;
 		spec.Recipe.Stamps[1].Enabled = false;
 		spec.Recipe.Stamps[1].Center = { -3, 7 };
@@ -981,6 +985,12 @@ namespace {
 		const auto restored = gl::CreateRef<gl::Scene>();
 		const bool loaded = gl::SceneSerializer(restored).Deserialize(path.string());
 		const auto restoredEntity = restored->FindEntityByUUID(uuid);
+		context.Check(loaded && restoredEntity && restoredEntity.GetComponent<gl::TerrainComponent>().Specification.ExecutionMode == gl::TerrainExecutionMode::Static,
+			"explicit static mode survives scene round trip");
+		spec.ExecutionMode = gl::TerrainExecutionMode(999);
+		std::string invalidModeYaml;
+		context.Check(!gl::SceneSerializer(source).SerializeToString(invalidModeYaml), "unknown execution mode is rejected before saving");
+		spec.ExecutionMode = gl::TerrainExecutionMode::Static;
 		context.Check(loaded && restoredEntity
 			&& SameTerrainRecipe(spec.Recipe, restoredEntity.GetComponent<gl::TerrainComponent>().Specification.Recipe)
 			&& !restoredEntity.GetComponent<gl::TerrainComponent>().Runtime,
@@ -1031,6 +1041,10 @@ namespace {
 			context.Check(rejected && original == unchanged, message);
 		};
 		std::string futureYaml = yaml;
+		std::string unknownModeYaml = yaml;
+		const auto modePosition = unknownModeYaml.find("ExecutionMode: 0");
+		unknownModeYaml.replace(modePosition, 16, "ExecutionMode: 999");
+		rejectLoad(unknownModeYaml, "unknown execution mode fails before modifying the destination scene");
 		const auto versionPosition = futureYaml.find("Version: 1", futureYaml.find("Recipe:"));
 		futureYaml.replace(versionPosition, 10, "Version: 999");
 		rejectLoad(futureYaml, "unknown recipe version fails before modifying the destination scene");

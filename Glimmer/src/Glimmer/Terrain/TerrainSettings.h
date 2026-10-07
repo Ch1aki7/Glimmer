@@ -56,11 +56,16 @@ namespace gl {
 		float ThermalStrength = 0.35f;
 	};
 
+	enum class TerrainExecutionMode { Static = 0, Simulation = 1 };
+	inline bool IsValidTerrainExecutionMode(TerrainExecutionMode mode)
+	{ return mode == TerrainExecutionMode::Static || mode == TerrainExecutionMode::Simulation; }
+
 	struct TerrainSpecification
 	{
 		// Independent of the noise algorithm. Missing YAML fields retain v1.
 		uint32_t DataVersion = 2;
 		bool Procedural = true;
+		TerrainExecutionMode ExecutionMode = TerrainExecutionMode::Static;
 		TerrainPreset Preset = TerrainPreset::Custom;
 		uint32_t HeightMapResolution = 1024;
 		uint32_t MeshResolution = 256;

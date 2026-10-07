@@ -291,6 +291,9 @@ namespace gl {
 			runtime.GenerationError = message;
 			return runtime.HasPublishedSpecification && runtime.HeightMap != nullptr;
 		};
+		if (!IsValidTerrainExecutionMode(specification.ExecutionMode)) return generationFailed("Unsupported Terrain ExecutionMode.");
+		if (runtime.HasPublishedSpecification && runtime.PublishedSpecification.ExecutionMode != specification.ExecutionMode)
+			runtime.Dirty = true;
 		const auto recipeValidation = ValidateTerrainRecipe(specification.Recipe,
 			specification.HeightScale, specification.DataVersion, specification.Procedural);
 		if (!recipeValidation.Valid()) return generationFailed(recipeValidation.Message);
@@ -443,7 +446,12 @@ namespace gl {
 			runtime.LoadedMeshResolution = sharedMeshResolution;
 		}
 
-		if (specification.Procedural
+		if (specification.ExecutionMode == TerrainExecutionMode::Static || !specification.Procedural)
+		{
+			runtime.GPUEnvironment.reset(); runtime.GPUClimate.reset(); runtime.GPUHydrology.reset(); runtime.Hydrology.reset();
+			runtime.HydrologyGenerationVersion = runtime.ClimateGenerationVersion = 0;
+		}
+		if (specification.Procedural && specification.ExecutionMode == TerrainExecutionMode::Simulation
 			&& runtime.HeightMap->GetFormat() == TextureFormat::R32F)
 		{
 			const auto generationPath =
@@ -481,6 +489,12 @@ namespace gl {
 					runtime.HeightMap, specification.HeightScale,
 					terrainWorldSize);
 				runtime.HydrologyGenerationVersion = runtime.GenerationVersion;
+				// Requests issued while static must not be replayed when simulation is enabled.
+				runtime.HydrologyResetRequest = s_Data.HydrologyResetRequest;
+				runtime.HydrologySingleStepRequest = s_Data.HydrologySingleStepRequest;
+				runtime.HydrologySedimentSeedRequest = s_Data.HydrologySedimentSeedRequest;
+				runtime.ClimateResetRequest = s_Data.ClimateResetRequest;
+				runtime.ClimateSingleStepRequest = s_Data.ClimateSingleStepRequest;
 			}
 			auto& hydrology = *runtime.GPUHydrology;
 			hydrology.ReloadShadersIfChanged();

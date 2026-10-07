@@ -20,6 +20,55 @@ namespace gl {
 	// Exercise actual widgets in an isolated ImGui context; diagnostics require the caller's GL context.
 	struct TerrainInspectorValidation
 	{
+		static void RunExecutionModes(const Ref<Scene>& scene, Entity entity)
+		{
+			auto& terrain = entity.GetComponent<TerrainComponent>();
+			const auto original = terrain.Specification;
+			auto require = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
+			InspectorPanel panel; EditorCommandHistory history; panel.SetContext(scene); panel.SetCommandHistory(&history);
+			TerrainComponent after = terrain; after.Specification.ExecutionMode = TerrainExecutionMode::Static;
+			panel.ExecuteComponentEdit(entity, "Edit Terrain Execution Mode", terrain, after);
+			require(TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology && !terrain.Runtime->GPUClimate
+				&& !terrain.Runtime->GPUEnvironment && !terrain.Runtime->Hydrology
+				&& terrain.Runtime->HeightMap == terrain.Runtime->Generator->GetHeightMap(), "Static mode allocates simulation or publishes dynamic height.");
+			const auto staticVersion = TerrainRenderer::GetSurfaceVersion(terrain); const auto staticMap = terrain.Runtime->HeightMap;
+			TerrainSurfaceSnapshot snapshot; require(TerrainRenderer::CaptureSurfaceSnapshot(terrain, snapshot) == TerrainQueryStatus::Ready, "Static snapshot capture failed.");
+			TerrainRenderer::RequestHydrologySingleStep(); TerrainRenderer::RequestClimateSingleStep();
+			require(TerrainRenderer::Prepare(terrain) && TerrainRenderer::GetSurfaceVersion(terrain) == staticVersion
+				&& terrain.Runtime->HeightMap == staticMap && !terrain.Runtime->GPUHydrology, "Static repeated Prepare changes publication or creates simulation.");
+			terrain.Specification.ExecutionMode = TerrainExecutionMode::Simulation; terrain.Specification.Recipe.Version = 999;
+			TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain) && TerrainRenderer::GetSurfaceSpecification(terrain).ExecutionMode == TerrainExecutionMode::Static
+				&& !terrain.Runtime->GPUHydrology && terrain.Runtime->HeightMap == staticMap, "Failed mode switch discards static publication.");
+			terrain.Specification = original; terrain.Specification.ExecutionMode = TerrainExecutionMode::Static;
+			require(history.Undo() && TerrainRenderer::Prepare(terrain) && terrain.Runtime->GPUHydrology && terrain.Runtime->GPUClimate
+				&& terrain.Runtime->GPUEnvironment && snapshot.Query({ 0, 0 }, TerrainRenderer::GetSurfaceVersion(terrain)).Status == TerrainQueryStatus::StaleVersion,
+				"Mode Undo fails to recreate simulation or invalidate old snapshot.");
+			const size_t count = size_t(terrain.Runtime->HeightMap->GetWidth()) * terrain.Runtime->HeightMap->GetHeight();
+			std::vector<float> initial(count), simulated(count);
+			terrain.Runtime->Generator->GetHeightMap()->GetImageData(initial.data(), uint32_t(count * sizeof(float)));
+			terrain.Runtime->GPUHydrology->GetHeightTexture()->GetImageData(simulated.data(), uint32_t(count * sizeof(float)));
+			require(initial == simulated, "Enabled simulation does not initialize from static height.");
+			terrain.Runtime->GPUHydrology->GetHeightTexture()->Clear(glm::vec4(0));
+			terrain.Runtime->GPUHydrology->Reset();
+			terrain.Runtime->GPUHydrology->GetHeightTexture()->GetImageData(simulated.data(), uint32_t(count * sizeof(float)));
+			require(initial == simulated, "Mode switch Reset loses static initial height.");
+			const auto simulationMap = terrain.Runtime->HeightMap; const auto simulationVersion = TerrainRenderer::GetSurfaceVersion(terrain);
+			terrain.Specification.ExecutionMode = TerrainExecutionMode::Static; terrain.Specification.Recipe.Version = 999; TerrainRenderer::Invalidate(terrain);
+			require(TerrainRenderer::Prepare(terrain) && terrain.Runtime->GPUHydrology && terrain.Runtime->HeightMap == simulationMap
+				&& TerrainRenderer::GetSurfaceVersion(terrain) == simulationVersion, "Failed static switch discards simulation publication.");
+			terrain.Specification = original;
+			require(history.Redo() && TerrainRenderer::Prepare(terrain) && !terrain.Runtime->GPUHydrology, "Mode Redo fails to release simulation.");
+			const auto copy = Scene::Copy(scene); auto copied = copy->FindEntityByUUID(entity.GetUUID());
+			require(copied.GetComponent<TerrainComponent>().Specification.ExecutionMode == TerrainExecutionMode::Static
+				&& !copied.GetComponent<TerrainComponent>().Runtime, "Static mode copy shares runtime or loses mode.");
+			auto& copiedTerrain = copied.GetComponent<TerrainComponent>();
+			require(TerrainRenderer::Prepare(copiedTerrain) && !copiedTerrain.Runtime->GPUHydrology && !copiedTerrain.Runtime->GPUClimate
+				&& !copiedTerrain.Runtime->GPUEnvironment && copiedTerrain.Runtime != terrain.Runtime, "Cold static Prepare allocates simulation or shares resources.");
+			terrain.Specification = original; TerrainRenderer::Invalidate(terrain); require(TerrainRenderer::Prepare(terrain), "Mode fixture recovery failed.");
+			GL_CORE_INFO("Terrain execution modes PASS: static resource absence, repeated Prepare, Undo/Redo, both failed switches, snapshot staleness, simulation initialization/Reset and scene copy isolation.");
+		}
+
 		static void RunDiagnostics(const Ref<Scene>& scene, Entity entity)
 		{
 			struct Guard {
@@ -159,6 +208,7 @@ namespace gl {
 			TerrainRenderer::Invalidate(terrain);
 			require(TerrainRenderer::Prepare(terrain), "Initial recipe Prepare failed.");
 			TerrainInspectorValidation::RunDiagnostics(scene, entity);
+			TerrainInspectorValidation::RunExecutionModes(scene, entity);
 			auto hash = [&]() { const auto result = terrain.Runtime->Generator->ValidateOutputs(); require(result.Valid, "Invalid composed maps."); return result.Hash; };
 			auto protectionValues = [&](const TerrainComponent& target) {
 				const auto map = target.Runtime->ProtectionMap;
@@ -381,6 +431,12 @@ namespace gl {
 
 		auto terrainEntity = scene->CreateEntityWithUUID(UUID(TerrainFixtureID), "Terrain");
 		auto& terrain = terrainEntity.AddComponent<TerrainComponent>();
+		// This verification fixture preserves the legacy simulation baseline.
+		terrain.Specification.ExecutionMode = TerrainExecutionMode::Simulation;
+		char* modeValue = nullptr; size_t modeLength = 0;
+		if (_dupenv_s(&modeValue, &modeLength, "GLIMMER_TERRAIN_EXECUTION_MODE") == 0
+			&& modeValue && std::string(modeValue) == "static") terrain.Specification.ExecutionMode = TerrainExecutionMode::Static;
+		std::free(modeValue);
 		ApplyTerrainPreset(terrain.Specification, TerrainPreset::Alpine);
 		terrain.Specification.DataVersion = std::clamp(dataVersion, 1u, 2u);
 		terrain.Specification.Noise.SynthesisVersion =

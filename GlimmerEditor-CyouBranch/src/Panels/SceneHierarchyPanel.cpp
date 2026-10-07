@@ -348,6 +348,15 @@ namespace gl {
 				};
 
 				TerrainComponent before = terrain;
+				int executionMode = int(spec.ExecutionMode);
+				if (ImGui::Combo("Execution Mode", &executionMode, "Static\0Simulation\0")) {
+					TerrainComponent after = terrain; after.Specification.ExecutionMode = TerrainExecutionMode(executionMode);
+					ExecuteComponentEdit(entity, "Edit Terrain Execution Mode", terrain, after);
+				}
+				ImGui::TextWrapped("Static uses the authored surface without water/climate resources. Simulation enables the global Debug controls.");
+				if (!spec.Procedural) ImGui::TextDisabled("Imported height maps do not support runtime simulation.");
+				if (terrain.Runtime && terrain.Runtime->HasPublishedSpecification)
+					ImGui::TextDisabled("Published mode: %s", terrain.Runtime->PublishedSpecification.ExecutionMode == TerrainExecutionMode::Static ? "Static" : "Simulation");
 				if (ImGui::Checkbox("Procedural", &spec.Procedural))
 					TerrainRenderer::Invalidate(terrain);
 				commit("Edit Terrain Procedural Mode", before);

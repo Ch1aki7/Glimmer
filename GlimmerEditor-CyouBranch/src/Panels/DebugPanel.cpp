@@ -169,6 +169,7 @@ namespace gl {
 				}
 				m_TerrainSamplingBenchmark.OnImGuiRender(terrainStatistics);
 				ImGui::SeparatorText("Runtime Hydrology");
+				ImGui::TextWrapped("Global controls affect only Terrain entities published in Simulation mode. Static Terrain ignores Step/Reset and owns no simulation resources.");
 				bool hydrologyPlaying = TerrainRenderer::IsHydrologyPlaying();
 				if (ImGui::Checkbox("Play##Hydrology", &hydrologyPlaying))
 					TerrainRenderer::SetHydrologyPlaying(hydrologyPlaying);

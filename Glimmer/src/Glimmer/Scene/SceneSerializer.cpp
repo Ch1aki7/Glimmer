@@ -299,6 +299,7 @@ namespace gl {
 		const auto& noise = spec.Noise;
 		out << YAML::Key << "TerrainComponent" << YAML::Value << YAML::BeginMap;
 		out << YAML::Key << "Procedural" << YAML::Value << spec.Procedural;
+		out << YAML::Key << "ExecutionMode" << YAML::Value << uint32_t(spec.ExecutionMode);
 		out << YAML::Key << "DataVersion" << YAML::Value << std::clamp(spec.DataVersion, 1u, 2u);
 		out << YAML::Key << "Preset" << YAML::Value << TerrainPresetToString(spec.Preset);
 		out << YAML::Key << "HeightMapResolution" << YAML::Value << spec.HeightMapResolution;
@@ -357,6 +358,8 @@ namespace gl {
 		auto& spec = comp.Specification;
 		spec.DataVersion = node["DataVersion"]
 			? std::clamp(node["DataVersion"].as<uint32_t>(), 1u, 2u) : 1u;
+		spec.ExecutionMode = node["ExecutionMode"] ? TerrainExecutionMode(node["ExecutionMode"].as<uint32_t>()) : TerrainExecutionMode::Simulation;
+		if (!IsValidTerrainExecutionMode(spec.ExecutionMode)) throw YAML::RepresentationException(node.Mark(), "Unsupported Terrain ExecutionMode.");
 		if (node["Procedural"]) spec.Procedural = node["Procedural"].as<bool>();
 		spec.Preset = node["Preset"]
 			? TerrainPresetFromString(node["Preset"].as<std::string>())
@@ -566,6 +569,9 @@ namespace gl {
 		for (const auto entity : m_Scene->m_Registry.view<TerrainComponent>())
 		{
 			const auto& spec = m_Scene->m_Registry.get<TerrainComponent>(entity).Specification;
+			if (!IsValidTerrainExecutionMode(spec.ExecutionMode)) {
+				GL_CORE_ERROR("Could not save unsupported Terrain ExecutionMode."); return false;
+			}
 			const auto validation = ValidateTerrainRecipe(spec.Recipe,
 				spec.HeightScale, spec.DataVersion, spec.Procedural);
 			if (!validation.Valid())

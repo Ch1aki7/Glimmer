@@ -4741,6 +4741,20 @@ if (status == gl::TerrainQueryStatus::Ready) {
 
 2026-10-06 的 VS2026 Debug x64 全解决方案构建与 267 条无窗口 PASS 输出通过，完全链接产物位于本地 `bin/P17-B2-review/`，原编辑器窗口保留。解析斜面/非平面、版本/身份、端点/越界和非法输入通过；Intel Iris Xe GPU 验证平台核心、145×145 全节点查询（最大归一化差 `1.7881393e-7`）、Resize、失败保留、重载/Play 隔离、模拟高度隔离及旧 Data/导入拒绝。原编辑闭环与空配方 Data v1/v2 逐字节图像基线保持。
 
+## Terrain 静态与模拟模式
+
+新建 Terrain 的 `Execution Mode` 默认 Static，可在 Inspector 的 Terrain 属性顶部切换为 Simulation。Static 直接渲染组合后的静态高度、派生图与遮罩，不创建水文、气候或环境模拟对象，也不绘制模拟水面；基础噪声和创作热侵蚀仍照常生成。Simulation 保留现有运行时水文/气候流程，仅支持程序化 R32F 地形，导入高度图仍不运行模拟。
+
+模式是引擎 TerrainSpecification 的持久规格，Scene YAML 的 `ExecutionMode` 为 0（Static）或 1（Simulation）；旧场景缺字段时保留 Simulation 行为，未知值拒绝加载/保存。预设切换保留模式，Inspector 修改支持 Undo/Redo。游戏宿主决定是否启用模拟，引擎负责资源和表面发布，编辑器提供通用选择与诊断。
+
+切换模式会重新生成并发布表面，使旧静态快照过期；进入 Simulation 从组合后静态高度初始化，Reset 恢复该初值，进入 Static 释放模拟资源。切换不保留先前的水量、泥沙或气候状态。受控配方/生成失败保留上一套已发布模式和资源，Inspector 的 Published mode 显示实际绘制模式；模拟 Shader 首次加载失败或设备故障不属于该回退保证。
+
+DebugPanel 的模拟 Play/Step/Reset 是全局会话控制，仅对 Simulation 地形生效；Static 忽略这些请求，重新启用 Simulation 时不会补执行此前的 Step/Seed。静态快照始终查询创作表面，保护图尚不约束运行时侵蚀。
+
+手动验证：通过标准 Debug 程序或 Visual Studio F5 启动，选中 Terrain，在顶部将 Execution Mode 设为 Static，确认 Published mode 更新；编辑印章后捕获快照查询。切为 Simulation 后使用 Debug 水文/气候控制，再 Undo/Redo 检查模式恢复。已有验证场景默认 Simulation 以保持图像基线；设置 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1` 与 `GLIMMER_TERRAIN_EXECUTION_MODE=static` 可直接打开静态案例。
+
+2026-10-07 标准目录的 VS2026 Debug x64 全解决方案完全链接构建及 273 条无窗口 PASS 通过。Intel Iris Xe GPU 验证静态冷启动/反复 Prepare 无模拟对象、模式命令 Undo/Redo、两方向失败切换保留、初值/Reset、快照过期和 Scene Copy 隔离；原编辑闭环、保护/查询检查通过。静态固定视角已检查：Color 16 Chunk、Water 0 Draw、Shadow 4 Cascade/3 Draw；原水文/气候 GPU Contract PASS，旧 Data v1/v2 图像与 A2 基线逐字节一致。模拟纹理清单、峰值及性能成本的完整复核尚未验收。
+
 ## Terrain 创作诊断与手动验证
 
 选中含 Terrain 组件的实体，在 Inspector 展开 Terrain 并滚动到 `Terrain Authoring Diagnostics`（位于 Terrain Stamps 上方）。`Authoring View` 是全局会话开关：Protection 用暗色/青色/黄色显示 0/0.5/1 权重，Clipping 用洋红色显示任意印章曾被 [0,HeightScale] 夹取的节点；缺图按零显示。预览读取当前已发布纹理，不重新生成或读回 GPU，保留地形拾取与法线输出；诊断时隐藏水面，切回 None 恢复原材质和水面设置。遮罩颜色不包含材质光照，仍经过视口后处理与当前 LOD 几何。
@@ -4749,7 +4763,7 @@ if (status == gl::TerrainQueryStatus::Ready) {
 
 点击 `Capture Static Snapshot`，确认 Last capture 和 Query 为 Ready；在 `Query Local XZ` 输入局部 XZ，查看高度、单位法线与坡度。坐标超出快照 WorldSize/2 返回 OutOfBounds；修改印章或尺寸并重建后返回 StaleVersion，重新捕获后恢复 Ready。快照记录身份、生成版本和尺寸，场景或 Terrain 身份切换清空缓存；受控生成失败保留旧表面时，旧查询仍可用。只在 Ready 时显示查询数值，Last capture 表示最近按钮结果，Query 表示当前缓存状态。旧 Data/导入表面捕获返回 UnsupportedSurface。Capture 和 Count 均有同步回读成本，不会每帧自动刷新，也不进入 Scene 保存或 Undo。
 
-快照和遮罩属于静态创作数据；当前运行时侵蚀不消费保护图，快照也不跟随模拟更新。暂停模拟后查看平台可避免将静态查询误当作动态表面；静态模式资源分离尚未实现。
+快照和遮罩属于静态创作数据；当前运行时侵蚀不消费保护图，快照也不跟随模拟更新。使用 Static 模式查看平台可避免将静态查询误当作动态表面；Simulation 中暂停不释放模拟资源。
 
 自动验证沿用 `GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`，新增真实 ImGui Capture/Count 控件与过期/失败/上下文重置检查。验证场景中 `GLIMMER_TERRAIN_AUTHORING_VIEW=protection` 或 `clipping` 指定启动视图，搭配 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1`；`GLIMMER_TERRAIN_RECIPE_CLIP_FIXTURE=1` 仅为此场景增加越界 Add 印章。`GLIMMER_TERRAIN_CAPTURE_PATH` 保存五帧固定视角结果并退出；不设置捕获路径可停留进行手动检查。
 
