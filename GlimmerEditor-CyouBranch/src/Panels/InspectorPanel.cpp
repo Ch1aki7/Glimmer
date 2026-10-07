@@ -87,7 +87,14 @@ namespace gl
 			ImGui::Text("Hydrology / climate: %.3f / %.3f MiB", resources.HydrologyBytes / mib, resources.ClimateBytes / mib);
 			ImGui::Text("Other referenced / meshes: %.3f / %.3f MiB", resources.OtherReferencedTextureBytes / mib, resources.MeshBytes / mib);
 			ImGui::Text("Initial height CPU: %.3f MiB", resources.InitialHeightCPUBytes / mib);
-			ImGui::TextDisabled("Logical resident storage, not driver VRAM or rebuild peak; shared assets are referenced bytes.");
+			ImGui::TextDisabled("Logical resident storage; shared assets are referenced bytes, not exclusive driver VRAM.");
+			const auto& preparation = terrain.Runtime->Preparation;
+			ImGui::Text("Last Prepare texture peak / lifetime: %.3f / %.3f MiB", preparation.Textures.PeakBytes / mib, preparation.LifetimePeakTextureBytes / mib);
+			ImGui::Text("Last texture creates / releases: %llu / %llu | total creates: %llu",
+				(unsigned long long)preparation.Textures.Allocations, (unsigned long long)preparation.Textures.Releases, (unsigned long long)preparation.TotalTextureAllocations);
+			ImGui::Text("CPU Prepare / last Generate: %.3f / %.3f ms", preparation.CPUPrepareMilliseconds, preparation.LastCPUGenerationMilliseconds);
+			ImGui::Text("CPU Environment / derived subset: %.3f / %.3f ms", preparation.CPUEnvironmentMilliseconds, preparation.CPUDerivedMilliseconds);
+			ImGui::TextDisabled("CPU wall time; Generate includes static derivation, Environment includes runtime derivation. Do not add subsets.");
 		}
 		if (ImGui::Button("Capture Static Snapshot"))
 			m_TerrainCaptureStatus = TerrainRenderer::CaptureSurfaceSnapshot(terrain, m_TerrainSnapshot);

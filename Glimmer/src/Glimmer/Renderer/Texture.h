@@ -53,6 +53,45 @@ namespace gl {
 		TextureColorSpace ColorSpace = TextureColorSpace::Linear;
 	};
 
+	struct TextureAllocationStatistics
+	{
+		uint64_t CurrentBytes = 0, PeakBytes = 0, AllocatedBytes = 0, ReleasedBytes = 0;
+		uint64_t Allocations = 0, Releases = 0;
+	};
+
+	// Render-thread logical Texture2D events in a bounded operation; no driver queries.
+	// The caller supplies its existing referenced storage. Nested scopes propagate events.
+	class TextureAllocationScope
+	{
+	public:
+		explicit TextureAllocationScope(uint64_t initialBytes = 0) : m_Previous(s_Active)
+		{ m_Statistics.CurrentBytes = m_Statistics.PeakBytes = initialBytes; s_Active = this; }
+		~TextureAllocationScope() { s_Active = m_Previous; }
+		TextureAllocationScope(const TextureAllocationScope&) = delete;
+		TextureAllocationScope& operator=(const TextureAllocationScope&) = delete;
+		const TextureAllocationStatistics& GetStatistics() const { return m_Statistics; }
+		static void RecordAllocation(uint64_t bytes) { Record(bytes, true); }
+		static void RecordRelease(uint64_t bytes) { Record(bytes, false); }
+	private:
+		static void Record(uint64_t bytes, bool allocate)
+		{
+			if (!bytes) return;
+			for (auto* scope = s_Active; scope; scope = scope->m_Previous) {
+				auto& stats = scope->m_Statistics;
+				if (allocate) {
+					++stats.Allocations; stats.AllocatedBytes += bytes; stats.CurrentBytes += bytes;
+					if (stats.CurrentBytes > stats.PeakBytes) stats.PeakBytes = stats.CurrentBytes;
+				} else {
+					++stats.Releases; stats.ReleasedBytes += bytes;
+					stats.CurrentBytes = bytes > stats.CurrentBytes ? 0 : stats.CurrentBytes - bytes;
+				}
+			}
+		}
+		inline static thread_local TextureAllocationScope* s_Active = nullptr;
+		TextureAllocationScope* m_Previous = nullptr;
+		TextureAllocationStatistics m_Statistics;
+	};
+
 	class Texture {
 	public:
 		virtual ~Texture() = default;

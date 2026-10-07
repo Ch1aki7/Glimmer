@@ -22,6 +22,15 @@ namespace gl {
 		uint64_t TextureBytes() const { return GeneratorBytes + PendingGeneratorBytes + HydrologyBytes + ClimateBytes + OtherReferencedTextureBytes; }
 	};
 
+	struct TerrainPreparationStatistics
+	{
+		TextureAllocationStatistics Textures;
+		uint64_t LifetimePeakTextureBytes = 0, TotalTextureAllocations = 0, PrepareCount = 0;
+		double LastCPUGenerationMilliseconds = 0;
+		double CPUPrepareMilliseconds = 0, CPUGenerationMilliseconds = 0;
+		double CPUEnvironmentMilliseconds = 0, CPUDerivedMilliseconds = 0;
+	};
+
 	struct TerrainRuntime
 	{
 		uint64_t SurfaceIdentity = UUID(); // New Runtime (including scene copies) has a distinct query identity.
@@ -65,6 +74,7 @@ namespace gl {
 		bool ValidationComplete = false;
 		bool RecipeValidationComplete = false;
 		bool Dirty = true;
+		TerrainPreparationStatistics Preparation; // Diagnostics only; never serialized or copied with specifications.
 
 		// Read-only census of actual references. Aliases and Ping-Pong reads are counted once.
 		// OtherReferencedTextureBytes includes shared imported/retained source assets, not exclusive ownership.

@@ -283,6 +283,10 @@ Simulation 模式下的 GPU 路径由同一 `TerrainRuntime` 独占一个 `Terra
 
 `Texture::GetStorageByteSize` 根据实际规格计算不可变二维纹理存储字节，含选择三线性过滤时的完整 Mip；无 RendererID 返回零，不查询驱动。Generator/Hydrology/Climate 的 GetTextureResources 暴露当前只读引用，包括 Ping-Pong 两侧、裁切/保护和零源项；Hydrology 单独暴露借用初始 Height 与 CPU 初值容量。`TerrainRuntime::GetResourceUsage` 按非零 RendererID 去重归入 Generator、PendingGenerator、Hydrology、Climate 和其他引用纹理，LOD Mesh/Mesh 别名按对象身份去重，记录顶点/索引逻辑存储。其他引用包含共享导入资产，不代表独占拥有；环境协调器无纹理。它不 Prepare、Dispatch、读回或持久化，也不捕获 Generate 内部临时候选峰值/完整 CPU 堆/材质或 Renderer 水面资源；Inspector 只读显示，Fixture 捕获日志复用同一清单。
 
+`TextureAllocationScope` 在渲染线程接收 OpenGLTexture2D 存储创建/析构事件，含选择的 Mip；嵌套作用域将事件传给祖先。Prepare 越过本帧重复准备检查后，以当前去重纹理引用字节建立作用域，在所有正常/失败返回路径记录峰值、事件次数和 CPU 墙钟耗时；Runtime.Preparation 保存最近记录、历史最高峰值与累计创建次数。候选内部纹理和旧/新模拟共存也在作用域内，但未覆盖 Mesh、FBO/Cubemap、CPU 堆或水面 Renderer 共享资源。共享源以引用基线计入，显式验证/资产加载在该作用域创建的 Texture2D 也计入，因此它是 Prepare 逻辑纹理作用域峰值，不是独占驱动显存或全场景峰值；事件余量不代替当前资源引用清单。
+
+CPU 诊断的 Generate 包含静态派生，Environment 包含初始化、轮询、Reset/模拟、运行时派生和显式读回，Derived 为其子集；Prepare 主体计时从纹理基线建立后开始。最近 Generate 时间保留到下一次调用，CPU 时间可能含驱动等待，不代表 GPU 工作耗时。诊断不增加 GPU Query/同步读回，不保存/进入 Undo，不改变生成版本；其他 Color/Shadow/Water 既有 GPU 计时不由该 CPU 记录替代。
+
 成功解析导入 Height 资产后，Prepare 清理旧 Generator/PendingGenerator 和旧生成 Dispatch 计数，并清理模拟、派生与保护引用；资产解析失败继续保留旧发布资源。返回未变的已发布导入源也清理失败遗留的 PendingGenerator；重新切回程序化路径通过新生成器重建，不复用已释放资源。
 
 `Scene` 在 Shadow Pass 前调用 `TerrainRenderer::BeginFrame(Timestep)`；本帧第一次 Prepare 消费请求并固定表面，Shadow/Color 的后续 Prepare 与 Water 只读同版结果。BeginScene 开始颜色计时，EndScene 结束地形帧和颜色计时，水面随后独立计时。`TerrainRuntime::GPUEnvironment` 是 Climate/Hydrology 的统一固定步协调器；两个既有 Play 和 SingleStep 入口都消费同一累加器，每个子步严格执行 Climate → 全局图像 Barrier → Hydrology，禁止两个 Runtime 各自按帧积累并重复推进。任一 Reset 请求在耦合模式下共同恢复气候、水文和总量预算。显式 Readback 同时读取两侧统计，并以 AtmosphericWater + SurfaceWater 对比 InitialTotal + 外部标量 Rainfall，普通帧不做同步读回。Terrain Color/Shadow 顶点阶段继续统一读取 Runtime Height；派生图只在本帧环境步确实改变 Height 且侵蚀/沉积启用时刷新，所有运行时纹理与预算均不进入 Scene YAML。

@@ -46,6 +46,20 @@ namespace gl {
 				map->GetImageData(result.data(), uint32_t(result.size() * sizeof(float))); return result;
 			};
 			frame([&] { require(TerrainRenderer::Prepare(terrain), "Cold lifecycle Static failed."); });
+			const uint64_t nodes = uint64_t(65) * 65;
+			require(terrain.Runtime->Preparation.Textures.Allocations == 12
+				&& terrain.Runtime->Preparation.Textures.Releases == 5
+				&& terrain.Runtime->Preparation.Textures.PeakBytes == nodes * 72
+				&& terrain.Runtime->Preparation.Textures.CurrentBytes == nodes * 40,
+				"Cold Static peak misses generator candidate overlap.");
+			const auto versionBeforeTrace = TerrainRenderer::GetSurfaceVersion(terrain);
+			TerrainRenderer::Invalidate(terrain);
+			frame([&] { require(TerrainRenderer::Prepare(terrain), "Traced rebuild failed."); });
+			require(terrain.Runtime->Preparation.Textures.PeakBytes == nodes * 80
+				&& terrain.Runtime->Preparation.Textures.CurrentBytes == nodes * 40
+				&& terrain.Runtime->Preparation.Textures.Allocations == 7
+				&& terrain.Runtime->Preparation.Textures.Releases == 7
+				&& !(versionBeforeTrace == TerrainRenderer::GetSurfaceVersion(terrain)), "Static rebuild peak/event balance invalid.");
 			TerrainRenderer::RequestHydrologySingleStep(); TerrainRenderer::RequestClimateSingleStep();
 			TerrainRenderer::RequestHydrologyReset(); TerrainRenderer::RequestClimateReset(); TerrainRenderer::RequestHydrologySedimentSeed();
 			terrain.Specification.ExecutionMode = TerrainExecutionMode::Simulation; TerrainRenderer::Invalidate(terrain);
@@ -62,10 +76,20 @@ namespace gl {
 				&& simulationUsage.TextureCount == 32 && simulationUsage.OtherReferencedTextureBytes == 0
 				&& simulationUsage.PendingGeneratorBytes == 0 && simulationUsage.InitialHeightCPUBytes >= uint64_t(65) * 65 * 4,
 				"Simulation resource census misses allocation or double counts aliases.");
+			TerrainRenderer::Invalidate(terrain);
+			frame([&] { require(TerrainRenderer::Prepare(terrain), "Simulation traced rebuild failed."); });
+			require(terrain.Runtime->Preparation.Textures.PeakBytes == nodes * 236
+				&& terrain.Runtime->Preparation.Textures.CurrentBytes == nodes * 156
+				&& terrain.Runtime->Preparation.Textures.Allocations == 32
+				&& terrain.Runtime->Preparation.Textures.Releases == 32,
+				"Simulation rebuild peak misses old/new simulation or retained initial Height.");
+			GL_CORE_INFO("Terrain Prepare trace PASS: cold Static peak=72 bytes/node, warm Static=80, warm Simulation=236; event balance and final residency agree.");
 			const auto hydroIdentity = terrain.Runtime->GPUHydrology.get();
 			for (int i = 0; i < 3; ++i) frame([&] { require(TerrainRenderer::Prepare(terrain), "Repeated resource Prepare failed."); });
 			require(terrain.Runtime->GPUHydrology.get() == hydroIdentity && terrain.Runtime->GetResourceUsage().TextureBytes() == simulationUsage.TextureBytes(),
 				"Paused Prepare reallocates simulation resources.");
+			require(terrain.Runtime->Preparation.Textures.Allocations == 0 && terrain.Runtime->Preparation.Textures.Releases == 0,
+				"Paused Prepare creates/releases textures.");
 			TerrainRenderer::RequestHydrologySingleStep();
 			{
 				struct ShadowFrameGuard { ShadowFrameGuard() { TerrainRenderer::BeginFrame(0); } ~ShadowFrameGuard() { TerrainRenderer::EndScene(); } } guard;
@@ -581,6 +605,10 @@ namespace gl {
 		const auto& terrain = entity.GetComponent<TerrainComponent>();
 		if (!terrain.Runtime) return;
 		const auto resources = terrain.Runtime->GetResourceUsage();
+		const auto& preparation = terrain.Runtime->Preparation;
+		GL_CORE_INFO("Terrain Prepare trace: count={0}, last peak={1}, lifetime peak={2}, allocations={3}, CPU prepare={4}ms, last generation={5}ms, environment={6}ms, derived subset={7}ms",
+			preparation.PrepareCount, preparation.Textures.PeakBytes, preparation.LifetimePeakTextureBytes, preparation.TotalTextureAllocations,
+			preparation.CPUPrepareMilliseconds, preparation.LastCPUGenerationMilliseconds, preparation.CPUEnvironmentMilliseconds, preparation.CPUDerivedMilliseconds);
 		GL_CORE_INFO("Terrain resource capture: textures={0}, total={1}, generator={2}, pending={3}, hydrology={4}, climate={5}, other={6}, meshes={7}, initial CPU={8} bytes",
 			resources.TextureCount, resources.TextureBytes(), resources.GeneratorBytes, resources.PendingGeneratorBytes,
 			resources.HydrologyBytes, resources.ClimateBytes, resources.OtherReferencedTextureBytes, resources.MeshBytes, resources.InitialHeightCPUBytes);

@@ -14,6 +14,7 @@
 #include "Glimmer/Terrain/TerrainMaterial.h"
 
 #include <cstdlib>
+#include <chrono>
 
 namespace gl {
 	namespace {
@@ -73,6 +74,34 @@ namespace gl {
 		};
 
 		TerrainRendererData s_Data;
+
+		struct CPUInterval
+		{
+			double& Milliseconds;
+			std::chrono::steady_clock::time_point Start = std::chrono::steady_clock::now();
+			~CPUInterval() { Milliseconds += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - Start).count(); }
+		};
+
+		struct PreparationTrace
+		{
+			TerrainRuntime& Runtime;
+			TextureAllocationScope Textures;
+			std::chrono::steady_clock::time_point Start = std::chrono::steady_clock::now();
+			explicit PreparationTrace(TerrainRuntime& runtime) : Runtime(runtime), Textures(runtime.GetResourceUsage().TextureBytes())
+			{
+				auto& stats = Runtime.Preparation;
+				stats.CPUGenerationMilliseconds = stats.CPUEnvironmentMilliseconds = stats.CPUDerivedMilliseconds = 0;
+			}
+			~PreparationTrace()
+			{
+				auto& stats = Runtime.Preparation;
+				stats.Textures = Textures.GetStatistics();
+				if (stats.CPUGenerationMilliseconds > 0) stats.LastCPUGenerationMilliseconds = stats.CPUGenerationMilliseconds;
+				stats.LifetimePeakTextureBytes = std::max(stats.LifetimePeakTextureBytes, stats.Textures.PeakBytes);
+				stats.TotalTextureAllocations += stats.Textures.Allocations; ++stats.PrepareCount;
+				stats.CPUPrepareMilliseconds = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - Start).count();
+			}
+		};
 
 		SimulationGridSpecification CreateGridSpecification(uint32_t resolution)
 		{
@@ -299,6 +328,8 @@ namespace gl {
 			runtime.PreparedFrameSerial = s_Data.FrameSerial;
 		}
 
+		PreparationTrace preparationTrace(runtime);
+
 		auto generationFailed = [&runtime](const std::string& message) {
 			if (runtime.GenerationError != message) GL_CORE_ERROR("Terrain generation rejected: {0}", message);
 			runtime.GenerationError = message;
@@ -343,8 +374,12 @@ namespace gl {
 			if (runtime.Dirty)
 			{
 				runtime.Dirty = false; // Retry only on explicit invalidation or a successful shader reload.
-				if (!generator->Generate(specification, terrainWorldSize))
-					return generationFailed(generator->GetLastGenerationError());
+				bool generated = false;
+				{
+					CPUInterval generationInterval{ runtime.Preparation.CPUGenerationMilliseconds };
+					generated = generator->Generate(specification, terrainWorldSize);
+				}
+				if (!generated) return generationFailed(generator->GetLastGenerationError());
 				if (needsGenerator) runtime.Generator = std::move(runtime.PendingGenerator);
 				else runtime.PendingGenerator.reset();
 				runtime.PublishedSpecification = specification;
@@ -470,6 +505,7 @@ namespace gl {
 		if (specification.Procedural && specification.ExecutionMode == TerrainExecutionMode::Simulation
 			&& runtime.HeightMap->GetFormat() == TextureFormat::R32F)
 		{
+			CPUInterval environmentInterval{ runtime.Preparation.CPUEnvironmentMilliseconds };
 			const auto generationPath =
 				AssetManager::GetFileSystemPath(specification.GenerationShaderHandle);
 			const auto fluxPath = generationPath.parent_path() / "HydrologyFlux.comp";
@@ -631,6 +667,7 @@ namespace gl {
 				}
 				if (refreshDerivedMaps)
 				{
+					CPUInterval derivedInterval{ runtime.Preparation.CPUDerivedMilliseconds };
 					runtime.Generator->DeriveMapsFromHeight(runtime.HeightMap,
 						specification.HeightScale, worldSize);
 					runtime.NormalSlopeMap = runtime.Generator->GetNormalSlopeMap();

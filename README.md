@@ -4800,6 +4800,18 @@ Reset 和 Step 同帧请求时，先恢复模拟初值，再执行 Seed/Step；�
 
 2026-10-07 验证：标准 VS2026 Debug x64 全解决方案完全链接、285 条无窗口 PASS；实际 GPU 核对 65² 两模式清单/去重、重复暂停 Prepare、两模式导入释放及重新生成，原模式/生命周期/查询与水文/气候 Contract 通过。1024² 清单与上述数值一致，三档地形网格合计 503,592 字节，模拟 CPU 初值容量 4 MiB；空配方 Data v1/v2 固定视角 BMP 与 A2 基线逐字节一致，Static 保持 Water 0 Draw，截图已检查。该结果验证驻留清单和释放修复，不构成重建峰值、分项性能或完整 C3 总验收。
 
+## Terrain 准备峰值与 CPU 耗时
+
+在 `Terrain Authoring Diagnostics` 的资源统计下方，`Last Prepare texture peak / lifetime` 显示最近一次有效准备和当前 Runtime 历史最高纹理峰值；`Last texture creates / releases` 与 `total creates` 显示最近和累计创建事件。首次生成、修改印章、切换模式或分辨率后观察历史峰值；普通帧会更新 Last，历史最高值保留至 Runtime 销毁。帧内重复 Prepare 不覆盖首个记录；暂停后的有效 Prepare 应为 0 创建/0 释放。
+
+峰值按进入时当前去重纹理引用与创建/释放事件跟踪，包含 Generate 内部候选及旧/新模拟共存。1024² 正常印章 Fixture 冷 Static 为 72 MiB、12 次创建，冷 Simulation 为 156 MiB、37 次，无印章 Simulation 为 148 MiB、35 次。65² 实际重建验证中，Static 为每节点 80 字节，Simulation 为 236 字节；后者包含替换水文前新旧共存和旧初始 Height 的借用，最终回到每节点 156 字节驻留。该小网格案例不是 1024² 重建压力基准。
+
+它是 Prepare 作用域的逻辑 Texture2D 峰值，非驱动显存或全场景独占峰值；共享源按引用计，Mesh、FBO/Cubemap、水面共享资源和 CPU 堆另算。显式 GPU Contract 在作用域里创建的验证纹理也计入，成本采样应关闭这些验证；不同账本的历史峰值不代表同一时刻，不能直接相加。统计没有新增 GPU 查询或同步读回。
+
+`CPU Prepare / last Generate`、`CPU Environment / derived subset` 使用墙钟时间。Generate 含静态派生；Environment 含模拟初始化、Shader 轮询、Reset/推进、运行时派生和显式读回；Derived 是其子集，不能重复相加。最近 Generate 耗时保留，失败调用也会记录，请结合 Generation Error。CPU 可能等待驱动，不能用这些时间替代 GPU 毫秒或判断帧率。
+
+2026-10-07 完整 Debug 构建、285 条回归 PASS、实际 GPU 创建/释放平衡及冷启动/静态重建/模拟重建峰值验证通过；原编辑/模式/生命周期/查询、水文和气候 Contract 保持通过，空配方 v1/v2 图像与 A2 基线逐字节一致。本轮验证峰值与 CPU 诊断，未完成 GPU 分项压力基准、目标设备性能预算或 C3 总验收。
+
 ## Terrain 创作诊断与手动验证
 
 选中含 Terrain 组件的实体，在 Inspector 展开 Terrain 并滚动到 `Terrain Authoring Diagnostics`（位于 Terrain Stamps 上方）。`Authoring View` 是全局会话开关：Protection 用暗色/青色/黄色显示 0/0.5/1 权重，Clipping 用洋红色显示任意印章曾被 [0,HeightScale] 夹取的节点；缺图按零显示。预览读取当前已发布纹理，不重新生成或读回 GPU，保留地形拾取与法线输出；诊断时隐藏水面，切回 None 恢复原材质和水面设置。遮罩颜色不包含材质光照，仍经过视口后处理与当前 LOD 几何。

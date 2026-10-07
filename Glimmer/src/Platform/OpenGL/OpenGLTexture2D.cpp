@@ -135,8 +135,10 @@ namespace gl {
 
 	OpenGLTexture2D::~OpenGLTexture2D()
 	{
-		if (m_RendererID != 0)
+		if (m_RendererID != 0) {
+			TextureAllocationScope::RecordRelease(GetStorageByteSize());
 			glDeleteTextures(1, &m_RendererID);
+		}
 	}
 
 	void OpenGLTexture2D::CreateStorage()
@@ -164,6 +166,7 @@ namespace gl {
 			m_InternalFormat,
 			static_cast<GLsizei>(m_Specification.Width),
 			static_cast<GLsizei>(m_Specification.Height));
+		TextureAllocationScope::RecordAllocation(GetStorageByteSize());
 		glTextureParameteri(m_RendererID, GL_TEXTURE_MIN_FILTER, ToFilter(m_Specification.MinFilter));
 		glTextureParameteri(m_RendererID, GL_TEXTURE_MAG_FILTER, m_Specification.MagFilter == TextureFilter::Nearest ? GL_NEAREST : GL_LINEAR);
 		glTextureParameteri(m_RendererID, GL_TEXTURE_WRAP_S, ToWrap(m_Specification.WrapS));
