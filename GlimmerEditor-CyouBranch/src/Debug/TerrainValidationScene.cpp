@@ -51,15 +51,31 @@ namespace gl {
 					"GPU stage timed out, lost a sample, or returned invalid timing.");
 				return stage.Milliseconds;
 			};
+			auto option = [](const char* key, const char* fallback) { const char* value = std::getenv(key); return std::string(value ? value : fallback); };
+			const auto profile = option("GLIMMER_TERRAIN_COST_PROFILE", "local");
+			require(profile == "local" || profile == "overlap" || profile == "wide" || profile == "full" || profile == "extreme", "Unknown cost footprint profile.");
+			const auto resolutionText = option("GLIMMER_TERRAIN_COST_RESOLUTION", "1024");
+			require(resolutionText == "1024" || resolutionText == "2048", "Cost resolution must be 1024 or 2048.");
+			const uint32_t resolution = resolutionText == "2048" ? 2048 : 1024;
+			const auto modeText = option("GLIMMER_TERRAIN_COST_MODE", "both");
+			require(modeText == "both" || modeText == "static" || modeText == "simulation", "Unknown cost execution mode.");
+			const auto countText = option("GLIMMER_TERRAIN_COST_STAMPS", "all");
+			require(countText == "all" || countText == "0" || countText == "1" || countText == "16" || countText == "64", "Cost stamp count must be all, 0, 1, 16 or 64.");
 			for (auto mode : { TerrainExecutionMode::Static, TerrainExecutionMode::Simulation })
 				for (uint32_t count : { 0u, 1u, 16u, 64u }) {
+					if (modeText != "both" && (modeText == "static") != (mode == TerrainExecutionMode::Static)) continue;
+					if (countText != "all" && countText != std::to_string(count)) continue;
 					TerrainComponent terrain; terrain.Specification = fixture;
-					terrain.Specification.ExecutionMode = mode; terrain.Specification.HeightMapResolution = 1024;
+					terrain.Specification.ExecutionMode = mode; terrain.Specification.HeightMapResolution = resolution;
 					terrain.Specification.MeshResolution = 24; terrain.Specification.Recipe.Stamps.clear();
 					for (uint32_t i = 0; i < count; ++i) {
 						TerrainStamp stamp; stamp.ID = i + 1; stamp.Operation = TerrainStampOperation::Add;
 						stamp.Center = { float(i % 8) * 100 - 350, float(i / 8) * 100 - 350 };
 						stamp.Size = { 100, 80 }; stamp.TransitionWidth = 20; stamp.Height = 1;
+						if (profile == "overlap") stamp.Center = { 0, 0 };
+						if (profile == "wide") { stamp.Shape = TerrainStampShape::Ellipse; stamp.Size = { 600, 8 }; stamp.TransitionWidth = 40; stamp.RotationDegrees = 73; }
+						if (profile == "full") { stamp.Center = { 0, 0 }; stamp.Size = { fixture.WorldSize * 2, fixture.WorldSize * 2 }; }
+						if (profile == "extreme") { stamp.Center = { 0, 0 }; stamp.Size = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max() }; }
 						terrain.Specification.Recipe.Stamps.push_back(stamp);
 					}
 					prepare(terrain); auto& stats = terrain.Runtime->Preparation;
@@ -71,11 +87,11 @@ namespace gl {
 						const float elapsed = awaitStage(stats.GenerationGPU, next); sum += elapsed; maximum = std::max(maximum, elapsed);
 						peak = std::max(peak, stats.Textures.PeakBytes);
 						const uint64_t expectedPeakPerNode = mode == TerrainExecutionMode::Static ? (count ? 80 : 64) : (count ? 236 : 228);
-						require(stats.Textures.PeakBytes == expectedPeakPerNode * 1024 * 1024
-							&& stats.Textures.CurrentBytes == terrain.Runtime->GetResourceUsage().TextureBytes(), "1024 rebuild peak or event balance differs.");
+						require(stats.Textures.PeakBytes == expectedPeakPerNode * resolution * resolution
+							&& stats.Textures.CurrentBytes == terrain.Runtime->GetResourceUsage().TextureBytes(), "Rebuild peak or event balance differs.");
 					}
-					GL_CORE_INFO("Terrain GPU cost PASS: mode={0}, stamps={1}, samples=30, generation mean={2}ms, max={3}ms, rebuild peak={4} bytes",
-						mode == TerrainExecutionMode::Static ? "Static" : "Simulation", count, sum / 30, maximum, peak);
+					GL_CORE_INFO("Terrain GPU cost PASS: mode={0}, stamps={1}, samples=30, generation mean={2}ms, max={3}ms, rebuild peak={4} bytes, profile={5}, resolution={6}",
+						mode == TerrainExecutionMode::Static ? "Static" : "Simulation", count, sum / 30, maximum, peak, profile, resolution);
 					if (mode == TerrainExecutionMode::Simulation) {
 						double simulation = 0, derived = 0;
 						for (uint32_t sample = 0; sample < 30; ++sample) {
@@ -86,7 +102,7 @@ namespace gl {
 						}
 						const auto simSamples = stats.SimulationGPU.Samples; prepare(terrain); stats.SimulationGPU.Poll();
 						require(stats.SimulationGPU.Samples == simSamples, "Paused frame emits a simulation timing sample.");
-						GL_CORE_INFO("Terrain GPU simulation cost PASS: stamps={0}, samples=30, Reset+Step mean={1}ms, runtime derive mean={2}ms", count, simulation / 30, derived / 30);
+						GL_CORE_INFO("Terrain GPU simulation cost PASS: stamps={0}, samples=30, Reset+Step mean={1}ms, runtime derive mean={2}ms, profile={3}, resolution={4}", count, simulation / 30, derived / 30, profile, resolution);
 					}
 				}
 		}

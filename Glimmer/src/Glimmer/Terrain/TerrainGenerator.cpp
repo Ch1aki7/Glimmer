@@ -152,24 +152,53 @@ namespace gl {
 				m_ProtectionMap->Clear(glm::vec4(0));
 			}
 			const double angle = std::remainder(double(stamp.RotationDegrees), 360.0) * 0.017453292519943295;
+			const glm::vec2 rotation(float(std::cos(angle)), float(std::sin(angle)));
+			// Invert the exact float rotation sent to the shader, including its small norm error.
+			const double c = rotation.x, r = rotation.y, determinant = c * c + r * r;
+			double halfX = double(stamp.Size.x) * 0.5, halfZ = double(stamp.Size.y) * 0.5;
+			if (stamp.Shape == TerrainStampShape::Ellipse) {
+				// The ellipse uses a minor-radius-scaled radial metric, not an equal-distance SDF.
+				const double factor = 1.0 + double(stamp.TransitionWidth) / std::min(halfX, halfZ);
+				halfX *= factor; halfZ *= factor;
+			} else { halfX += stamp.TransitionWidth; halfZ += stamp.TransitionWidth; }
+			const double extentX = (std::abs(c) * halfX + std::abs(r) * halfZ) / determinant;
+			const double extentZ = (std::abs(r) * halfX + std::abs(c) * halfZ) / determinant;
+			const auto& grid = m_HeightGrid.GetSpecification();
+			const double range = ClampTerrainWorldSize(worldSize);
+			auto nodeRange = [range](double center, double extent, uint32_t nodes, uint32_t& first, uint32_t& last) {
+				// Extreme finite parameters can cause cancellation in support bounds. Use the safe full grid.
+				if (std::abs(center) > range * 1e6 || extent > range * 1e6) { first = 0; last = nodes - 1; return true; }
+				const double scale = double(nodes - 1) / range;
+				// Two nodes cover endpoint float evaluation/rounding; clamp before integer conversion.
+				const double low = (center - extent + range * 0.5) * scale - 2.0;
+				const double high = (center + extent + range * 0.5) * scale + 2.0;
+				if (high < 0 || low > double(nodes - 1)) return false;
+				first = uint32_t(std::floor(std::clamp(low, 0.0, double(nodes - 1))));
+				last = uint32_t(std::ceil(std::clamp(high, 0.0, double(nodes - 1))));
+				return true;
+			};
+			uint32_t firstX, firstZ, lastX, lastZ;
+			if (!nodeRange(stamp.Center.x, extentX, grid.Width, firstX, lastX)
+				|| !nodeRange(stamp.Center.y, extentZ, grid.Height, firstZ, lastZ)) continue;
+
 			m_StampShader->Bind();
 			m_StampShader->UploadUniformInt("u_Shape", static_cast<int>(stamp.Shape));
 			m_StampShader->UploadUniformInt("u_Operation", static_cast<int>(stamp.Operation));
 			m_StampShader->UploadUniformFloat2("u_Center", stamp.Center);
 			m_StampShader->UploadUniformFloat2("u_Size", stamp.Size);
-			m_StampShader->UploadUniformFloat2("u_Rotation", { float(std::cos(angle)), float(std::sin(angle)) });
+			m_StampShader->UploadUniformFloat2("u_Rotation", rotation);
+			m_StampShader->UploadUniformFloat2("u_DispatchOffset", { float(firstX), float(firstZ) });
 			m_StampShader->UploadUniformFloat("u_TransitionWidth", stamp.TransitionWidth);
 			m_StampShader->UploadUniformFloat("u_Strength", stamp.Strength);
 			m_StampShader->UploadUniformFloat("u_Height", stamp.Height);
 			m_StampShader->UploadUniformFloat("u_HeightScale", specification.HeightScale);
 			m_StampShader->UploadUniformFloat("u_WorldSize", ClampTerrainWorldSize(worldSize));
-			m_StampShader->BindImageTexture(0, m_HeightGrid.ReadTexture()->GetRendererID(), 0, ImageAccess::Read, ImageFormat::R32F);
-			m_StampShader->BindImageTexture(1, m_HeightGrid.WriteTexture()->GetRendererID(), 0, ImageAccess::Write, ImageFormat::R32F);
+			m_StampShader->BindImageTexture(0, m_HeightGrid.ReadTexture()->GetRendererID(), 0, ImageAccess::ReadWrite, ImageFormat::R32F);
 			m_StampShader->BindImageTexture(2, m_RecipeClipMask->GetRendererID(), 0, ImageAccess::ReadWrite, ImageFormat::R32F);
 			m_StampShader->BindImageTexture(3, m_ProtectionMap->GetRendererID(), 0, ImageAccess::ReadWrite, ImageFormat::R32F);
-			Dispatch2D(m_StampShader);
+			m_StampShader->Dispatch((lastX - firstX + 8) / 8, (lastZ - firstZ + 8) / 8, 1);
+			++m_LastDispatchCount;
 			ComputeShader::Barrier();
-			m_HeightGrid.Swap();
 		}
 	}
 
@@ -462,7 +491,7 @@ namespace gl {
 				TerrainStamp disabled = platform;
 				disabled.ID = 4; disabled.Enabled = false;
 				TerrainStamp zero = platform; zero.ID = 5; zero.Strength = 0;
-				for (int scenario = 0; scenario < 8; ++scenario)
+				for (int scenario = 0; scenario < 14; ++scenario)
 				{
 					if (scenario == 0) spec.Recipe.Stamps = { platform };
 					if (scenario == 1) spec.Recipe.Stamps = { platform, crater, clip, disabled, zero };
@@ -471,6 +500,12 @@ namespace gl {
 					if (scenario == 5) spec.Recipe.Stamps = { clip, crater, platform, disabled, zero };
 					if (scenario == 6) { auto noHeightChange = platform; noHeightChange.Operation = TerrainStampOperation::Add; noHeightChange.Height = 0; spec.Recipe.Stamps = { noHeightChange }; }
 					if (scenario == 7) { auto fractional = platform; fractional.Strength = 0.375f; spec.Recipe.Stamps = { fractional }; }
+					if (scenario == 8) { auto elongated = crater; elongated.Size = { 600, 8 }; elongated.TransitionWidth = 40; elongated.RotationDegrees = 73; spec.Recipe.Stamps = { elongated }; }
+					if (scenario == 9) { auto outside = platform; outside.Center = { spec.WorldSize * 3, spec.WorldSize * 3 }; outside.Size = { 8, 8 }; outside.TransitionWidth = 0; spec.Recipe.Stamps = { outside }; }
+					if (scenario == 10) { auto tiny = clip; tiny.Size = { 0.25f, 0.25f }; tiny.RotationDegrees = -137; spec.Recipe.Stamps = { tiny }; }
+					if (scenario == 11) { auto enormous = crater; enormous.Size = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max() }; enormous.TransitionWidth = std::numeric_limits<float>::max(); spec.Recipe.Stamps = { enormous }; }
+					if (scenario == 12) { auto extreme = crater; extreme.Size = { std::numeric_limits<float>::min(), 80 }; extreme.TransitionWidth = std::numeric_limits<float>::max(); spec.Recipe.Stamps = { extreme }; }
+					if (scenario == 13) { auto distant = platform; distant.Center = { std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() }; spec.Recipe.Stamps = { distant }; }
 					if (scenario == 4)
 					{
 						spec.Recipe.Stamps.clear();
@@ -509,6 +544,9 @@ namespace gl {
 							require(residual.Validation.Valid() && std::abs(residual.Residual - gpuMaskResidual) <= 1e-4f,
 								"GPU protection does not match analytic residual attenuation.");
 						}
+					if (scenario == 9) require(actual == base && generator.GetLastDispatchCount() == baseDispatches
+						&& std::all_of(protection.begin(), protection.end(), [](float p) { return p == 0; }),
+						"Off-domain stamp dispatches or alters nodes outside its support.");
 					require(maximumDifference <= 1e-5f, "CPU/GPU stamp height exceeds normalized tolerance 1e-5.");
 					require(maximumProtectionDifference <= 1e-5f, "CPU/GPU protection exceeds tolerance 1e-5.");
 					require(generator.ReadRecipeClippedNodeCount() == expectedClipped, "GPU clipping diagnostic differs from CPU.");
@@ -567,7 +605,7 @@ namespace gl {
 			}
 			result.Valid = true;
 			std::ostringstream message;
-			message << "65x81/129x145 CPU/GPU, 1/3/64 stamps, order, clipping, determinism, failure retention and simulation initial/Reset PASS; max normalized difference="
+			message << "65x81/129x145 CPU/GPU, 1/3/64 stamps, local support/rotated elongated ellipse/tiny endpoint/off-domain/extreme bounds, order, clipping, determinism, failure retention and simulation initial/Reset PASS; max normalized difference="
 				<< std::scientific << maximumDifference << "; protection max union/zero delta/fractional strength/residual/retention PASS; max protection difference="
 				<< maximumProtectionDifference;
 			result.Message = message.str();

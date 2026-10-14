@@ -1034,8 +1034,14 @@ namespace gl {
 
 		if (m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
 		{
-			const uint32_t viewportWidth = static_cast<uint32_t>(m_ViewportSize.x);
-			const uint32_t viewportHeight = static_cast<uint32_t>(m_ViewportSize.y);
+			uint32_t viewportWidth = static_cast<uint32_t>(m_ViewportSize.x);
+			uint32_t viewportHeight = static_cast<uint32_t>(m_ViewportSize.y);
+			// Fixed offscreen size only for the explicit capture benchmark; UI layout remains unchanged.
+			if (!m_TerrainCapturePath.empty() && GetEnvironmentValue("GLIMMER_TERRAIN_RENDER_BENCHMARK") == "1") {
+				const auto target = GetEnvironmentValue("GLIMMER_TERRAIN_BENCHMARK_VIEWPORT");
+				if (target == "720p") { viewportWidth = 1280; viewportHeight = 720; }
+				else if (target == "1080p") { viewportWidth = 1920; viewportHeight = 1080; }
+			}
 			const auto& framebufferSpecification = m_Framebuffer->GetSpecification();
 			if (framebufferSpecification.Width != viewportWidth
 				|| framebufferSpecification.Height != viewportHeight)
@@ -1187,7 +1193,7 @@ namespace gl {
             }
         }
         const bool costsReady=(!waterBenchmark||m_WaterCostSamples>=30)&&(!renderBenchmark||(m_ColorCostSamples>=30&&m_ShadowCostSamples>=30));
-        if (!m_TerrainCapturePath.empty() && ++m_TerrainCaptureFrames >= ((waterBenchmark||renderBenchmark)?(costsReady?45u:180u):5u))
+        if (!m_TerrainCapturePath.empty() && ++m_TerrainCaptureFrames >= ((waterBenchmark||renderBenchmark)?(costsReady?45u:(renderBenchmark?1200u:180u)):5u))
 		{
 			std::vector<uint8_t> pixels;
 			uint32_t width = 0;
@@ -1204,7 +1210,7 @@ namespace gl {
                 if(renderBenchmark) {
                     if(m_ColorCostSamples>=30&&m_ShadowCostSamples>=30) GL_CORE_INFO("Terrain render benchmark PASS: color {0} samples mean={1}ms, shadow {2} samples mean={3}ms",
                         m_ColorCostSamples,m_ColorCostTotal/m_ColorCostSamples,m_ShadowCostSamples,m_ShadowCostTotal/m_ShadowCostSamples);
-                    else GL_CORE_ERROR("Terrain render benchmark FAIL: insufficient unique completed samples.");
+                    else GL_CORE_ERROR("Terrain render benchmark FAIL: insufficient unique completed samples: color={0}, shadow={1}, frames={2}", m_ColorCostSamples, m_ShadowCostSamples, m_TerrainCaptureFrames);
                 }
 				const auto terrainStats = TerrainRenderer::GetStatistics();
 				const auto waterStats = WaterSurfaceRenderer::GetStatistics();

@@ -4700,7 +4700,7 @@ Scene YAML 将非空配方保存为 `TerrainComponent.Recipe` 下的 Version 与
 
 ## Terrain GPU 印章合成与失败回退
 
-程序化 Data v2 现在按 `Recipe.Stamps` 顺序执行 GPU 印章。完整链路为 GenerateFBM → Thermal Erosion → ApplyTerrainStamp × 有效操作数 → DeriveTerrainMaps。空列表维持旧路径；禁用或零强度操作不 Dispatch，也不分配印章遮罩。每个有效操作独占一次 Height Ping-Pong，Barrier 后交换，最终高度统一派生法线/坡度、分析与四层材质权重，再作为水文初值。独立保护遮罩已输出，但运行时侵蚀尚未消费它，仍可改变印章结果。
+程序化 Data v2 现在按 `Recipe.Stamps` 顺序执行 GPU 印章。完整链路为 GenerateFBM → Thermal Erosion → ApplyTerrainStamp × 有效且范围相交操作数 → DeriveTerrainMaps。空列表维持旧路径；禁用或零强度操作不 Dispatch，也不分配印章遮罩。每个有效且范围相交的操作按保守节点矩形原位更新候选 Height，操作间 Barrier 保序，最终高度统一派生法线/坡度、分析与四层材质权重，再作为水文初值。独立保护遮罩已输出，但运行时侵蚀尚未消费它，仍可改变印章结果。
 
 宿主可写入 `terrain.Specification.Recipe.Stamps` 后调用 `TerrainRenderer::Invalidate(terrain)`；编辑器可通过 Inspector 的 Terrain Stamps 编辑同一规格。引擎只处理普通几何操作，平台的任务含义、地点选择与玩法规则由游戏宿主负责。印章 Shader 默认从生成 Shader 所在目录读取 `ApplyTerrainStamp.comp`，保持该文件与其他 Terrain Compute 一起部署。
 
@@ -4818,11 +4818,11 @@ Reset 和 Step 同帧请求时，先恢复模拟初值，再执行 Seed/Step；�
 
 Generate 包括候选纹理、印章合成和静态派生；Simulation 包括 Play 调度、Reset/Step/Seed，初始化资源不在该项内；运行时派生单独计时。时间戳区间可包含驱动/CPU 提交间隙，不能解释为纯 GPU 忙碌时间。Color/Shadow/Water 沿用各自绘制统计，Shadow 在重建帧可能包含 Prepare；这些区间不能直接相加推导整帧 FPS。
 
-自动压力入口为 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1`、`GLIMMER_TERRAIN_RECIPE_INTEGRATION=1` 与 `GLIMMER_TERRAIN_COST_VALIDATE=1`，配合捕获路径运行后退出。它在独立 1024² Terrain 上顺序测试 Static/Simulation × 0/1/16/64 印章，各排除一次冷生成后采集 30 次重建；模拟另采集 30 次 Reset+Step 与运行时派生，检查逻辑纹理峰值、事件平衡和暂停不提交模拟样本。该显式验证会 Flush 并限时等待，普通渲染没有此等待；应关闭其他 GPU Contract，按顺序运行，64 操作可能耗时数分钟。
+自动压力入口为 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1`、`GLIMMER_TERRAIN_RECIPE_INTEGRATION=1` 与 `GLIMMER_TERRAIN_COST_VALIDATE=1`，配合捕获路径运行后退出。它在独立 1024² Terrain 上顺序测试 Static/Simulation × 0/1/16/64 印章，各排除一次冷生成后采集 30 次重建；模拟另采集 30 次 Reset+Step 与运行时派生，检查逻辑纹理峰值、事件平衡和暂停不提交模拟样本。该显式验证会 Flush 并限时等待，普通渲染没有此等待；应关闭其他 GPU Contract，按顺序运行，大范围或极端参数回退的 64 操作仍可能耗时数分钟。
 
 `GLIMMER_TERRAIN_RENDER_BENCHMARK=1` 配合 Recipe Fixture 与捕获路径，预热后分别收集至少 30 个唯一完成的 Color/Shadow 样本，不重复计入保留值；水面场景可同时设置既有 `GLIMMER_WATER_BENCHMARK=1`。这些环境变量仅控制隔离验证，不保存到场景。
 
-2026-10-07 的 Intel Iris Xe / OpenGL 4.6、Debug x64 压力测试：Static 的 0/1/16/64 印章生成平均 58.347/141.827/1647.640/7693.725 ms，Simulation 为 58.663/148.294/1588.194/6807.860 ms，各 30 个完成样本。1024² 重建峰值分别为空/非空 Static 64/80 MiB、Simulation 228/236 MiB，均通过事件与驻留核对。各档 Reset+Step 平均约 2.7～2.9 ms、运行时派生约 0.86～0.88 ms，暂停不追加模拟样本，Reset/Step 无重新分配。这些数据说明高印章数量会造成明显编辑重建等待。
+2026-10-07 局部调度优化前的 Intel Iris Xe / OpenGL 4.6、Debug x64 压力测试：Static 的 0/1/16/64 印章生成平均 58.347/141.827/1647.640/7693.725 ms，Simulation 为 58.663/148.294/1588.194/6807.860 ms，各 30 个完成样本。1024² 重建峰值分别为空/非空 Static 64/80 MiB、Simulation 228/236 MiB，均通过事件与驻留核对。各档 Reset+Step 平均约 2.7～2.9 ms、运行时派生约 0.86～0.88 ms，暂停不追加模拟样本，Reset/Step 无重新分配。这些数据是全网格逐印章调度的历史基线，优化后结果见“Terrain 印章局部调度优化”。
 
 固定 558×353 视角的 Static Color/Shadow 各 35 个唯一样本平均 10.443/0.198 ms；水面 Fixture 为 10.551/0.165 ms，Water Copy/Draw 35 样本平均 0.076/2.767 ms。这是本机小视口的分项观测，未验收目标设备预算或 C3 整体。完整 Debug 构建、285 条无窗口回归、八档压力、编辑/生命周期集成、印章/采样和原水文/气候 GPU Contract 均通过；空配方 Data v1/v2 BMP 与 A2 基线逐字节一致。
 
@@ -4847,3 +4847,51 @@ Generate 包括候选纹理、印章合成和静态派生；Simulation 包括 Pl
 PMX/VMD 与 glTF/GLB 尚未注册为可用导入入口。仓库中的 Assimp 包含 PMX importer 与 VMD parser 源码，但当前 MMD importer 未编入依赖，VMD parser 没有接入播放系统。VMD 是动作数据，当前引擎既不能直接播放，也没有跨骨架重定向；同名骨骼不构成现成的兼容保证。
 
 现有 PBR/Toon、多 Pass、材质覆盖、纹理语义和静态模型阴影仍可正常使用；Camera Velocity 仅覆盖相机运动，不能代表角色形变。导入纹理仍由 Model 持有，尚无模型内部烘焙或统一图像解码层。模型与动作建设计划及 P15 依赖统一见 `Documents/PROJECT_STATUS.md` 的 P18；本节仅说明当前实现，无新增可操作的动画工作流。
+
+## Terrain 印章局部调度优化
+
+印章合成现在只调度保守支持范围内的节点，避免每个小印章都评估整张高度图。支持范围包含核心、外侧过渡和旋转；细长椭圆沿用短半轴径向度量，过渡可能远大于直接外扩同样宽度。节点范围额外留两节点余量，极端有限参数回退全网格，范围外印章跳过 Dispatch。启用印章仍按原规则分配保护/裁切图，范围外操作不会改变表面。
+
+Shader 每个 invocation 独占一个节点，无邻居读取，按配方顺序原位更新候选 Height，并在操作间 Barrier；高度的逐操作 R32F 舍入、裁切标记和保护 max 合并保持。生成仍建立完整候选并统一发布，失败保留旧表面；这项优化没有改变场景格式、印章操作上限、模拟分辨率或常驻/重建纹理峰值。编辑器和游戏宿主继续提交同一通用配方，不需要新的调用方式。
+
+2026-10-07，Intel Iris Xe / OpenGL 4.6、Debug x64，沿用 1024²、0/1/16/64 个 100×80、过渡 20 的 Add 印章，各预热一次后 30 次重建，Static 平均 59.599/61.996/108.146/176.713 ms，Simulation 为 58.859/61.000/96.920/175.825 ms。历史 Static 的 16/64 档约 1647.640/7693.725 ms，本次约缩短 15/44 倍；这只适用于该局部印章分布，覆盖全地形的印章或极端参数不会获得同等改善，也不是整帧 FPS。
+
+完整 Debug x64 构建、285 条无窗口回归与八档压力验证通过；GPU Contract 增加旋转细长椭圆/宽过渡、端点微小尺寸、范围外和极端参数回退的全节点 CPU 对照。最大归一化高度/保护差为 6.258488e-7/1.788139e-7，均小于 1e-5；编辑/撤销/重载/Play/查询/生命周期与原水文/气候 Contract 保持通过。静态印章固定视角以及空配方 Data v1/v2 BMP 与优化前逐字节一致。
+
+手动查看：打开编辑器，选中 Terrain，在 Terrain Stamps 修改局部印章位置、尺寸或高度，观察重建响应；在 `Terrain Authoring Diagnostics` 查看最近完成的 GPU Generate 毫秒。Protection/Clipping 预览仍使用原控件，拖动印章和 Undo/Redo 后轮廓应保持一致。大尺寸、宽过渡和极端参数仍可能覆盖全图，不能用上述小范围基准估计所有配方。
+
+## Terrain 大范围与固定视口成本验证
+
+已有成本验证入口增加以下选项，未设置时沿用原 1024² 双模式、0/1/16/64 操作测试。设置 `GLIMMER_TERRAIN_RECIPE_FIXTURE=1`、`GLIMMER_TERRAIN_RECIPE_INTEGRATION=1`、`GLIMMER_TERRAIN_COST_VALIDATE=1` 并指定捕获路径后运行：
+
+| 环境变量 | 可用值 / 默认 |
+| --- | --- |
+| `GLIMMER_TERRAIN_COST_PROFILE` | local、overlap、wide、full、extreme / local |
+| `GLIMMER_TERRAIN_COST_RESOLUTION` | 1024、2048 / 1024 |
+| `GLIMMER_TERRAIN_COST_STAMPS` | 0、1、16、64、all / all |
+| `GLIMMER_TERRAIN_COST_MODE` | static、simulation、both / both |
+
+local 是原 100×80、过渡 20 的网格分布；overlap 将这些印章集中到原点；wide 使用 600×8、过渡 40、旋转 73° 的椭圆；full 使用中心为原点、两倍 WorldSize 的矩形；extreme 使用最大有限尺寸，触发保守全网格回退。每档仍预热一次后采集 30 个完成样本，日志包含分布和分辨率，模拟另测 Reset+Step/运行时派生。非法成本选项报告失败。全图和宽过渡可能耗时数分钟，应顺序运行。
+
+`GLIMMER_TERRAIN_RENDER_BENCHMARK=1` 与捕获路径同时启用时，可设 `GLIMMER_TERRAIN_BENCHMARK_VIEWPORT=720p` 或 `1080p`，固定离屏 Scene/后处理分辨率为 1280×720 或 1920×1080，并同步相机投影；捕获图片尺寸用于核对。未设置或其他值使用当前视口。渲染基准采样未满足时最多等待 1200 帧，仍不足则报告已有 Color/Shadow 样本数；普通轮询不等待 GPU。此选项不改变窗口布局，普通编辑不启用固定尺寸；水面测试继续搭配原 Water Fixture/Benchmark 开关。
+
+测试日志的 cost PASS 表示计时样本与资源契约通过，不表示达到交互或整帧性能预算；GPU 时间线区间的重叠边界继续遵循上一节说明。
+
+2026-10-07 的 Iris Xe / OpenGL 4.6、Debug x64 实测，各档 30 次重建：
+
+| 分辨率与分布 | 操作数/模式 | 生成平均 | 重建逻辑纹理峰值 |
+| --- | --- | --- | --- |
+| 1024² overlap | 64 Static | 223 ms | 80 MiB |
+| 1024² full | 64 Static | 7438 ms | 80 MiB |
+| 1024² wide | 16 Static | 2521 ms | 80 MiB |
+| 1024² extreme | 1 Static | 181 ms | 80 MiB |
+| 2048² local | 64 Static | 667 ms | 320 MiB |
+| 2048² local | 64 Simulation | 739 ms | 944 MiB |
+
+2048² Reset+Step 平均约 18.0 ms、运行时派生约 3.93 ms，未重新分配纹理。固定 720p/1080p 的 Static Color 平均约 47.9/90.4 ms，Shadow 约 0.22/0.20 ms；水面 Fixture 的 Water Copy+Draw 约 5.96/9.02 ms，各 30 个水面样本。图像实际尺寸已核对，Color/Shadow 各至少 30 个唯一完成样本。大范围与高视口成本仍明显，不能把局部小印章的改善推广到所有配方，不能据这些分项宣称整帧性能达标。
+
+完整 Debug 构建、285 条无窗口回归、六档压力/事件平衡、隔离编辑/生命周期集成和非法成本 profile 拒绝通过，空配方 v1/v2 BMP 与原基线逐字节一致。初次 1080p 样本不足已通过延长基准等待帧上限重测；最终结果仅使用足够样本的运行。
+
+## KB
+
+项目当前任务、计划与验收证据见 [PROJECT_STATUS](Documents/PROJECT_STATUS.md)；已实现的模块边界和数据流见 [ARCHITECTURE](ARCHITECTURE.md)。

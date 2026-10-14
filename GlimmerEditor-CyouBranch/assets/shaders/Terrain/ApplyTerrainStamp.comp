@@ -1,11 +1,12 @@
 #version 450 core
 layout(local_size_x = 8, local_size_y = 8) in;
-layout(r32f, binding = 0) readonly uniform image2D u_InputHeight;
-layout(r32f, binding = 1) writeonly uniform image2D u_OutputHeight;
+// Each invocation accesses only its own node; no neighbor reads or inter-invocation dependencies.
+layout(r32f, binding = 0) uniform image2D u_HeightMap;
 // One invocation owns one flag; Dispatch barriers preserve prior clipping marks.
 layout(r32f, binding = 2) uniform image2D u_ClipMask;
 // A node has one owner per Dispatch; max union is independent of height and order.
 layout(r32f, binding = 3) uniform image2D u_ProtectionMap;
+uniform vec2 u_DispatchOffset;
 uniform int u_Shape;
 uniform int u_Operation;
 uniform vec2 u_Center;
@@ -19,10 +20,10 @@ uniform float u_WorldSize;
 
 void main()
 {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(u_InputHeight);
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy) + ivec2(u_DispatchOffset);
+    ivec2 size = imageSize(u_HeightMap);
     if (any(greaterThanEqual(pixel, size))) return;
-    float source = imageLoad(u_InputHeight, pixel).r;
+    float source = imageLoad(u_HeightMap, pixel).r;
     // Match TerrainSamplingGrid endpoint positions, then use double arithmetic.
     vec2 position = vec2(-u_WorldSize * 0.5) + vec2(pixel) * (vec2(u_WorldSize) / vec2(size - 1));
     dvec2 delta = dvec2(position) - dvec2(u_Center);
@@ -56,5 +57,5 @@ void main()
         if (bounded != composed) imageStore(u_ClipMask, pixel, vec4(1.0));
         result = float(bounded / double(u_HeightScale));
     }
-    imageStore(u_OutputHeight, pixel, vec4(result));
+    imageStore(u_HeightMap, pixel, vec4(result));
 }
